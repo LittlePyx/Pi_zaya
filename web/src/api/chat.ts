@@ -712,6 +712,55 @@ export interface ResearchBriefGenerateBody {
   max_tokens?: number
 }
 
+export type ResearchBriefUpdateDecision = 'accept' | 'reject'
+
+export interface ResearchBriefUpdatePlanItem {
+  id: string
+  start: number
+  end: number
+  heading: string
+  old_markdown: string
+  proposed_markdown: string
+  action: 'replace' | 'delete' | string
+  recommended: ResearchBriefUpdateDecision
+  citation_numbers_before: number[]
+  citation_numbers_after: number[]
+  affected_citation_numbers: number[]
+  generation_modes: string[]
+}
+
+export interface ResearchBriefUpdatePlan {
+  id: string
+  brief_id: string
+  contract_version: number
+  base_brief_revision: number
+  base_content_hash: string
+  matrix_id: string
+  source_matrix_revision: number
+  target_matrix_revision: number
+  matrix_fingerprint: string
+  status: string
+  items: ResearchBriefUpdatePlanItem[]
+  preview_content_markdown: string
+  impact: ResearchBriefLineageImpact
+  generation: {
+    mode?: string
+    elapsed_ms?: number
+    candidate_count?: number
+    requested_count?: number
+    reason?: string
+  }
+  preservation: {
+    base_character_count?: number
+    affected_character_count?: number
+    unaffected_character_count?: number
+    unaffected_preservation_ratio?: number
+  }
+  elapsed_ms: number
+  created_at: number
+  updated_at: number
+}
+
 export type ResearchBriefExportFormat = 'markdown' | 'docx' | 'bibtex' | 'ris'
 
 export type EvidenceMatrixQualityStatus = 'verified' | 'needs_review' | 'draft' | string
@@ -997,6 +1046,32 @@ export const chatApi = {
     api.post<ResearchBriefRecord>(
       `/api/projects/${encodeURIComponent(projectId)}/research-briefs/generate`,
       body,
+    ),
+  createResearchBriefUpdatePlan: (
+    briefId: string,
+    body: { expected_revision: number; locale?: string; max_tokens?: number },
+  ) => api.post<ResearchBriefUpdatePlan>(
+    `/api/research-briefs/${encodeURIComponent(briefId)}/update-plans`,
+    body,
+  ),
+  getCurrentResearchBriefUpdatePlan: (briefId: string) =>
+    api.get<ResearchBriefUpdatePlan>(
+      `/api/research-briefs/${encodeURIComponent(briefId)}/update-plans/current`,
+    ),
+  applyResearchBriefUpdatePlan: (
+    briefId: string,
+    planId: string,
+    body: {
+      expected_revision: number
+      decisions: Array<{ item_id: string; decision: ResearchBriefUpdateDecision }>
+    },
+  ) => api.post<ResearchBriefRecord>(
+    `/api/research-briefs/${encodeURIComponent(briefId)}/update-plans/${encodeURIComponent(planId)}/apply`,
+    body,
+  ),
+  discardResearchBriefUpdatePlan: (briefId: string, planId: string) =>
+    api.delete<{ ok: boolean }>(
+      `/api/research-briefs/${encodeURIComponent(briefId)}/update-plans/${encodeURIComponent(planId)}`,
     ),
   updateResearchBrief: (
     briefId: string,

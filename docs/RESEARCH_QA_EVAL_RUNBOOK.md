@@ -368,6 +368,56 @@ gate. The focused CASSI rerun and the subsequent complete 29-question run both
 passed; no lineage status hides a quality failure or narrows retrieval to
 improve speed.
 
+## 2026-08-08 Reviewable Incremental Brief-Update Acceptance
+
+Stale matrix-backed research briefs now update through a persisted review
+plan rather than replacing the whole document. The plan is bound to the brief
+revision and content hash plus the source and target matrix revisions. It
+proposes changes only for citation-bearing spans affected by the matrix diff,
+shows old and proposed Markdown, and requires an explicit accept or keep-old
+decision for every item. Applying a plan creates an immutable brief revision
+and reruns the complete citation, source, and evidence audit over the merged
+document. Rejected items remain visible as `needs_review`; direct whole-brief
+replacement of a stale matrix-backed brief is rejected by the API.
+
+The deterministic replay at
+`test_results/research_brief_incremental_update/20260808_095434/report.json`
+passed 5/5 reviewed matrices. Every unchanged span was preserved byte for
+byte, the minimum unaffected-content preservation ratio was 80.94%, all five
+merged briefs remained verified, and there were no unresolved citations. The
+deterministic plan median/max was 1.01/1.02 ms. The paid live-model replay at
+`test_results/research_brief_incremental_update/20260808_095853/report.json`
+also passed 5/5. Four cases used focused model synthesis; one candidate failed
+the unchanged citation verifier and safely used source-extractive fallback.
+All five final full-document audits passed. Live plan median/max was
+1,550.51/2,000.26 ms versus 3,962.71/4,064.58 ms for the recorded legacy
+whole-regeneration baseline, which also did not preserve unaffected manual
+content.
+
+The unchanged product gates passed after the final implementation:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_incremental_update_full_library/20260808_100146`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_incremental_update_live_smoke/20260808_100055`.
+3. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_eval/20260808_100042`.
+4. Source validation: 41/41; reviewed replay: 6/6; reviewed comparison audit:
+   5/5 with zero false comparisons. The final lineage replay remained 5/5 at
+   `test_results/research_brief_lineage/20260808_102647/report.json`.
+5. Backend suite: 4,336 passed with 43 configuration-dependent skips; frontend
+   ESLint, production build, 120/120 executed Playwright smoke tests with two
+   skips, 109/109 core tests, and 4/4 public-surface tests passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+3,248/5,338/6,070 ms, answer-complete p50/p95/max of
+5,546/11,188/14,562 ms, evidence-card complete p50/p95/max of
+7,837/12,988/15,888 ms, and UI-ready p50/p95/max of
+8,706/14,312/15,888 ms. These gates retain the complete 29-question retrieval
+coverage, the 5/5 live answer-quality contract, and exact evidence validation;
+latency is reduced by limiting generation scope, not by dropping sources,
+citations, audits, or user-visible review states.
+
 ## Outputs
 
 Default output directory:

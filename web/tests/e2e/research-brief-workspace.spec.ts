@@ -92,6 +92,9 @@ async function installBackend(page: Page) {
   let brief: Brief | null = null
   let generatedPayload: Record<string, unknown> | null = null
   let savedPayload: Record<string, unknown> | null = null
+  let updatePlanPayload: Record<string, unknown> | null = null
+  let appliedUpdatePayload: Record<string, unknown> | null = null
+  let updatePlan: Record<string, unknown> | null = null
   let exportedFormat = ''
   const revisions: Brief[] = []
 
@@ -257,6 +260,104 @@ async function installBackend(page: Page) {
   await page.route(/\/api\/research-briefs\/brief-1(?:\/.*)?(?:\?.*)?$/, async (route) => {
     const request = route.request()
     const url = new URL(request.url())
+    if (url.pathname.endsWith('/update-plans/current')) {
+      await fulfillJson(route, updatePlan || { detail: 'not found' }, updatePlan ? 200 : 404)
+      return
+    }
+    if (url.pathname.endsWith('/update-plans') && request.method() === 'POST') {
+      updatePlanPayload = request.postDataJSON() as Record<string, unknown>
+      const oldMarkdown = '# Findings\n\nSparse 3-D filtering is the selected comparison baseline [1].'
+      const proposedMarkdown = '# Findings\n\nSparse 3-D filtering reports the updated measured comparison [1].'
+      updatePlan = {
+        id: 'update-plan-1',
+        brief_id: 'brief-1',
+        contract_version: 1,
+        base_brief_revision: brief?.revision || 1,
+        base_content_hash: 'content-hash',
+        matrix_id: VERIFIED_MATRIX.id,
+        source_matrix_revision: 1,
+        target_matrix_revision: VERIFIED_MATRIX.revision,
+        matrix_fingerprint: 'matrix-fingerprint',
+        status: 'open',
+        items: [{
+          id: 'change-1',
+          start: 0,
+          end: oldMarkdown.length,
+          heading: 'Findings',
+          old_markdown: oldMarkdown,
+          proposed_markdown: proposedMarkdown,
+          action: 'replace',
+          recommended: 'accept',
+          citation_numbers_before: [1],
+          citation_numbers_after: [1],
+          affected_citation_numbers: [1],
+          generation_modes: ['model_synthesis'],
+        }],
+        preview_content_markdown: proposedMarkdown,
+        impact: { affected_citation_numbers: [1] },
+        generation: { mode: 'model_synthesis', elapsed_ms: 420 },
+        preservation: {
+          base_character_count: 900,
+          affected_character_count: 80,
+          unaffected_character_count: 820,
+          unaffected_preservation_ratio: 0.9111,
+        },
+        elapsed_ms: 438,
+        created_at: 11,
+        updated_at: 11,
+      }
+      await fulfillJson(route, updatePlan)
+      return
+    }
+    if (url.pathname.endsWith('/update-plans/update-plan-1/apply') && request.method() === 'POST') {
+      appliedUpdatePayload = request.postDataJSON() as Record<string, unknown>
+      if (!brief) {
+        await fulfillJson(route, { detail: 'not found' }, 404)
+        return
+      }
+      brief = {
+        ...brief,
+        content_markdown: '# Findings\n\nSparse 3-D filtering reports the updated measured comparison [1].',
+        quality_status: 'verified',
+        quality: {
+          ...brief.quality,
+          source_matrix_revision: VERIFIED_MATRIX.revision,
+          incremental_update: {
+            plan_id: 'update-plan-1',
+            accepted_item_ids: ['change-1'],
+            rejected_item_ids: [],
+          },
+        },
+        lineage: {
+          contract_version: 1,
+          status: 'current',
+          source_matrix_id: VERIFIED_MATRIX.id,
+          source_matrix_title: VERIFIED_MATRIX.title,
+          source_matrix_revision: VERIFIED_MATRIX.revision,
+          current_matrix_revision: VERIFIED_MATRIX.revision,
+          source_matrix_quality_status: 'verified',
+          current_matrix_quality_status: 'verified',
+          historical_verified: true,
+          latest_verified: true,
+          refresh_available: true,
+          export_allowed: true,
+          export_mode: 'current',
+          reasons: [],
+          impact: {},
+        },
+        revision: brief.revision + 1,
+        updated_at: brief.updated_at + 1,
+      }
+      revisions.push({ ...brief })
+      updatePlan = null
+      await fulfillJson(route, brief)
+      return
+    }
+    if (url.pathname.endsWith('/update-plans/update-plan-1') && request.method() === 'DELETE') {
+      updatePlan = null
+      await fulfillJson(route, { ok: true })
+      return
+    }
     if (url.pathname.endsWith('/export')) {
       const format = url.searchParams.get('format') || 'markdown'
       exportedFormat = format
@@ -304,6 +405,8 @@ async function installBackend(page: Page) {
   return {
     generatedPayload: () => generatedPayload,
     savedPayload: () => savedPayload,
+    updatePlanPayload: () => updatePlanPayload,
+    appliedUpdatePayload: () => appliedUpdatePayload,
     exportedFormat: () => exportedFormat,
     markMatrixUpdated: () => {
       if (!brief) return
@@ -365,7 +468,7 @@ test('project basket becomes a versioned, audited, exportable research brief', a
   await page.getByTestId('research-brief-objective').fill('Compare the selected method without merging experimental conditions.')
   await page.getByTestId('research-brief-generate').click()
 
-  await expect(page.getByText('Evidence audit passed')).toBeVisible()
+  await expect(page.getByTestId('research-brief-workspace').getByText('Evidence audit passed')).toBeVisible()
   await expect(page.getByText('Targeted evidence repair applied')).toBeVisible()
   await expect(page.getByText(/retained 3 supported model claims, removed 1 unsupported or out-of-contract claim/)).toBeVisible()
   await expect(page.getByTestId('research-brief-preview')).toContainText('selected comparison baseline')
@@ -404,7 +507,7 @@ test('matrix changes keep historical verification visible and update only throug
   await page.getByTestId('research-brief-title').fill('Lineage-aware brief')
   await page.getByTestId('research-brief-objective').fill('Keep the brief synchronized with audited evidence.')
   await page.getByTestId('research-brief-generate').click()
-  await expect(page.getByText('Evidence audit passed')).toBeVisible()
+  await expect(page.getByTestId('research-brief-workspace').getByText('Evidence audit passed')).toBeVisible()
 
   backend.markMatrixUpdated()
   await page.keyboard.press('Escape')
@@ -417,14 +520,28 @@ test('matrix changes keep historical verification visible and update only throug
   await expect(page.getByTestId('research-brief-lineage-impact')).toContainText('[1]')
   await expect(page.getByTestId('research-brief-lineage-impact')).toContainText('key_result')
   await expect(page.getByTestId('research-brief-source-matrix')).toHaveClass(/ant-select-disabled/)
-  await expect(page.getByTestId('research-brief-generate')).toHaveText('Update from latest matrix')
+  await expect(page.getByTestId('research-brief-generate')).toHaveText('Review latest matrix update')
 
   await page.getByTestId('research-brief-generate').click()
-  await expect.poll(() => backend.generatedPayload()).toMatchObject({
-    brief_id: 'brief-1',
+  await expect(page.getByTestId('research-brief-update-plan')).toBeVisible()
+  await expect(page.getByTestId('research-brief-update-item-0')).toContainText('selected comparison baseline')
+  await expect(page.getByTestId('research-brief-update-item-0')).toContainText('updated measured comparison')
+  await expect(page.getByText(/91% of the existing brief/)).toBeVisible()
+  await expect.poll(() => backend.updatePlanPayload()).toMatchObject({
     expected_revision: 1,
-    matrix_id: VERIFIED_MATRIX.id,
+    locale: 'en',
   })
+  await page.getByTestId('research-brief-update-decision-0').getByText('Keep old text').click()
+  await expect(page.getByTestId('research-brief-update-apply')).toHaveText('Apply review (0/1)')
+  await page.getByTestId('research-brief-update-decision-0').getByText('Accept').click()
+  await expect(page.getByTestId('research-brief-update-apply')).toHaveText('Apply review (1/1)')
+  await page.getByTestId('research-brief-update-apply').click()
+  await expect.poll(() => backend.appliedUpdatePayload()).toMatchObject({
+    expected_revision: 1,
+    decisions: [{ item_id: 'change-1', decision: 'accept' }],
+  })
+  await expect(page.getByTestId('research-brief-update-plan')).not.toBeVisible()
   await expect(page.getByTestId('research-brief-lineage-impact')).not.toBeVisible()
-  await expect(page.getByText('Evidence audit passed')).toBeVisible()
+  await expect(page.getByTestId('research-brief-workspace').getByText('Evidence audit passed')).toBeVisible()
+  await expect(page.getByTestId('research-brief-preview')).toContainText('updated measured comparison')
 })

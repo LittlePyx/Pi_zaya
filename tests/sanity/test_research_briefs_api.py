@@ -192,3 +192,212 @@ def test_research_brief_api_requires_revision_before_regeneration(monkeypatch, t
 
     assert response.status_code == 400
     assert "expected_revision" in response.json()["detail"]
+
+
+def test_research_brief_incremental_update_plan_preserves_unaffected_content_and_reaudits(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import research_briefs as brief_router
+    from kb.evidence_matrix import evidence_matrix_hits
+    from kb.research_brief import research_brief_evidence
+    from kb.research_brief_lineage import matrix_contract_fingerprint
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    project_id = store.create_project("Incremental brief project")
+    row = {
+        "id": "row-a",
+        "paper": "Paper A",
+        "source_name": "Paper A",
+        "source_path": "F:/papers/a.md",
+        "source_status": "active",
+        "notes": "",
+        "cells": {
+            "method": {
+                "field": "method",
+                "value": "calibrated acquisition",
+                "support_status": "grounded",
+                "evidence_ids": ["ev-method"],
+                "manual_override": False,
+            },
+            "key_result": {
+                "field": "key_result",
+                "value": "1.0 dB",
+                "support_status": "grounded",
+                "evidence_ids": ["ev-result-old"],
+                "manual_override": False,
+            },
+        },
+    }
+    evidence = [
+        {
+            "id": "ev-method",
+            "field": "method",
+            "source_path": "F:/papers/a.md",
+            "source_name": "Paper A",
+            "evidence_quote": "Paper A uses calibrated acquisition.",
+        },
+        {
+            "id": "ev-result-old",
+            "field": "key_result",
+            "source_path": "F:/papers/a.md",
+            "source_name": "Paper A",
+            "evidence_quote": "Paper A reports 1.0 dB.",
+        },
+    ]
+    source_items = [
+        {"key": "paper-a", "title": "Paper A", "sourcePath": "F:/papers/a.md"}
+    ]
+    matrix = store.create_evidence_matrix(
+        project_id=project_id,
+        title="Verified matrix",
+        rows=[row],
+        evidence=evidence,
+        source_items=source_items,
+        quality_status="verified",
+        quality={"supported_cell_count": 2},
+    )
+    assert matrix is not None
+    original_content = (
+        "## Findings\n\n"
+        "- Paper A uses calibrated acquisition [1].\n\n"
+        "### Quantitative evidence\n\n"
+        "- Paper A reports 1.0 dB [2]."
+    )
+    brief = store.create_research_brief(
+        project_id=project_id,
+        title="Measured brief",
+        objective="Summarize Paper A.",
+        content_markdown=original_content,
+        evidence=research_brief_evidence(evidence_matrix_hits(matrix, limit=20)),
+        quality_status="verified",
+        quality={
+            "source_matrix_id": matrix["id"],
+            "source_matrix_revision": 1,
+            "source_matrix_quality_status": "verified",
+            "source_matrix_title": matrix["title"],
+            "source_matrix_fingerprint": matrix_contract_fingerprint(matrix),
+        },
+    )
+    assert brief is not None
+    rejected_brief = store.create_research_brief(
+        project_id=project_id,
+        title="Measured brief with retained text",
+        objective="Summarize Paper A.",
+        content_markdown=original_content,
+        evidence=research_brief_evidence(evidence_matrix_hits(matrix, limit=20)),
+        quality_status="verified",
+        quality={
+            "source_matrix_id": matrix["id"],
+            "source_matrix_revision": 1,
+            "source_matrix_quality_status": "verified",
+            "source_matrix_title": matrix["title"],
+            "source_matrix_fingerprint": matrix_contract_fingerprint(matrix),
+        },
+    )
+    assert rejected_brief is not None
+
+    current_row = dict(row)
+    current_row["cells"] = {**row["cells"]}
+    current_row["cells"]["key_result"] = {
+        **row["cells"]["key_result"],
+        "value": "1.4 dB",
+        "evidence_ids": ["ev-result-new"],
+    }
+    current_evidence = [
+        evidence[0],
+        {
+            **evidence[1],
+            "id": "ev-result-new",
+            "evidence_quote": "Paper A reports 1.4 dB.",
+        },
+    ]
+    updated_matrix, conflict = store.update_evidence_matrix(
+        matrix["id"],
+        expected_revision=1,
+        rows=[current_row],
+        evidence=current_evidence,
+    )
+    assert conflict is False
+    assert updated_matrix is not None
+
+    monkeypatch.setattr(brief_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(brief_router, "get_settings", lambda: SimpleNamespace(db_dir=tmp_path))
+    monkeypatch.setattr(
+        brief_router,
+        "generate_grounded_answer",
+        lambda *args, **kwargs: {"answer": "- Paper A reports 1.4 dB [1]."},
+    )
+    client = TestClient(app)
+
+    full_replace = client.post(
+        f"/api/projects/{project_id}/research-briefs/generate",
+        json={
+            "title": brief["title"],
+            "objective": brief["objective"],
+            "brief_id": brief["id"],
+            "matrix_id": matrix["id"],
+            "expected_revision": 1,
+            "locale": "en",
+        },
+    )
+    assert full_replace.status_code == 409
+    assert "incremental update plan" in full_replace.json()["detail"]
+
+    planned = client.post(
+        f"/api/research-briefs/{brief['id']}/update-plans",
+        json={"expected_revision": 1, "locale": "en"},
+    )
+    assert planned.status_code == 200, planned.text
+    plan = planned.json()
+    assert len(plan["items"]) == 1
+    assert plan["items"][0]["citation_numbers_before"] == [2]
+    assert "1.4 dB" in plan["items"][0]["proposed_markdown"]
+    assert "Paper A uses calibrated acquisition [1]." in plan["preview_content_markdown"]
+    assert "### Quantitative evidence" in plan["preview_content_markdown"]
+
+    applied = client.post(
+        f"/api/research-briefs/{brief['id']}/update-plans/{plan['id']}/apply",
+        json={
+            "expected_revision": 1,
+            "decisions": [{"item_id": plan["items"][0]["id"], "decision": "accept"}],
+        },
+    )
+    assert applied.status_code == 200, applied.text
+    record = applied.json()
+    assert record["revision"] == 2
+    assert record["quality_status"] == "verified", record["quality"]["reasons"]
+    assert record["lineage"]["status"] == "current"
+    assert record["quality"]["incremental_update"]["rejected_item_ids"] == []
+    assert "Paper A uses calibrated acquisition [1]." in record["content_markdown"]
+    assert "### Quantitative evidence" in record["content_markdown"]
+    assert "1.4 dB [2]" in record["content_markdown"]
+    assert "1.0 dB [2]" not in record["content_markdown"]
+
+    reused = client.post(
+        f"/api/research-briefs/{brief['id']}/update-plans/{plan['id']}/apply",
+        json={"expected_revision": 2, "decisions": []},
+    )
+    assert reused.status_code == 404
+
+    rejected_plan_response = client.post(
+        f"/api/research-briefs/{rejected_brief['id']}/update-plans",
+        json={"expected_revision": 1, "locale": "en"},
+    )
+    assert rejected_plan_response.status_code == 200, rejected_plan_response.text
+    rejected_plan = rejected_plan_response.json()
+    rejected_apply = client.post(
+        f"/api/research-briefs/{rejected_brief['id']}/update-plans/{rejected_plan['id']}/apply",
+        json={"expected_revision": 1, "decisions": []},
+    )
+    assert rejected_apply.status_code == 200, rejected_apply.text
+    retained = rejected_apply.json()
+    assert retained["revision"] == 2
+    assert retained["content_markdown"] == original_content
+    assert retained["quality_status"] == "needs_review"
+    assert "incremental_update_rejected_changes" in retained["quality"]["reasons"]
+    assert retained["quality"]["incremental_update"]["accepted_item_ids"] == []
+    assert retained["quality"]["incremental_update"]["rejected_item_ids"] == [
+        rejected_plan["items"][0]["id"]
+    ]
+    assert retained["agent_trace"]["summary"]["quality_gate_status"] == "passed"

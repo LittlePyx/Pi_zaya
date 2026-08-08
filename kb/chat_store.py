@@ -648,6 +648,26 @@ def _research_brief_record(row: sqlite3.Row | dict, *, include_content: bool = T
     return rec
 
 
+def _research_brief_update_plan_record(row: sqlite3.Row | dict) -> dict:
+    rec = dict(row)
+    payload = _research_brief_json(rec.pop("payload_json", "{}"), default={})
+    out = dict(payload) if isinstance(payload, dict) else {}
+    out.update(
+        {
+            "id": str(rec.get("id") or out.get("id") or ""),
+            "brief_id": str(rec.get("brief_id") or out.get("brief_id") or ""),
+            "base_brief_revision": max(1, int(rec.get("base_revision") or out.get("base_brief_revision") or 1)),
+            "matrix_id": str(rec.get("matrix_id") or out.get("matrix_id") or ""),
+            "target_matrix_revision": max(1, int(rec.get("matrix_revision") or out.get("target_matrix_revision") or 1)),
+            "matrix_fingerprint": str(rec.get("matrix_fingerprint") or out.get("matrix_fingerprint") or ""),
+            "status": str(rec.get("status") or out.get("status") or "open"),
+            "created_at": float(rec.get("created_at") or out.get("created_at") or 0.0),
+            "updated_at": float(rec.get("updated_at") or out.get("updated_at") or 0.0),
+        }
+    )
+    return out
+
+
 def _evidence_matrix_record(row: sqlite3.Row | dict, *, include_content: bool = True) -> dict:
     rec = dict(row)
     rows = _research_brief_json(rec.pop("rows_json", "[]"), default=[])
@@ -1042,6 +1062,27 @@ class ChatStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_research_brief_revisions_created "
                 "ON research_brief_revisions(brief_id, created_at DESC);"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_brief_update_plans (
+                  id TEXT PRIMARY KEY,
+                  brief_id TEXT NOT NULL,
+                  base_revision INTEGER NOT NULL,
+                  matrix_id TEXT NOT NULL,
+                  matrix_revision INTEGER NOT NULL,
+                  matrix_fingerprint TEXT NOT NULL,
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  status TEXT NOT NULL DEFAULT 'open',
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(brief_id) REFERENCES research_briefs(id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_brief_update_plans_brief "
+                "ON research_brief_update_plans(brief_id, status, updated_at DESC);"
             )
             conn.execute(
                 """
@@ -1507,6 +1548,115 @@ class ChatStore:
             )
             self._insert_research_brief_revision(conn, next_record)
         return _research_brief_record(next_record), False
+
+    def create_research_brief_update_plan(
+        self,
+        brief_id: str,
+        *,
+        expected_revision: int,
+        matrix_id: str,
+        matrix_revision: int,
+        matrix_fingerprint: str,
+        payload: dict,
+    ) -> tuple[dict | None, bool]:
+        bid = str(brief_id or "").strip()
+        mid = str(matrix_id or "").strip()
+        if not bid or not mid:
+            return None, False
+        plan_id = uuid.uuid4().hex
+        now = time.time()
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            brief = conn.execute(
+                "SELECT revision FROM research_briefs WHERE id = ?",
+                (bid,),
+            ).fetchone()
+            if brief is None:
+                return None, False
+            current_revision = max(1, int(brief["revision"] or 1))
+            if current_revision != int(expected_revision):
+                return {"brief_id": bid, "base_brief_revision": current_revision}, True
+            conn.execute(
+                "UPDATE research_brief_update_plans SET status = 'superseded', updated_at = ? "
+                "WHERE brief_id = ? AND status = 'open'",
+                (now, bid),
+            )
+            clean_payload = dict(payload or {})
+            clean_payload["id"] = plan_id
+            clean_payload["brief_id"] = bid
+            payload_json = self._research_brief_json_text(clean_payload, fallback={})
+            conn.execute(
+                """
+                INSERT INTO research_brief_update_plans (
+                  id, brief_id, base_revision, matrix_id, matrix_revision,
+                  matrix_fingerprint, payload_json, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                """,
+                (
+                    plan_id,
+                    bid,
+                    current_revision,
+                    mid,
+                    max(1, int(matrix_revision or 1)),
+                    str(matrix_fingerprint or ""),
+                    payload_json,
+                    now,
+                    now,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM research_brief_update_plans WHERE id = ?",
+                (plan_id,),
+            ).fetchone()
+        return (_research_brief_update_plan_record(row) if row else None), False
+
+    def get_research_brief_update_plan(self, brief_id: str, plan_id: str) -> dict | None:
+        bid = str(brief_id or "").strip()
+        pid = str(plan_id or "").strip()
+        if not bid or not pid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_brief_update_plans WHERE id = ? AND brief_id = ?",
+                (pid, bid),
+            ).fetchone()
+        return _research_brief_update_plan_record(row) if row else None
+
+    def get_open_research_brief_update_plan(self, brief_id: str) -> dict | None:
+        bid = str(brief_id or "").strip()
+        if not bid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT * FROM research_brief_update_plans
+                WHERE brief_id = ? AND status = 'open'
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """,
+                (bid,),
+            ).fetchone()
+        return _research_brief_update_plan_record(row) if row else None
+
+    def set_research_brief_update_plan_status(
+        self,
+        brief_id: str,
+        plan_id: str,
+        *,
+        status: str,
+    ) -> bool:
+        bid = str(brief_id or "").strip()
+        pid = str(plan_id or "").strip()
+        next_status = str(status or "").strip().lower()
+        if not bid or not pid or next_status not in {"applied", "discarded", "superseded"}:
+            return False
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE research_brief_update_plans SET status = ?, updated_at = ? "
+                "WHERE id = ? AND brief_id = ? AND status = 'open'",
+                (next_status, time.time(), pid, bid),
+            )
+        return int(cur.rowcount or 0) > 0
 
     def list_research_brief_revisions(self, brief_id: str, *, limit: int = 40) -> list[dict]:
         bid = str(brief_id or "").strip()

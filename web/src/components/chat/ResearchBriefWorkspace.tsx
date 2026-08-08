@@ -5,6 +5,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Radio,
   Select,
   Spin,
   Tabs,
@@ -13,6 +14,7 @@ import {
 } from 'antd'
 import {
   DeleteOutlined,
+  DiffOutlined,
   DownloadOutlined,
   FileAddOutlined,
   ReloadOutlined,
@@ -23,6 +25,8 @@ import {
   type EvidenceMatrixRecord,
   type ResearchBriefExportFormat,
   type ResearchBriefRecord,
+  type ResearchBriefUpdateDecision,
+  type ResearchBriefUpdatePlan,
 } from '../../api/chat'
 import { useT } from '../../i18n'
 import type { CiteShelfItem } from './citationState'
@@ -88,6 +92,10 @@ export function ResearchBriefWorkspace({
   const [saving, setSaving] = useState(false)
   const [exporting, setExporting] = useState<ResearchBriefExportFormat | ''>('')
   const [tab, setTab] = useState('edit')
+  const [updatePlan, setUpdatePlan] = useState<ResearchBriefUpdatePlan | null>(null)
+  const [updateDecisions, setUpdateDecisions] = useState<Record<string, ResearchBriefUpdateDecision>>({})
+  const [planningUpdate, setPlanningUpdate] = useState(false)
+  const [applyingUpdate, setApplyingUpdate] = useState(false)
 
   const applyRecord = useCallback((record: ResearchBriefRecord | null) => {
     setActive(record)
@@ -104,18 +112,38 @@ export function ResearchBriefWorkspace({
     setRevisions(rows)
   }, [])
 
+  const configureUpdatePlan = useCallback((plan: ResearchBriefUpdatePlan | null) => {
+    setUpdatePlan(plan)
+    setUpdateDecisions(Object.fromEntries(
+      (plan?.items || []).map((item) => [item.id, item.recommended === 'reject' ? 'reject' : 'accept']),
+    ))
+  }, [])
+
+  const loadOpenUpdatePlan = useCallback(async (record: ResearchBriefRecord) => {
+    if (record.lineage?.status !== 'matrix_updated') {
+      configureUpdatePlan(null)
+      return
+    }
+    try {
+      const plan = await chatApi.getCurrentResearchBriefUpdatePlan(record.id)
+      configureUpdatePlan(plan.base_brief_revision === record.revision ? plan : null)
+    } catch {
+      configureUpdatePlan(null)
+    }
+  }, [configureUpdatePlan])
+
   const selectBrief = useCallback(async (briefId: string) => {
     setLoading(true)
     try {
       const record = await chatApi.getResearchBrief(briefId)
       applyRecord(record)
-      await loadRevisions(briefId)
+      await Promise.all([loadRevisions(briefId), loadOpenUpdatePlan(record)])
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_brief_load_failed)
     } finally {
       setLoading(false)
     }
-  }, [S.research_brief_load_failed, applyRecord, loadRevisions])
+  }, [S.research_brief_load_failed, applyRecord, loadOpenUpdatePlan, loadRevisions])
 
   const loadBriefs = useCallback(async () => {
     if (!projectId) return
@@ -126,17 +154,18 @@ export function ResearchBriefWorkspace({
       if (rows.length > 0) {
         const record = await chatApi.getResearchBrief(rows[0].id)
         applyRecord(record)
-        await loadRevisions(record.id)
+        await Promise.all([loadRevisions(record.id), loadOpenUpdatePlan(record)])
       } else {
         applyRecord(null)
         setRevisions([])
+        configureUpdatePlan(null)
       }
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_brief_load_failed)
     } finally {
       setLoading(false)
     }
-  }, [S.research_brief_load_failed, applyRecord, loadRevisions, projectId])
+  }, [S.research_brief_load_failed, applyRecord, configureUpdatePlan, loadOpenUpdatePlan, loadRevisions, projectId])
 
   const loadMatrices = useCallback(async () => {
     if (!projectId) return
@@ -169,6 +198,7 @@ export function ResearchBriefWorkspace({
 
   const beginNewBrief = () => {
     applyRecord(null)
+    configureUpdatePlan(null)
     setRevisions([])
     setTitle(S.research_brief_default_title)
     setObjective('')
@@ -180,6 +210,7 @@ export function ResearchBriefWorkspace({
     const rows = await chatApi.listResearchBriefs(projectId)
     setBriefs(rows)
     applyRecord(record)
+    configureUpdatePlan(null)
     await loadRevisions(record.id)
   }
 
@@ -223,6 +254,66 @@ export function ResearchBriefWorkspace({
       message.error(error instanceof Error ? error.message : S.research_brief_generate_failed)
     } finally {
       setGenerating(false)
+    }
+  }
+
+  const planIncrementalUpdate = async () => {
+    if (!active || active.lineage?.status !== 'matrix_updated') return
+    if (dirty) {
+      message.warning(S.research_brief_update_save_first)
+      return
+    }
+    setPlanningUpdate(true)
+    try {
+      const plan = await chatApi.createResearchBriefUpdatePlan(active.id, {
+        expected_revision: active.revision,
+        locale: localeKey(),
+      })
+      configureUpdatePlan(plan)
+      message.success(S.research_brief_update_plan_ready)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_brief_update_plan_failed)
+    } finally {
+      setPlanningUpdate(false)
+    }
+  }
+
+  const applyIncrementalUpdate = async () => {
+    if (!active || !updatePlan) return
+    setApplyingUpdate(true)
+    try {
+      const record = await chatApi.applyResearchBriefUpdatePlan(active.id, updatePlan.id, {
+        expected_revision: active.revision,
+        decisions: updatePlan.items.map((item) => ({
+          item_id: item.id,
+          decision: updateDecisions[item.id] || 'reject',
+        })),
+      })
+      await refreshListsAfterRecord(record)
+      setTab('preview')
+      message.success(
+        record.quality_status === 'verified'
+          ? S.research_brief_update_applied_verified
+          : S.research_brief_update_applied_review,
+      )
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_brief_update_apply_failed)
+    } finally {
+      setApplyingUpdate(false)
+    }
+  }
+
+  const discardIncrementalUpdate = async () => {
+    if (!active || !updatePlan) return
+    setApplyingUpdate(true)
+    try {
+      await chatApi.discardResearchBriefUpdatePlan(active.id, updatePlan.id)
+      configureUpdatePlan(null)
+      message.success(S.research_brief_update_plan_discarded)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_brief_update_plan_failed)
+    } finally {
+      setApplyingUpdate(false)
     }
   }
 
@@ -301,7 +392,9 @@ export function ResearchBriefWorkspace({
   const claimRepair = quality.claim_repair && typeof quality.claim_repair === 'object'
     ? quality.claim_repair as Record<string, unknown>
     : {}
-  const evidence = Array.isArray(active?.evidence) ? active.evidence : []
+  const evidence = Array.isArray(active?.evidence)
+    ? active.evidence.filter((item) => !item.citation_slot_filler)
+    : []
   const lineage = active?.lineage
   const lineageStatus = String(lineage?.status || 'untracked')
   const lineageImpact = lineage?.impact || {}
@@ -344,9 +437,16 @@ export function ResearchBriefWorkspace({
           : lineageBlocked
             ? S.research_brief_lineage_blocked_title
             : S.research_brief_lineage_unverified_title
+  const acceptedUpdateCount = updatePlan?.items.filter(
+    (item) => (updateDecisions[item.id] || 'reject') === 'accept',
+  ).length || 0
+  const preservationPercent = Math.round(
+    numeric(updatePlan?.preservation?.unaffected_preservation_ratio) * 100,
+  )
 
   return (
-    <Modal
+    <>
+      <Modal
       open={open}
       onCancel={onClose}
       footer={null}
@@ -413,10 +513,14 @@ export function ResearchBriefWorkspace({
                   </Button>
                   <Button
                     type="primary"
-                    icon={<ReloadOutlined />}
-                    loading={generating}
-                    disabled={!canGenerate}
-                    onClick={() => void generate()}
+                    icon={active && lineageStatus === 'matrix_updated' ? <DiffOutlined /> : <ReloadOutlined />}
+                    loading={generating || planningUpdate}
+                    disabled={!canGenerate || Boolean(active && lineageUpdated && lineageStatus !== 'matrix_updated')}
+                    onClick={() => void (
+                      active && lineageStatus === 'matrix_updated'
+                        ? planIncrementalUpdate()
+                        : generate()
+                    )}
                     data-testid="research-brief-generate"
                   >
                     {active && lineageUpdated
@@ -664,6 +768,119 @@ export function ResearchBriefWorkspace({
           )}
         </section>
       </div>
-    </Modal>
+      </Modal>
+      <Modal
+        open={Boolean(updatePlan)}
+        onCancel={() => configureUpdatePlan(null)}
+        width={1040}
+        destroyOnHidden
+        title={S.research_brief_update_review_title}
+        className="kb-research-brief-update-modal"
+        footer={[
+          <Button key="close" onClick={() => configureUpdatePlan(null)}>
+            {S.research_brief_update_close}
+          </Button>,
+          <Button
+            key="discard"
+            danger
+            loading={applyingUpdate}
+            onClick={() => void discardIncrementalUpdate()}
+            data-testid="research-brief-update-discard"
+          >
+            {S.research_brief_update_discard}
+          </Button>,
+          <Button
+            key="apply"
+            type="primary"
+            loading={applyingUpdate}
+            onClick={() => void applyIncrementalUpdate()}
+            data-testid="research-brief-update-apply"
+          >
+            {S.research_brief_update_apply
+              .replace('{accepted}', String(acceptedUpdateCount))
+              .replace('{total}', String(updatePlan?.items.length || 0))}
+          </Button>,
+        ]}
+      >
+        {updatePlan ? (
+          <div className="kb-research-brief-update-review" data-testid="research-brief-update-plan">
+            <Alert
+              type="info"
+              showIcon
+              message={S.research_brief_update_summary
+                .replace('{source}', String(updatePlan.source_matrix_revision))
+                .replace('{target}', String(updatePlan.target_matrix_revision))
+                .replace('{count}', String(updatePlan.items.length))}
+              description={S.research_brief_update_preservation
+                .replace('{percent}', String(preservationPercent))
+                .replace('{chars}', String(numeric(updatePlan.preservation.unaffected_character_count)))}
+            />
+            {updatePlan.items.length <= 0 ? (
+              <Alert
+                type="success"
+                showIcon
+                message={S.research_brief_update_audit_only}
+              />
+            ) : null}
+            {updatePlan.items.map((item, index) => (
+              <section
+                key={item.id}
+                className="kb-research-brief-update-item"
+                data-testid={`research-brief-update-item-${index}`}
+              >
+                <div className="kb-research-brief-update-item-header">
+                  <div>
+                    <strong>{item.heading || S.research_brief_update_affected_claim}</strong>
+                    <small>
+                      {S.research_brief_update_citations
+                        .replace(
+                          '{before}',
+                          item.citation_numbers_before.map((number) => `[${number}]`).join(', ') || '—',
+                        )
+                        .replace(
+                          '{after}',
+                          item.citation_numbers_after.map((number) => `[${number}]`).join(', ') || S.research_brief_update_deleted,
+                        )}
+                    </small>
+                  </div>
+                  <Radio.Group
+                    value={updateDecisions[item.id] || 'reject'}
+                    onChange={(event) => setUpdateDecisions((current) => ({
+                      ...current,
+                      [item.id]: event.target.value as ResearchBriefUpdateDecision,
+                    }))}
+                    optionType="button"
+                    buttonStyle="solid"
+                    options={[
+                      { label: S.research_brief_update_accept, value: 'accept' },
+                      { label: S.research_brief_update_reject, value: 'reject' },
+                    ]}
+                    data-testid={`research-brief-update-decision-${index}`}
+                  />
+                </div>
+                <div className="kb-research-brief-update-diff">
+                  <div>
+                    <span>{S.research_brief_update_before}</span>
+                    <pre>{item.old_markdown}</pre>
+                  </div>
+                  <div>
+                    <span>{S.research_brief_update_after}</span>
+                    <pre>{item.proposed_markdown || S.research_brief_update_deleted}</pre>
+                  </div>
+                </div>
+              </section>
+            ))}
+            <div className="kb-research-brief-update-preview">
+              <strong>{S.research_brief_update_preview}</strong>
+              <MarkdownRenderer
+                content={updatePlan.preview_content_markdown}
+                citeDetails={[]}
+                linkifyPlainCitations={false}
+              />
+            </div>
+          </div>
+        ) : null}
+      </Modal>
+    </>
   )
 }

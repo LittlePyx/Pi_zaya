@@ -31,9 +31,11 @@ unsupported claim from diagnostics, or weakening citation matching.
 8. Edit and save as needed. Each save creates a new revision; restoring an old
    revision also creates a new revision instead of rewriting history.
 9. If the source matrix advances, review the displayed row, field, comparison,
-   source, and citation impact, then use **Update from latest matrix**. Existing
-   matrix-backed briefs stay bound to their original matrix; changing matrices
-   requires a new brief.
+   source, and citation impact, then use **Review latest matrix update**. The
+   product persists a revision- and fingerprint-bound update plan, shows the
+   current and proposed Markdown for every affected citation-bearing block, and
+   lets the user accept or retain each proposal. Existing matrix-backed briefs
+   stay bound to their original matrix; changing matrices requires a new brief.
 10. Export the current revision as Markdown, DOCX, BibTeX, or RIS. Every export
     records the saved and current matrix revisions plus the freshness state.
 
@@ -96,9 +98,23 @@ generation, and update responses. Its main states are:
 
 An ordinary historical export remains available for a valid older revision and
 is visibly labeled `historical`; this preserves reproducibility rather than
-hiding staleness. Same-matrix regeneration requires `brief_id`,
-`expected_revision`, and the bound `matrix_id`. It creates a new brief revision
-using the latest verified matrix and reruns the full claim/evidence audit.
+hiding staleness. A changed same-matrix brief cannot use the legacy whole-body
+regeneration path. It must first create an incremental update plan. The plan:
+
+- binds the brief revision, content hash, matrix revision, and matrix contract
+  fingerprint;
+- keeps surviving citations in stable slots so an earlier removed claim does
+  not force unrelated citation renumbering;
+- synthesizes only affected citation-bearing Markdown blocks, with an explicit
+  source-extractive fallback when focused model output fails the evidence gate;
+- preserves every byte outside those affected spans;
+- records accept/retain decisions and creates a new immutable brief revision;
+- reruns the complete claim, citation, source-coverage, and locator audit after
+  the merge. Retaining any stale proposal forces `needs_review` even when the
+  remaining claims happen to pass.
+
+If the brief or matrix changes while the review is open, applying the plan
+returns HTTP 409. It never silently rebases a reviewed proposal.
 
 ## Version and Concurrency Rules
 
@@ -113,6 +129,10 @@ automatic snapshot and is blocked if that backup fails.
 - `GET/POST /api/projects/{project_id}/research-briefs`
 - `POST /api/projects/{project_id}/research-briefs/generate`
 - `GET/PATCH/DELETE /api/research-briefs/{brief_id}`
+- `POST /api/research-briefs/{brief_id}/update-plans`
+- `GET /api/research-briefs/{brief_id}/update-plans/current`
+- `POST /api/research-briefs/{brief_id}/update-plans/{plan_id}/apply`
+- `DELETE /api/research-briefs/{brief_id}/update-plans/{plan_id}`
 - `GET /api/research-briefs/{brief_id}/revisions`
 - `GET /api/research-briefs/{brief_id}/revisions/{revision}`
 - `POST /api/research-briefs/{brief_id}/restore`
@@ -123,6 +143,40 @@ basket keys are accepted per generation request. Matrix-backed generation sends
 `matrix_id`; the saved brief quality record includes `source_matrix_id`,
 `source_matrix_revision`, `source_matrix_quality_status`,
 `source_matrix_title`, and `source_matrix_fingerprint`.
+
+Incremental plan creation and application both require `expected_revision`.
+Application accepts an explicit `accept` or `reject` decision per plan item.
+Missing decisions are treated as rejection, never implicit acceptance.
+
+## Real Incremental Update Replay
+
+The incremental acceptance runner replays the five reviewed real matrices,
+changes one brief-used grounded matrix cell without weakening its source
+evidence, builds a one-claim update plan, applies it, and reruns the full audit:
+
+```bash
+python tools/research_brief/run_incremental_update_eval.py
+python tools/research_brief/run_incremental_update_eval.py --live
+```
+
+The deterministic run requires 5/5 verified merges, exact preservation outside
+the affected span, no unresolved citation, and one auditable change item per
+case. `--live` additionally exercises focused model synthesis; any unsupported
+candidate falls back to the source sentence and remains visibly recorded in the
+plan. The report compares plan latency with the last five-case whole-brief
+generation baseline and records the minimum preserved-content ratio.
+
+The 2026-08-08 acceptance passed 5/5 deterministic cases in
+`test_results/research_brief_incremental_update/20260808_095434/report.json`
+and 5/5 configured-model cases in
+`test_results/research_brief_incremental_update/20260808_095853/report.json`.
+Every case produced exactly one affected change item, preserved all bytes
+outside that item, finished with a verified full-brief audit, and had no
+unresolved citations. The live run used focused model synthesis in 4/5 cases;
+the fifth candidate failed its focused evidence gate and used the disclosed
+extractive fallback. Median live plan time was 1.55 s (2.00 s max), versus the
+last five-case whole-brief baseline of 3.96 s median (4.06 s max), while the
+minimum unaffected-content preservation ratio was 80.94%.
 
 ## Real Lineage Replay
 
@@ -152,6 +206,7 @@ Run the focused implementation checks:
 ```bash
 python -m pytest -q tests/unit/test_research_brief.py tests/unit/test_research_brief_lineage.py tests/unit/test_chat_store_research_briefs.py tests/unit/test_evidence_matrix.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_research_briefs_api.py tests/sanity/test_evidence_matrices_api.py
 python tools/research_brief/run_lineage_eval.py
+python tools/research_brief/run_incremental_update_eval.py
 cd web
 npm run lint
 npm run build

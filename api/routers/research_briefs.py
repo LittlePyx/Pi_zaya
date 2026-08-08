@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from api.deps import get_chat_store, get_settings
 from kb.agent.runner import run_research_agent
+from kb.agent.tools import generate_grounded_answer, verify_answer_citations
 from kb.maintenance import create_auto_snapshot
 from kb.research_brief import (
     research_brief_bibliography,
@@ -26,6 +27,12 @@ from kb.research_brief import (
 from kb.research_brief_lineage import (
     matrix_contract_fingerprint,
     research_brief_lineage,
+)
+from kb.research_brief_update import (
+    apply_research_brief_update_decisions,
+    build_research_brief_update_plan,
+    research_brief_content_hash,
+    stable_matrix_hits,
 )
 
 
@@ -75,6 +82,28 @@ class ResearchBriefRestoreBody(BaseModel):
 
     revision: int = Field(..., ge=1)
     expected_revision: int = Field(..., ge=1)
+
+
+class ResearchBriefUpdatePlanCreateBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(..., ge=1)
+    locale: str = Field("zh", max_length=16)
+    max_tokens: int = Field(800, ge=200, le=1_600)
+
+
+class ResearchBriefUpdateDecision(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    item_id: str = Field(..., min_length=1, max_length=120)
+    decision: Literal["accept", "reject"]
+
+
+class ResearchBriefUpdatePlanApplyBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(..., ge=1)
+    decisions: list[ResearchBriefUpdateDecision] = Field(default_factory=list, max_length=100)
 
 
 def _project_or_404(project_id: str) -> dict:
@@ -139,6 +168,40 @@ def _briefs_with_lineage(records: list[dict]) -> list[dict]:
 def _conflict_response(record: dict | None) -> None:
     current_revision = int((record or {}).get("revision") or 0)
     raise HTTPException(409, f"research brief revision conflict; current revision is {current_revision}")
+
+
+def _brief_update_matrices(record: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    quality = record.get("quality") if isinstance(record.get("quality"), dict) else {}
+    matrix_id = str(quality.get("source_matrix_id") or "").strip()
+    source_revision = int(quality.get("source_matrix_revision") or 0)
+    if not matrix_id or source_revision <= 0:
+        raise HTTPException(400, "incremental updates require a matrix-backed research brief")
+    store = get_chat_store()
+    current = store.get_evidence_matrix(matrix_id)
+    if current is None or str(current.get("project_id") or "") != str(record.get("project_id") or ""):
+        raise HTTPException(409, "source evidence matrix is unavailable")
+    if str(current.get("quality_status") or "") != "verified":
+        raise HTTPException(409, "the latest evidence matrix must be verified before planning an update")
+    current_revision = int(current.get("revision") or 1)
+    if current_revision <= source_revision:
+        historical = current
+    else:
+        historical = store.get_evidence_matrix_revision(matrix_id, source_revision)
+    if historical is None:
+        raise HTTPException(409, "the source evidence-matrix revision is unavailable")
+    lineage = research_brief_lineage(
+        record,
+        current_matrix=current,
+        historical_matrix=historical,
+        include_impact=True,
+    )
+    if str(lineage.get("status") or "") != "matrix_updated":
+        raise HTTPException(
+            409,
+            "an incremental update plan requires a verified matrix change with auditable impact; "
+            f"current lineage status is {lineage.get('status') or 'unknown'}",
+        )
+    return historical, current, lineage
 
 
 def _download_name(record: dict, suffix: str) -> str:
@@ -206,6 +269,26 @@ def generate_research_brief(project_id: str, body: ResearchBriefGenerateBody):
             raise HTTPException(404, "evidence matrix not found in project")
         if str(source_matrix.get("quality_status") or "") != "verified":
             raise HTTPException(400, "research briefs require a verified evidence matrix")
+        if current is not None:
+            current_quality = current.get("quality") if isinstance(current.get("quality"), dict) else {}
+            saved_matrix_revision = int(current_quality.get("source_matrix_revision") or 0)
+            latest_matrix_revision = int(source_matrix.get("revision") or 1)
+            if saved_matrix_revision > 0 and latest_matrix_revision > saved_matrix_revision:
+                historical_matrix = store.get_evidence_matrix_revision(
+                    str(source_matrix.get("id") or ""),
+                    saved_matrix_revision,
+                )
+                lineage = research_brief_lineage(
+                    current,
+                    current_matrix=source_matrix,
+                    historical_matrix=historical_matrix,
+                    include_impact=True,
+                )
+                if str(lineage.get("status") or "") == "matrix_updated":
+                    raise HTTPException(
+                        409,
+                        "the evidence matrix changed; create and review an incremental update plan instead of replacing the full brief",
+                    )
         selected_items = [
             item
             for item in list(source_matrix.get("source_items") or [])
@@ -357,6 +440,227 @@ def update_research_brief(brief_id: str, body: ResearchBriefUpdateBody):
         _conflict_response(record)
     if record is None:
         raise HTTPException(404, "research brief not found")
+    return _brief_with_lineage(record)
+
+
+@router.post("/research-briefs/{brief_id}/update-plans")
+def create_research_brief_update_plan(brief_id: str, body: ResearchBriefUpdatePlanCreateBody):
+    record = _brief_or_404(brief_id)
+    if int(record.get("revision") or 1) != int(body.expected_revision):
+        _conflict_response(record)
+    historical_matrix, current_matrix, lineage = _brief_update_matrices(record)
+    impact = lineage.get("impact") if isinstance(lineage.get("impact"), dict) else {}
+    plan = build_research_brief_update_plan(
+        record,
+        historical_matrix=historical_matrix,
+        current_matrix=current_matrix,
+        impact=impact,
+        locale=body.locale,
+        settings=get_settings(),
+        max_tokens=body.max_tokens,
+        model_generator=generate_grounded_answer,
+    )
+    fingerprint = matrix_contract_fingerprint(current_matrix)
+    saved, conflict = get_chat_store().create_research_brief_update_plan(
+        brief_id,
+        expected_revision=body.expected_revision,
+        matrix_id=str(current_matrix.get("id") or ""),
+        matrix_revision=int(current_matrix.get("revision") or 1),
+        matrix_fingerprint=fingerprint,
+        payload=plan,
+    )
+    if conflict:
+        _conflict_response(_brief_or_404(brief_id))
+    if saved is None:
+        raise HTTPException(404, "research brief not found")
+    return saved
+
+
+@router.get("/research-briefs/{brief_id}/update-plans/current")
+def get_current_research_brief_update_plan(brief_id: str):
+    _brief_or_404(brief_id)
+    plan = get_chat_store().get_open_research_brief_update_plan(brief_id)
+    if plan is None:
+        raise HTTPException(404, "open research brief update plan not found")
+    return plan
+
+
+@router.delete("/research-briefs/{brief_id}/update-plans/{plan_id}")
+def discard_research_brief_update_plan(brief_id: str, plan_id: str):
+    _brief_or_404(brief_id)
+    if not get_chat_store().set_research_brief_update_plan_status(
+        brief_id,
+        plan_id,
+        status="discarded",
+    ):
+        raise HTTPException(404, "open research brief update plan not found")
+    return {"ok": True}
+
+
+@router.post("/research-briefs/{brief_id}/update-plans/{plan_id}/apply")
+def apply_research_brief_update_plan(
+    brief_id: str,
+    plan_id: str,
+    body: ResearchBriefUpdatePlanApplyBody,
+):
+    store = get_chat_store()
+    current = _brief_or_404(brief_id)
+    if int(current.get("revision") or 1) != int(body.expected_revision):
+        _conflict_response(current)
+    plan = store.get_research_brief_update_plan(brief_id, plan_id)
+    if plan is None or str(plan.get("status") or "") != "open":
+        raise HTTPException(404, "open research brief update plan not found")
+    if int(plan.get("base_brief_revision") or 0) != int(body.expected_revision):
+        raise HTTPException(409, "research brief update plan is stale")
+    base_content = str(current.get("content_markdown") or "")
+    if str(plan.get("base_content_hash") or "") != research_brief_content_hash(base_content):
+        raise HTTPException(409, "research brief content changed after the update plan was created")
+    matrix = store.get_evidence_matrix(str(plan.get("matrix_id") or ""))
+    if matrix is None or str(matrix.get("project_id") or "") != str(current.get("project_id") or ""):
+        raise HTTPException(409, "source evidence matrix is unavailable")
+    if str(matrix.get("quality_status") or "") != "verified":
+        raise HTTPException(409, "the source evidence matrix is no longer verified")
+    if (
+        int(matrix.get("revision") or 1) != int(plan.get("target_matrix_revision") or 0)
+        or matrix_contract_fingerprint(matrix) != str(plan.get("matrix_fingerprint") or "")
+    ):
+        raise HTTPException(409, "source evidence matrix changed after the update plan was created")
+
+    items = [item for item in list(plan.get("items") or []) if isinstance(item, dict)]
+    item_ids = {str(item.get("id") or "") for item in items}
+    decisions = {str(item.item_id): str(item.decision) for item in body.decisions}
+    unknown = sorted(set(decisions) - item_ids)
+    if unknown:
+        raise HTTPException(400, "update decisions contain unknown change items: " + ", ".join(unknown[:8]))
+    merged = apply_research_brief_update_decisions(base_content, items, decisions)
+    answer = str(merged.get("content_markdown") or "")
+    hits = stable_matrix_hits(
+        [item for item in list(current.get("evidence") or []) if isinstance(item, dict)],
+        matrix,
+    )
+    evidence = research_brief_evidence(hits)
+    selected_items = [item for item in list(matrix.get("source_items") or []) if isinstance(item, dict)]
+    bibliography = research_brief_bibliography(selected_items, evidence)
+    verification_payload = verify_answer_citations(answer, hits, answer_mode="evidence_grounded")
+    verification = verification_payload.get("verification") if isinstance(verification_payload.get("verification"), dict) else {}
+    verification_passed = bool(
+        str(verification.get("evidence_status") or "").strip().lower() == "grounded"
+        and int(verification.get("total_claims") or 0) > 0
+        and int(verification.get("unsupported_claims") or 0) == 0
+        and float(verification.get("support_ratio") or 0.0) >= 0.999
+    )
+    rejected = list(merged.get("rejected_item_ids") or [])
+    trace = {
+        "mode": "research_agent",
+        "question_type": "multi_paper_comparison",
+        "context": {
+            "query_scope": "basket",
+            "answer_contract": "research_brief_incremental_update",
+            "source_matrix_id": str(matrix.get("id") or ""),
+            "source_matrix_revision": int(matrix.get("revision") or 1),
+            "base_brief_revision": int(current.get("revision") or 1),
+            "update_plan_id": str(plan.get("id") or ""),
+        },
+        "plan": items,
+        "steps": [
+            {
+                "tool": "review_incremental_update",
+                "status": "done",
+                "observation": "Applied only accepted change items and preserved every unaffected Markdown span.",
+                "output": {
+                    "accepted_item_ids": list(merged.get("accepted_item_ids") or []),
+                    "rejected_item_ids": rejected,
+                },
+                "error": "",
+                "elapsed_ms": 0,
+            },
+            {
+                "tool": "verify_answer_citations",
+                "status": "done",
+                "observation": str(verification_payload.get("observation") or ""),
+                "output": verification,
+                "error": "",
+                "elapsed_ms": 0,
+            },
+        ],
+        "verification": verification,
+        "status": "done",
+        "errors": [],
+        "summary": {
+            "query_scope": "basket",
+            "quality_gate_status": "passed" if verification_passed else "failed",
+            "quality_gate_warnings": [
+                "incremental_update_rejected_changes" if rejected else "",
+                "incremental_update_full_audit_failed" if not verification_passed else "",
+                "incremental_extractive_fallback"
+                if any(
+                    "extractive_fallback" in list(item.get("generation_modes") or [])
+                    for item in items
+                )
+                else "",
+            ],
+            **{
+                key: verification.get(key)
+                for key in (
+                    "total_claims",
+                    "supported_claims",
+                    "unsupported_claims",
+                    "support_ratio",
+                    "evidence_status",
+                )
+            },
+        },
+    }
+    quality_status, quality = research_brief_quality(
+        answer=answer,
+        agent_trace=trace,
+        selected_items=selected_items,
+        evidence=evidence,
+    )
+    if rejected:
+        quality_status = "needs_review"
+        quality["reasons"] = sorted(
+            {
+                *[str(item) for item in list(quality.get("reasons") or []) if str(item)],
+                "incremental_update_rejected_changes",
+            }
+        )
+    quality.update(
+        {
+            "source_matrix_id": str(matrix.get("id") or ""),
+            "source_matrix_revision": int(matrix.get("revision") or 1),
+            "source_matrix_quality_status": str(matrix.get("quality_status") or ""),
+            "source_matrix_title": str(matrix.get("title") or ""),
+            "source_matrix_fingerprint": matrix_contract_fingerprint(matrix),
+            "incremental_update": {
+                "contract_version": 1,
+                "plan_id": str(plan.get("id") or ""),
+                "base_brief_revision": int(current.get("revision") or 1),
+                "source_matrix_revision": int(plan.get("source_matrix_revision") or 0),
+                "target_matrix_revision": int(matrix.get("revision") or 1),
+                "accepted_item_ids": list(merged.get("accepted_item_ids") or []),
+                "rejected_item_ids": rejected,
+                "base_content_hash": research_brief_content_hash(base_content),
+                "generation": dict(plan.get("generation") or {}),
+                "preservation": dict(plan.get("preservation") or {}),
+            },
+        }
+    )
+    record, conflict = store.update_research_brief(
+        brief_id,
+        expected_revision=body.expected_revision,
+        content_markdown=answer,
+        evidence=evidence,
+        bibliography=bibliography,
+        agent_trace=trace,
+        quality_status=quality_status,
+        quality=quality,
+    )
+    if conflict:
+        _conflict_response(record)
+    if record is None:
+        raise HTTPException(404, "research brief not found")
+    store.set_research_brief_update_plan_status(brief_id, plan_id, status="applied")
     return _brief_with_lineage(record)
 
 

@@ -174,6 +174,7 @@ def test_research_brief_can_use_only_a_verified_matrix(monkeypatch, tmp_path: Pa
                         "source_path": source_path,
                         "source_name": "Paper A",
                         "heading_path": "Method / Architecture",
+                        "matrix_field": "method",
                     },
                 }
             ],
@@ -238,7 +239,7 @@ def test_research_brief_can_use_only_a_verified_matrix(monkeypatch, tmp_path: Pa
     assert "current matrix revision: 2" in historical_export.text
     assert "freshness: matrix_updated" in historical_export.text
 
-    regenerated = client.post(
+    full_replace = client.post(
         f"/api/projects/{project_id}/research-briefs/generate",
         json={
             "title": "Matrix brief",
@@ -246,6 +247,33 @@ def test_research_brief_can_use_only_a_verified_matrix(monkeypatch, tmp_path: Pa
             "matrix_id": matrix["id"],
             "brief_id": brief["id"],
             "expected_revision": 1,
+        },
+    )
+    assert full_replace.status_code == 409
+    assert "incremental update plan" in full_replace.json()["detail"]
+
+    monkeypatch.setattr(
+        brief_router,
+        "generate_grounded_answer",
+        lambda *args, **kwargs: {
+            "answer": "- Paper A uses a revised coded optical network [1].",
+        },
+    )
+    planned = client.post(
+        f"/api/research-briefs/{brief['id']}/update-plans",
+        json={"expected_revision": 1, "locale": "en"},
+    )
+    assert planned.status_code == 200
+    update_plan = planned.json()
+    assert len(update_plan["items"]) == 1
+    assert "revised coded optical network" in update_plan["items"][0]["proposed_markdown"]
+    regenerated = client.post(
+        f"/api/research-briefs/{brief['id']}/update-plans/{update_plan['id']}/apply",
+        json={
+            "expected_revision": 1,
+            "decisions": [
+                {"item_id": update_plan["items"][0]["id"], "decision": "accept"},
+            ],
         },
     )
     assert regenerated.status_code == 200

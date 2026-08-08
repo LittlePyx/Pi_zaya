@@ -76,3 +76,55 @@ def test_research_briefs_are_project_scoped_and_deleted_with_project(tmp_path: P
     assert store.delete_project(project_a) is True
     assert store.get_research_brief(brief_a["id"]) is None
     assert store.get_research_brief(brief_b["id"]) is not None
+
+
+def test_research_brief_update_plans_are_persistent_version_bound_and_superseded(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    project_id = store.create_project("Incremental updates")
+    brief = store.create_research_brief(project_id=project_id, title="Brief", content_markdown="Old [1].")
+    assert brief is not None
+
+    first, conflict = store.create_research_brief_update_plan(
+        brief["id"],
+        expected_revision=1,
+        matrix_id="matrix-1",
+        matrix_revision=2,
+        matrix_fingerprint="fingerprint-2",
+        payload={"items": [{"id": "change-1"}], "base_content_hash": "hash"},
+    )
+    assert conflict is False
+    assert first is not None
+    assert first["status"] == "open"
+    assert store.get_open_research_brief_update_plan(brief["id"])["id"] == first["id"]
+
+    second, conflict = store.create_research_brief_update_plan(
+        brief["id"],
+        expected_revision=1,
+        matrix_id="matrix-1",
+        matrix_revision=2,
+        matrix_fingerprint="fingerprint-2",
+        payload={"items": []},
+    )
+    assert conflict is False
+    assert second is not None
+    assert second["id"] != first["id"]
+    assert store.get_research_brief_update_plan(brief["id"], first["id"])["status"] == "superseded"
+    assert store.get_open_research_brief_update_plan(brief["id"])["id"] == second["id"]
+
+    updated, conflict = store.update_research_brief(
+        brief["id"],
+        expected_revision=1,
+        content_markdown="New [1].",
+    )
+    assert conflict is False
+    assert updated is not None
+    stale, conflict = store.create_research_brief_update_plan(
+        brief["id"],
+        expected_revision=1,
+        matrix_id="matrix-1",
+        matrix_revision=3,
+        matrix_fingerprint="fingerprint-3",
+        payload={},
+    )
+    assert stale["base_brief_revision"] == 2
+    assert conflict is True

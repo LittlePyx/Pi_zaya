@@ -269,6 +269,7 @@ def research_brief_evidence(hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 ),
                 "matrix_field": _first_text(meta, "matrix_field", limit=80),
                 "comparison_audit_id": _first_text(meta, "comparison_audit_id", limit=120),
+                "citation_slot_filler": bool(meta.get("citation_slot_filler")),
                 "score": _safe_float(hit.get("score")),
             }
         )
