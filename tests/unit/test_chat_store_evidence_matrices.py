@@ -61,3 +61,85 @@ def test_evidence_matrix_revision_conflict_restore_and_project_cascade(tmp_path:
 
     assert store.delete_project(project_id) is True
     assert store.get_evidence_matrix(created["id"]) is None
+
+
+def test_evidence_watch_events_are_deduplicated_acknowledged_and_cascaded(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    project_id = store.create_project("Living review")
+    matrix = store.create_evidence_matrix(project_id=project_id, title="Tracked matrix")
+    assert matrix is not None
+    snapshot = {"contract_version": 1, "sources": [], "fingerprint": "base"}
+    baseline = store.set_evidence_watch_baseline(
+        matrix["id"],
+        project_id=project_id,
+        matrix_revision=1,
+        snapshot=snapshot,
+    )
+    assert baseline is not None
+    assert baseline["snapshot"]["fingerprint"] == "base"
+    event = {
+        "event_key": "same-change",
+        "kind": "source_added",
+        "actionable": True,
+        "source_identity": "f:/papers/a.md",
+        "impact": {"affected_row_ids": []},
+    }
+
+    first = store.sync_evidence_watch_events(
+        project_id=project_id,
+        matrix_id=matrix["id"],
+        matrix_revision=1,
+        events=[event],
+    )
+    second = store.sync_evidence_watch_events(
+        project_id=project_id,
+        matrix_id=matrix["id"],
+        matrix_revision=1,
+        events=[event],
+    )
+    assert len(first) == len(second) == 1
+    assert first[0]["id"] == second[0]["id"]
+
+    ignored = store.set_evidence_watch_event_status(
+        first[0]["id"],
+        project_id=project_id,
+        status="ignored",
+    )
+    assert ignored is not None
+    assert ignored["status"] == "ignored"
+    assert store.sync_evidence_watch_events(
+        project_id=project_id,
+        matrix_id=matrix["id"],
+        matrix_revision=2,
+        events=[event],
+    ) == []
+    assert store.get_evidence_watch_event(first[0]["id"])["matrix_revision"] == 2
+
+    transient = {**event, "event_key": "transient-change", "kind": "source_unavailable"}
+    opened = store.sync_evidence_watch_events(
+        project_id=project_id,
+        matrix_id=matrix["id"],
+        matrix_revision=2,
+        events=[transient],
+    )
+    assert len(opened) == 1
+    transient_id = opened[0]["id"]
+    assert store.sync_evidence_watch_events(
+        project_id=project_id,
+        matrix_id=matrix["id"],
+        matrix_revision=2,
+        events=[],
+    ) == []
+    assert store.get_evidence_watch_event(transient_id)["status"] == "resolved"
+    reopened = store.sync_evidence_watch_events(
+        project_id=project_id,
+        matrix_id=matrix["id"],
+        matrix_revision=2,
+        events=[transient],
+    )
+    assert len(reopened) == 1
+    assert reopened[0]["id"] == transient_id
+    assert reopened[0]["status"] == "open"
+
+    assert store.delete_project(project_id) is True
+    assert store.get_evidence_watch_event(first[0]["id"]) is None

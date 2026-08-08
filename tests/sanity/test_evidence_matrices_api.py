@@ -141,6 +141,171 @@ def test_evidence_matrix_api_generates_versions_edits_and_exports(monkeypatch, t
     assert xlsx.content.startswith(b"PK")
 
 
+def test_evidence_change_scan_and_apply_refreshes_only_affected_source(monkeypatch, tmp_path: Path) -> None:
+    from api.routers import evidence_matrices as matrix_router
+    from kb.evidence_watch import source_watch_snapshot
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    project_id = store.create_project("Living matrix")
+    source_a = tmp_path / "paper-a.md"
+    source_b = tmp_path / "paper-b.md"
+    source_a.write_text("Paper A evidence", encoding="utf-8")
+    source_b.write_text("Paper B evidence", encoding="utf-8")
+    item_a = {"key": "paper-a", "title": "Paper A", "sourceName": "Paper A", "sourcePath": str(source_a)}
+    item_b = {"key": "paper-b", "title": "Paper B", "sourceName": "Paper B", "sourcePath": str(source_b)}
+    store.save_citation_shelf(
+        project_id=project_id,
+        scope="project",
+        items=[item_a],
+        open=True,
+    )
+    rows_a, evidence_a, flags_a = _generated_matrix(str(source_a))
+    rows_a[0]["notes"] = "Preserve this reviewed note."
+    baseline = source_watch_snapshot([item_a], shelf_revision=1)
+    matrix = store.create_evidence_matrix(
+        project_id=project_id,
+        title="Living evidence",
+        objective="Compare methods.",
+        rows=rows_a,
+        evidence=evidence_a,
+        source_items=[item_a],
+        comparison_flags=flags_a,
+        quality_status="verified",
+        quality={"contract_version": 2, "reasons": [], "source_watch_snapshot": baseline},
+    )
+    assert matrix is not None
+    manual_draft = store.create_evidence_matrix(project_id=project_id, title="Unbound manual draft")
+    assert manual_draft is not None
+    store.set_evidence_watch_baseline(
+        matrix["id"],
+        project_id=project_id,
+        matrix_revision=1,
+        snapshot=baseline,
+    )
+    store.save_citation_shelf(
+        project_id=project_id,
+        scope="project",
+        items=[item_a, item_b],
+        open=True,
+    )
+
+    def fake_build(selected_items, **_kwargs):
+        assert len(selected_items) == 1
+        assert str(selected_items[0]["sourcePath"]) == str(source_b)
+        rows, evidence, flags = _generated_matrix(str(source_b))
+        rows[0].update(
+            {
+                "id": "row-b",
+                "source_item_key": "paper-b",
+                "paper": "Paper B",
+                "source_name": "Paper B",
+            }
+        )
+        evidence[0].update(
+            {
+                "id": "ev-method-b",
+                "source_item_key": "paper-b",
+                "source_name": "Paper B",
+                "title": "Paper B",
+                "evidence_quote": "Paper B uses a distinct optical network.",
+            }
+        )
+        rows[0]["cells"]["method"].update(
+            {
+                "value": evidence[0]["evidence_quote"],
+                "evidence_ids": [evidence[0]["id"]],
+            }
+        )
+        return rows, evidence, flags
+
+    monkeypatch.setattr(matrix_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(matrix_router, "get_settings", lambda: SimpleNamespace(db_dir=tmp_path))
+    monkeypatch.setattr(matrix_router, "build_project_evidence_matrix", fake_build)
+    monkeypatch.setattr(matrix_router, "_indexed_source_is_fresh", lambda _source_path: True)
+    client = TestClient(app)
+
+    scanned = client.post(f"/api/projects/{project_id}/evidence-changes/scan")
+    assert scanned.status_code == 200
+    events = scanned.json()["items"]
+    assert len(events) == 1
+    assert events[0]["kind"] == "source_added"
+    assert events[0]["actionable"] is True
+    assert events[0]["matrix_id"] == matrix["id"]
+
+    applied = client.post(
+        f"/api/evidence-matrices/{matrix['id']}/evidence-changes/apply",
+        json={"expected_revision": 1, "event_ids": [events[0]["id"]]},
+    )
+    assert applied.status_code == 200
+    payload = applied.json()
+    record = payload["record"]
+    assert record["revision"] == 2
+    assert payload["refreshed_source_count"] == 1
+    assert payload["preserved_row_count"] == 1
+    assert [row["id"] for row in record["rows"]] == ["row-a", "row-b"]
+    assert record["rows"][0] == rows_a[0]
+    assert record["rows"][1]["cells"]["method"]["evidence_ids"] == ["ev-method-b"]
+    assert record["quality"]["last_evidence_change_application"]["refreshed_row_count"] == 1
+    assert client.get(f"/api/projects/{project_id}/evidence-changes").json()["items"] == []
+
+    store.save_citation_shelf(
+        project_id=project_id,
+        scope="project",
+        items=[{**item_a, "title": "Paper A corrected"}, item_b],
+        open=True,
+    )
+    source_b.write_text("Paper B changed evidence", encoding="utf-8")
+    metadata_scan = client.post(f"/api/projects/{project_id}/evidence-changes/scan")
+    assert metadata_scan.status_code == 200
+    metadata_events = metadata_scan.json()["items"]
+    assert {event["kind"] for event in metadata_events} == {
+        "source_content_changed",
+        "source_metadata_changed",
+    }
+    content_event = next(event for event in metadata_events if event["kind"] == "source_content_changed")
+    metadata_event = next(event for event in metadata_events if event["kind"] == "source_metadata_changed")
+    metadata_blocked = client.post(
+        f"/api/evidence-matrices/{matrix['id']}/evidence-changes/apply",
+        json={"expected_revision": 2, "event_ids": [content_event["id"]]},
+    )
+    assert metadata_blocked.status_code == 409
+    assert "metadata-only" in metadata_blocked.json()["detail"]
+    acknowledged = client.post(
+        f"/api/projects/{project_id}/evidence-changes/{metadata_event['id']}/ignore",
+        json={},
+    )
+    assert acknowledged.status_code == 200
+
+    source_a.unlink()
+    rescanned = client.post(f"/api/projects/{project_id}/evidence-changes/scan")
+    assert rescanned.status_code == 200
+    next_events = rescanned.json()["items"]
+    assert {event["kind"] for event in next_events} == {
+        "source_content_changed",
+        "source_unavailable",
+    }
+    changed = next(event for event in next_events if event["kind"] == "source_content_changed")
+    unavailable = next(event for event in next_events if event["kind"] == "source_unavailable")
+
+    partial = client.post(
+        f"/api/evidence-matrices/{matrix['id']}/evidence-changes/apply",
+        json={"expected_revision": 2, "event_ids": [changed["id"]]},
+    )
+    assert partial.status_code == 409
+    assert "all open actionable" in partial.json()["detail"]
+    ignored = client.post(
+        f"/api/projects/{project_id}/evidence-changes/{unavailable['id']}/ignore",
+        json={},
+    )
+    assert ignored.status_code == 400
+    blocked = client.post(
+        f"/api/evidence-matrices/{matrix['id']}/evidence-changes/apply",
+        json={"expected_revision": 2, "event_ids": [event["id"] for event in next_events]},
+    )
+    assert blocked.status_code == 409
+    assert "unavailable" in blocked.json()["detail"]
+
+
 def test_research_brief_can_use_only_a_verified_matrix(monkeypatch, tmp_path: Path) -> None:
     from api.routers import research_briefs as brief_router
 

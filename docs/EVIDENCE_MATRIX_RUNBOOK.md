@@ -1,6 +1,6 @@
 # Evidence Matrix Runbook
 
-Updated: 2026-08-07
+Updated: 2026-08-08
 
 ## Purpose
 
@@ -38,6 +38,49 @@ cell stays empty.
 7. Open **Comparisons**, select two sources, and enter the exact phrases and
    values to audit. Review any user-confirmed semantic mapping, the paired
    source excerpts, and the explicit comparable/not-comparable result.
+8. Use **Scan evidence changes** or review the automatic scan when the workspace
+   opens. Inspect the affected rows, fields, comparison audits, briefs, and
+   citations before acknowledging metadata-only changes or confirming an
+   affected-source refresh.
+
+## Evidence Change Inbox
+
+Each generated matrix stores an exact SHA-256 full-text fingerprint and a
+separate bibliographic-metadata fingerprint for every selected source. The
+project scan compares that immutable generation baseline with the current
+literature basket and current files. It persists and deduplicates five visible
+event types:
+
+- `source_added`, `source_removed`, and `source_content_changed` can be applied;
+- `source_unavailable` stays visible until the source is repaired or removed
+  from the basket;
+- `source_metadata_changed` is explicitly metadata-only and can be
+  acknowledged without rebuilding evidence.
+
+The scan keeps the matrix's existing sources stable when a project basket is
+larger than the eight-source matrix contract. Newly added basket sources fill
+only remaining matrix slots, so basket ordering cannot create a false removal.
+
+No event changes a matrix automatically. Applying confirmed events uses
+optimistic concurrency, rebuilds only rows and evidence for the affected
+sources, preserves unaffected rows and manual notes, recomputes comparison
+boundaries, and re-audits only saved comparisons that touch an affected row.
+It then runs the complete matrix evidence contract and creates exactly one new
+immutable revision. Matrix-backed briefs remain historical snapshots and show
+`matrix_updated`; their existing incremental-update review is the only path to
+a new brief revision.
+
+A changed or newly added full text must have a current chunk index before it
+can be applied. The API returns HTTP 409 when the file hash and indexed hash do
+not match, rather than rebuilding a row from stale chunks. An unavailable
+source is likewise blocked until repaired or removed. The UI reports these
+states instead of hiding them or treating fewer sources as a successful speed
+optimization.
+
+Legacy matrices have no historical file fingerprint. Their first scan creates
+a baseline from the matrix's recorded sources and current files, so it can
+immediately detect basket additions/removals but does not claim to know whether
+a file changed before monitoring began.
 
 ## Evidence Contract
 
@@ -92,6 +135,10 @@ creation fails.
 - `POST /api/evidence-matrices/{matrix_id}/restore`
 - `POST /api/evidence-matrices/{matrix_id}/comparison-audits`
 - `DELETE /api/evidence-matrices/{matrix_id}/comparison-audits/{comparison_id}`
+- `GET /api/projects/{project_id}/evidence-changes`
+- `POST /api/projects/{project_id}/evidence-changes/scan`
+- `POST /api/projects/{project_id}/evidence-changes/{event_id}/ignore`
+- `POST /api/evidence-matrices/{matrix_id}/evidence-changes/apply`
 - `GET /api/evidence-matrices/{matrix_id}/export?format=markdown|csv|xlsx`
 
 Refreshing requires `matrix_id` and `expected_revision`. Generation rejects an
@@ -104,7 +151,7 @@ cannot replace source identity or evidence locators.
 Run the focused backend and UI checks:
 
 ```bash
-python -m pytest -q tests/unit/test_evidence_matrix.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_evidence_matrices_api.py tests/unit/test_research_brief.py tests/sanity/test_research_briefs_api.py
+python -m pytest -q tests/unit/test_evidence_matrix.py tests/unit/test_evidence_watch.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_evidence_matrices_api.py tests/unit/test_research_brief.py tests/sanity/test_research_briefs_api.py
 python tools/evidence_matrix/run_comparison_eval.py --dry-run
 python tools/evidence_matrix/run_comparison_eval.py --db-root db
 cd web
@@ -245,3 +292,39 @@ and 6/6 reviewed replay. Frontend ESLint, the production build, 119/119 executed
 Playwright smoke tests with two configuration-dependent skips, 109/109 core
 tests, and 4/4 public-surface tests also passed. The backend suite completed
 with 4,327 passed and 43 configuration-dependent skips.
+
+## 2026-08-08 Evidence Change Inbox Acceptance
+
+The real-corpus change replay used the accepted two-paper dynamic-3D matrix and
+a third indexed paper. Full-text change, metadata-only change, source addition,
+source removal, and source unavailability all matched their reviewed event and
+actionability contract (5/5). The changed real row exposed four affected
+fields, one bound brief, and one affected citation; a removed real row exposed
+all five populated fields in that source. Detection median/max were 0.562/0.680
+ms after the exact file snapshots had been captured. The report is
+`test_results/evidence_change_watch/20260808_133414/report.json`.
+
+Persistence tests proved that repeated scans deduplicate the same event,
+acknowledgement survives later scans, and project deletion cascades baselines
+and events. The API and browser tests proved that applying a newly added source
+creates one matrix revision, rebuilds only that source, and preserves an
+unaffected reviewed row byte-for-byte. A changed source with a stale index is
+rejected instead of using old chunks. Metadata-only and unavailable states stay
+visible and are not silently treated as a successful refresh.
+
+The unchanged release gates passed in the final state: 29/29 live full-library
+QA at
+`test_results/research_qa_evidence_watch_full_library_release/20260808_131635`,
+5/5 paid-model smoke, 29/29 deterministic retrieval, 41/41 source validation,
+6/6 reviewed replay, and 5/5 comparison audit with zero false comparisons. The
+backend suite completed with 4,344 passed and 43 configuration-dependent skips.
+Frontend ESLint and the production build passed; Playwright passed 121 executed
+smoke tests with two configuration-dependent skips, 109/109 core tests, and
+4/4 public-surface tests.
+
+Two preliminary full-library live runs each had one different stochastic
+failure: one answer failed the exact denoising claim/locator binding and one
+extra English background card was suppressed in the Chinese locale. Both cases
+passed immediate focused reruns and the independent final 29-question run.
+These failures remain recorded in their reports; they were not hidden by
+weakening a validator or reducing the source set.

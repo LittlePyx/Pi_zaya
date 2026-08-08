@@ -874,6 +874,73 @@ export interface EvidenceMatrixRowUpdate {
   cells?: Array<{ field: EvidenceMatrixCellField; value: string }>
 }
 
+export type EvidenceWatchKind =
+  | 'source_added'
+  | 'source_removed'
+  | 'source_unavailable'
+  | 'source_content_changed'
+  | 'source_metadata_changed'
+  | string
+
+export interface EvidenceWatchImpact {
+  affected_row_ids: string[]
+  affected_fields: EvidenceMatrixCellField[]
+  affected_comparison_ids: string[]
+  affected_briefs: Array<{
+    brief_id: string
+    title: string
+    revision: number
+    citation_numbers: number[]
+  }>
+  affected_brief_count: number
+  affected_citation_count: number
+  candidate_fields?: EvidenceMatrixCellField[]
+}
+
+export interface EvidenceWatchEvent {
+  id: string
+  event_key: string
+  project_id: string
+  matrix_id: string
+  matrix_title: string
+  matrix_revision: number
+  kind: EvidenceWatchKind
+  severity: 'error' | 'warning' | 'info' | string
+  actionable: boolean
+  status: string
+  source_identity: string
+  source_item_key: string
+  source_path: string
+  source_name: string
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  impact: EvidenceWatchImpact
+  created_at: number
+  updated_at: number
+}
+
+export interface EvidenceWatchScan {
+  items: EvidenceWatchEvent[]
+  summary: {
+    total: number
+    actionable: number
+    metadata_only: number
+    high_severity: number
+    affected_matrix_count: number
+    affected_brief_count: number
+  }
+  scanned_at?: number
+  shelf_revision?: number
+}
+
+export interface EvidenceWatchApplyResult {
+  record: EvidenceMatrixRecord
+  applied_event_ids: string[]
+  refreshed_source_count: number
+  preserved_row_count: number
+  reaudited_comparison_count: number
+}
+
 export type EvidenceMatrixExportFormat = 'markdown' | 'csv' | 'xlsx'
 
 export interface ChatUploadItem {
@@ -1097,6 +1164,20 @@ export const chatApi = {
     api.get<EvidenceMatrixRecord[]>(
       `/api/projects/${encodeURIComponent(projectId)}/evidence-matrices?limit=${encodeURIComponent(String(limit))}`,
     ),
+  listEvidenceChanges: (projectId: string, limit = 200) =>
+    api.get<EvidenceWatchScan>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-changes?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  scanEvidenceChanges: (projectId: string) =>
+    api.post<EvidenceWatchScan>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-changes/scan`,
+      {},
+    ),
+  ignoreEvidenceChange: (projectId: string, eventId: string, reason = '') =>
+    api.post<EvidenceWatchEvent>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-changes/${encodeURIComponent(eventId)}/ignore`,
+      { reason },
+    ),
   getEvidenceMatrix: (matrixId: string) =>
     api.get<EvidenceMatrixRecord>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}`),
   createEvidenceMatrix: (projectId: string, body: { title: string; objective?: string; source_conv_id?: string | null }) =>
@@ -1118,6 +1199,11 @@ export const chatApi = {
       row_updates?: EvidenceMatrixRowUpdate[]
     },
   ) => api.patch<EvidenceMatrixRecord>(`/api/evidence-matrices/${encodeURIComponent(matrixId)}`, body),
+  applyEvidenceChanges: (matrixId: string, expectedRevision: number, eventIds: string[]) =>
+    api.post<EvidenceWatchApplyResult>(
+      `/api/evidence-matrices/${encodeURIComponent(matrixId)}/evidence-changes/apply`,
+      { expected_revision: expectedRevision, event_ids: eventIds },
+    ),
   auditEvidenceComparison: (matrixId: string, body: EvidenceComparisonAuditBody) =>
     api.post<EvidenceMatrixRecord>(
       `/api/evidence-matrices/${encodeURIComponent(matrixId)}/comparison-audits`,

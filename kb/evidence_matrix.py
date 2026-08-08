@@ -472,6 +472,11 @@ def _comparison_flags(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return flags
 
 
+def evidence_matrix_comparison_flags(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Recompute source-comparability warnings without rebuilding matrix cells."""
+    return _comparison_flags(rows)
+
+
 def _comparison_normal(value: object) -> str:
     text = _text(value, limit=4_000, multiline=True).casefold()
     text = re.sub(r"[`*_{}$|]+", " ", text)

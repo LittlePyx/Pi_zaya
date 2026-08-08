@@ -418,6 +418,29 @@ coverage, the 5/5 live answer-quality contract, and exact evidence validation;
 latency is reduced by limiting generation scope, not by dropping sources,
 citations, audits, or user-visible review states.
 
+## 2026-08-08 Evidence Change Inbox Acceptance
+
+Adding persisted evidence-source fingerprints and the project change inbox did
+not change the ordinary chat retrieval, answer-generation, citation, or card
+contracts. The final release run passed all 29 full-library cases at
+`test_results/research_qa_evidence_watch_full_library_release/20260808_131635`.
+First-visible p50/p95/max were 2,823/4,147/5,282 ms; answer-complete were
+4,536/11,658/16,062 ms; evidence-card complete were
+6,760/12,354/17,409 ms; and UI-ready were 7,431/14,720/17,409 ms.
+
+The five-question real-model smoke passed 5/5 at
+`test_results/research_qa_evidence_watch_live_smoke/20260808_130506` with
+UI-ready p50/p95/max of 4,026/5,428/5,436 ms. Deterministic full-library
+retrieval passed 29/29, source validation passed 41/41, reviewed replay passed
+6/6, and the paired comparison audit passed 5/5 with zero false comparisons.
+
+Two earlier complete live attempts each produced one different non-repeating
+failure (`denoising-classical-map` claim/locator binding, then a locale-
+suppressed extra background card in `foveated-dynamic-supersampling`). Both
+passed focused reruns and the final complete suite. They remain visible as
+model/card long-tail variance; no validator, citation requirement, source
+coverage rule, or timeout was weakened to obtain the final pass.
+
 ## Outputs
 
 Default output directory:

@@ -69,6 +69,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 
 async function installBackend(page: Page) {
   let matrix: Matrix | null = null
+  let watchEvent: Record<string, unknown> | null = null
   let generatedPayload: Record<string, unknown> | null = null
   let savedPayload: Record<string, unknown> | null = null
   const revisions: Matrix[] = []
@@ -193,9 +194,69 @@ async function installBackend(page: Page) {
     await fulfillJson(route, matrix ? [matrix] : [])
   })
 
+  await page.route(`**/api/projects/${PROJECT.id}/evidence-changes**`, async (route) => {
+    const items = watchEvent ? [watchEvent] : []
+    await fulfillJson(route, {
+      items,
+      summary: {
+        total: items.length,
+        actionable: items.length,
+        metadata_only: 0,
+        high_severity: items.length,
+        affected_matrix_count: items.length ? 1 : 0,
+        affected_brief_count: items.length ? 1 : 0,
+      },
+      scanned_at: 20,
+      shelf_revision: 2,
+    })
+  })
+
   await page.route(/\/api\/evidence-matrices\/matrix-1(?:\/.*)?(?:\?.*)?$/, async (route) => {
     const request = route.request()
     const url = new URL(request.url())
+    if (url.pathname.endsWith('/evidence-changes/apply') && request.method() === 'POST') {
+      if (!matrix || !watchEvent) {
+        await fulfillJson(route, { detail: 'no open evidence change' }, 409)
+        return
+      }
+      const rows = matrix.rows.map((row) => ({ ...row }))
+      const firstRow = rows[0] as Record<string, unknown>
+      const firstCells = { ...(firstRow.cells as Record<string, unknown>) }
+      firstCells.method = {
+        field: 'method',
+        value: 'The revised full text uses an adaptive coded optical network.',
+        support_status: 'grounded',
+        evidence_ids: ['ev-method-r2'],
+        manual_override: false,
+      }
+      rows[0] = { ...firstRow, cells: firstCells }
+      matrix = {
+        ...matrix,
+        rows,
+        quality_status: 'verified',
+        quality: {
+          ...matrix.quality,
+          last_evidence_change_application: {
+            affected_source_count: 1,
+            refreshed_row_count: 1,
+            preserved_row_count: 1,
+          },
+        },
+        revision: matrix.revision + 1,
+        updated_at: 21,
+      }
+      revisions.push({ ...matrix })
+      const appliedId = String(watchEvent.id || '')
+      watchEvent = null
+      await fulfillJson(route, {
+        record: matrix,
+        applied_event_ids: [appliedId],
+        refreshed_source_count: 1,
+        preserved_row_count: 1,
+        reaudited_comparison_count: 0,
+      })
+      return
+    }
     if (url.pathname.endsWith('/revisions')) {
       await fulfillJson(route, [...revisions].reverse())
       return
@@ -283,6 +344,37 @@ async function installBackend(page: Page) {
   return {
     generatedPayload: () => generatedPayload,
     savedPayload: () => savedPayload,
+    setContentChange: () => {
+      if (!matrix) throw new Error('generate the matrix before adding a watch event')
+      watchEvent = {
+        id: 'watch-content-a',
+        event_key: 'watch-content-a-key',
+        project_id: PROJECT.id,
+        matrix_id: matrix.id,
+        matrix_title: matrix.title,
+        matrix_revision: matrix.revision,
+        kind: 'source_content_changed',
+        severity: 'error',
+        actionable: true,
+        status: 'open',
+        source_identity: SHELF_ITEM.sourcePath.toLowerCase(),
+        source_item_key: SHELF_ITEM.key,
+        source_path: SHELF_ITEM.sourcePath,
+        source_name: 'Paper A',
+        before: {},
+        after: {},
+        impact: {
+          affected_row_ids: ['row-a'],
+          affected_fields: ['method', 'metric', 'key_result'],
+          affected_comparison_ids: [],
+          affected_briefs: [{ brief_id: 'brief-1', title: 'Imaging brief', revision: 1, citation_numbers: [1, 3] }],
+          affected_brief_count: 1,
+          affected_citation_count: 2,
+        },
+        created_at: 20,
+        updated_at: 20,
+      }
+    },
   }
 }
 
@@ -339,4 +431,27 @@ test('project basket becomes a persistent cell-audited evidence matrix', async (
   await page.getByRole('tab', { name: /Evidence/ }).click()
   await expect(page.getByTestId('project-evidence-matrix-evidence')).toContainText('Method / Architecture')
   await expect(page.getByTestId('project-evidence-matrix-evidence')).toContainText('coded optical network')
+})
+
+test('evidence change inbox reports impact and refreshes only the affected source', async ({ page }) => {
+  const backend = await installBackend(page)
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
+  await page.getByRole('button', { name: 'New matrix' }).click()
+  await page.getByTestId('evidence-matrix-title').fill('Living imaging evidence')
+  await page.getByTestId('evidence-matrix-generate').click()
+  await expect(page.getByTestId('project-evidence-matrix-row')).toHaveCount(2)
+
+  backend.setContentChange()
+  await page.getByTestId('evidence-watch-scan').click()
+  const inbox = page.getByTestId('evidence-watch-inbox')
+  await expect(inbox).toBeVisible()
+  await expect(inbox).toContainText('Full text changed')
+  await expect(inbox).toContainText('1 rows, 3 fields, 0 comparisons, 1 briefs, 2 citations')
+
+  await page.getByTestId('evidence-watch-apply').click()
+  await page.getByRole('button', { name: 'OK' }).click()
+  await expect(inbox).not.toBeVisible()
+  await expect(page.getByTestId('project-evidence-matrix-row').first()).toContainText('adaptive coded optical network')
+  await expect(page.getByTestId('project-evidence-matrix-row').nth(1)).toContainText('SCINeRF reconstructs')
 })

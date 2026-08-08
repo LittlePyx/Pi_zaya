@@ -696,6 +696,26 @@ def _evidence_matrix_record(row: sqlite3.Row | dict, *, include_content: bool = 
     return rec
 
 
+def _evidence_watch_event_record(row: sqlite3.Row | dict) -> dict:
+    rec = dict(row)
+    payload = _research_brief_json(rec.pop("payload_json", "{}"), default={})
+    out = dict(payload) if isinstance(payload, dict) else {}
+    out.update(
+        {
+            "id": str(rec.get("id") or out.get("id") or ""),
+            "event_key": str(rec.get("event_key") or out.get("event_key") or ""),
+            "project_id": str(rec.get("project_id") or out.get("project_id") or ""),
+            "matrix_id": str(rec.get("matrix_id") or out.get("matrix_id") or ""),
+            "matrix_revision": max(1, int(rec.get("matrix_revision") or out.get("matrix_revision") or 1)),
+            "kind": str(rec.get("kind") or out.get("kind") or ""),
+            "status": str(rec.get("status") or out.get("status") or "open"),
+            "created_at": float(rec.get("created_at") or out.get("created_at") or 0.0),
+            "updated_at": float(rec.get("updated_at") or out.get("updated_at") or 0.0),
+        }
+    )
+    return out
+
+
 def _is_default_conversation_title(title: str) -> bool:
     text = str(title or "").strip()
     if not text:
@@ -1134,6 +1154,46 @@ class ChatStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_research_evidence_matrix_revisions_created "
                 "ON research_evidence_matrix_revisions(matrix_id, created_at DESC);"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_evidence_watch_baselines (
+                  matrix_id TEXT PRIMARY KEY,
+                  project_id TEXT NOT NULL,
+                  matrix_revision INTEGER NOT NULL,
+                  snapshot_json TEXT NOT NULL DEFAULT '{}',
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                  FOREIGN KEY(matrix_id) REFERENCES research_evidence_matrices(id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_evidence_watch_events (
+                  id TEXT PRIMARY KEY,
+                  event_key TEXT NOT NULL UNIQUE,
+                  project_id TEXT NOT NULL,
+                  matrix_id TEXT NOT NULL,
+                  matrix_revision INTEGER NOT NULL,
+                  kind TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'open',
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE,
+                  FOREIGN KEY(matrix_id) REFERENCES research_evidence_matrices(id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_evidence_watch_project_status "
+                "ON research_evidence_watch_events(project_id, status, updated_at DESC);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_evidence_watch_matrix_status "
+                "ON research_evidence_watch_events(matrix_id, status, updated_at DESC);"
             )
             for table_name in ("research_evidence_matrices", "research_evidence_matrix_revisions"):
                 try:
@@ -2027,6 +2087,206 @@ class ChatStore:
         with self._connect() as conn:
             cur = conn.execute("DELETE FROM research_evidence_matrices WHERE id = ?", (mid,))
         return int(cur.rowcount or 0) > 0
+
+    def get_evidence_watch_baseline(self, matrix_id: str) -> dict | None:
+        mid = str(matrix_id or "").strip()
+        if not mid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT matrix_id, project_id, matrix_revision, snapshot_json, created_at, updated_at "
+                "FROM research_evidence_watch_baselines WHERE matrix_id = ?",
+                (mid,),
+            ).fetchone()
+        if not row:
+            return None
+        snapshot = _research_brief_json(row["snapshot_json"], default={})
+        return {
+            "matrix_id": str(row["matrix_id"] or ""),
+            "project_id": str(row["project_id"] or ""),
+            "matrix_revision": max(1, int(row["matrix_revision"] or 1)),
+            "snapshot": snapshot if isinstance(snapshot, dict) else {},
+            "created_at": float(row["created_at"] or 0.0),
+            "updated_at": float(row["updated_at"] or 0.0),
+        }
+
+    def set_evidence_watch_baseline(
+        self,
+        matrix_id: str,
+        *,
+        project_id: str,
+        matrix_revision: int,
+        snapshot: dict,
+    ) -> dict | None:
+        mid = str(matrix_id or "").strip()
+        pid = str(project_id or "").strip()
+        if not mid or not pid:
+            return None
+        now = time.time()
+        snapshot_json = self._research_brief_json_text(dict(snapshot or {}), fallback={})
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            matrix = conn.execute(
+                "SELECT project_id FROM research_evidence_matrices WHERE id = ?",
+                (mid,),
+            ).fetchone()
+            if not matrix or str(matrix["project_id"] or "") != pid:
+                return None
+            conn.execute(
+                """
+                INSERT INTO research_evidence_watch_baselines (
+                  matrix_id, project_id, matrix_revision, snapshot_json, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(matrix_id) DO UPDATE SET
+                  project_id = excluded.project_id,
+                  matrix_revision = excluded.matrix_revision,
+                  snapshot_json = excluded.snapshot_json,
+                  updated_at = excluded.updated_at
+                """,
+                (mid, pid, max(1, int(matrix_revision or 1)), snapshot_json, now, now),
+            )
+        return self.get_evidence_watch_baseline(mid)
+
+    def sync_evidence_watch_events(
+        self,
+        *,
+        project_id: str,
+        matrix_id: str,
+        matrix_revision: int,
+        events: list[dict],
+    ) -> list[dict]:
+        pid = str(project_id or "").strip()
+        mid = str(matrix_id or "").strip()
+        revision = max(1, int(matrix_revision or 1))
+        if not pid or not mid:
+            return []
+        active = [item for item in list(events or []) if isinstance(item, dict) and str(item.get("event_key") or "")]
+        active_keys = {str(item.get("event_key") or "") for item in active}
+        now = time.time()
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            if active_keys:
+                placeholders = ",".join("?" for _ in active_keys)
+                conn.execute(
+                    f"UPDATE research_evidence_watch_events SET status = 'resolved', updated_at = ? "
+                    f"WHERE matrix_id = ? AND status = 'open' AND event_key NOT IN ({placeholders})",
+                    (now, mid, *sorted(active_keys)),
+                )
+            else:
+                conn.execute(
+                    "UPDATE research_evidence_watch_events SET status = 'resolved', updated_at = ? "
+                    "WHERE matrix_id = ? AND status = 'open'",
+                    (now, mid),
+                )
+            for item in active:
+                event_key = str(item.get("event_key") or "")
+                payload = dict(item)
+                payload_json = self._research_brief_json_text(payload, fallback={})
+                conn.execute(
+                    """
+                    INSERT INTO research_evidence_watch_events (
+                      id, event_key, project_id, matrix_id, matrix_revision, kind,
+                      status, payload_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?)
+                    ON CONFLICT(event_key) DO UPDATE SET
+                      project_id = excluded.project_id,
+                      matrix_id = excluded.matrix_id,
+                      matrix_revision = excluded.matrix_revision,
+                      kind = excluded.kind,
+                      status = CASE
+                        WHEN research_evidence_watch_events.status IN ('resolved', 'applied') THEN 'open'
+                        ELSE research_evidence_watch_events.status
+                      END,
+                      payload_json = excluded.payload_json,
+                      created_at = CASE
+                        WHEN research_evidence_watch_events.status IN ('resolved', 'applied') THEN excluded.created_at
+                        ELSE research_evidence_watch_events.created_at
+                      END,
+                      updated_at = excluded.updated_at
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        event_key,
+                        pid,
+                        mid,
+                        revision,
+                        str(item.get("kind") or ""),
+                        payload_json,
+                        now,
+                        now,
+                    ),
+                )
+            rows = conn.execute(
+                "SELECT * FROM research_evidence_watch_events "
+                "WHERE matrix_id = ? AND status = 'open' ORDER BY updated_at DESC, created_at DESC",
+                (mid,),
+            ).fetchall()
+        return [_evidence_watch_event_record(row) for row in rows]
+
+    def list_project_evidence_watch_events(
+        self,
+        project_id: str,
+        *,
+        status: str = "open",
+        limit: int = 200,
+    ) -> list[dict]:
+        pid = str(project_id or "").strip()
+        status_norm = str(status or "open").strip().lower()
+        if not pid or status_norm not in {"open", "ignored", "applied", "resolved"}:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM research_evidence_watch_events "
+                "WHERE project_id = ? AND status = ? ORDER BY updated_at DESC, created_at DESC LIMIT ?",
+                (pid, status_norm, max(1, min(500, int(limit or 200)))),
+            ).fetchall()
+        return [_evidence_watch_event_record(row) for row in rows]
+
+    def get_evidence_watch_event(self, event_id: str) -> dict | None:
+        eid = str(event_id or "").strip()
+        if not eid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM research_evidence_watch_events WHERE id = ?",
+                (eid,),
+            ).fetchone()
+        return _evidence_watch_event_record(row) if row else None
+
+    def set_evidence_watch_event_status(
+        self,
+        event_id: str,
+        *,
+        project_id: str,
+        status: str,
+    ) -> dict | None:
+        eid = str(event_id or "").strip()
+        pid = str(project_id or "").strip()
+        status_norm = str(status or "").strip().lower()
+        if not eid or not pid or status_norm not in {"ignored", "applied", "resolved"}:
+            return None
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE research_evidence_watch_events SET status = ?, updated_at = ? "
+                "WHERE id = ? AND project_id = ?",
+                (status_norm, time.time(), eid, pid),
+            )
+            if int(cur.rowcount or 0) <= 0:
+                return None
+        return self.get_evidence_watch_event(eid)
+
+    def resolve_matrix_evidence_watch_events(self, matrix_id: str, *, status: str = "applied") -> int:
+        mid = str(matrix_id or "").strip()
+        status_norm = str(status or "applied").strip().lower()
+        if not mid or status_norm not in {"applied", "resolved"}:
+            return 0
+        with self._connect() as conn:
+            cur = conn.execute(
+                "UPDATE research_evidence_watch_events SET status = ?, updated_at = ? "
+                "WHERE matrix_id = ? AND status = 'open'",
+                (status_norm, time.time(), mid),
+            )
+        return int(cur.rowcount or 0)
 
     def create_conversation(
         self,

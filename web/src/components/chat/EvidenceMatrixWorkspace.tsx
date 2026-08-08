@@ -29,6 +29,8 @@ import {
   type EvidenceMatrixCellField,
   type EvidenceMatrixExportFormat,
   type EvidenceMatrixRecord,
+  type EvidenceWatchEvent,
+  type EvidenceWatchKind,
   type ProjectEvidenceMatrixRow,
 } from '../../api/chat'
 import { useT } from '../../i18n'
@@ -114,6 +116,9 @@ export function EvidenceMatrixWorkspace({
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [scanningChanges, setScanningChanges] = useState(false)
+  const [applyingChanges, setApplyingChanges] = useState(false)
+  const [watchEvents, setWatchEvents] = useState<EvidenceWatchEvent[]>([])
   const [exporting, setExporting] = useState<EvidenceMatrixExportFormat | ''>('')
   const [auditingComparison, setAuditingComparison] = useState(false)
   const [comparisonMode, setComparisonMode] = useState<EvidenceComparisonMode>('ranking')
@@ -146,6 +151,24 @@ export function EvidenceMatrixWorkspace({
     setRevisions(await chatApi.listEvidenceMatrixRevisions(matrixId))
   }, [])
 
+  const scanChanges = useCallback(async (quiet = false) => {
+    if (!projectId) return
+    setScanningChanges(true)
+    try {
+      const result = await chatApi.scanEvidenceChanges(projectId)
+      setWatchEvents(result.items || [])
+      if (!quiet) {
+        message.success(result.items.length > 0
+          ? S.evidence_watch_scan_found.replace('{n}', String(result.items.length))
+          : S.evidence_watch_scan_clear)
+      }
+    } catch (error) {
+      if (!quiet) message.error(error instanceof Error ? error.message : S.evidence_watch_scan_failed)
+    } finally {
+      setScanningChanges(false)
+    }
+  }, [S.evidence_watch_scan_clear, S.evidence_watch_scan_failed, S.evidence_watch_scan_found, projectId])
+
   const selectMatrix = useCallback(async (matrixId: string) => {
     setLoading(true)
     try {
@@ -173,12 +196,13 @@ export function EvidenceMatrixWorkspace({
         applyRecord(null)
         setRevisions([])
       }
+      await scanChanges(true)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.evidence_matrix_load_failed)
     } finally {
       setLoading(false)
     }
-  }, [S.evidence_matrix_load_failed, applyRecord, loadRevisions, projectId])
+  }, [S.evidence_matrix_load_failed, applyRecord, loadRevisions, projectId, scanChanges])
 
   useEffect(() => {
     if (!open || !projectId) return
@@ -191,6 +215,23 @@ export function EvidenceMatrixWorkspace({
       || objective !== active.objective
       || JSON.stringify(rows) !== JSON.stringify(active.rows || [])
   }, [active, objective, rows, title])
+
+  const activeWatchEvents = useMemo(
+    () => watchEvents.filter((event) => event.matrix_id === active?.id),
+    [active?.id, watchEvents],
+  )
+  const applicableWatchEvents = useMemo(
+    () => activeWatchEvents.filter((event) => event.actionable && event.kind !== 'source_unavailable'),
+    [activeWatchEvents],
+  )
+  const hasUnavailableWatchEvent = useMemo(
+    () => activeWatchEvents.some((event) => event.kind === 'source_unavailable'),
+    [activeWatchEvents],
+  )
+  const hasMetadataWatchEvent = useMemo(
+    () => activeWatchEvents.some((event) => event.kind === 'source_metadata_changed'),
+    [activeWatchEvents],
+  )
 
   const visibleRows = useMemo(() => {
     const query = search.trim().toLowerCase()
@@ -214,6 +255,41 @@ export function EvidenceMatrixWorkspace({
     setMatrices(await chatApi.listEvidenceMatrices(projectId))
     applyRecord(record)
     await loadRevisions(record.id)
+    await scanChanges(true)
+  }
+
+  const applyWatchChanges = async () => {
+    if (!active || applicableWatchEvents.length <= 0) return
+    if (dirty) {
+      message.warning(S.evidence_watch_save_first)
+      return
+    }
+    setApplyingChanges(true)
+    try {
+      const result = await chatApi.applyEvidenceChanges(
+        active.id,
+        active.revision,
+        applicableWatchEvents.map((event) => event.id),
+      )
+      await refreshListsAfterRecord(result.record)
+      message.success(result.record.quality_status === 'verified'
+        ? S.evidence_watch_applied_verified.replace('{n}', String(result.refreshed_source_count))
+        : S.evidence_watch_applied_review.replace('{n}', String(result.refreshed_source_count)))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.evidence_watch_apply_failed)
+    } finally {
+      setApplyingChanges(false)
+    }
+  }
+
+  const ignoreWatchChange = async (event: EvidenceWatchEvent) => {
+    try {
+      await chatApi.ignoreEvidenceChange(projectId, event.id)
+      setWatchEvents((current) => current.filter((item) => item.id !== event.id))
+      message.success(S.evidence_watch_acknowledged)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.evidence_watch_acknowledge_failed)
+    }
   }
 
   const generate = async () => {
@@ -437,6 +513,13 @@ export function EvidenceMatrixWorkspace({
     value: row.id,
     label: row.paper || row.source_name,
   }))
+  const watchKindLabels: Record<EvidenceWatchKind, string> = {
+    source_added: S.evidence_watch_kind_added,
+    source_removed: S.evidence_watch_kind_removed,
+    source_unavailable: S.evidence_watch_kind_unavailable,
+    source_content_changed: S.evidence_watch_kind_content,
+    source_metadata_changed: S.evidence_watch_kind_metadata,
+  }
 
   return (
     <Modal
@@ -476,6 +559,9 @@ export function EvidenceMatrixWorkspace({
                 {dirty ? <span className="is-dirty">{S.research_brief_unsaved}</span> : null}
               </div>
               <div className="kb-evidence-matrix-actions">
+                <Button icon={<ReloadOutlined />} loading={scanningChanges} onClick={() => { void scanChanges() }} data-testid="evidence-watch-scan">
+                  {S.evidence_watch_scan}
+                </Button>
                 <Button icon={<SaveOutlined />} loading={saving} onClick={() => { void save() }} data-testid="evidence-matrix-save">{S.evidence_matrix_save}</Button>
                 <Button type="primary" icon={<ReloadOutlined />} loading={generating} onClick={() => { void generate() }} data-testid="evidence-matrix-generate">
                   {active ? S.evidence_matrix_refresh : S.evidence_matrix_generate}
@@ -494,6 +580,58 @@ export function EvidenceMatrixWorkspace({
               placeholder={S.evidence_matrix_objective_placeholder}
               data-testid="evidence-matrix-objective"
             />
+
+            {active && activeWatchEvents.length > 0 ? (
+              <section className="kb-evidence-watch" data-testid="evidence-watch-inbox">
+                <div className="kb-evidence-watch-heading">
+                  <div>
+                    <strong>{S.evidence_watch_title}</strong>
+                    <span>{S.evidence_watch_body.replace('{n}', String(activeWatchEvents.length))}</span>
+                  </div>
+                  {applicableWatchEvents.length > 0 && !hasUnavailableWatchEvent && !hasMetadataWatchEvent ? (
+                    <Popconfirm
+                      title={S.evidence_watch_apply_confirm.replace('{n}', String(applicableWatchEvents.length))}
+                      onConfirm={() => { void applyWatchChanges() }}
+                    >
+                      <Button type="primary" loading={applyingChanges} data-testid="evidence-watch-apply">
+                        {S.evidence_watch_apply.replace('{n}', String(applicableWatchEvents.length))}
+                      </Button>
+                    </Popconfirm>
+                  ) : null}
+                </div>
+                <div className="kb-evidence-watch-list">
+                  {activeWatchEvents.map((event) => {
+                    const impact = event.impact || {} as EvidenceWatchEvent['impact']
+                    const impactText = S.evidence_watch_impact
+                      .replace('{rows}', String(impact.affected_row_ids?.length || 0))
+                      .replace('{fields}', String(impact.affected_fields?.length || 0))
+                      .replace('{comparisons}', String(impact.affected_comparison_ids?.length || 0))
+                      .replace('{briefs}', String(impact.affected_brief_count || 0))
+                      .replace('{citations}', String(impact.affected_citation_count || 0))
+                    return (
+                      <article key={event.id} data-testid="evidence-watch-event">
+                        <div className="kb-evidence-watch-event-main">
+                          <div>
+                            <Tag color={event.severity === 'error' ? 'red' : event.severity === 'warning' ? 'orange' : 'blue'}>
+                              {watchKindLabels[event.kind] || event.kind}
+                            </Tag>
+                            <strong>{event.source_name || event.source_path}</strong>
+                          </div>
+                          <span>{impactText}</span>
+                          {event.kind === 'source_unavailable' ? <small>{S.evidence_watch_unavailable_help}</small> : null}
+                          {event.kind === 'source_metadata_changed' ? <small>{S.evidence_watch_metadata_help}</small> : null}
+                        </div>
+                        {event.kind !== 'source_unavailable' ? (
+                          <Button size="small" onClick={() => { void ignoreWatchChange(event) }}>
+                            {S.evidence_watch_acknowledge}
+                          </Button>
+                        ) : null}
+                      </article>
+                    )
+                  })}
+                </div>
+              </section>
+            ) : null}
 
             {active?.quality_status === 'verified' ? (
               <Alert
