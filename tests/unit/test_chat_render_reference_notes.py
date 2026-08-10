@@ -969,6 +969,76 @@ def test_inline_system_a_compound_card_and_reader_locator_ignore_plan_order() ->
         assert output["strict_locate"] is True
 
 
+def test_inline_system_a_rejected_evidence_upgrade_keeps_matching_locator() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = r"F:\db\SCIGS\SCIGS.en.md"
+    abstract = (
+        "The proposed SCIGS is the first to reconstruct a 3D explicit scene from a "
+        "single compressed image, extending its application to dynamic 3D scenes."
+    )
+    method = (
+        "A transformation network takes Gaussian positions and a camera pose stamp "
+        "as inputs and outputs transformations of the Gaussians."
+    )
+    detail = {
+        "num": 1,
+        "answer_hit_num": 3,
+        "citation_route": "system_a",
+        "source_path": source_path,
+        "source_name": "SCIGS.pdf",
+        "heading_path": "SCIGS / Abstract",
+        "evidence_quote": abstract,
+        "summary_line": abstract,
+        "raw": abstract,
+        "answer_claim": (
+            "SCIGS reconstructs an explicit dynamic 3D scene from a single compressed image."
+        ),
+        "page_start": 1,
+        "page_end": 1,
+        "strict_locate": True,
+    }
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [2],
+                "source_path": source_path,
+                "heading_path": "SCIGS / Abstract",
+                "evidence_quote": abstract,
+                "page_start": 1,
+                "page_end": 1,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [3],
+                "source_path": source_path,
+                "heading_path": "SCIGS / 3. Method",
+                "evidence_quote": method,
+                "block_id": "blk-method",
+                "anchor_id": "p-method",
+                "anchor_kind": "paragraph",
+                "page_start": 3,
+                "page_end": 3,
+                "strict_locate": True,
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        [detail],
+        plan,
+        render_locale="en",
+    )[0]
+
+    assert refined["evidence_quote"] == abstract
+    assert refined["heading_path"] == "SCIGS / Abstract"
+    assert refined["page_start"] == 1
+    assert refined["page_end"] == 1
+    assert "block_id" not in refined
+    assert "reader_evidence_quote" not in refined
+
+
 def test_inline_system_a_taxonomy_uses_prompt_complete_page_locator_across_title_variants() -> None:
     from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
 

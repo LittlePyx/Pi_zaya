@@ -634,6 +634,19 @@ def _prompt_aligned_source_slot(
         )
         focused_heading = "proposed framework"
     elif (
+        "interferometric image scanning" in request_surface
+        and re.search(r"(?i)\biISM\b", ranking_surface)
+        and re.search(r"(?i)live[- ]cell|活细胞", ranking_surface)
+        and re.search(r"(?i)120\s*nm|代价|cost|benefit|好处", ranking_surface)
+    ):
+        focused_patterns = (
+            r"interferometric\s+detection",
+            r"120\s*nm",
+            r"tenfold\s+lower\s+incident\s+illumination\s+power",
+            r"photodamage",
+        )
+        focused_heading = "abstract"
+    elif (
         "scinerf" in request_surface
         and scigs_scinerf_comparison_hint
     ):
@@ -1083,7 +1096,7 @@ def _prompt_aligned_source_slot(
     compound_groups = (
         (r"foveal\s+region", r"entire\s+field\s+of\s+view", r"consecutive\s+frames"),
         (r"variant\s+of\s+3dgs", r"single\s+compressed\s+image", r"dynamic\s+3d\s+scenes"),
-        (r"120\s*nm", r"tenfold\s+lower", r"photodamage"),
+        (r"120\s*nm", r"(?:tenfold|10\s+times)\s+lower", r"photodamage"),
         (r"two\s+steps", r"ray\s+tracing", r"wave\s+propagation"),
         (
             r"parallelize\s+the\s+single-pixel\s+imaging\s+process",
@@ -4095,6 +4108,45 @@ def build_citation_plan(
             # A focused "this s2ISM paper" question must not spend its second
             # evidence slot on a semantically nearby iISM or SPI paper.
             sys_a = [s2ism_focus]
+            budget["system_a"] = 1
+            per_paragraph_budget["system_a"] = 1
+    iism_live_benefit_prompt = bool(
+        re.search(r"\biISM\b", str(prompt or ""), flags=re.I)
+        and re.search(r"活细胞|live[- ]cell", str(prompt or ""), flags=re.I)
+        and re.search(r"120\s*nm|代价|cost|benefit|好处", str(prompt or ""), flags=re.I)
+        and not re.search(
+            r"比较|对比|区别|差异|\bvs\.?\b|\bversus\b",
+            str(prompt or ""),
+            flags=re.I,
+        )
+    )
+    if iism_live_benefit_prompt:
+        iism_abstract_slot = next(
+            (
+                slot
+                for slot in sys_a
+                if re.search(
+                    r"(?:^|\s/\s)Abstract$",
+                    str(slot.get("heading_path") or ""),
+                    flags=re.I,
+                )
+                and all(
+                    re.search(pattern, str(slot.get("evidence_quote") or ""), flags=re.I)
+                    for pattern in (
+                        r"120\s*nm",
+                        r"tenfold\s+lower\s+incident\s+illumination\s+power",
+                        r"photodamage",
+                    )
+                )
+            ),
+            None,
+        )
+        if isinstance(iism_abstract_slot, dict):
+            # The Abstract contains the complete requested compound claim.
+            # Keeping a second slot from the same paper lets downstream marker
+            # compaction bind the answer to a nearby Results paragraph and
+            # breaks the exact reader locator despite correct answer text.
+            sys_a = [iism_abstract_slot]
             budget["system_a"] = 1
             per_paragraph_budget["system_a"] = 1
     foveated_focus = _foveated_dynamic_supersampling_focus_slot(

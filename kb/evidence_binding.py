@@ -1253,6 +1253,24 @@ def assess_system_a_hit_binding(
             re.I,
         ):
             continue
+        # Complexity and measurement-budget expressions are also technical
+        # metadata, even when every quantity is symbolic rather than written
+        # with digits.  For example, ``(consisting of about k log k log log n
+        # measurements in total)`` describes an algorithmic budget; treating
+        # it as a paper title incorrectly rejects the exact source passage.
+        if re.search(
+            r"(?i)(?:\\(?:log|frac|mathbb|mathrm)|\$|\b(?:log|measurements?|"
+            r"components?|dimensions?|probability|complexity|iterations?|steps?)\b)",
+            named_candidate,
+        ) and (
+            len(re.findall(r"(?i)\blog\b", named_candidate)) >= 2
+            or re.search(r"\\[A-Za-z]+|\$", named_candidate)
+            or re.search(
+                r"(?i)\b(?:measurements?|components?|dimensions?|probability|complexity)\b",
+                named_candidate,
+            )
+        ):
+            continue
         title_tokens = {
             token
             for token in re.findall(r"[a-z0-9]+", named_candidate.lower())

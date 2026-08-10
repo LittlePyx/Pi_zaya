@@ -683,6 +683,32 @@ def test_multiplier_binding_accepts_cross_language_equivalence_but_not_units() -
     assert unit_conflict["suppress_link"] is True
 
 
+def test_complexity_parenthetical_is_not_treated_as_another_paper_title() -> None:
+    evidence = (
+        "The first stage uses several sparse compressed sensing matrices (consisting "
+        "of about k log k log log n measurements in total), which remove half of the "
+        "zero components at each step while retaining all non-zero components."
+    )
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=(
+            "The first stage uses sparse compressed sensing matrices (consisting of "
+            "about k log k log log n measurements in total) to remove half of the zero "
+            "components [1]."
+        ),
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Main result",
+        evidence_quote=evidence,
+        source_name="Sequentially Designed Compressed Sensing",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
 def test_fact_quantities_normalize_chinese_word_multiplier() -> None:
     quantities = evidence_binding._system_a_fact_quantities(
         "缩小针孔可把横向分辨率提高到衍射极限的两倍。"

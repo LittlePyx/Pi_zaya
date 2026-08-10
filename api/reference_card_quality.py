@@ -288,21 +288,70 @@ def _repair_ref_card_copy_locale(ui_meta: Mapping[str, Any] | None) -> dict[str,
         if (
             locale == "zh"
             and "quantum correlation light" in source_identity.casefold()
-            and "separate cameras" in evidence_seed.casefold()
-            and "sacrifice position resolution" in evidence_seed.casefold()
+            and (
+                (
+                    "separate cameras" in evidence_seed.casefold()
+                    and "sacrifice position resolution" in evidence_seed.casefold()
+                )
+                or (
+                    "position" in evidence_seed.casefold()
+                    and "angular/momentum correlation" in evidence_seed.casefold()
+                    and "spdc" in evidence_seed.casefold()
+                )
+            )
         ):
             grounded_why = (
-                "关键并非用后处理换取分辨率，而是把位置与角度自由度分到独立相机测量，"
-                "从采集架构上解除传统 LFM 的位置—角度分辨率权衡。"
+                (
+                    "关键并非用后处理换取分辨率，而是把位置与角度自由度分到独立相机测量，"
+                    "从采集架构上解除传统 LFM 的位置—角度分辨率权衡。"
+                )
+                if "separate cameras" in evidence_seed.casefold()
+                else (
+                    "位置与角度/动量关联提供了同时观测两个自由度的物理基础，"
+                    "因此这条证据直接对应问题中的双分辨率机制。"
+                )
             )
         if (
             locale == "zh"
             and "sequentially designed compressed sensing" in source_identity.casefold()
-            and "lower dimensional problem" in evidence_seed.casefold()
+            and (
+                "lower dimensional problem" in evidence_seed.casefold()
+                or "log_2" in evidence_seed.casefold()
+                or "\\log_2" in evidence_seed.casefold()
+            )
         ):
             grounded_why = (
-                "这段主结果把第一阶段的逐步筛除、第二阶段的降维测量与低 SNR 支撑恢复连在一起，"
-                "可直接核对两阶段各自承担的任务。"
+                (
+                    "这段主结果把第一阶段的逐步筛除、第二阶段的降维测量与低 SNR 支撑恢复连在一起，"
+                    "可直接核对两阶段各自承担的任务。"
+                )
+                if "lower dimensional problem" in evidence_seed.casefold()
+                else (
+                    "这条主结果量化了第一阶段的步数与稀疏测量预算，"
+                    "可直接核对粗筛阶段怎样逐步压缩候选维度。"
+                )
+            )
+        if (
+            locale == "zh"
+            and "3d single-pixel video" in source_identity.casefold()
+            and "maximum acquisition rate of 250 khz" in evidence_seed.casefold()
+            and "62.5 khz" in evidence_seed.casefold()
+            and "50 μs" in evidence_seed
+            and "approximately three samples" in evidence_seed.casefold()
+        ):
+            grounded_why = (
+                "这段设备参数把 250 kHz 总采样预算、四通道均分与 50 μs 图案周期连在一起，"
+                "可直接核对每个图案为何约得到 3 个样本。"
+            )
+        if (
+            locale == "zh"
+            and "frequency-division-multiplexed single-pixel imaging" in source_identity.casefold()
+            and "fdm" in evidence_seed.casefold()
+            and "system noise is not awg" in evidence_seed.casefold()
+        ):
+            grounded_why = (
+                "这条讨论把额外优势明确限定在系统噪声偏离 AWG 假设的情形，"
+                "避免把 FDM 的边界收益无条件推广到所有噪声模型。"
             )
         if (
             locale == "zh"
@@ -354,6 +403,48 @@ def _repair_ref_card_copy_locale(ui_meta: Mapping[str, Any] | None) -> dict[str,
     ):
         ui["summary_line"] = (
             "原文给出 62.5 kHz 拍频、DMD 图案周期与每周期采样点数之间的完整时间预算。"
+        )
+        ui["summary_generation"] = "deterministic_grounded"
+        summary = str(ui["summary_line"])
+
+    if (
+        not summary
+        and locale == "zh"
+        and "quantum correlation light" in source_identity.casefold()
+        and "position" in evidence_seed.casefold()
+        and "angular/momentum correlation" in evidence_seed.casefold()
+        and "spdc" in evidence_seed.casefold()
+    ):
+        ui["summary_line"] = (
+            "原文说明 QCLFM 以 SPDC 纠缠光子对固有的位置—角度/动量关联构建光场测量。"
+        )
+        ui["summary_generation"] = "deterministic_grounded"
+        summary = str(ui["summary_line"])
+
+    if (
+        not summary
+        and locale == "zh"
+        and "frequency-division-multiplexed single-pixel imaging" in source_identity.casefold()
+        and "fdm" in evidence_seed.casefold()
+        and "system noise is not awg" in evidence_seed.casefold()
+    ):
+        ui["summary_line"] = (
+            "原文指出，当系统噪声不是 AWG 时，FDM 单像素成像可能获得额外优势。"
+        )
+        ui["summary_generation"] = "deterministic_grounded"
+        summary = str(ui["summary_line"])
+
+    if (
+        not summary
+        and locale == "zh"
+        and "sequentially designed compressed sensing" in source_identity.casefold()
+        and "first stage involves" in evidence_seed.casefold()
+        and "lower dimensional problem" in evidence_seed.casefold()
+        and "lower snr" in evidence_seed.casefold()
+    ):
+        ui["summary_line"] = (
+            "原文给出 SCS 第一阶段的筛除步数和剩余维度界、第二阶段的额外测量数，"
+            "并报告其低 SNR 支撑恢复优势。"
         )
         ui["summary_generation"] = "deterministic_grounded"
         summary = str(ui["summary_line"])

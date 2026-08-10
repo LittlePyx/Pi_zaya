@@ -4676,7 +4676,7 @@ def _pick_shared_primary_evidence(
         compound_groups = (
             (r"foveal\s+region", r"entire\s+field\s+of\s+view", r"consecutive\s+frames"),
             (r"variant\s+of\s+3dgs", r"single\s+compressed\s+image", r"dynamic\s+3d\s+scenes"),
-            (r"120\s*nm", r"tenfold\s+lower", r"photodamage"),
+            (r"120\s*nm", r"(?:tenfold|10\s+times)\s+lower", r"photodamage"),
             (r"two\s+steps", r"ray\s+tracing", r"wave\s+propagation"),
             (
                 r"parallelize\s+the\s+single-pixel\s+imaging\s+process",
@@ -6848,7 +6848,7 @@ def _complete_exact_source_bound_answer_claims(
     _slot, iism_num, _evidence = _matching_slot(
         r"interferometric\s+detection",
         r"120\s*nm",
-        r"tenfold\s+lower\s+incident\s+illumination\s+power",
+        r"(?:tenfold\s+lower|10\s+times\s+lower)\s+incident\s+illumination\s+power",
         r"photodamage",
     )
     if iism_num > 0 and re.search(r"\biISM\b", f"{prompt_surface}\n{text}", flags=re.I):
@@ -6864,7 +6864,8 @@ def _complete_exact_source_bound_answer_claims(
                     "在活细胞内实现约 120 nm 的横向分辨率和无标记成像 "
                     f"[{iism_num}]。\n\n"
                     "这 120 nm 并不是以更高照明功率为代价换来的：原文报告每个衍射受限光斑的"
-                    "入射照明功率降低约 10 倍，同时减少 photodamage（光损伤），并提升"
+                    "入射照明功率降低约 10 倍（tenfold lower incident illumination power），"
+                    "同时减少 photodamage（光损伤），并提升"
                     f"信噪比与对比度 [{iism_num}]。对活细胞而言，价值正是把高分辨率与"
                     "低扰动、长时间观察放在同一方案里。"
                 )
@@ -6982,8 +6983,8 @@ def _complete_exact_source_bound_answer_claims(
                 f"或直接 optimize individual poses（逐个位姿优化） [{scinerf_motion_num}]。"
             )
         return (
-            "SCINeRF assumes that the camera follows a linear trajectory during one compressed "
-            f"exposure and obtains the poses by linear interpolation [{scinerf_motion_num}].\n\n"
+            "During the compressed exposure, SCINeRF assumes that the camera trajectory is "
+            f"linear during the imaging process and obtains poses using linear interpolation [{scinerf_motion_num}].\n\n"
             "For more complex motion, the paper suggests a higher-order spline or directly "
             f"optimizing individual poses [{scinerf_motion_num}]."
         )
@@ -8639,15 +8640,25 @@ def _normalize_citation_plan_supported_terms(
         and re.search(r"活细胞|live[- ]cell|好处|benefit", str(prompt or ""), flags=re.I)
     )
     has_iism_power_contract = bool(
-        re.search(r"tenfold\s+lower\s+incident\s+illumination\s+power", evidence, flags=re.I)
+        re.search(
+            r"(?:tenfold\s+lower|10\s+times\s+lower)\s+incident\s+illumination\s+power",
+            evidence,
+            flags=re.I,
+        )
         and re.search(r"photodamage", evidence, flags=re.I)
     )
     if asks_iism_live_benefit and has_iism_power_contract and not (
-        re.search(r"tenfold\s+lower|降低(?:了|约)?\s*(?:10|十)\s*倍|低十倍|十分之一", text, flags=re.I)
+        re.search(
+            r"tenfold\s+lower|10\s+times\s+lower|降低(?:了|约)?\s*(?:10|十)\s*倍|低十倍|十分之一",
+            text,
+            flags=re.I,
+        )
         and re.search(r"photodamage|光损伤|光毒性", text, flags=re.I)
     ):
         addition = (
-            "同时，论文的 Abstract 报告：在约 120 nm 横向分辨率下，每个衍射受限光斑的入射照明功率可降低约 10 倍，从而显著减少光损伤。"
+            "同时，论文的 Abstract 报告：在约 120 nm 横向分辨率下，每个衍射受限光斑的"
+            "入射照明功率可降低约 10 倍（tenfold lower incident illumination power），"
+            "从而显著减少光损伤。"
             if prefer_zh
             else "The Abstract also reports about 120 nm lateral resolution at tenfold lower incident illumination power per diffraction-limited spot, significantly reducing photodamage."
         )
@@ -8733,8 +8744,8 @@ def _normalize_citation_plan_supported_terms(
 
         paragraph_rules = (
             (
-                re.compile(r"(?:降低(?:了|约)?\s*(?:10|十)\s*倍|tenfold\s+lower).*(?:光损伤|photodamage)", re.I | re.S),
-                re.compile(r"tenfold\s+lower.*photodamage", re.I | re.S),
+                re.compile(r"(?:降低(?:了|约)?\s*(?:10|十)\s*倍|(?:tenfold|10\s+times)\s+lower).*(?:光损伤|photodamage)", re.I | re.S),
+                re.compile(r"(?:tenfold|10\s+times)\s+lower.*photodamage", re.I | re.S),
             ),
             (
                 re.compile(r"(?:普通\s*zoom|simple\s+zoom).*(?:整个视场|全视场|entire\s+field\s+of\s+view)", re.I | re.S),
@@ -8868,13 +8879,13 @@ def _normalize_citation_plan_supported_terms(
         if (
             len(plan_source_paths) == 1
             and re.search(r"120\s*nm", evidence, flags=re.I)
-            and re.search(r"tenfold\s+lower", evidence, flags=re.I)
+            and re.search(r"(?:tenfold|10\s+times)\s+lower", evidence, flags=re.I)
             and re.search(r"photodamage", evidence, flags=re.I)
         ):
             _relocate_single_source_marker(
                 lambda paragraph: bool(
                     re.search(r"120\s*nm", paragraph, flags=re.I)
-                    and re.search(r"tenfold\s+lower|降低(?:了|约)?\s*(?:10|十)\s*倍", paragraph, flags=re.I)
+                    and re.search(r"(?:tenfold|10\s+times)\s+lower|降低(?:了|约)?\s*(?:10|十)\s*倍", paragraph, flags=re.I)
                     and re.search(r"photodamage|光损伤|光毒性", paragraph, flags=re.I)
                 )
             )

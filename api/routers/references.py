@@ -233,6 +233,70 @@ def _sync_message_render_packets_with_refs_payload(*, store, conv_id: str, paylo
         return
 
 
+def _answer_citation_state_from_rendered_messages(
+    *,
+    store,
+    conv_id: str,
+    refs_by_user: dict[int, dict] | None,
+) -> tuple[dict[int, list[dict]], set[int]]:
+    """Build final cite details only for turns with incomplete answer cards.
+
+    Raw message rows intentionally do not always embed the full render packet;
+    the messages API builds and caches it on read. Reuse that same contract as
+    a narrow fallback when a citation-plan overlay has evidence and locators
+    but no safe localized card copy. Normal complete-card reads never enter
+    this path.
+    """
+
+    refs = {
+        int(key): dict(value)
+        for key, value in dict(refs_by_user or {}).items()
+        if (str(key).isdigit() or isinstance(key, int)) and isinstance(value, dict)
+    }
+    if not refs:
+        return {}, set()
+    try:
+        from api.chat_render import enrich_messages_with_reference_render
+
+        wanted = set(refs)
+        selected: list[dict] = []
+        active = False
+        for message in list(store.get_messages(conv_id) or []):
+            if not isinstance(message, dict):
+                continue
+            role = str(message.get("role") or "").strip().lower()
+            if role == "user":
+                try:
+                    user_msg_id = int(message.get("id") or 0)
+                except (TypeError, ValueError):
+                    user_msg_id = 0
+                active = user_msg_id in wanted
+                if active:
+                    selected.append(dict(message))
+                continue
+            if not active:
+                continue
+            selected.append(dict(message))
+            if role == "assistant":
+                active = False
+        if not selected:
+            return {}, set()
+        rendered = enrich_messages_with_reference_render(
+            selected,
+            refs,
+            conv_id=conv_id,
+            chat_store=store,
+            render_packet_only=True,
+        )
+        return _answer_citation_state_by_user(
+            store=store,
+            conv_id=conv_id,
+            messages=list(rendered or []),
+        )
+    except Exception:
+        return {}, set()
+
+
 def _answer_citation_source_key(value: Any) -> str:
     # Reuse the render registry's canonical path bridge. It resolves public
     # ``kb-source/<root-id>`` paths to their local document when possible and
@@ -2542,12 +2606,23 @@ def _overlay_refs_payload_with_answer_citations(
             pack.pop("pending_hit_count", None)
             pack.pop("enrichment_pending", None)
             pack.pop("answer_citation_overlay_pending", None)
+        else:
+            # A stored/full evidence pack can win the background race before
+            # the final cite details (and their localized grounded claims) are
+            # durable.  Its locator remains useful, but empty Guide/Relevance
+            # copy is not a terminal card. Keep polling so the next snapshot
+            # can overlay the final binder output instead of freezing an empty
+            # card behind a state-validated full cache.
+            pack["payload_mode"] = "fast"
+            pack["render_status"] = "fast"
+            pack["enrichment_pending"] = True
+            pack["answer_citation_overlay_pending"] = True
         payload_out[raw_user_msg_id] = attach_refs_pack_polish_contract(pack)
     return payload_out
 
 
 def _answer_citation_overlay_pack_is_complete(pack: dict | None) -> bool:
-    if not isinstance(pack, dict) or not bool(pack.get("answer_aligned_citation_cards")):
+    if not isinstance(pack, dict) or not _pack_has_answer_citation_overlay(pack):
         return False
     hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
     if not hits:
@@ -2571,6 +2646,79 @@ def _answer_citation_overlay_pack_is_complete(pack: dict | None) -> bool:
         ):
             return False
     return True
+
+
+def _pack_has_answer_citation_overlay(pack: dict | None) -> bool:
+    if not isinstance(pack, dict):
+        return False
+    if bool(pack.get("answer_aligned_citation_cards")):
+        return True
+    for hit in list(pack.get("hits") or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        ui = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
+        primary = (
+            ui.get("primary_evidence")
+            if isinstance(ui.get("primary_evidence"), dict)
+            else {}
+        )
+        if (
+            bool(meta.get("answer_citation_overlay_grounded"))
+            or str(ui.get("primary_evidence_source") or "").strip().lower()
+            == "answer_citation"
+            or str(ui.get("summary_generation") or "").strip().lower()
+            == "answer_citation_grounded"
+            or str(primary.get("selection_reason") or "").strip().lower()
+            == "answer_citation_grounded"
+        ):
+            return True
+    return False
+
+
+def _answer_citation_overlay_payload_needs_refresh(payload: dict | None) -> bool:
+    """Detect a cached citation overlay that lost required public card copy.
+
+    A fast citation-plan overlay can be built in the narrow interval after the
+    answer text is durable but before the richer, final cite details have been
+    persisted.  If that provisional evidence has no deterministic localized
+    guide, the public copy contract intentionally suppresses it.  Do not let a
+    state-validated cache keep serving that incomplete overlay after the final
+    grounded answer claims are available.
+    """
+
+    return any(
+        isinstance(pack, dict)
+        and _pack_has_answer_citation_overlay(pack)
+        and not _answer_citation_overlay_pack_is_complete(pack)
+        for pack in dict(payload or {}).values()
+    )
+
+
+def _normalize_completed_answer_citation_overlay_state(
+    payload: dict | None,
+) -> dict:
+    """Clear stale pending state only after the public card is complete."""
+
+    out: dict = {}
+    for user_msg_id, raw_pack in dict(payload or {}).items():
+        if not isinstance(raw_pack, dict):
+            out[user_msg_id] = raw_pack
+            continue
+        pack = dict(raw_pack)
+        if _answer_citation_overlay_pack_is_complete(pack):
+            pack["payload_mode"] = "full"
+            pack["display_state"] = "ready"
+            pack["render_status"] = "full"
+            pack["render_error"] = ""
+            pack["render_error_detail"] = ""
+            pack.pop("pending", None)
+            pack.pop("pending_hit_count", None)
+            pack.pop("enrichment_pending", None)
+            pack.pop("answer_citation_overlay_pending", None)
+            pack = attach_refs_pack_polish_contract(pack)
+        out[user_msg_id] = pack
+    return out
 
 
 def _refs_without_completed_answer_citation_overlays(
@@ -4508,12 +4656,49 @@ def get_conversation_refs(
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
+        incomplete_overlay_ids = {
+            int(user_msg_id)
+            for user_msg_id, pack in payload_out.items()
+            if (str(user_msg_id).isdigit() or isinstance(user_msg_id, int))
+            and isinstance(pack, dict)
+            and _pack_has_answer_citation_overlay(pack)
+            and not _answer_citation_overlay_pack_is_complete(pack)
+        }
         payload_out = _overlay_refs_payload_with_answer_citations(
             store=store,
             conv_id=conv_id,
             payload=payload_out,
             answer_citation_state=answer_citation_state_for_finish,
         )
+        if (
+            _answer_citation_overlay_payload_needs_refresh(payload_out)
+            and refs_for_finish
+        ):
+            incomplete_overlay_ids.update(
+                int(user_msg_id)
+                for user_msg_id, pack in payload_out.items()
+                if (str(user_msg_id).isdigit() or isinstance(user_msg_id, int))
+                and isinstance(pack, dict)
+                and _pack_has_answer_citation_overlay(pack)
+                and not _answer_citation_overlay_pack_is_complete(pack)
+            )
+            rendered_state = _answer_citation_state_from_rendered_messages(
+                store=store,
+                conv_id=conv_id,
+                refs_by_user={
+                    user_msg_id: refs_for_finish[user_msg_id]
+                    for user_msg_id in incomplete_overlay_ids
+                    if user_msg_id in refs_for_finish
+                },
+            )
+            if rendered_state[0]:
+                payload_out = _overlay_refs_payload_with_answer_citations(
+                    store=store,
+                    conv_id=conv_id,
+                    payload=payload_out,
+                    answer_citation_state=rendered_state,
+                )
+        payload_out = _normalize_completed_answer_citation_overlay_state(payload_out)
         completed_payloads = {
             int(user_msg_id): pack
             for user_msg_id, pack in payload_out.items()
@@ -4521,11 +4706,14 @@ def get_conversation_refs(
             and isinstance(pack, dict)
             and _answer_citation_overlay_pack_is_complete(pack)
             and int(user_msg_id) in refs_for_finish
-            and str(
-                (refs_for_finish.get(int(user_msg_id)) or {}).get("render_status")
-                or ""
-            ).strip().lower()
-            != "full"
+            and (
+                str(
+                    (refs_for_finish.get(int(user_msg_id)) or {}).get("render_status")
+                    or ""
+                ).strip().lower()
+                != "full"
+                or int(user_msg_id) in incomplete_overlay_ids
+            )
         }
         if completed_payloads:
             _persist_rendered_refs_payloads(
@@ -4547,6 +4735,23 @@ def get_conversation_refs(
                     refs=refs_for_finish,
                     state_signature=refs_state_signature,
                 )
+        elif (
+            _answer_citation_overlay_payload_needs_refresh(payload_out)
+            and signature
+            and refs_for_finish
+        ):
+            # Replace a misleading state-validated ``full`` snapshot with the
+            # explicitly incomplete overlay. The next poll will bypass that
+            # cache, load the final cite details, and persist the repaired
+            # grounded card.
+            _store_cached_conversation_refs_payload(
+                conv_id=conv_id,
+                signature=signature,
+                payload=payload_out,
+                mode="fast",
+                refs=refs_for_finish,
+                state_signature=refs_state_signature,
+            )
         # Card construction/background warming already embeds cached local
         # bibliography metadata. Re-scanning every source and rebuilding every
         # message render packet on this read path caused 10–45 second stalls,
@@ -4633,11 +4838,16 @@ def get_conversation_refs(
                         and bool(pack.get("_generation_pending_snapshot"))
                         for pack in cached_state_payload.values()
                     )
+                    cached_overlay_needs_refresh = (
+                        _answer_citation_overlay_payload_needs_refresh(
+                            cached_state_payload
+                        )
+                    )
                     if (
                         cached_state_mode != "pending"
                         or generation_running
                         or not cached_generation_pending
-                    ):
+                    ) and not cached_overlay_needs_refresh:
                         # This payload was built against the same cheap message
                         # and refs state signature. Reapplying citation
                         # overlays would only re-read/parse unchanged rows.

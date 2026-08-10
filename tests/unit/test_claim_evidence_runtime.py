@@ -1233,6 +1233,28 @@ def test_restores_sequential_cs_full_name_from_source_definition() -> None:
     assert meta["restored_source_facts"] == 1
 
 
+def test_restores_sequential_cs_name_as_heading_from_cited_source_identity() -> None:
+    repaired, meta = audit_and_repair_claim_evidence(
+        "第一阶段逐步筛除零分量，第二阶段完成支持集恢复 [1]。",
+        [
+            {
+                "text": "The algorithm consists of two stages.",
+                "meta": {
+                    "source_name": "Sequentially designed compressed sensing",
+                    "citation_plan_evidence_quotes": [
+                        "The algorithm consists of two stages."
+                    ],
+                },
+            }
+        ],
+        prompt="Sequential Compressed Sensing 的两阶段过程分别做什么？",
+        allowed_citation_numbers={1},
+    )
+
+    assert repaired.startswith("### Sequential Compressed Sensing\n\n")
+    assert meta["restored_source_facts"] == 1
+
+
 def test_restores_fdm_non_awg_optimum_from_complete_source_relation() -> None:
     evidence = (
         "Our FDM scheme increases acquisition speed without lowering integration time. "
@@ -1298,6 +1320,197 @@ def test_restores_both_sph_frequency_change_conditions_from_exact_source() -> No
 
     assert "integer number of beating cycles per displayed pattern [1]" in repaired
     assert meta["restored_source_facts"] == 1
+
+
+def test_restored_sph_chinese_parameter_clauses_are_individually_cited() -> None:
+    evidence = (
+        "Thus, the beat frequency of these two beams is 62,500 Hz and the signal was "
+        "digitized with a sampling rate of 1.25 Ms/s. Considering the 48-μs refresh "
+        "time of the DMD and the 62,500-Hz beating frequency, three beating cycles "
+        "last for each Hadamard pattern and 20 data points were acquired within one "
+        "cycle. The Nyquist sampling criterion must be followed, and an integer number "
+        "of beating cycles for each displayed pattern is desired."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "更换拍频要满足奈奎斯特采样准则和整数个拍频周期 [1]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt=(
+            "SPH 实验里 62.5 kHz 拍频、1.25 Ms/s 采样和 DMD 的 48 μs 图案周期"
+            "怎样配合？请说明更换拍频的两个条件。"
+        ),
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "DMD 图案周期 48 μs [1]。" in repaired
+    assert "拍频 62,500 Hz" in repaired
+    assert "62.5 kHz" not in repaired
+    assert "每个图案包含 3 个拍频周期 [1]" in repaired
+    assert not any("62.5 kHz" in claim for claim in meta.get("unresolved_claims", []))
+
+
+def test_restores_three_d_video_per_pattern_sample_budget() -> None:
+    evidence = (
+        "The DAQ has a maximum acquisition rate of 250 kHz for all channels. As there "
+        "are four channels employed, sampling rate for each channel is set to 62.5 kHz. "
+        "Given that each pattern is displayed for 50 μs, there are approximately three "
+        "samples acquired for each pattern."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "3D single-pixel video 的 DAQ 总采样率为 250 kHz，四路各为 62.5 kHz [1]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt=(
+            "3D single-pixel video 的 DAQ 总采样率怎样分给四路探测器？"
+            "在 50 μs 图案显示时间下，每个图案实际得到多少个样本？"
+        ),
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "每个图案显示 50 μs" in repaired
+    assert "每个图案约采集 3 个样本" in repaired
+    assert "approximately three samples acquired for each pattern" in repaired
+    assert meta["restored_evidence_numbers"] >= 1
+
+
+def test_strict_gate_keeps_perovskite_threshold_and_coupling_bundle() -> None:
+    evidence = (
+        "The dual-cavity device shows a minimum lasing threshold of 92 A cm$^{-2}$. "
+        "The PeLED delivers directional emission into the single-crystal perovskite "
+        "microcavity at a coupling efficiency of about 82.7% to establish lasing."
+    )
+    answer = "器件的最低激光阈值是 92 A cm⁻²，腔间耦合效率约为 82.7% [1]。"
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired == answer
+    assert meta["stripped_weak_citations"] == 0
+    assert meta["minimum_ok"] is True
+
+
+def test_strict_gate_keeps_source_exact_scinerf_motion_assumption() -> None:
+    evidence = (
+        "Since the compressed multi-view images are taken within a relatively-short "
+        "exposure time, we assume that the camera trajectory during the imaging process "
+        "is linear and obtain poses using linear interpolation. For more complex motions, "
+        "we can exploit higher-order spline or directly optimize individual poses."
+    )
+    answer = (
+        "During the compressed exposure, SCINeRF assumes that the camera trajectory "
+        "is linear during the imaging process and obtains poses using linear interpolation "
+        "[1]. For more complex motion, it suggests a higher-order spline or directly "
+        "optimizing individual poses [1]."
+    )
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "camera trajectory is linear during the imaging process" in repaired
+    assert "linear interpolation [1]" in repaired
+    assert meta["dropped_hard_mismatch_claims"] == 0
+
+
+def test_restores_sequential_cs_first_stage_step_count_from_main_result() -> None:
+    evidence = (
+        "The algorithm consists of two stages. The first stage involves "
+        "$\\log_2 \\log n$ steps. The second stage uses $k \\log n$ additional "
+        "measurements, and support is recovered at much lower SNRs."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "Sequential Compressed Sensing（SCS）分为两个阶段 [1]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt=(
+            "Sequential Compressed Sensing 的两阶段过程分别做什么？"
+            "请给出第一阶段步数。"
+        ),
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "first stage involves $\\log_2 \\log n$ steps [1]" in repaired
+    assert meta["restored_source_facts"] >= 1
+
+
+def test_restores_sequential_cs_second_stage_measurement_budget() -> None:
+    evidence = (
+        "The algorithm consists of two stages. The first stage leaves at most "
+        "$n / \\log n + k$ components. In the second stage, we reliably remove "
+        "all remaining zero components using $k \\log n$ additional measurements."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "第一阶段留下至多 $n / \\log n + k$ 个候选分量 [1]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt=(
+            "Sequential Compressed Sensing 的第二阶段做什么？"
+            "请给出第二阶段额外测量数 k log n。"
+        ),
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "第二阶段" in repaired
+    assert "$k \\log n$ 次额外测量" in repaired
+    assert "移除剩余零分量 [1]" in repaired
+    assert meta["restored_source_facts"] >= 1
+
+
+def test_restores_single_prompt_source_identifier_as_nonassertive_heading() -> None:
+    evidence = (
+        "Position and angular information are measured on separate cameras, so position "
+        "resolution need not be sacrificed for angular resolution. The DOF is 2–5 times "
+        "larger at 5 μm resolution."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "位置和角度信息由不同相机测量，因此不必牺牲两种分辨率 [1]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt="QCLFM 为什么能同时保住位置和角度分辨率？",
+        allowed_citation_numbers={1},
+    )
+
+    assert repaired.startswith("### QCLFM\n\n")
+    assert meta["restored_prompt_terms"] == 1
+
+
+def test_restores_qclfm_separate_camera_source_wording() -> None:
+    evidence = (
+        "Since each degree of freedom can potentially be measured on separate cameras, "
+        "one does not need to sacrifice position resolution for angular resolution or "
+        "vice versa as in conventional LFM designs."
+    )
+    repaired, meta = audit_and_repair_claim_evidence(
+        "QCLFM 把两个自由度放在两台相机上独立测量，因此不必做分辨率取舍 [1]。",
+        [{"text": evidence, "meta": {"citation_plan_evidence_quotes": [evidence]}}],
+        prompt="QCLFM 为什么能同时保住位置和角度分辨率？",
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "不同相机（separate cameras）" in repaired
+    assert "无需牺牲位置分辨率来换取角度分辨率 [1]" in repaired
+    assert meta["restored_source_facts"] >= 1
 
 
 def test_drops_distilled_energy_explanation_not_present_in_planned_evidence() -> None:

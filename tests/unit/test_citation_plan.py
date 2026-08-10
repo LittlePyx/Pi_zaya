@@ -1779,6 +1779,77 @@ def test_prompt_aligned_slot_bundles_complete_iism_depth_phase_relation(
     assert "Gouy phase" in evidence
 
 
+def test_prompt_aligned_slot_prefers_iism_abstract_for_live_cell_benefit(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "Interferometric Image Scanning Microscopy.en.md"
+    abstract = (
+        "This technique combines interferometric detection with image scanning microscopy "
+        "to achieve about 120 nm lateral resolution while operating at tenfold lower "
+        "incident illumination power per diffraction limited spot, significantly reducing "
+        "photodamage while enhancing signal-to-noise and contrast."
+    )
+    discussion = (
+        "By combining interferometric detection with a modified APR algorithm based on RVT, "
+        "we realized a lateral resolution of about 120 nm and maintained confocal resolution "
+        "with 0.5 μW incident power, about 10 times lower than previously reported."
+    )
+    source_path.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        + abstract
+        + "\n\n<!-- kb_page: 7 -->\n\n## Results / Live cells\n\n"
+        + discussion
+        + "\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source_path),
+            "heading_path": "Results / Live cells",
+            "evidence_quote": discussion,
+            "page_start": 7,
+        },
+        ranking_texts=[
+            "iISM 在活细胞里同时改善了什么？120 nm 分辨率是用什么代价换来的？"
+        ],
+    )
+
+    assert slot["page_start"] == 1
+    assert slot["heading_path"].endswith("Abstract")
+    assert slot["evidence_quote"] == abstract
+
+    plan = build_citation_plan(
+        prompt="iISM 在活细胞里同时改善了什么？120 nm 分辨率是用什么代价换来的？",
+        answer_hits=[
+            {
+                "text": discussion,
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "Results / Live cells",
+                    "page_start": 7,
+                    "block_id": "discussion-block",
+                    "paper_guide_targeted_block": True,
+                },
+            },
+            {
+                "text": abstract,
+                "meta": {
+                    "source_path": str(source_path),
+                    "heading_path": "Abstract",
+                    "page_start": 1,
+                },
+            },
+        ],
+    )
+    system_a_slots = [
+        item for item in plan["slots"] if item["preferred_system"] == "system_a"
+    ]
+    assert len(system_a_slots) == 1
+    assert system_a_slots[0]["page_start"] == 1
+    assert system_a_slots[0]["heading_path"].endswith("Abstract")
+
+
 def test_prompt_aligned_slot_bundles_sequential_two_stage_main_result(
     tmp_path: Path,
 ) -> None:

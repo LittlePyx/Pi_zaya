@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from api.reference_card_quality import (
+    _repair_ref_card_copy_locale,
     attach_ref_card_polish_contract,
     attach_refs_pack_polish_contract,
     citation_detail_quality,
@@ -12,6 +13,111 @@ from api.reference_card_quality import (
     summarize_ref_card_hit_quality,
 )
 from api.reference_card_payload import build_ref_card_ui_payload
+
+
+def test_sequential_cs_card_gets_grounded_chinese_guide() -> None:
+    evidence = (
+        "The first stage involves log_2 log n steps and removes zero components. "
+        "The second stage faces a lower dimensional problem, and support can be "
+        "recovered exactly at much lower SNRs."
+    )
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "",
+            "why_line": "",
+            "display_name": "SSP-2012-Sequentially designed compressed sensing",
+            "heading_path": "II. MAIN RESULT",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert "第一阶段的筛除步数和剩余维度界" in ui["summary_line"]
+    assert "低 SNR" in ui["summary_line"]
+    assert ui["summary_generation"] == "deterministic_grounded"
+
+    short_seed = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "共进行 \\log_2 \\log n 步，每步使用若干稀疏压缩感知矩阵",
+            "why_line": "",
+            "display_name": "Sequentially designed compressed sensing",
+            "primary_evidence": {
+                "snippet": "The first stage involves \\log_2 \\log n steps."
+            },
+        }
+    )
+    assert "量化了第一阶段的步数与稀疏测量预算" in short_seed["why_line"]
+    assert short_seed["why_generation"] == "deterministic_grounded"
+
+
+def test_qclfm_short_evidence_seed_gets_grounded_card_copy() -> None:
+    evidence = (
+        "We demonstrate an LFM design based on the inherent position and "
+        "angular/momentum correlation of entangled photon pairs generated through SPDC."
+    )
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "",
+            "why_line": "",
+            "display_name": "arXiv-Quantum correlation light-field microscope",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert "QCLFM" in ui["summary_line"]
+    assert "位置—角度/动量关联" in ui["summary_line"]
+    assert "双分辨率机制" in ui["why_line"]
+
+
+def test_three_d_video_daq_block_gets_grounded_relevance_copy() -> None:
+    evidence = (
+        "The DAQ has a maximum acquisition rate of 250 kHz for all channels. "
+        "Each of four channels is set to 62.5 kHz. Given that each pattern is "
+        "displayed for 50 μs, there are approximately three samples per pattern."
+    )
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "DAQ 总采样率按四通道均分，每通道为 62.5 kHz。",
+            "why_line": "",
+            "display_name": "Journal of Optics-2016-3D single-pixel video.pdf",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert "250 kHz 总采样预算" in ui["why_line"]
+    assert "每个图案为何约得到 3 个样本" in ui["why_line"]
+
+
+def test_fdm_non_awg_short_seed_gets_grounded_card_copy() -> None:
+    evidence = (
+        "Our frequency-division multiplexing (FDM) approach to imaging may realize "
+        "additional advantages if the system noise is not AWG."
+    )
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "",
+            "why_line": "",
+            "display_name": (
+                "Optica-2016-Frequency-division-multiplexed single-pixel imaging "
+                "with metamaterials"
+            ),
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert "系统噪声不是 AWG" in ui["summary_line"]
+    assert "偏离 AWG 假设" in ui["why_line"]
+    assert ui["summary_generation"] == "deterministic_grounded"
+    assert ui["why_generation"] == "deterministic_grounded"
 
 
 def test_ref_card_polish_contract_marks_full_llm_card():

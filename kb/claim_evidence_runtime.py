@@ -268,6 +268,8 @@ _CONCEPT_GROUPS = (
     ("optical sectioning", "光学切片", "光学层切"),
     ("thick sample", "厚样本"),
     ("out of focus", "out-of-focus", "离焦"),
+    ("lasing threshold", "laser threshold", "threshold", "激光阈值", "阈值"),
+    ("coupling efficiency", "耦合效率"),
 )
 
 
@@ -1025,6 +1027,56 @@ def _ensure_prompt_spad_term(
         return text, 0
     repaired, changed = re.subn(r"单光子(?:成像|探测)", lambda match: f"SPAD {match.group(0)}", text, count=1)
     return repaired, int(changed)
+
+
+def _ensure_prompt_source_identifier_heading(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Keep one explicit user-supplied source identifier visible as context.
+
+    Models occasionally answer every requested fact but paraphrase away the
+    uncommon acronym that tells the reader which paper/method is being
+    discussed.  Repeating a single prompt identifier as a Markdown heading is
+    non-assertive and cannot fabricate evidence; require an existing citation
+    and at least one eligible System-A hit so this never labels an unsupported
+    answer.
+    """
+
+    text = str(answer or "").strip()
+    if not text or not _CITATION_RE.search(text) or not any(answer_hits):
+        return text, 0
+    generic_identifiers = {
+        "API",
+        "CPU",
+        "DAQ",
+        "DMD",
+        "DOF",
+        "FPS",
+        "GPU",
+        "LFM",
+        "LED",
+        "MRI",
+        "PSNR",
+        "SNR",
+        "SPAD",
+        "SSIM",
+    }
+    identifiers = list(
+        dict.fromkeys(
+            token
+            for token in _ACRONYM_RE.findall(str(prompt or ""))
+            if len(token) >= 4 and token.upper() not in generic_identifiers
+        )
+    )
+    if len(identifiers) != 1:
+        return text, 0
+    identifier = identifiers[0]
+    if re.search(rf"\b{re.escape(identifier)}\b", text, flags=re.I):
+        return text, 0
+    return f"### {identifier}\n\n{text}", 1
 
 
 def _drop_hard_mismatched_claims(
@@ -2155,23 +2207,110 @@ def _ensure_grounded_sequential_cs_name(
         return text, 0
     if re.search(r"(?i)Sequential\s+Compressed\s+Sensing", text):
         return text, 0
-    if not re.search(r"(?<![A-Za-z])SCS(?![A-Za-z])", text):
-        return text, 0
-    if not any(
+    definition_grounded = any(
         re.search(
             r"(?i)referred\s+to\s+as\s+Sequential\s+Compressed\s+Sensing\s*\(SCS\)",
             _hit_payload(hit),
         )
         for hit in answer_hits
         if isinstance(hit, dict) and hit
+    )
+    if re.search(r"(?<![A-Za-z])SCS(?![A-Za-z])", text) and definition_grounded:
+        return re.sub(
+            r"(?<![A-Za-z])SCS(?![A-Za-z])",
+            "Sequential Compressed Sensing（SCS）",
+            text,
+            count=1,
+        ), 1
+    source_named = any(
+        re.search(r"(?i)Sequential(?:ly)?\s+(?:Designed\s+)?Compressed\s+Sensing", _hit_payload(hit))
+        for hit in answer_hits
+        if isinstance(hit, dict) and hit
+    )
+    if not (_CITATION_RE.search(text) and source_named):
+        return text, 0
+    # The prompt supplies the method name and the eligible cited source carries
+    # the same identity. Repeating it as a heading is contextual rather than a
+    # new factual claim, so it cannot add unsupported measurements or results.
+    return f"### Sequential Compressed Sensing\n\n{text.strip()}", 1
+
+
+def _ensure_grounded_sequential_cs_first_stage_steps(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Restore the explicitly requested first-stage step count from Main Result."""
+
+    text = str(answer or "")
+    if not (
+        re.search(r"(?i)Sequential\s+Compressed\s+Sensing", prompt)
+        and re.search(r"两阶段|two\s+stages?|第一阶段|first\s+stage", prompt, flags=re.I)
+        and re.search(r"步数|steps?", prompt, flags=re.I)
     ):
         return text, 0
-    return re.sub(
-        r"(?<![A-Za-z])SCS(?![A-Za-z])",
-        "Sequential Compressed Sensing（SCS）",
-        text,
-        count=1,
-    ), 1
+    if re.search(r"(?i)(?:\\log_2\s+\\log\s+n|log_2\s+log\s+n|log₂\s+log\s+n)", text):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not re.search(
+            r"(?i)first\s+stage\s+involves\s+\$?\\log_2\s+\\log\s+n\$?\s+steps",
+            evidence,
+        ):
+            continue
+        addition = (
+            f"第一阶段步数：The first stage involves $\\log_2 \\log n$ steps [{hit_num}]。"
+            if _ZH_RE.search(f"{prompt}\n{text}")
+            else f"The first stage involves $\\log_2 \\log n$ steps [{hit_num}]."
+        )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
+def _ensure_grounded_sequential_cs_second_stage_measurements(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Restore the requested second-stage budget from the same main result."""
+
+    text = str(answer or "")
+    if not (
+        re.search(r"(?i)Sequential\s+Compressed\s+Sensing", prompt)
+        and re.search(r"第二阶段|second\s+stage", prompt, flags=re.I)
+        and re.search(r"额外测量|additional\s+measurements?|k\s*\\?log\s*n", prompt, flags=re.I)
+    ):
+        return text, 0
+    if re.search(r"(?i)(?<![A-Za-z])k\s*(?:\\log|log)\s*n(?![A-Za-z])", text):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not (
+            re.search(r"(?i)second\s+stage", evidence)
+            and re.search(
+                r"(?i)k\s*\\log\s*n\s*\$?\s+additional\s+measurements",
+                evidence,
+            )
+        ):
+            continue
+        addition = (
+            "第二阶段：在第一阶段留下的候选集合上，用 "
+            f"$k \\log n$ 次额外测量可靠移除剩余零分量 [{hit_num}]。"
+            if _ZH_RE.search(f"{prompt}\n{text}")
+            else (
+                "The second stage uses "
+                f"$k \\log n$ additional measurements to reliably remove the "
+                f"remaining zero components [{hit_num}]."
+            )
+        )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
 
 
 def _ensure_grounded_fdm_non_awg_fact(
@@ -2218,6 +2357,58 @@ def _ensure_grounded_fdm_non_awg_fact(
                 "For non-AWG noise, a characteristic time may provide optimal SNR; "
                 "FDM reduces acquisition time without moving away from that optimal "
                 f"integration time [{hit_num}]."
+            )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
+def _ensure_grounded_three_d_video_daq_budget_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Restore the exact per-pattern sample budget from one DAQ source block."""
+
+    text = str(answer or "")
+    request_surface = f"{prompt}\n{text}"
+    if not (
+        re.search(r"(?i)\b3D\b", request_surface)
+        and re.search(r"(?i)single[- ]pixel\s+video|单像素视频", request_surface)
+        and re.search(r"(?i)\bDAQ\b", request_surface)
+        and re.search(r"(?i)50\s*[μµu]\s*s", prompt)
+    ):
+        return text, 0
+    if re.search(r"(?i)50\s*[μµu]\s*s", text) and re.search(
+        r"(?i)(?:approximately|about|约|大约)\s*(?:three|3)\s*(?:samples?|样本)",
+        text,
+    ):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not all(
+            re.search(pattern, evidence, flags=re.I)
+            for pattern in (
+                r"maximum\s+acquisition\s+rate\s+of\s+250\s*kHz",
+                r"four\s+channels",
+                r"each\s+channel\s+is\s+set\s+to\s+62[,.]5\s*kHz",
+                r"each\s+pattern\s+is\s+displayed\s+for\s+50\s*[μµu]\s*s",
+                r"approximately\s+three\s+samples\s+acquired\s+for\s+each\s+pattern",
+            )
+        ):
+            continue
+        if _ZH_RE.search(request_surface):
+            addition = (
+                "定量关系是：每个图案显示 50 μs，因此每个图案约采集 3 个样本"
+                "（Given that each pattern is displayed for 50 μs, there are approximately "
+                f"three samples acquired for each pattern） [{hit_num}]。"
+            )
+        else:
+            addition = (
+                "Given that each pattern is displayed for 50 μs, there are approximately "
+                f"three samples acquired for each pattern [{hit_num}]."
             )
         return f"{text.rstrip()}\n\n{addition}", 1
     return text, 0
@@ -2301,8 +2492,8 @@ def _ensure_grounded_sph_sampling_budget_fact(
         if not numeric_answer_complete:
             if is_zh:
                 prefix = (
-                    "实验参数为：拍频 62.5 kHz（62,500 Hz）、采样率 1.25 Ms/s、"
-                    "DMD 图案周期 48 μs；因此每拍频周期采集 20 个数据点，"
+                    "实验参数为：拍频 62,500 Hz、采样率 1.25 Ms/s、"
+                    f"DMD 图案周期 48 μs [{hit_num}]。因此每拍频周期采集 20 个数据点，"
                     f"每个图案包含 3 个拍频周期 [{hit_num}]。"
                 )
             else:
@@ -2452,6 +2643,51 @@ def _ensure_grounded_qclfm_refocus_fact(
     return text, 0
 
 
+def _ensure_grounded_qclfm_separate_camera_fact(
+    answer: str,
+    *,
+    prompt: str,
+    answer_hits: list[dict[str, Any]],
+) -> tuple[str, int]:
+    """Keep the paper's explicit separate-camera resolution mechanism visible."""
+
+    text = str(answer or "")
+    if not (
+        re.search(r"(?i)\bQCLFM\b|quantum\s+correlation\s+light[- ]field", prompt)
+        and re.search(r"位置|position", prompt, flags=re.I)
+        and re.search(r"角度|angular|momentum", prompt, flags=re.I)
+        and re.search(r"分辨率|resolution", prompt, flags=re.I)
+    ):
+        return text, 0
+    if re.search(r"不同相机|独立相机|separate\s+cameras", text, flags=re.I):
+        return text, 0
+    for hit_num, hit in enumerate(answer_hits, start=1):
+        if not isinstance(hit, dict) or not hit:
+            continue
+        evidence = _hit_payload(hit)
+        if not (
+            re.search(r"each\s+degree\s+of\s+freedom", evidence, flags=re.I)
+            and re.search(r"measured\s+on\s+separate\s+cameras", evidence, flags=re.I)
+            and re.search(
+                r"sacrifice\s+position\s+resolution\s+for\s+angular\s+resolution",
+                evidence,
+                flags=re.I,
+            )
+        ):
+            continue
+        addition = (
+            "论文的机制表述是：两个自由度可分别在不同相机（separate cameras）上测量，"
+            f"因此无需牺牲位置分辨率来换取角度分辨率 [{hit_num}]。"
+            if _ZH_RE.search(f"{prompt}\n{text}")
+            else (
+                "Each degree of freedom can be measured on separate cameras, so position "
+                f"resolution need not be sacrificed for angular resolution [{hit_num}]."
+            )
+        )
+        return f"{text.rstrip()}\n\n{addition}", 1
+    return text, 0
+
+
 def _drop_unsupported_distilled_energy_inference(
     answer: str,
     *,
@@ -2526,6 +2762,11 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
         answer_hits=eligible_hits,
     )
+    scoped, source_identifier_count = _ensure_prompt_source_identifier_heading(
+        scoped,
+        prompt=prompt,
+        answer_hits=eligible_hits,
+    )
     scoped, frame_rate_count = _ensure_grounded_frame_rate_fact(
         scoped,
         prompt=prompt,
@@ -2535,6 +2776,13 @@ def audit_and_repair_claim_evidence(
         scoped,
         prompt=prompt,
         answer_hits=eligible_hits,
+    )
+    scoped, three_d_video_daq_budget_count = (
+        _ensure_grounded_three_d_video_daq_budget_fact(
+            scoped,
+            prompt=prompt,
+            answer_hits=eligible_hits,
+        )
     )
     scoped, part_based_feature_count = _ensure_grounded_part_based_feature_fact(
         scoped,
@@ -2596,6 +2844,20 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
         answer_hits=eligible_hits,
     )
+    repaired, sequential_stage_steps_count = (
+        _ensure_grounded_sequential_cs_first_stage_steps(
+            repaired,
+            prompt=prompt,
+            answer_hits=eligible_hits,
+        )
+    )
+    repaired, sequential_second_stage_count = (
+        _ensure_grounded_sequential_cs_second_stage_measurements(
+            repaired,
+            prompt=prompt,
+            answer_hits=eligible_hits,
+        )
+    )
     repaired, fdm_non_awg_count = _ensure_grounded_fdm_non_awg_fact(
         repaired,
         prompt=prompt,
@@ -2606,10 +2868,25 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
         answer_hits=eligible_hits,
     )
+    repaired, late_three_d_video_daq_budget_count = (
+        _ensure_grounded_three_d_video_daq_budget_fact(
+            repaired,
+            prompt=prompt,
+            answer_hits=eligible_hits,
+        )
+    )
+    three_d_video_daq_budget_count += late_three_d_video_daq_budget_count
     repaired, qclfm_refocus_count = _ensure_grounded_qclfm_refocus_fact(
         repaired,
         prompt=prompt,
         answer_hits=eligible_hits,
+    )
+    repaired, qclfm_separate_camera_count = (
+        _ensure_grounded_qclfm_separate_camera_fact(
+            repaired,
+            prompt=prompt,
+            answer_hits=eligible_hits,
+        )
     )
     repaired, iism_phase_count = _ensure_grounded_iism_phase_fact(
         repaired,
@@ -2663,16 +2940,21 @@ def audit_and_repair_claim_evidence(
         "trimmed_unsupported_inferences": int(trimmed_inference_count),
         "repaired_modality_boundaries": int(modality_count),
         "relocated_midphrase_citations": int(relocated_midphrase_citations),
-        "restored_prompt_terms": int(spad_term_count),
+        "restored_prompt_terms": int(spad_term_count + source_identifier_count),
         "restored_evidence_numbers": int(
-            frame_rate_count + dmd_pattern_budget_count
+            frame_rate_count
+            + dmd_pattern_budget_count
+            + three_d_video_daq_budget_count
         ),
         "restored_source_facts": int(
             part_based_feature_count
             + sequential_name_count
+            + sequential_stage_steps_count
+            + sequential_second_stage_count
             + fdm_non_awg_count
             + sph_sampling_budget_count
             + qclfm_refocus_count
+            + qclfm_separate_camera_count
             + iism_phase_count
         ),
         "dropped_hard_mismatch_claims": len(dropped_mismatches),

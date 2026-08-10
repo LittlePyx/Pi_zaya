@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## Purpose
 
@@ -679,6 +679,76 @@ copy, and high-risk claim-binding defects outside the formal 29-question
 release suite; they are recorded rather than reclassified, hidden, or used to
 weaken the release gate. The expanded run's final-validation p50/p95/max was
 8,440/15,271/20,114 ms and defines the next long-tail quality backlog.
+
+## 2026-08-11 Full 56-Question Long-Tail Acceptance
+
+The recorded seven-case backlog is now closed without removing a case, source,
+answer term, evidence term, citation route, page locator, or reference-card
+quality check. The fixes keep answer generation and evidence validation strict:
+
+1. Citation-plan evidence selection preserves the complete requested source
+   sentence or table boundary instead of binding a nearby, partially matching
+   passage.
+2. Claim/evidence finalization restores only prompt-requested facts that are
+   present in the selected source evidence, including the Sequential Compressed
+   Sensing method name and its second-stage `k log n` measurement count.
+3. Answer-citation reference cards use the final grounded render packet when a
+   stored card wins the background race before final citation details are
+   durable. Empty guide/relevance copy remains non-terminal.
+4. A complete public card clears stale cache `pending` state only after it has a
+   source path, grounded evidence excerpt, and localized guide. Citation-card
+   evidence and its reader locator are updated atomically, so an Abstract quote
+   cannot inherit a Method page or anchor from another same-paper occurrence.
+
+The exact-code final run passed all 56/56 questions and completed all 56/56
+evidence-card snapshots in
+`test_results/research_qa_long_tail_full_56_release_verified/20260811_031858`:
+
+| Milestone | p50 / p95 / max |
+|---|---:|
+| First visible answer | 3,122 / 4,550 / 6,347 ms |
+| Answer complete | 4,721 / 10,805 / 13,152 ms |
+| Evidence cards complete | 7,747 / 12,727 / 14,982 ms |
+| End-to-end UI ready | 8,454 / 13,409 / 14,982 ms |
+| Validation snapshot complete | 8,818 / 14,842 / 17,365 ms |
+| Full evaluator wall time | 9,052 / 14,873 / 17,397 ms |
+
+Compared with the 49/56 backlog-defining run, final-validation p95 fell from
+15,271 to 14,842 ms (2.8%) and the maximum fell from 20,114 to 17,365 ms
+(13.7%); p50 increased from 8,440 to 8,818 ms (4.5%) and remains visible as
+real model/provider variance. More importantly, all seven previously failing
+quality cases now pass, and every card reaches a quality-checked terminal
+state.
+
+Two failed attempts remain intentionally visible. The run at
+`test_results/research_qa_long_tail_full_56_final_release/20260811_025258`
+passed 55/56 and exposed a mixed SCIGS Abstract-evidence/Method-locator card.
+The next run at
+`test_results/research_qa_long_tail_full_56_final_green/20260811_030623`
+passed 56/56 but exposed one stale cached `pending` bit, producing a 55,917 ms
+validation maximum. Neither failure was retried away or accepted as green; both
+causes were fixed and regression-tested before the final 56/56 run.
+
+The unchanged release gates also passed:
+
+1. Standalone full-library live QA: 29/29 in
+   `test_results/research_qa_full_library_acceptance_release/20260811_023724`;
+   standalone paid-model smoke: 5/5 in
+   `test_results/research_qa_live_smoke_release/20260811_024158`. Every case in
+   both suites also ran inside the later exact-code 56/56 final run.
+2. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_retrieval_only_release/20260811_024255`; source
+   grounding: 41/41; grounded replay: 6/6; reviewed Agent replay: 5/5.
+3. Backend unit tests: 4,126 passed with 41 configuration-dependent skips;
+   backend sanity: 262 passed with two skips; the visible Agent contract passed
+   5/5; Ruff passed.
+4. Frontend ESLint and the production build passed. Playwright smoke passed 126
+   tests with two private-auth-only skips; core citation/library E2E passed
+   109/109; ordinary-user public-surface isolation passed 4/4.
+
+The final acceptance does not shorten the evidence-card wait timeout or treat a
+pending card as ready. It removes false pending states only after the same
+source, evidence, localization, and locator contracts have already passed.
 
 ## Outputs
 

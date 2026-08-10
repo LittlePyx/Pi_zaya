@@ -250,6 +250,404 @@ def test_state_validated_cache_rejects_empty_payload_after_refs_row_appears() ->
     ) is True
 
 
+def test_answer_citation_overlay_payload_refreshes_only_incomplete_aligned_cards() -> None:
+    incomplete = {
+        7: {
+            "answer_aligned_citation_cards": True,
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": "paper.en.md",
+                        "summary_line": "",
+                        "primary_evidence": {
+                            "source_path": "paper.en.md",
+                            "snippet": "Grounded source evidence.",
+                        },
+                    }
+                }
+            ],
+        }
+    }
+    complete = {
+        7: {
+            "answer_aligned_citation_cards": True,
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": "paper.en.md",
+                        "summary_line": "The grounded answer claim.",
+                        "primary_evidence": {
+                            "source_path": "paper.en.md",
+                            "snippet": "Grounded source evidence.",
+                        },
+                    }
+                }
+            ],
+        }
+    }
+
+    assert references_router._answer_citation_overlay_payload_needs_refresh(incomplete)
+    assert not references_router._answer_citation_overlay_payload_needs_refresh(complete)
+    assert not references_router._answer_citation_overlay_payload_needs_refresh(
+        {7: {"hits": []}}
+    )
+    projected_incomplete = {
+        7: {
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": "paper.en.md",
+                        "summary_line": "",
+                        "summary_generation": "answer_citation_grounded",
+                        "primary_evidence": {
+                            "source_path": "paper.en.md",
+                            "snippet": "Grounded source evidence.",
+                            "selection_reason": "answer_citation_grounded",
+                        },
+                    }
+                }
+            ]
+        }
+    }
+    assert references_router._answer_citation_overlay_payload_needs_refresh(
+        projected_incomplete
+    )
+    projected_complete = {
+        7: {
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": "paper.en.md",
+                        "summary_line": "The grounded answer claim.",
+                        "summary_generation": "answer_citation_grounded",
+                        "primary_evidence": {
+                            "snippet": "Grounded source evidence.",
+                            "selection_reason": "answer_citation_grounded",
+                        },
+                    }
+                }
+            ]
+        }
+    }
+    assert not references_router._answer_citation_overlay_payload_needs_refresh(
+        projected_complete
+    )
+
+
+def test_completed_projected_answer_overlay_clears_stale_pending_state() -> None:
+    payload = {
+        7: {
+            "payload_mode": "fast",
+            "render_status": "full",
+            "display_state": "ready",
+            "enrichment_pending": True,
+            "hits": [
+                {
+                    "ui_meta": {
+                        "source_path": "paper.en.md",
+                        "summary_line": "The grounded answer claim.",
+                        "summary_generation": "deterministic_grounded",
+                        "primary_evidence": {
+                            "snippet": "Grounded source evidence.",
+                            "selection_reason": "answer_citation_grounded",
+                        },
+                    }
+                }
+            ],
+        }
+    }
+
+    normalized = references_router._normalize_completed_answer_citation_overlay_state(
+        payload
+    )
+
+    assert normalized[7]["payload_mode"] == "full"
+    assert normalized[7]["render_status"] == "full"
+    assert normalized[7]["display_state"] == "ready"
+    assert "enrichment_pending" not in normalized[7]
+    assert payload[7]["enrichment_pending"] is True
+
+
+def test_plan_only_answer_overlay_with_empty_copy_stays_nonterminal() -> None:
+    source_path = r"F:\db\Paper\Paper.en.md"
+    out = references_router._overlay_refs_payload_with_answer_citations(
+        store=object(),
+        conv_id="conv-plan-only",
+        payload={
+            7: {
+                "prompt": "为什么选择这种材料？",
+                "render_status": "full",
+                "payload_mode": "full",
+                "hits": [
+                    {
+                        "meta": {"source_path": source_path, "ref_pack_state": "ready"},
+                        "ui_meta": {"source_path": source_path},
+                    }
+                ],
+            }
+        },
+        answer_citation_state=(
+            {
+                7: [
+                    {
+                        "num": 1,
+                        "citation_route": "system_a",
+                        "citation_plan_slot": True,
+                        "source_path": source_path,
+                        "source_name": "Paper.pdf",
+                        "heading_path": "Methods",
+                        "answer_claim": "Methods",
+                        "evidence_quote": (
+                            "The material was selected after the experimental comparison."
+                        ),
+                    }
+                ]
+            },
+            set(),
+        ),
+    )
+
+    pack = out[7]
+    assert pack["answer_aligned_citation_cards"] is True
+    assert pack["render_status"] == "fast"
+    assert pack["payload_mode"] == "fast"
+    assert pack["enrichment_pending"] is True
+    assert pack["answer_citation_overlay_pending"] is True
+    assert references_router._answer_citation_overlay_payload_needs_refresh(out)
+
+
+def test_incomplete_card_fallback_builds_final_rendered_citation_state(
+    monkeypatch,
+) -> None:
+    import api.chat_render as chat_render
+
+    source_path = r"F:\db\Paper\Paper.en.md"
+    messages = [
+        {"id": 5, "role": "user", "content": "Unrelated turn"},
+        {"id": 6, "role": "assistant", "content": "Unrelated answer [1]."},
+        {"id": 7, "role": "user", "content": "为什么选择银掩模？"},
+        {
+            "id": 8,
+            "role": "assistant",
+            "content": "银掩模反射率更高、透射率更低 [1]。",
+            "meta": {"answer_quality": {"citation_plan": {"slots": []}}},
+        },
+    ]
+    observed: dict[str, object] = {}
+
+    class Store:
+        def get_messages(self, conv_id: str):
+            assert conv_id == "conv-render-fallback"
+            return messages
+
+    def fake_enrich(selected, refs, **kwargs):
+        observed["selected_ids"] = [item["id"] for item in selected]
+        observed["refs"] = refs
+        observed["kwargs"] = kwargs
+        rendered = [dict(item) for item in selected]
+        rendered[-1]["meta"] = {
+            "paper_guide_contracts": {
+                "render_packet": {
+                    "cite_details": [
+                        {
+                            "num": 1,
+                            "binding_status": "grounded",
+                            "citation_route": "system_a",
+                            "source_path": source_path,
+                            "source_name": "Paper.pdf",
+                            "answer_claim": "银掩模反射率更高、透射率更低。",
+                            "evidence_quote": (
+                                "The Ag mask has higher reflectivity and lower transmissivity."
+                            ),
+                        }
+                    ]
+                }
+            }
+        }
+        return rendered
+
+    monkeypatch.setattr(chat_render, "enrich_messages_with_reference_render", fake_enrich)
+
+    details_by_user, pending = (
+        references_router._answer_citation_state_from_rendered_messages(
+            store=Store(),
+            conv_id="conv-render-fallback",
+            refs_by_user={7: {"prompt": "为什么选择银掩模？", "hits": []}},
+        )
+    )
+
+    assert observed["selected_ids"] == [7, 8]
+    assert list(dict(observed["refs"] or {})) == [7]
+    assert dict(observed["kwargs"] or {})["render_packet_only"] is True
+    assert pending == set()
+    assert details_by_user[7][0]["binding_status"] == "grounded"
+    assert details_by_user[7][0]["source_path"] == source_path
+
+
+def test_state_validated_cache_repairs_incomplete_plan_overlay_from_final_citations(
+    monkeypatch,
+) -> None:
+    references_router._REFS_CONVERSATION_CACHE.clear()
+    source_path = r"F:\db\Paper\Paper.en.md"
+    conversation = {"mode": "normal", "updated_at": 123.0}
+    refs_state = {
+        "rows": [
+            {
+                "user_msg_id": 7,
+                "prompt_sig": "prompt-7",
+                "rendered_payload_sig": "render-7",
+                "render_status": "full",
+                "updated_at": 124.0,
+                "rendered_payload_json_chars": 900,
+            }
+        ],
+        "messages": {
+            "message_count": 2,
+            "max_message_id": 8,
+            "content_chars": 120,
+            "meta_chars": 900,
+        },
+    }
+    refs = {
+        7: {
+            "prompt": "为什么银掩模更适合差分检测？",
+            "render_status": "full",
+            "hits": [
+                {
+                    "text": "The Ag mask has higher reflectivity and lower transmissivity.",
+                    "meta": {
+                        "source_path": source_path,
+                        "ref_pack_state": "ready",
+                    },
+                }
+            ],
+        }
+    }
+    messages = [
+        {"id": 7, "role": "user", "content": refs[7]["prompt"]},
+        {
+            "id": 8,
+            "role": "assistant",
+            "content": "银掩模反射率更高、透射率更低，因此互补图案对比度更好 [1]。",
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "cite_details": [
+                            {
+                                "num": 1,
+                                "binding_status": "grounded",
+                                "citation_route": "system_a",
+                                "source_path": source_path,
+                                "source_name": "Paper.pdf",
+                                "heading_path": "Methods / Binary mask",
+                                "answer_claim": "银掩模反射率更高、透射率更低。",
+                                "answer_claims": [
+                                    "更高反射率和更低透射率会提高互补图案的对比度。"
+                                ],
+                                "evidence_quote": (
+                                    "The Ag mask exhibits superior reflectivity and lower "
+                                    "transmissivity, resulting in better contrast for the "
+                                    "complementary patterns."
+                                ),
+                                "block_id": "blk-mask",
+                                "anchor_id": "p-mask",
+                                "page_start": 2,
+                            }
+                        ]
+                    }
+                }
+            },
+        },
+    ]
+    incomplete_payload = {
+        7: {
+            "prompt": refs[7]["prompt"],
+            "render_status": "full",
+            "payload_mode": "full",
+            "answer_aligned_citation_cards": True,
+            "hits": [
+                {
+                    "meta": {"source_path": source_path, "ref_pack_state": "ready"},
+                    "ui_meta": {
+                        "source_path": source_path,
+                        "summary_line": "",
+                        "why_line": "",
+                        "primary_evidence": {
+                            "source_path": source_path,
+                            "snippet": "The Ag mask has higher reflectivity.",
+                        },
+                    },
+                }
+            ],
+        }
+    }
+    state_signature = references_router._refs_conversation_state_signature(
+        conversation=conversation,
+        refs_state=refs_state,
+    )
+    references_router._store_cached_conversation_refs_payload(
+        conv_id="conv-refresh-overlay",
+        signature="cache-signature",
+        state_signature=state_signature,
+        payload=incomplete_payload,
+        mode="full",
+        refs=refs,
+    )
+    persisted: dict[str, object] = {}
+
+    class Store:
+        def get_conversation(self, conv_id: str, *, timeout_s=None):
+            del conv_id, timeout_s
+            return dict(conversation)
+
+        def list_message_refs_state(self, conv_id: str, *, timeout_s=None):
+            del conv_id, timeout_s
+            return dict(refs_state)
+
+        def list_message_refs(self, conv_id: str, *, timeout_s=None):
+            del conv_id, timeout_s
+            return refs
+
+        def get_messages(self, conv_id: str):
+            del conv_id
+            return messages
+
+    monkeypatch.setattr(references_router, "get_chat_store", lambda: Store())
+    monkeypatch.setattr(
+        references_router,
+        "_refs_conversation_cache_signature",
+        lambda **_kwargs: "cache-signature",
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_load_authoritative_doc_list_contracts",
+        lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        references_router,
+        "_persist_rendered_refs_payloads",
+        lambda **kwargs: persisted.update(kwargs),
+    )
+    monkeypatch.setattr(references_router, "_reference_asset_roots", lambda: [])
+    monkeypatch.setattr(
+        references_router,
+        "_gen_has_running_for_conversation",
+        lambda *_args, **_kwargs: False,
+    )
+
+    response = Response()
+    out = references_router.get_conversation_refs(
+        "conv-refresh-overlay",
+        response=response,
+    )
+
+    ui = out[7]["hits"][0]["ui_meta"]
+    assert all(term in ui["summary_line"] for term in ("银掩模", "反射率", "透射率"))
+    assert "互补图案" in ui["why_line"]
+    assert response.headers["x-kb-refs-mode"] == "cache_full"
+    assert 7 in dict(persisted.get("payload") or {})
+
+
 def test_advantage_only_reference_copy_does_not_claim_the_prompt_asks_for_limits() -> None:
     summary, why = references_router._answer_citation_card_copy(
         [

@@ -2064,6 +2064,47 @@ def _refine_system_a_cite_evidence_from_citation_plan(
             locator_reason == "prompt_aligned_source_sentence"
             and locator_page_start > 0
         )
+        locator_state_keys = (
+            "heading_path",
+            "block_id",
+            "anchor_id",
+            "anchor_kind",
+            "strict_locate",
+            "page_start",
+            "page_end",
+            "reader_evidence_quote",
+            "reader_evidence_source",
+        )
+        original_locator_keys = {
+            key for key in locator_state_keys if key in detail
+        }
+        original_locator_state = {
+            key: detail.get(key) for key in locator_state_keys
+        }
+        original_heading = _render_primary_heading_identity(detail)
+        original_heading_leaf = _render_primary_heading_leaf_identity(detail)
+        locator_heading_identity = _render_primary_heading_identity(locator_slot)
+        locator_heading_leaf = _render_primary_heading_leaf_identity(locator_slot)
+        try:
+            original_page_start = int(
+                detail.get("page_start") or detail.get("pageStart") or 0
+            )
+        except (TypeError, ValueError):
+            original_page_start = 0
+        locator_location_conflicts = bool(
+            original_heading
+            and locator_heading_identity
+            and original_heading != locator_heading_identity
+            and not (
+                original_heading_leaf
+                and locator_heading_leaf
+                and original_heading_leaf == locator_heading_leaf
+            )
+        ) or bool(
+            original_page_start > 0
+            and locator_page_start > 0
+            and original_page_start != locator_page_start
+        )
         if locator_occurrence_bound or prompt_aligned_page_locator:
             locator_heading = str(
                 locator_slot.get("heading_path")
@@ -2150,6 +2191,17 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 or readable_overlap < existing_overlap + 2
             )
         ):
+            if locator_location_conflicts:
+                # The card evidence remains authoritative when the candidate
+                # plan passage is not strong enough to replace it.  Restore
+                # its original locator as well; otherwise one card can expose
+                # an Abstract quote with an unrelated Method page/anchor from
+                # another occurrence in the same paper.
+                for key in locator_state_keys:
+                    if key in original_locator_keys:
+                        detail[key] = original_locator_state.get(key)
+                    else:
+                        detail.pop(key, None)
             out.append(detail)
             continue
 
