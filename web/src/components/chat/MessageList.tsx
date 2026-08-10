@@ -2154,7 +2154,7 @@ export function MessageList({
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
       onOpenEvidenceMatrix={(items) => { void openEvidenceMatrixWorkspace(items) }}
       onOpenResearchBrief={(items) => { void openResearchBriefWorkspace(items) }}
-      onOpenResearchGaps={openResearchGapWorkspace}
+      onOpenResearchGaps={shelfProjectId ? openResearchGapWorkspace : undefined}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
         if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
