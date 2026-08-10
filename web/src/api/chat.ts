@@ -941,6 +941,110 @@ export interface EvidenceWatchApplyResult {
   reaudited_comparison_count: number
 }
 
+export type ResearchGapKind =
+  | 'missing_cell'
+  | 'unsupported_cell'
+  | 'comparison_not_comparable'
+  | 'matrix_needs_review'
+  | 'brief_stale'
+  | 'source_change'
+  | string
+
+export interface ResearchGapImpact {
+  affected_brief_count?: number
+  affected_citation_count?: number
+  affected_comparison_count?: number
+  affected_briefs?: Array<Record<string, unknown>>
+  [key: string]: unknown
+}
+
+export interface ResearchGapRecord {
+  id: string
+  gap_key: string
+  contract_version: number
+  project_id: string
+  kind: ResearchGapKind
+  status: 'open' | 'in_progress' | 'ignored' | 'resolved' | string
+  severity: string
+  priority: 'high' | 'medium' | 'low' | string
+  priority_score: number
+  title: string
+  detail: string
+  matrix_id: string
+  matrix_title: string
+  matrix_revision: number
+  brief_id: string
+  brief_title: string
+  brief_revision: number
+  row_id: string
+  row_label: string
+  field: string
+  comparison_id: string
+  source_path: string
+  source_name: string
+  reasons: string[]
+  impact: ResearchGapImpact
+  candidate_query: string
+  candidate_searchable: boolean
+  dismissible: boolean
+  action?: Record<string, unknown>
+  created_at: number
+  updated_at: number
+}
+
+export interface ResearchGapSummary {
+  total: number
+  open: number
+  in_progress: number
+  high: number
+  medium: number
+  low: number
+  searchable: number
+  affected_matrix_count: number
+  affected_brief_count: number
+}
+
+export interface ResearchGapScanResult {
+  items: ResearchGapRecord[]
+  summary: ResearchGapSummary
+  scanned_at?: number
+  matrix_count?: number
+  brief_count?: number
+  source_change_count?: number
+}
+
+export interface ResearchGapCandidate {
+  id: string
+  gap_id: string
+  gap_key: string
+  source_path: string
+  source_name: string
+  title: string
+  chunk_id: string
+  score: number
+  evidence_quote: string
+  heading_path: string
+  location_label: string
+  page_start?: number | null
+  page_end?: number | null
+  block_id: string
+  anchor_id: string
+  matched_terms: string[]
+  match_reason: string
+}
+
+export interface ResearchGapCandidateResult {
+  items: ResearchGapCandidate[]
+  query: string
+  gap_id: string
+}
+
+export interface ResearchGapConfirmResult {
+  gap: ResearchGapRecord
+  candidate: ResearchGapCandidate
+  shelf: CitationShelfRecord
+}
+
 export type EvidenceMatrixExportFormat = 'markdown' | 'csv' | 'xlsx'
 
 export interface ChatUploadItem {
@@ -1171,6 +1275,29 @@ export const chatApi = {
   scanEvidenceChanges: (projectId: string) =>
     api.post<EvidenceWatchScan>(
       `/api/projects/${encodeURIComponent(projectId)}/evidence-changes/scan`,
+      {},
+    ),
+  listResearchGaps: (projectId: string, status = 'active', limit = 300) =>
+    api.get<ResearchGapScanResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps?status=${encodeURIComponent(status)}&limit=${encodeURIComponent(String(limit))}`,
+    ),
+  scanResearchGaps: (projectId: string) =>
+    api.post<ResearchGapScanResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps/scan`,
+      {},
+    ),
+  ignoreResearchGap: (projectId: string, gapId: string, reason = '') =>
+    api.post<ResearchGapRecord>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/ignore`,
+      { reason },
+    ),
+  listResearchGapCandidates: (projectId: string, gapId: string, limit = 5) =>
+    api.get<ResearchGapCandidateResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/candidates?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  confirmResearchGapCandidate: (projectId: string, gapId: string, candidateId: string) =>
+    api.post<ResearchGapConfirmResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
       {},
     ),
   ignoreEvidenceChange: (projectId: string, eventId: string, reason = '') =>

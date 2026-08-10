@@ -101,7 +101,7 @@ import {
   readerSelectionNote,
 } from './readerShelfPayload'
 import { RefsPanel } from '../refs/RefsPanel'
-import { chatApi, type Message } from '../../api/chat'
+import { chatApi, type CitationShelfRecord, type Message } from '../../api/chat'
 import { referencesApi, type ShelfMetadataRepairImpact } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
@@ -173,6 +173,7 @@ import { ResearchContextReceipt } from './ResearchContextReceipt'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { EvidenceMatrixWorkspace } from './EvidenceMatrixWorkspace'
 import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
+import { ResearchGapWorkspace } from './ResearchGapWorkspace'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 
 const { Text } = Typography
@@ -330,6 +331,7 @@ export function MessageList({
   const [researchBriefSourceMatrixId, setResearchBriefSourceMatrixId] = useState('')
   const [evidenceMatrixOpen, setEvidenceMatrixOpen] = useState(false)
   const [evidenceMatrixSeedItems, setEvidenceMatrixSeedItems] = useState<CiteShelfItem[]>([])
+  const [researchGapOpen, setResearchGapOpen] = useState(false)
   const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
@@ -2098,6 +2100,24 @@ export function MessageList({
     if (detail) openReaderFromDetail(detail)
   }, [openReaderFromDetail])
 
+  const openResearchGapWorkspace = useCallback(() => {
+    const projectId = String(shelfProjectId || '').trim()
+    if (!projectId) {
+      message.warning(S.research_gap_project_required)
+      return
+    }
+    setResearchGapOpen(true)
+  }, [S.research_gap_project_required, shelfProjectId])
+
+  const applyResearchGapShelf = useCallback((record: CitationShelfRecord) => {
+    const projectId = String(shelfProjectId || '').trim()
+    if (projectId) {
+      shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
+    }
+    setShelfItems(restoreShelfItems(Array.isArray(record.items) ? record.items : []))
+    setShelfOpen(Boolean(record.open))
+  }, [shelfProjectId])
+
   const shelfNode = (
     <CiteShelf
       open={shelfOpen}
@@ -2134,6 +2154,7 @@ export function MessageList({
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
       onOpenEvidenceMatrix={(items) => { void openEvidenceMatrixWorkspace(items) }}
       onOpenResearchBrief={(items) => { void openResearchBriefWorkspace(items) }}
+      onOpenResearchGaps={openResearchGapWorkspace}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
         if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
@@ -2622,6 +2643,13 @@ export function MessageList({
         sourceMatrixId={researchBriefSourceMatrixId}
         onClose={() => setResearchBriefOpen(false)}
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
+      />
+      <ResearchGapWorkspace
+        open={researchGapOpen}
+        projectId={String(shelfProjectId || '').trim()}
+        onClose={() => setResearchGapOpen(false)}
+        onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
+        onShelfChanged={applyResearchGapShelf}
       />
       <EvidenceMatrixWorkspace
         open={evidenceMatrixOpen}

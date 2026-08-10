@@ -1,7 +1,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button, Input, Select, message } from 'antd'
-import { BookOutlined, CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, FileTextOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined, TableOutlined } from '@ant-design/icons'
+import { AlertOutlined, BookOutlined, CloseOutlined, DeleteOutlined, DownOutlined, DownloadOutlined, FileSearchOutlined, FileTextOutlined, LoadingOutlined, SaveOutlined, SearchOutlined, SlidersOutlined, TableOutlined } from '@ant-design/icons'
 import type { CiteShelfItem } from './citationState'
 import type { ReaderLocateResult } from './reader/readerTypes'
 import type { ShelfMetadataRepairImpact } from '../../api/references'
@@ -85,6 +85,7 @@ interface Props {
   onUseSelectedAsContext?: (items: CiteShelfItem[]) => void
   onOpenEvidenceMatrix?: (items: CiteShelfItem[]) => void
   onOpenResearchBrief?: (items: CiteShelfItem[]) => void
+  onOpenResearchGaps?: () => void
   onRemove: (key: string) => void
   onUpdateTags: (key: string, tags: string[]) => void
   onUpdateNote: (key: string, note: string) => void
@@ -126,6 +127,7 @@ export function CiteShelf({
   onUseSelectedAsContext,
   onOpenEvidenceMatrix,
   onOpenResearchBrief,
+  onOpenResearchGaps,
   onRemove,
   onUpdateTags,
   onUpdateNote,
@@ -1420,7 +1422,7 @@ export function CiteShelf({
                 />
               </div>
             </div>
-            {showOrganizeToggle || items.length > 0 ? (
+            {showOrganizeToggle || items.length > 0 || onOpenResearchGaps ? (
               <div className="kb-shelf-status-actions">
                 {showOrganizeToggle ? (
                   <button
@@ -1439,6 +1441,19 @@ export function CiteShelf({
                   >
                     <span className="kb-shelf-organize-status">{organizeStatusLabel}</span>
                     {showOrganizeDetails ? <DownOutlined className="kb-shelf-organize-chevron" aria-hidden="true" /> : null}
+                  </button>
+                ) : null}
+                {onOpenResearchGaps ? (
+                  <button
+                    type="button"
+                    className="kb-shelf-command"
+                    onClick={onOpenResearchGaps}
+                    aria-label={S.research_gap_open}
+                    title={S.research_gap_open_tip}
+                    data-testid="citation-shelf-open-research-gaps"
+                  >
+                    <AlertOutlined />
+                    {S.research_gap_open}
                   </button>
                 ) : null}
                 {items.length > 0 ? (

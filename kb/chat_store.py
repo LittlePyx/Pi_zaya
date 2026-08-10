@@ -716,6 +716,28 @@ def _evidence_watch_event_record(row: sqlite3.Row | dict) -> dict:
     return out
 
 
+def _research_gap_record(row: sqlite3.Row | dict) -> dict:
+    rec = dict(row)
+    payload = _research_brief_json(rec.pop("payload_json", "{}"), default={})
+    action = _research_brief_json(rec.pop("action_json", "{}"), default={})
+    out = dict(payload) if isinstance(payload, dict) else {}
+    out.update(
+        {
+            "id": str(rec.get("id") or out.get("id") or ""),
+            "gap_key": str(rec.get("gap_key") or out.get("gap_key") or ""),
+            "project_id": str(rec.get("project_id") or out.get("project_id") or ""),
+            "matrix_id": str(rec.get("matrix_id") or out.get("matrix_id") or ""),
+            "brief_id": str(rec.get("brief_id") or out.get("brief_id") or ""),
+            "kind": str(rec.get("kind") or out.get("kind") or ""),
+            "status": str(rec.get("status") or out.get("status") or "open"),
+            "action": action if isinstance(action, dict) else {},
+            "created_at": float(rec.get("created_at") or out.get("created_at") or 0.0),
+            "updated_at": float(rec.get("updated_at") or out.get("updated_at") or 0.0),
+        }
+    )
+    return out
+
+
 def _is_default_conversation_title(title: str) -> bool:
     text = str(title or "").strip()
     if not text:
@@ -1194,6 +1216,32 @@ class ChatStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_research_evidence_watch_matrix_status "
                 "ON research_evidence_watch_events(matrix_id, status, updated_at DESC);"
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS research_gap_items (
+                  id TEXT PRIMARY KEY,
+                  gap_key TEXT NOT NULL UNIQUE,
+                  project_id TEXT NOT NULL,
+                  matrix_id TEXT,
+                  brief_id TEXT,
+                  kind TEXT NOT NULL,
+                  status TEXT NOT NULL DEFAULT 'open',
+                  payload_json TEXT NOT NULL DEFAULT '{}',
+                  action_json TEXT NOT NULL DEFAULT '{}',
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE CASCADE
+                );
+                """
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_gap_project_status "
+                "ON research_gap_items(project_id, status, updated_at DESC);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_gap_matrix_status "
+                "ON research_gap_items(matrix_id, status, updated_at DESC);"
             )
             for table_name in ("research_evidence_matrices", "research_evidence_matrix_revisions"):
                 try:
@@ -2287,6 +2335,144 @@ class ChatStore:
                 (status_norm, time.time(), mid),
             )
         return int(cur.rowcount or 0)
+
+    def sync_research_gap_items(self, *, project_id: str, gaps: list[dict]) -> list[dict]:
+        pid = str(project_id or "").strip()
+        if not pid:
+            return []
+        active = [item for item in list(gaps or []) if isinstance(item, dict) and str(item.get("gap_key") or "")]
+        active_keys = {str(item.get("gap_key") or "") for item in active}
+        now = time.time()
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            if not self._project_exists(conn, pid):
+                return []
+            if active_keys:
+                placeholders = ",".join("?" for _ in active_keys)
+                conn.execute(
+                    f"UPDATE research_gap_items SET status = 'resolved', updated_at = ? "
+                    f"WHERE project_id = ? AND status IN ('open', 'in_progress') AND gap_key NOT IN ({placeholders})",
+                    (now, pid, *sorted(active_keys)),
+                )
+            else:
+                conn.execute(
+                    "UPDATE research_gap_items SET status = 'resolved', updated_at = ? "
+                    "WHERE project_id = ? AND status IN ('open', 'in_progress')",
+                    (now, pid),
+                )
+            for item in active:
+                gap_key = str(item.get("gap_key") or "")
+                payload_json = self._research_brief_json_text(dict(item), fallback={})
+                conn.execute(
+                    """
+                    INSERT INTO research_gap_items (
+                      id, gap_key, project_id, matrix_id, brief_id, kind,
+                      status, payload_json, action_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, '{}', ?, ?)
+                    ON CONFLICT(gap_key) DO UPDATE SET
+                      project_id = excluded.project_id,
+                      matrix_id = excluded.matrix_id,
+                      brief_id = excluded.brief_id,
+                      kind = excluded.kind,
+                      status = CASE
+                        WHEN research_gap_items.status = 'resolved' THEN 'open'
+                        ELSE research_gap_items.status
+                      END,
+                      payload_json = excluded.payload_json,
+                      created_at = CASE
+                        WHEN research_gap_items.status = 'resolved' THEN excluded.created_at
+                        ELSE research_gap_items.created_at
+                      END,
+                      updated_at = excluded.updated_at
+                    """,
+                    (
+                        uuid.uuid4().hex,
+                        gap_key,
+                        pid,
+                        str(item.get("matrix_id") or "") or None,
+                        str(item.get("brief_id") or "") or None,
+                        str(item.get("kind") or ""),
+                        payload_json,
+                        now,
+                        now,
+                    ),
+                )
+            rows = conn.execute(
+                "SELECT * FROM research_gap_items WHERE project_id = ? "
+                "AND status IN ('open', 'in_progress') "
+                "ORDER BY json_extract(payload_json, '$.priority_score') DESC, updated_at DESC, created_at DESC",
+                (pid,),
+            ).fetchall()
+        return [_research_gap_record(row) for row in rows]
+
+    def list_project_research_gaps(
+        self,
+        project_id: str,
+        *,
+        status: str = "active",
+        limit: int = 300,
+    ) -> list[dict]:
+        pid = str(project_id or "").strip()
+        status_norm = str(status or "active").strip().lower()
+        if not pid or status_norm not in {"active", "open", "in_progress", "ignored", "resolved"}:
+            return []
+        where_status = "status IN ('open', 'in_progress')" if status_norm == "active" else "status = ?"
+        params: tuple[object, ...] = (pid,) if status_norm == "active" else (pid, status_norm)
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT * FROM research_gap_items WHERE project_id = ? AND "
+                + where_status
+                + " ORDER BY json_extract(payload_json, '$.priority_score') DESC, updated_at DESC, created_at DESC LIMIT ?",
+                (*params, max(1, min(1000, int(limit or 300)))),
+            ).fetchall()
+        return [_research_gap_record(row) for row in rows]
+
+    def get_research_gap(self, gap_id: str) -> dict | None:
+        gid = str(gap_id or "").strip()
+        if not gid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM research_gap_items WHERE id = ?", (gid,)).fetchone()
+        return _research_gap_record(row) if row else None
+
+    def set_research_gap_status(
+        self,
+        gap_id: str,
+        *,
+        project_id: str,
+        status: str,
+        action: dict | None = None,
+    ) -> dict | None:
+        gid = str(gap_id or "").strip()
+        pid = str(project_id or "").strip()
+        status_norm = str(status or "").strip().lower()
+        if not gid or not pid or status_norm not in {"open", "in_progress", "ignored", "resolved"}:
+            return None
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            row = conn.execute(
+                "SELECT action_json FROM research_gap_items WHERE id = ? AND project_id = ?",
+                (gid, pid),
+            ).fetchone()
+            if not row:
+                return None
+            current_action = _research_brief_json(row["action_json"], default={})
+            merged_action = dict(current_action) if isinstance(current_action, dict) else {}
+            merged_action.update(dict(action or {}))
+            cur = conn.execute(
+                "UPDATE research_gap_items SET status = ?, action_json = ?, updated_at = ? "
+                "WHERE id = ? AND project_id = ?",
+                (
+                    status_norm,
+                    self._research_brief_json_text(merged_action, fallback={}),
+                    time.time(),
+                    gid,
+                    pid,
+                ),
+            )
+            if int(cur.rowcount or 0) <= 0:
+                return None
+        return self.get_research_gap(gid)
 
     def create_conversation(
         self,

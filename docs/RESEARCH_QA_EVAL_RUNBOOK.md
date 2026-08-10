@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-08
+Updated: 2026-08-10
 
 ## Purpose
 
@@ -440,6 +440,39 @@ suppressed extra background card in `foveated-dynamic-supersampling`). Both
 passed focused reruns and the final complete suite. They remain visible as
 model/card long-tail variance; no validator, citation requirement, source
 coverage rule, or timeout was weakened to obtain the final pass.
+
+## 2026-08-10 Research Gap Queue Release Gate
+
+The project research gap queue reads existing matrix audits, comparison
+boundaries, brief lineage, and source-change events. It does not modify ordinary
+chat retrieval, generation, citation binding, reference-card rendering, or the
+quality validator. Candidate search is an explicit project action and excludes
+the current matrix's sources; confirming a candidate only adds its exact local
+passage and locator to the literature basket.
+
+The unchanged product gates passed after implementation:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_research_gap_full_library/20260810_134330`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_research_gap_live_smoke/20260810_134250`.
+3. Deterministic full-library retrieval: 29/29; source validation: 41/41;
+   reviewed replay: 6/6; paired comparison audit: 5/5 with zero false
+   comparisons; evidence-change replay: 5/5.
+4. The five reviewed real evidence matrices reproduced all 9/9 missing cells;
+   all 17 retrieved candidate passages were exact same-source indexed excerpts
+   with locators. See `docs/RESEARCH_GAP_RUNBOOK.md`.
+5. Backend suite: 4,348 passed with 43 configuration-dependent skips. Frontend
+   smoke: 122 passed with two private-auth-gate-only skips; all 109 core
+   citation/library tests and all four public-surface tests passed. ESLint and
+   the production build passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+3,000/5,802/7,630 ms, answer-complete p50/p95/max of
+5,517/11,774/12,859 ms, evidence-card p50/p95/max of
+8,089/13,013/14,067 ms, and final validation p50/p95/max of
+8,690/14,470/17,249 ms. These values stay visible as ordinary real-model and
+provider variance; no evidence or coverage gate was weakened to obtain them.
 
 ## Outputs
 
