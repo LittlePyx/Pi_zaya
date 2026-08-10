@@ -948,9 +948,14 @@ def build_project_evidence_matrix(
     objective: str,
     db_dir: str | Path,
     existing_rows: list[dict[str, Any]] | None = None,
+    corpus_chunks: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     context_items = list(research_brief_context(selected_items).get("items") or [])[:_MAX_MATRIX_SOURCES]
-    chunks = [item for item in load_all_chunks(Path(db_dir)) if isinstance(item, dict)]
+    chunks = [
+        item
+        for item in (corpus_chunks if corpus_chunks is not None else load_all_chunks(Path(db_dir)))
+        if isinstance(item, dict)
+    ]
     prior_by_source = {
         _source_identity(row.get("source_path")): row
         for row in list(existing_rows or [])
@@ -1029,6 +1034,199 @@ def build_project_evidence_matrix(
             )
         rows.append(row)
     return rows, evidence, _comparison_flags(rows)
+
+
+def evidence_matrix_source_expansion_preview(
+    matrix: dict[str, Any],
+    gap: dict[str, Any],
+    candidate: dict[str, Any],
+    source_item: dict[str, Any],
+    *,
+    db_dir: str | Path,
+    chunks: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a non-mutating, exact-source preview for one new matrix row."""
+    matrix_id = str(matrix.get("id") or "")
+    matrix_revision = int(matrix.get("revision") or 0)
+    if (
+        not matrix_id
+        or str(gap.get("matrix_id") or "") != matrix_id
+        or int(gap.get("matrix_revision") or 0) != matrix_revision
+        or str(candidate.get("gap_key") or "") != str(gap.get("gap_key") or "")
+    ):
+        raise ValueError("expansion candidate does not match the current matrix gap")
+    current_rows = [item for item in list(matrix.get("rows") or []) if isinstance(item, dict)]
+    if len(current_rows) >= _MAX_MATRIX_SOURCES:
+        raise ValueError(f"evidence matrix already has the maximum {_MAX_MATRIX_SOURCES} sources")
+    candidate_source = _text(candidate.get("source_path"), limit=1_200)
+    candidate_identity = _source_identity(candidate_source)
+    if not candidate_identity:
+        raise ValueError("expansion candidate source is missing")
+    if any(_source_identity(item.get("source_path")) == candidate_identity for item in current_rows):
+        raise ValueError("expansion candidate is already a matrix source")
+    context_items = [
+        item
+        for item in list(research_brief_context([source_item]).get("items") or [])
+        if isinstance(item, dict)
+    ]
+    if len(context_items) != 1 or _source_identity(context_items[0].get("sourcePath")) != candidate_identity:
+        raise ValueError("confirmed literature-basket source does not match the expansion candidate")
+    quote = _text(candidate.get("evidence_quote"), limit=900, multiline=True)
+    chunk_id = _text(candidate.get("chunk_id"), limit=500)
+    if not quote or not chunk_id:
+        raise ValueError("expansion candidate lacks exact indexed evidence")
+    corpus = [
+        item
+        for item in (chunks if chunks is not None else load_all_chunks(Path(db_dir)))
+        if isinstance(item, dict)
+    ]
+    candidate_hit = next(
+        (
+            item
+            for item in corpus
+            if _text(item.get("id") or _meta(item).get("chunk_id"), limit=500) == chunk_id
+            and _source_identity(_source_path(item)) == candidate_identity
+            and _normal(quote) in _normal(item.get("text"))
+            and _meta(item).get("evidence_ready") is not False
+        ),
+        None,
+    )
+    if not isinstance(candidate_hit, dict):
+        raise ValueError("expansion candidate is no longer bound to its indexed source passage")
+    candidate_meta = _meta(candidate_hit)
+    if not (
+        _text(candidate.get("anchor_id") or candidate_meta.get("anchor_id"), limit=500)
+        or _text(candidate.get("block_id") or candidate_meta.get("block_id"), limit=500)
+        or _text(candidate.get("heading_path") or candidate_meta.get("heading_path"), limit=800)
+        or candidate.get("page_start") is not None
+        or candidate_meta.get("page_start") is not None
+    ):
+        raise ValueError("expansion candidate lacks a reader locator")
+    source_items = [context_items[0]]
+    rows, evidence, comparison_flags = build_project_evidence_matrix(
+        source_items,
+        objective=str(matrix.get("objective") or ""),
+        db_dir=db_dir,
+        corpus_chunks=corpus,
+    )
+    if len(rows) != 1 or _source_identity(rows[0].get("source_path")) != candidate_identity:
+        raise ValueError("expansion source did not produce an isolated matrix row")
+    quality_status, quality = evidence_matrix_quality(
+        rows=rows,
+        evidence=evidence,
+        selected_items=source_items,
+        comparison_flags=comparison_flags,
+    )
+    grounded_fields = [
+        field
+        for field in MATRIX_CELL_FIELDS
+        if str(((rows[0].get("cells") or {}).get(field) or {}).get("support_status") or "") == "grounded"
+    ]
+    if quality_status != "verified" or not grounded_fields:
+        raise ValueError("expansion source has no verified matrix evidence for this objective")
+    return {
+        "candidate_id": str(candidate.get("id") or ""),
+        "gap_id": str(gap.get("id") or ""),
+        "gap_key": str(gap.get("gap_key") or ""),
+        "matrix_id": matrix_id,
+        "matrix_revision": matrix_revision,
+        "source_item": source_items[0],
+        "row": rows[0],
+        "evidence": evidence,
+        "grounded_fields": grounded_fields,
+        "missing_fields": [field for field in MATRIX_CELL_FIELDS if field not in grounded_fields],
+        "quality_status": quality_status,
+        "quality": quality,
+        "candidate_evidence": {
+            "source_path": candidate_source,
+            "chunk_id": chunk_id,
+            "evidence_quote": quote,
+            "heading_path": _text(candidate.get("heading_path"), limit=800),
+            "location_label": _text(candidate.get("location_label"), limit=500),
+            "page_start": candidate.get("page_start"),
+            "page_end": candidate.get("page_end"),
+            "block_id": _text(candidate.get("block_id"), limit=500),
+            "anchor_id": _text(candidate.get("anchor_id"), limit=500),
+        },
+    }
+
+
+def apply_evidence_matrix_source_expansion(
+    matrix: dict[str, Any],
+    gap: dict[str, Any],
+    preview: dict[str, Any],
+    *,
+    db_dir: str | Path,
+) -> dict[str, Any]:
+    """Append a previewed source as a new row while preserving every old row."""
+    matrix_id = str(matrix.get("id") or "")
+    matrix_revision = int(matrix.get("revision") or 0)
+    if (
+        str(preview.get("matrix_id") or "") != matrix_id
+        or int(preview.get("matrix_revision") or 0) != matrix_revision
+        or str(preview.get("gap_key") or "") != str(gap.get("gap_key") or "")
+    ):
+        raise ValueError("source expansion preview is stale")
+    rows = copy.deepcopy([item for item in list(matrix.get("rows") or []) if isinstance(item, dict)])
+    evidence = copy.deepcopy([item for item in list(matrix.get("evidence") or []) if isinstance(item, dict)])
+    source_items = copy.deepcopy(
+        [item for item in list(matrix.get("source_items") or []) if isinstance(item, dict)]
+    )
+    new_row = copy.deepcopy(preview.get("row"))
+    new_source_item = copy.deepcopy(preview.get("source_item"))
+    new_evidence = copy.deepcopy(
+        [item for item in list(preview.get("evidence") or []) if isinstance(item, dict)]
+    )
+    if not isinstance(new_row, dict) or not isinstance(new_source_item, dict) or not new_evidence:
+        raise ValueError("source expansion preview is incomplete")
+    new_identity = _source_identity(new_row.get("source_path"))
+    if not new_identity or any(_source_identity(item.get("source_path")) == new_identity for item in rows):
+        raise ValueError("source expansion would duplicate a matrix row")
+    if _source_identity(new_source_item.get("sourcePath")) != new_identity:
+        raise ValueError("source expansion row and source record do not match")
+    old_evidence_ids = {str(item.get("id") or "") for item in evidence if str(item.get("id") or "")}
+    if any(str(item.get("id") or "") in old_evidence_ids for item in new_evidence):
+        raise ValueError("source expansion evidence identity collides with the current matrix")
+    rows.append(new_row)
+    evidence.extend(new_evidence)
+    source_items.append(new_source_item)
+    comparison_audits = reaudit_evidence_comparisons(
+        rows=rows,
+        audits=[item for item in list(matrix.get("comparison_audits") or []) if isinstance(item, dict)],
+        db_dir=db_dir,
+    )
+    comparison_flags = evidence_matrix_comparison_flags(rows)
+    quality_status, quality = evidence_matrix_quality(
+        rows=rows,
+        evidence=evidence,
+        selected_items=source_items,
+        comparison_flags=comparison_flags,
+        comparison_audits=comparison_audits,
+    )
+    quality["last_research_gap_expansion"] = {
+        "contract_version": 1,
+        "gap_id": str(gap.get("id") or ""),
+        "gap_key": str(gap.get("gap_key") or ""),
+        "candidate_id": str(preview.get("candidate_id") or ""),
+        "source_path": _text(new_row.get("source_path"), limit=1_200),
+        "new_row_id": str(new_row.get("id") or ""),
+        "grounded_fields": list(preview.get("grounded_fields") or []),
+        "missing_fields": list(preview.get("missing_fields") or []),
+        "preserved_row_count": len(rows) - 1,
+        "reaudited_comparison_count": len(comparison_audits),
+    }
+    return {
+        "rows": rows,
+        "evidence": evidence,
+        "source_items": source_items,
+        "comparison_flags": comparison_flags,
+        "comparison_audits": comparison_audits,
+        "quality_status": quality_status,
+        "quality": quality,
+        "new_row_id": str(new_row.get("id") or ""),
+        "preserved_row_count": len(rows) - 1,
+        "reaudited_comparison_count": len(comparison_audits),
+    }
 
 
 def evidence_matrix_cell_repair_candidates(

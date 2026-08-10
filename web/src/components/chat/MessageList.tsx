@@ -332,6 +332,7 @@ export function MessageList({
   const [researchBriefInitialId, setResearchBriefInitialId] = useState('')
   const [evidenceMatrixOpen, setEvidenceMatrixOpen] = useState(false)
   const [evidenceMatrixSeedItems, setEvidenceMatrixSeedItems] = useState<CiteShelfItem[]>([])
+  const [evidenceMatrixInitialId, setEvidenceMatrixInitialId] = useState('')
   const [researchGapOpen, setResearchGapOpen] = useState(false)
   const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
@@ -2079,6 +2080,7 @@ export function MessageList({
       return
     }
     setEvidenceMatrixSeedItems(requestedItems)
+    setEvidenceMatrixInitialId('')
     setEvidenceMatrixOpen(true)
   }, [S, activeConvId, shelfProjectId])
 
@@ -2660,12 +2662,19 @@ export function MessageList({
           setResearchBriefInitialId(briefId)
           setResearchBriefOpen(true)
         }}
+        onOpenMatrix={(matrixId) => {
+          setResearchGapOpen(false)
+          setEvidenceMatrixSeedItems(shelfItems)
+          setEvidenceMatrixInitialId(matrixId)
+          setEvidenceMatrixOpen(true)
+        }}
       />
       <EvidenceMatrixWorkspace
         open={evidenceMatrixOpen}
         projectId={String(shelfProjectId || '').trim()}
         activeConvId={activeConvId}
         seedItems={evidenceMatrixSeedItems}
+        initialMatrixId={evidenceMatrixInitialId}
         onClose={() => setEvidenceMatrixOpen(false)}
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
         onUseForBrief={(matrix) => {

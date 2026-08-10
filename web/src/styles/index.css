@@ -5798,6 +5798,47 @@ body.kb-reader-resizing .kb-reader-content {
   line-height: 1.55;
 }
 
+.kb-research-gap-expansion-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, #4b8af4 45%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #4b8af4 7%, var(--panel));
+}
+
+.kb-research-gap-expansion-preview > p {
+  margin: 0;
+  color: var(--muted-text);
+  line-height: 1.5;
+}
+
+.kb-research-gap-expansion-fields {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-research-gap-expansion-fields > div {
+  display: grid;
+  grid-template-columns: minmax(110px, auto) 1fr;
+  align-items: start;
+  gap: 8px;
+}
+
+.kb-research-gap-expansion-fields span {
+  color: var(--text-main);
+  line-height: 1.5;
+}
+
+.kb-research-gap-expansion-missing {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+}
+
 .kb-research-gap-empty {
   display: flex;
   min-height: 180px;

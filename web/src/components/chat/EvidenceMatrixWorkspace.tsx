@@ -42,6 +42,7 @@ interface Props {
   projectId: string
   activeConvId?: string | null
   seedItems: CiteShelfItem[]
+  initialMatrixId?: string
   onClose: () => void
   onOpenEvidence?: (evidence: Record<string, unknown>) => void
   onUseForBrief?: (matrix: EvidenceMatrixRecord) => void
@@ -98,6 +99,7 @@ export function EvidenceMatrixWorkspace({
   projectId,
   activeConvId,
   seedItems,
+  initialMatrixId = '',
   onClose,
   onOpenEvidence,
   onUseForBrief,
@@ -189,7 +191,9 @@ export function EvidenceMatrixWorkspace({
       const records = await chatApi.listEvidenceMatrices(projectId)
       setMatrices(records)
       if (records.length > 0) {
-        const record = await chatApi.getEvidenceMatrix(records[0].id)
+        const requestedId = String(initialMatrixId || '').trim()
+        const selected = records.find((item) => item.id === requestedId) || records[0]
+        const record = await chatApi.getEvidenceMatrix(selected.id)
         applyRecord(record)
         await loadRevisions(record.id)
       } else {
@@ -202,7 +206,7 @@ export function EvidenceMatrixWorkspace({
     } finally {
       setLoading(false)
     }
-  }, [S.evidence_matrix_load_failed, applyRecord, loadRevisions, projectId, scanChanges])
+  }, [S.evidence_matrix_load_failed, applyRecord, initialMatrixId, loadRevisions, projectId, scanChanges])
 
   useEffect(() => {
     if (!open || !projectId) return

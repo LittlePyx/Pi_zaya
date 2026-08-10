@@ -523,6 +523,48 @@ the visible citation-plan allowlist and preserve the exact, page-4 compound
 source excerpt within the card budget. No source, citation, coverage, or quality
 threshold was relaxed.
 
+## 2026-08-10 Cross-Source Gap Expansion Gate
+
+Cross-paper discovery now has two separate human decisions. The first confirms
+an exact candidate into the project literature basket. The second reviews a
+full extractive row preview before adding that paper as a new matrix source.
+The workflow recomputes the candidate and index freshness, rejects current
+matrix sources, preserves all old rows/evidence, reaudits saved comparisons,
+refreshes source monitoring, and marks bound briefs stale. It never fills the
+original paper's missing cell, and a new-row comparison still requires the
+normal paired comparison audit.
+
+Five real structured gaps passed 5/5 in
+`test_results/research_gap_expansion/20260810_155105/report.json`. All five
+candidates were outside the matrix and exact-locator-bound; all old rows and
+evidence were preserved; all new evidence was exact and same-source; and all
+five original gap identities remained visible. Preview p50/max was
+77.227/97.896 ms and apply-plus-reaudit p50/max was 10.246/11.062 ms.
+
+The final product gates after this implementation were:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_gap_expansion_full_library_release/20260810_160203`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_gap_expansion_live_smoke_release/20260810_160129`.
+3. Deterministic retrieval: 29/29; source validation: 41/41; reviewed replay:
+   6/6; reviewed Agent replay: 5/5; comparison audit: 5/5; converter quality:
+   13/13; cross-source expansion: 5/5.
+4. Backend suite: 4,355 passed with 43 configuration-dependent skips. Frontend
+   smoke: 124 passed with two private-auth-gate-only skips; core citation/library
+   E2E: 109/109; public-surface E2E: 4/4. ESLint and the production build passed.
+
+The 29-question run reported first-visible p50/p95/max of
+2,521/11,481/12,669 ms, answer-complete p50/p95/max of
+4,425/20,200/38,476 ms, evidence-card p50/p95/max of
+6,664/22,562/39,579 ms, and final validation p50/p95/max of
+7,231/22,962/40,550 ms. One provider stream crossed the visible-output deadline,
+but the affected case completed through the existing quality path and all 29
+strict cases passed; the tail remains visible rather than being removed from the
+report. The five-question smoke reported UI-ready p50/p95/max of
+4,017/6,524/6,885 ms. No retrieval, source, citation, locator, or evidence-card
+gate was reduced.
+
 ## Outputs
 
 Default output directory:

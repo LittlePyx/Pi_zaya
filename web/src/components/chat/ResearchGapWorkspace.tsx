@@ -4,6 +4,7 @@ import {
   CheckCircleOutlined,
   DiffOutlined,
   EyeOutlined,
+  FileAddOutlined,
   ReloadOutlined,
   SearchOutlined,
   StopOutlined,
@@ -16,6 +17,8 @@ import {
   type ResearchGapRepairApplyResult,
   type ResearchGapRepairCandidate,
   type ResearchGapRecord,
+  type ResearchGapSourceExpansionApplyResult,
+  type ResearchGapSourceExpansionPreviewResult,
   type ResearchGapSummary,
 } from '../../api/chat'
 import { useT } from '../../i18n'
@@ -28,6 +31,7 @@ interface Props {
   onOpenEvidence?: (evidence: Record<string, unknown>) => void
   onShelfChanged?: (shelf: CitationShelfRecord) => void
   onOpenBrief?: (briefId: string, matrixId: string) => void
+  onOpenMatrix?: (matrixId: string) => void
 }
 
 type GapFilter = 'all' | 'high' | 'open' | 'in_progress'
@@ -68,6 +72,7 @@ export function ResearchGapWorkspace({
   onOpenEvidence,
   onShelfChanged,
   onOpenBrief,
+  onOpenMatrix,
 }: Props) {
   const S = useT()
   const [items, setItems] = useState<ResearchGapRecord[]>([])
@@ -82,6 +87,10 @@ export function ResearchGapWorkspace({
   const [applyingRepairId, setApplyingRepairId] = useState('')
   const [repairsByGap, setRepairsByGap] = useState<Record<string, ResearchGapRepairCandidate[]>>({})
   const [lastRepair, setLastRepair] = useState<ResearchGapRepairApplyResult | null>(null)
+  const [expansionLoadingId, setExpansionLoadingId] = useState('')
+  const [applyingExpansionId, setApplyingExpansionId] = useState('')
+  const [expansionsByCandidate, setExpansionsByCandidate] = useState<Record<string, ResearchGapSourceExpansionPreviewResult>>({})
+  const [lastExpansion, setLastExpansion] = useState<ResearchGapSourceExpansionApplyResult | null>(null)
 
   const scan = useCallback(async (quiet = false) => {
     if (!projectId) return
@@ -93,6 +102,8 @@ export function ResearchGapWorkspace({
       setCandidatesByGap({})
       setRepairsByGap({})
       setLastRepair(null)
+      setExpansionsByCandidate({})
+      setLastExpansion(null)
       if (!quiet) {
         message.success(
           result.summary.total > 0
@@ -132,6 +143,18 @@ export function ResearchGapWorkspace({
     }
   }
 
+  const previewExpansion = async (gap: ResearchGapRecord, candidate: ResearchGapCandidate) => {
+    setExpansionLoadingId(candidate.id)
+    try {
+      const result = await chatApi.previewResearchGapSourceExpansion(projectId, gap.id, candidate.id)
+      setExpansionsByCandidate((current) => ({ ...current, [candidate.id]: result }))
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_gap_expansion_preview_failed)
+    } finally {
+      setExpansionLoadingId('')
+    }
+  }
+
   const confirmCandidate = async (gap: ResearchGapRecord, candidate: ResearchGapCandidate) => {
     setConfirmingCandidateId(candidate.id)
     try {
@@ -144,10 +167,39 @@ export function ResearchGapWorkspace({
       }))
       onShelfChanged?.(result.shelf)
       message.success(S.research_gap_candidate_confirmed)
+      await previewExpansion(result.gap, candidate)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_gap_candidate_confirm_failed)
     } finally {
       setConfirmingCandidateId('')
+    }
+  }
+
+  const applyExpansion = async (
+    gap: ResearchGapRecord,
+    candidate: ResearchGapCandidate,
+    expansion: ResearchGapSourceExpansionPreviewResult,
+  ) => {
+    setApplyingExpansionId(candidate.id)
+    try {
+      const result = await chatApi.applyResearchGapSourceExpansion(
+        projectId,
+        gap.id,
+        candidate.id,
+        expansion.matrix_revision,
+      )
+      setItems(result.research_gaps.items || [])
+      setSummary(result.research_gaps.summary || EMPTY_SUMMARY)
+      setCandidatesByGap({})
+      setRepairsByGap({})
+      setExpansionsByCandidate({})
+      setLastRepair(null)
+      setLastExpansion(result)
+      message.success(S.research_gap_expansion_applied)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_gap_expansion_apply_failed)
+    } finally {
+      setApplyingExpansionId('')
     }
   }
 
@@ -178,6 +230,7 @@ export function ResearchGapWorkspace({
       setRepairsByGap({})
       setCandidatesByGap({})
       setLastRepair(result)
+      setLastExpansion(null)
       message.success(S.research_gap_repair_applied)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_gap_repair_apply_failed)
@@ -206,6 +259,14 @@ export function ResearchGapWorkspace({
     } finally {
       setIgnoringGapId('')
     }
+  }
+
+  const expansionFieldLabels: Record<string, string> = {
+    method: S.evidence_matrix_col_method,
+    dataset_or_experiment: S.evidence_matrix_col_experiment,
+    metric: S.evidence_matrix_col_metric,
+    key_result: S.evidence_matrix_col_result,
+    limitation: S.evidence_matrix_col_limitation,
   }
 
   return (
@@ -256,6 +317,51 @@ export function ResearchGapWorkspace({
                       </Button>
                     ))}
                   </div>
+                ) : null}
+              </div>
+            )}
+          />
+        ) : null}
+        {lastExpansion ? (
+          <Alert
+            type={lastExpansion.matrix.quality_status === 'verified' ? 'success' : 'warning'}
+            showIcon
+            message={S.research_gap_expansion_result_title}
+            description={(
+              <div className="kb-research-gap-repair-result" data-testid="research-gap-expansion-result">
+                <p>
+                  {S.research_gap_expansion_result_detail
+                    .replace('{matrix}', lastExpansion.matrix.title)
+                    .replace('{revision}', String(lastExpansion.matrix.revision))
+                    .replace('{rows}', String(lastExpansion.preserved_row_count))
+                    .replace('{comparisons}', String(lastExpansion.reaudited_comparison_count))}
+                </p>
+                <div className="kb-research-gap-candidate-actions">
+                  <Button
+                    icon={<FileAddOutlined />}
+                    disabled={!onOpenMatrix}
+                    onClick={() => onOpenMatrix?.(lastExpansion.matrix.id)}
+                    data-testid="research-gap-open-expanded-matrix"
+                  >
+                    {S.research_gap_expansion_open_matrix}
+                  </Button>
+                  {lastExpansion.affected_briefs.map((brief) => (
+                    <Button
+                      key={brief.id}
+                      size="small"
+                      icon={<DiffOutlined />}
+                      disabled={!brief.update_ready || !onOpenBrief}
+                      onClick={() => onOpenBrief?.(brief.id, lastExpansion.matrix.id)}
+                      data-testid="research-gap-expansion-open-brief"
+                    >
+                      {brief.title} · {brief.update_ready
+                        ? S.research_gap_repair_brief_ready
+                        : S.research_gap_repair_brief_blocked}
+                    </Button>
+                  ))}
+                </div>
+                {lastExpansion.original_gap_preserved ? (
+                  <small>{S.research_gap_expansion_gap_preserved}</small>
                 ) : null}
               </div>
             )}
@@ -409,37 +515,97 @@ export function ResearchGapWorkspace({
                       <strong>{S.research_gap_candidates_title}</strong>
                       <p>{S.research_gap_candidates_detail}</p>
                       {candidates.length === 0 ? <span>{S.research_gap_candidate_empty}</span> : null}
-                      {candidates.map((candidate) => (
-                        <div key={candidate.id} className="kb-research-gap-candidate">
-                          <div>
-                            <strong>{candidate.title || candidate.source_name}</strong>
-                            <small>{candidate.location_label || candidate.heading_path || candidate.source_path}</small>
-                          </div>
-                          <blockquote>{candidate.evidence_quote}</blockquote>
-                          <div className="kb-research-gap-candidate-actions">
-                            {onOpenEvidence ? (
-                              <Button icon={<EyeOutlined />} onClick={() => onOpenEvidence({ ...candidate })}>
-                                {S.research_gap_open_evidence}
-                              </Button>
+                      {candidates.map((candidate) => {
+                        const confirmed = String(gap.action?.candidate_id || '') === candidate.id
+                        const expansion = expansionsByCandidate[candidate.id]
+                        return (
+                          <div key={candidate.id} className="kb-research-gap-candidate">
+                            <div>
+                              <strong>{candidate.title || candidate.source_name}</strong>
+                              <small>{candidate.location_label || candidate.heading_path || candidate.source_path}</small>
+                            </div>
+                            <blockquote>{candidate.evidence_quote}</blockquote>
+                            <div className="kb-research-gap-candidate-actions">
+                              {onOpenEvidence ? (
+                                <Button icon={<EyeOutlined />} onClick={() => onOpenEvidence({ ...candidate })}>
+                                  {S.research_gap_open_evidence}
+                                </Button>
+                              ) : null}
+                              {confirmed ? (
+                                <Button
+                                  type="primary"
+                                  ghost
+                                  icon={<FileAddOutlined />}
+                                  loading={expansionLoadingId === candidate.id}
+                                  onClick={() => void previewExpansion(gap, candidate)}
+                                  data-testid="research-gap-preview-expansion"
+                                >
+                                  {S.research_gap_expansion_preview}
+                                </Button>
+                              ) : (
+                                <Popconfirm
+                                  title={S.research_gap_confirm_title}
+                                  description={S.research_gap_confirm_detail}
+                                  onConfirm={() => void confirmCandidate(gap, candidate)}
+                                  okText={S.research_gap_confirm}
+                                  cancelText={S.confirm_cancel}
+                                >
+                                  <Button
+                                    type="primary"
+                                    loading={confirmingCandidateId === candidate.id}
+                                    data-testid="research-gap-confirm-candidate"
+                                  >
+                                    {S.research_gap_confirm}
+                                  </Button>
+                                </Popconfirm>
+                              )}
+                            </div>
+                            {expansion ? (
+                              <div className="kb-research-gap-expansion-preview" data-testid="research-gap-expansion-preview">
+                                <strong>
+                                  {S.research_gap_expansion_preview_title.replace(
+                                    '{paper}',
+                                    expansion.preview.row.paper || expansion.preview.row.source_name,
+                                  )}
+                                </strong>
+                                <p>{S.research_gap_expansion_preview_detail}</p>
+                                <div className="kb-research-gap-expansion-fields">
+                                  {expansion.preview.grounded_fields.map((field) => (
+                                    <div key={field}>
+                                      <Tag color="green">{expansionFieldLabels[field] || field}</Tag>
+                                      <span>{expansion.preview.row.cells[field]?.value}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                                {expansion.preview.missing_fields.length > 0 ? (
+                                  <div className="kb-research-gap-expansion-missing">
+                                    <small>{S.research_gap_expansion_missing_fields}</small>
+                                    {expansion.preview.missing_fields.map((field) => (
+                                      <Tag key={field}>{expansionFieldLabels[field] || field}</Tag>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                <Popconfirm
+                                  title={S.research_gap_expansion_confirm_title}
+                                  description={S.research_gap_expansion_confirm_detail}
+                                  onConfirm={() => void applyExpansion(gap, candidate, expansion)}
+                                  okText={S.research_gap_expansion_apply}
+                                  cancelText={S.confirm_cancel}
+                                >
+                                  <Button
+                                    type="primary"
+                                    icon={<FileAddOutlined />}
+                                    loading={applyingExpansionId === candidate.id}
+                                    data-testid="research-gap-apply-expansion"
+                                  >
+                                    {S.research_gap_expansion_apply}
+                                  </Button>
+                                </Popconfirm>
+                              </div>
                             ) : null}
-                            <Popconfirm
-                              title={S.research_gap_confirm_title}
-                              description={S.research_gap_confirm_detail}
-                              onConfirm={() => void confirmCandidate(gap, candidate)}
-                              okText={S.research_gap_confirm}
-                              cancelText={S.confirm_cancel}
-                            >
-                              <Button
-                                type="primary"
-                                loading={confirmingCandidateId === candidate.id}
-                                data-testid="research-gap-confirm-candidate"
-                              >
-                                {S.research_gap_confirm}
-                              </Button>
-                            </Popconfirm>
                           </div>
-                        </div>
-                      ))}
+                        )
+                      })}
                     </div>
                   ) : null}
                 </article>

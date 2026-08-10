@@ -1091,6 +1091,43 @@ export interface ResearchGapRepairApplyResult {
   research_gaps: ResearchGapScanResult
 }
 
+export interface ResearchGapSourceExpansionPreview {
+  candidate_id: string
+  gap_id: string
+  gap_key: string
+  matrix_id: string
+  matrix_revision: number
+  source_item: Record<string, unknown>
+  row: ProjectEvidenceMatrixRow
+  evidence: Array<Record<string, unknown>>
+  grounded_fields: EvidenceMatrixCellField[]
+  missing_fields: EvidenceMatrixCellField[]
+  quality_status: EvidenceMatrixQualityStatus
+  quality: Record<string, unknown>
+  candidate_evidence: Record<string, unknown>
+}
+
+export interface ResearchGapSourceExpansionPreviewResult {
+  candidate: ResearchGapCandidate
+  preview: ResearchGapSourceExpansionPreview
+  matrix_id: string
+  matrix_revision: number
+}
+
+export interface ResearchGapSourceExpansionApplyResult {
+  gap: ResearchGapRecord
+  candidate: ResearchGapCandidate
+  preview: ResearchGapSourceExpansionPreview
+  matrix: EvidenceMatrixRecord
+  new_row_id: string
+  preserved_row_count: number
+  reaudited_comparison_count: number
+  comparison_flag_count: number
+  original_gap_preserved: boolean
+  affected_briefs: ResearchGapAffectedBrief[]
+  research_gaps: ResearchGapScanResult
+}
+
 export interface ResearchGapConfirmResult {
   gap: ResearchGapRecord
   candidate: ResearchGapCandidate
@@ -1352,6 +1389,19 @@ export const chatApi = {
       `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
       {},
     ),
+  previewResearchGapSourceExpansion: (projectId: string, gapId: string, candidateId: string) =>
+    api.get<ResearchGapSourceExpansionPreviewResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/candidates/${encodeURIComponent(candidateId)}/expansion`,
+    ),
+  applyResearchGapSourceExpansion: (
+    projectId: string,
+    gapId: string,
+    candidateId: string,
+    expectedRevision: number,
+  ) => api.post<ResearchGapSourceExpansionApplyResult>(
+    `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/candidates/${encodeURIComponent(candidateId)}/expansion/apply`,
+    { expected_revision: expectedRevision },
+  ),
   listResearchGapRepairs: (projectId: string, gapId: string, limit = 3) =>
     api.get<ResearchGapRepairResult>(
       `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/repairs?limit=${encodeURIComponent(String(limit))}`,

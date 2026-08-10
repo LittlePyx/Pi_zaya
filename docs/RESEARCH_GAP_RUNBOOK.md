@@ -67,9 +67,39 @@ Candidate search is available for cell-level coverage and comparison gaps. It:
 The UI labels all results as candidates. A researcher can open the exact source
 passage, then explicitly confirm it. Confirmation recomputes the candidate on
 the server, adds the exact quote and stable locator to the project literature
-basket, and marks the gap `in_progress`. It does not update a matrix cell or
-brief. The researcher must use the existing matrix generation, edit, comparison
-audit, or brief update workflow to produce a newly verified artifact.
+basket, and marks the gap `in_progress`. This first confirmation does not update
+a matrix cell or brief. A separately confirmed source-expansion workflow can
+then add that other paper as its own matrix row; it can never fill the original
+paper's row.
+
+## Cross-Source Matrix Expansion Workflow
+
+A confirmed cross-paper candidate exposes an extractive new-row preview. This
+second stage:
+
+1. requires the gap revision to equal the current matrix revision and the
+   candidate ID/source to equal the persisted basket-confirmation action;
+2. verifies the candidate source file against the committed index SHA and
+   recomputes the candidate server-side;
+3. rejects sources already present in the matrix and matrices at the eight-source
+   contract limit;
+4. verifies that the discovery quote still occurs in the exact indexed chunk
+   with a page, heading, block, or anchor locator;
+5. runs the existing field-specific extractors only on that candidate paper and
+   previews all grounded values plus every honestly missing field;
+6. requires another explicit confirmation before writing anything;
+7. appends one independent row and its same-source evidence while preserving
+   every existing row and evidence record byte-for-byte;
+8. recomputes matrix quality and comparison warnings, reaudits every saved
+   comparison, refreshes the source-watch baseline, and rescans gaps and brief
+   lineage.
+
+Adding another paper does not resolve a missing fact in the original paper. The
+original `gap_key` therefore stays active when that row/field remains empty.
+New-row missing fields also remain visible. Existing comparisons are reaudited,
+but a comparative claim involving the newly added row still requires the
+normal user-specified paired comparison audit. Affected briefs remain unchanged
+until their incremental update decisions are reviewed.
 
 ## Same-Source Cell Repair Workflow
 
@@ -113,6 +143,8 @@ then returns, it reopens.
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/ignore`
 - `GET /api/projects/{project_id}/research-gaps/{gap_id}/candidates`
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/candidates/{candidate_id}/confirm`
+- `GET /api/projects/{project_id}/research-gaps/{gap_id}/candidates/{candidate_id}/expansion`
+- `POST /api/projects/{project_id}/research-gaps/{gap_id}/candidates/{candidate_id}/expansion/apply`
 - `GET /api/projects/{project_id}/research-gaps/{gap_id}/repairs`
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/repairs/{repair_id}/apply`
 
@@ -125,9 +157,10 @@ with HTTP 409 if a fresh server-side search no longer returns the candidate.
 Run the focused contract, persistence, API, and browser checks:
 
 ```bash
-python -m pytest -q tests/unit/test_research_gap.py tests/unit/test_research_gap_repair.py tests/unit/test_chat_store_research_gaps.py tests/sanity/test_research_gaps_api.py
+python -m pytest -q tests/unit/test_research_gap.py tests/unit/test_research_gap_repair.py tests/unit/test_research_gap_expansion.py tests/unit/test_chat_store_research_gaps.py tests/sanity/test_research_gaps_api.py
 python tools/evidence_matrix/run_research_gap_eval.py --db-root db
 python tools/evidence_matrix/run_research_gap_repair_eval.py --db-root db
+python tools/evidence_matrix/run_research_gap_expansion_eval.py --db-root db
 cd web
 npm run lint
 npm run build
@@ -199,4 +232,28 @@ live QA 29/29, paid-model smoke 5/5, deterministic retrieval 29/29, source
 validation 41/41, reviewed replay 6/6, backend 4,353 passed with 43 skips,
 frontend smoke 123 passed with two private-auth-gate-only skips, core E2E
 109/109, and public-surface E2E 4/4. Exact result paths and phase timings are in
+`docs/RESEARCH_QA_EVAL_RUNBOOK.md`.
+
+## 2026-08-10 Cross-Source Expansion Acceptance
+
+The expansion replay exercised five real structured gaps from the reviewed
+matrix corpus. Each selected candidate came from a source outside the current
+matrix, matched its exact indexed chunk, and carried a reader locator. All 5/5
+previews produced a separately grounded row. All 5/5 applications preserved
+the complete old row and evidence prefixes, kept new evidence bound to the new
+paper, introduced zero unsupported cells, and left the original paper's gap
+identity visible.
+
+The accepted report is
+`test_results/research_gap_expansion/20260810_155105/report.json`. Extractive
+preview p50/max was 77.227/97.896 ms; application plus saved-comparison
+reaudit p50/max was 10.246/11.062 ms. These timings exclude the explicit user
+review pauses and do not alter ordinary chat generation.
+
+The final unchanged product gates passed: full-library live QA 29/29, paid-model
+smoke 5/5, deterministic retrieval 29/29, source validation 41/41, reviewed
+replay 6/6, backend 4,355 passed with 43 skips, frontend smoke 124 passed with
+two private-auth-gate-only skips, core E2E 109/109, and public-surface E2E 4/4.
+The 29-question provider run retained a visible long tail rather than hiding it;
+exact report paths and phase timings are recorded in
 `docs/RESEARCH_QA_EVAL_RUNBOOK.md`.

@@ -37,6 +37,8 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 async function installBackend(page: Page) {
   let status = 'open'
   let repaired = false
+  let expanded = false
+  let candidateConfirmed = false
   const gap = () => ({
     id: 'gap-limitation',
     gap_key: 'gap-key-limitation',
@@ -51,7 +53,7 @@ async function installBackend(page: Page) {
     detail: 'The matrix has no source-grounded value for this field.',
     matrix_id: 'matrix-1',
     matrix_title: 'Imaging evidence matrix',
-    matrix_revision: 3,
+    matrix_revision: repaired || expanded ? 4 : 3,
     brief_id: '',
     brief_title: '',
     brief_revision: 0,
@@ -66,7 +68,10 @@ async function installBackend(page: Page) {
     candidate_query: 'dynamic imaging limitation failure trade-off',
     candidate_searchable: true,
     dismissible: true,
-    action: {},
+    action: candidateConfirmed ? {
+      candidate_id: 'candidate-new-paper',
+      candidate_source_path: 'db/Library/new-candidate.en.md',
+    } : {},
     created_at: 1,
     updated_at: 2,
   })
@@ -184,9 +189,11 @@ async function installBackend(page: Page) {
 
   await page.route(`**/api/projects/${PROJECT.id}/research-gaps/scan`, async (route) => {
     await fulfillJson(route, {
-      items: repaired ? [briefGap()] : [gap()],
+      items: repaired ? [briefGap()] : expanded ? [gap(), briefGap()] : [gap()],
       summary: repaired
         ? { total: 1, open: 1, in_progress: 0, high: 0, medium: 1, low: 0, searchable: 0, affected_matrix_count: 1, affected_brief_count: 1 }
+        : expanded
+          ? { total: 2, open: 1, in_progress: 1, high: 0, medium: 2, low: 0, searchable: 1, affected_matrix_count: 1, affected_brief_count: 1 }
         : { total: 1, open: status === 'open' ? 1 : 0, in_progress: status === 'in_progress' ? 1 : 0, high: 0, medium: 1, low: 0, searchable: 1, affected_matrix_count: 1, affected_brief_count: 1 },
       scanned_at: 3,
       matrix_count: 1,
@@ -250,6 +257,7 @@ async function installBackend(page: Page) {
   })
   await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/candidates/${candidate.id}/confirm`, async (route) => {
     status = 'in_progress'
+    candidateConfirmed = true
     await fulfillJson(route, {
       gap: gap(),
       candidate,
@@ -278,6 +286,107 @@ async function installBackend(page: Page) {
         revision: 2,
         created_at: 1,
         updated_at: 4,
+      },
+    })
+  })
+  const expansionPreview = {
+    candidate_id: candidate.id,
+    gap_id: gap().id,
+    gap_key: gap().gap_key,
+    matrix_id: 'matrix-1',
+    matrix_revision: 3,
+    source_item: {
+      key: `research-gap:${candidate.id}`,
+      title: candidate.title,
+      sourceName: candidate.source_name,
+      sourcePath: candidate.source_path,
+    },
+    row: {
+      id: 'row-new-candidate',
+      source_item_key: `research-gap:${candidate.id}`,
+      paper: 'New candidate paper',
+      source_name: candidate.source_name,
+      source_path: candidate.source_path,
+      notes: '',
+      source_status: 'active',
+      cells: {
+        method: {
+          field: 'method',
+          value: 'We propose a dynamic coded reconstruction method.',
+          support_status: 'grounded',
+          evidence_ids: ['ev-new-method'],
+          manual_override: false,
+        },
+        limitation: {
+          field: 'limitation',
+          value: candidate.evidence_quote,
+          support_status: 'grounded',
+          evidence_ids: ['ev-new-limitation'],
+          manual_override: false,
+        },
+      },
+    },
+    evidence: [],
+    grounded_fields: ['method', 'limitation'],
+    missing_fields: ['dataset_or_experiment', 'metric', 'key_result'],
+    quality_status: 'verified',
+    quality: { unsupported_cell_count: 0 },
+    candidate_evidence: candidate,
+  }
+  await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/candidates/${candidate.id}/expansion`, async (route) => {
+    await fulfillJson(route, {
+      candidate,
+      preview: expansionPreview,
+      matrix_id: 'matrix-1',
+      matrix_revision: 3,
+    })
+  })
+  await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/candidates/${candidate.id}/expansion/apply`, async (route) => {
+    expanded = true
+    const matrix = {
+      id: 'matrix-1',
+      project_id: PROJECT.id,
+      title: 'Imaging evidence matrix',
+      objective: 'Compare dynamic imaging evidence.',
+      rows: [
+        { id: 'row-a', paper: 'Paper A', source_name: 'Paper A', source_path: SHELF_ITEM.sourcePath, cells: {} },
+        expansionPreview.row,
+      ],
+      evidence: [],
+      source_items: [SHELF_ITEM, expansionPreview.source_item],
+      comparison_flags: [],
+      comparison_audits: [],
+      quality_status: 'verified',
+      quality: { missing_cell_count: 4, unsupported_cell_count: 0 },
+      revision: 4,
+      created_at: 1,
+      updated_at: 6,
+    }
+    await fulfillJson(route, {
+      gap: gap(),
+      candidate,
+      preview: expansionPreview,
+      matrix,
+      new_row_id: expansionPreview.row.id,
+      preserved_row_count: 1,
+      reaudited_comparison_count: 1,
+      comparison_flag_count: 0,
+      original_gap_preserved: true,
+      affected_briefs: [{
+        id: 'brief-1',
+        title: 'Living imaging brief',
+        revision: 2,
+        lineage_status: 'matrix_updated',
+        update_ready: true,
+        impact: { changed_row_count: 1, changed_field_count: 2 },
+      }],
+      research_gaps: {
+        items: [gap(), briefGap()],
+        summary: { total: 2, open: 1, in_progress: 1, high: 0, medium: 2, low: 0, searchable: 1, affected_matrix_count: 1, affected_brief_count: 1 },
+        scanned_at: 6,
+        matrix_count: 1,
+        brief_count: 1,
+        source_change_count: 0,
       },
     })
   })
@@ -328,4 +437,30 @@ test('same-source repair updates the matrix and exposes the affected brief workf
   await expect(dialog.getByTestId('research-gap-card')).toHaveCount(1)
   await expect(dialog.getByTestId('research-gap-card')).not.toContainText('Paper A: limitation')
   await expect(dialog.getByTestId('research-gap-card')).toContainText('Brief needs review: Living imaging brief')
+})
+
+test('confirmed cross-source evidence previews and adds a separate matrix row', async ({ page }) => {
+  await installBackend(page)
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+
+  await page.getByTestId('citation-shelf-open-research-gaps').click()
+  const dialog = page.getByRole('dialog', { name: 'Project research gap queue' })
+  await dialog.getByTestId('research-gap-find-candidates').click()
+  await dialog.getByTestId('research-gap-confirm-candidate').click()
+  await page.getByRole('button', { name: 'Confirm candidate', exact: true }).last().click()
+
+  const preview = dialog.getByTestId('research-gap-expansion-preview')
+  await expect(preview).toContainText('New source row: New candidate paper')
+  await expect(preview).toContainText('We propose a dynamic coded reconstruction method.')
+  await expect(preview).toContainText('Still missing in this paper:')
+  await preview.getByTestId('research-gap-apply-expansion').click()
+  await page.getByRole('button', { name: 'Add verified source row', exact: true }).last().click()
+
+  const result = dialog.getByTestId('research-gap-expansion-result')
+  await expect(result).toContainText('revision 4')
+  await expect(result).toContainText('1 existing rows were preserved')
+  await expect(result).toContainText('original paper\'s missing evidence remains visible')
+  await expect(dialog.getByTestId('research-gap-open-expanded-matrix')).toBeEnabled()
+  await expect(dialog.getByTestId('research-gap-expansion-open-brief')).toContainText('Living imaging brief')
+  await expect(dialog.getByTestId('research-gap-card').filter({ hasText: 'Paper A: limitation' })).toHaveCount(1)
 })

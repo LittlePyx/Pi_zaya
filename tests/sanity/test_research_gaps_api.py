@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -147,6 +148,89 @@ def test_research_gap_scan_ignore_search_and_confirm(monkeypatch, tmp_path: Path
         "_gap_repairs",
         lambda gap, _matrix, limit: [{**repair, "gap_id": gap["id"], "gap_key": gap["gap_key"]}],
     )
+
+    def fake_expansion_preview(current, gap, selected, source_item, *, db_dir):
+        row = {
+            "id": "row-b",
+            "source_item_key": source_item["key"],
+            "paper": "Paper B",
+            "source_name": "Paper B",
+            "source_path": str(candidate_path),
+            "source_status": "active",
+            "cells": {
+                "method": {
+                    "field": "method",
+                    "value": "Paper B proposes an adaptive imaging method.",
+                    "support_status": "grounded",
+                    "evidence_ids": ["ev-b-method"],
+                    "manual_override": False,
+                }
+            },
+        }
+        return {
+            "candidate_id": selected["id"],
+            "gap_id": gap["id"],
+            "gap_key": gap["gap_key"],
+            "matrix_id": current["id"],
+            "matrix_revision": current["revision"],
+            "source_item": {
+                "key": source_item["key"],
+                "title": "Paper B",
+                "sourceName": "Paper B",
+                "sourcePath": str(candidate_path),
+            },
+            "row": row,
+            "evidence": [
+                {
+                    "id": "ev-b-method",
+                    "field": "method",
+                    "source_item_key": source_item["key"],
+                    "source_path": str(candidate_path),
+                    "source_name": "Paper B",
+                    "evidence_quote": "Paper B proposes an adaptive imaging method.",
+                }
+            ],
+            "grounded_fields": ["method"],
+            "missing_fields": ["dataset_or_experiment", "metric", "key_result", "limitation"],
+            "quality_status": "verified",
+            "quality": {"unsupported_cell_count": 0},
+            "candidate_evidence": {"evidence_quote": selected["evidence_quote"]},
+        }
+
+    def fake_expansion_apply(current, gap, preview, *, db_dir):
+        rows = deepcopy(current["rows"])
+        rows.append(deepcopy(preview["row"]))
+        evidence = deepcopy(current["evidence"])
+        evidence.extend(deepcopy(preview["evidence"]))
+        source_items = deepcopy(current["source_items"])
+        source_items.append(deepcopy(preview["source_item"]))
+        return {
+            "rows": rows,
+            "evidence": evidence,
+            "source_items": source_items,
+            "comparison_flags": [],
+            "comparison_audits": [],
+            "quality_status": "verified",
+            "quality": {
+                "contract_version": 2,
+                "reasons": [],
+                "unsupported_cells": [],
+                "missing_cells": [
+                    {"row_id": "row-a", "field": "metric"},
+                    {"row_id": "row-a", "field": "key_result"},
+                    {"row_id": "row-b", "field": "dataset_or_experiment"},
+                    {"row_id": "row-b", "field": "metric"},
+                    {"row_id": "row-b", "field": "key_result"},
+                    {"row_id": "row-b", "field": "limitation"},
+                ],
+            },
+            "new_row_id": "row-b",
+            "preserved_row_count": len(current["rows"]),
+            "reaudited_comparison_count": 0,
+        }
+
+    monkeypatch.setattr(gap_router, "evidence_matrix_source_expansion_preview", fake_expansion_preview)
+    monkeypatch.setattr(gap_router, "apply_evidence_matrix_source_expansion", fake_expansion_apply)
     client = TestClient(app)
 
     scanned = client.post(f"/api/projects/{project_id}/research-gaps/scan")
@@ -183,6 +267,11 @@ def test_research_gap_scan_ignore_search_and_confirm(monkeypatch, tmp_path: Path
     assert candidates.status_code == 200
     assert candidates.json()["items"][0]["evidence_quote"] == candidate["evidence_quote"]
 
+    unconfirmed_preview = client.get(
+        f"/api/projects/{project_id}/research-gaps/{metric['id']}/candidates/{candidate['id']}/expansion"
+    )
+    assert unconfirmed_preview.status_code == 409
+
     confirmed = client.post(
         f"/api/projects/{project_id}/research-gaps/{metric['id']}/candidates/{candidate['id']}/confirm"
     )
@@ -191,6 +280,25 @@ def test_research_gap_scan_ignore_search_and_confirm(monkeypatch, tmp_path: Path
     assert confirmed.json()["gap"]["status"] == "in_progress"
     assert confirmed.json()["shelf"]["items"][0]["sourcePath"] == str(candidate_path)
     assert confirmed.json()["shelf"]["items"][0]["shelfExcerpt"] == candidate["evidence_quote"]
+
+    expansion_preview = client.get(
+        f"/api/projects/{project_id}/research-gaps/{metric['id']}/candidates/{candidate['id']}/expansion"
+    )
+    assert expansion_preview.status_code == 200
+    assert expansion_preview.json()["preview"]["row"]["source_path"] == str(candidate_path)
+    assert expansion_preview.json()["preview"]["grounded_fields"] == ["method"]
+    expanded = client.post(
+        f"/api/projects/{project_id}/research-gaps/{metric['id']}/candidates/{candidate['id']}/expansion/apply",
+        json={"expected_revision": expansion_preview.json()["matrix_revision"]},
+    )
+    assert expanded.status_code == 200
+    assert expanded.json()["matrix"]["revision"] == expansion_preview.json()["matrix_revision"] + 1
+    assert expanded.json()["new_row_id"] == "row-b"
+    assert expanded.json()["preserved_row_count"] == 1
+    assert expanded.json()["original_gap_preserved"] is True
+    assert expanded.json()["matrix"]["rows"][0]["cells"].get("metric") is None
+    assert expanded.json()["matrix"]["rows"][1]["source_path"] == str(candidate_path)
+    assert expanded.json()["affected_briefs"][0]["update_ready"] is True
 
     ignored = client.post(
         f"/api/projects/{project_id}/research-gaps/{key_result['id']}/ignore",
