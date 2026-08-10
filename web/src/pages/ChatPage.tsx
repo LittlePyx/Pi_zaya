@@ -2,6 +2,7 @@
 
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button, message, Typography } from 'antd'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
@@ -10,6 +11,11 @@ import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawe
 import { ChatActivityStrip } from '../components/chat/ChatActivityStrip'
 import { ChatConnectionAlert } from '../components/chat/ChatWorkspaceStatus'
 import { ReaderWorkspaceDock } from '../components/chat/ReaderWorkspaceDock'
+import { ProjectActionCenter } from '../components/chat/ProjectActionCenter'
+import { EvidenceMatrixWorkspace } from '../components/chat/EvidenceMatrixWorkspace'
+import { ResearchBriefWorkspace } from '../components/chat/ResearchBriefWorkspace'
+import { ResearchGapWorkspace } from '../components/chat/ResearchGapWorkspace'
+import { restoreShelfItems } from '../components/chat/citeShelfStorage'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useAgentMode } from '../components/chat/useAgentMode'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
@@ -25,7 +31,8 @@ import { buildResearchContext } from '../components/chat/researchContext'
 import { useResearchContextAttrs } from '../components/chat/researchContextAttrs'
 import type { SelectedResearchContextPack } from '../components/chat/researchContextPack'
 import { dispatchOpenSettings, type ApiSettingsTarget } from '../components/layout/settingsEvents'
-import type { QueryScope } from '../api/chat'
+import { chatApi, type ProjectResearchStatusAction, type QueryScope } from '../api/chat'
+import type { CiteShelfItem } from '../components/chat/citationState'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
 
@@ -40,6 +47,8 @@ function loadChatDebugPanelEnabled() {
 
 export default function ChatPage() {
   const S = useT()
+  const location = useLocation()
+  const navigate = useNavigate()
   const messages = useChatStore((s) => s.messages)
   const conversationLoading = useChatStore((s) => s.conversationLoading)
   const messagesLoadingMore = useChatStore((s) => s.messagesLoadingMore)
@@ -50,6 +59,9 @@ export default function ChatPage() {
   const activeConvId = useChatStore((s) => s.activeConvId)
   const activeProjectId = useChatStore((s) => s.activeProjectId)
   const activeConversation = useChatStore((s) => s.activeConversation)
+  const projects = useChatStore((s) => s.projects)
+  const selectProject = useChatStore((s) => s.selectProject)
+  const createConversation = useChatStore((s) => s.createConversation)
   const guideBindings = useChatStore((s) => s.guideBindings)
   const uploadItems = useChatStore((s) => s.uploadItems)
   const pendingImages = useChatStore((s) => s.pendingImages)
@@ -113,11 +125,32 @@ export default function ChatPage() {
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
+  const [projectMatrixLaunch, setProjectMatrixLaunch] = useState<{
+    projectId: string
+    matrixId: string
+    tab: 'matrix' | 'comparisons'
+    seedItems: CiteShelfItem[]
+  } | null>(null)
+  const [projectBriefLaunch, setProjectBriefLaunch] = useState<{
+    projectId: string
+    matrixId: string
+    briefId: string
+    seedItems: CiteShelfItem[]
+  } | null>(null)
+  const [projectGapId, setProjectGapId] = useState('')
   const eventTokenRef = useRef(1)
   const localeRefreshKeyRef = useRef(
     `${settings.uiLocale}:${settings.refsCardLocale}:${settings.localePreferencesRevision}`,
   )
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
+  const projectStatusId = useMemo(
+    () => String(new URLSearchParams(location.search).get('project_status') || '').trim(),
+    [location.search],
+  )
+  const projectStatusName = useMemo(
+    () => projects.find((project) => project.id === projectStatusId)?.name || '',
+    [projectStatusId, projects],
+  )
   const activeGuideBinding = useMemo(() => {
     const convId = String(activeConvId || '').trim()
     return convId ? guideBindings?.[convId] : undefined
@@ -235,6 +268,105 @@ export default function ChatPage() {
     showDockPanel,
     openTimeline,
   })
+
+  useEffect(() => {
+    if (!projectStatusId || activeProjectId === projectStatusId) return
+    selectProject(projectStatusId)
+  }, [activeProjectId, projectStatusId, selectProject])
+
+  const closeProjectStatus = useCallback(() => {
+    const params = new URLSearchParams(location.search)
+    params.delete('project_status')
+    const search = params.toString()
+    navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true })
+  }, [location.pathname, location.search, navigate])
+
+  const loadProjectShelfItems = useCallback(async (projectId: string): Promise<CiteShelfItem[]> => {
+    const shelf = await chatApi.getCitationShelf({ projectId, scope: 'project' })
+    return restoreShelfItems(Array.isArray(shelf.items) ? shelf.items : [])
+  }, [])
+
+  const launchProjectMatrix = useCallback(async (
+    projectId: string,
+    matrixId = '',
+    tab: 'matrix' | 'comparisons' = 'matrix',
+  ) => {
+    const seedItems = await loadProjectShelfItems(projectId)
+    setProjectGapId('')
+    setProjectBriefLaunch(null)
+    setProjectMatrixLaunch({ projectId, matrixId, tab, seedItems })
+  }, [loadProjectShelfItems])
+
+  const launchProjectBrief = useCallback(async (
+    projectId: string,
+    matrixId = '',
+    briefId = '',
+  ) => {
+    const seedItems = await loadProjectShelfItems(projectId)
+    setProjectGapId('')
+    setProjectMatrixLaunch(null)
+    setProjectBriefLaunch({ projectId, matrixId, briefId, seedItems })
+  }, [loadProjectShelfItems])
+
+  const openProjectEvidence = useCallback((evidence: Record<string, unknown>) => {
+    const sourcePath = String(evidence.source_path || evidence.sourcePath || '').trim()
+    if (!sourcePath) {
+      message.info(S.reader_missing_path)
+      return
+    }
+    openReader({
+      sourcePath,
+      sourceName: String(evidence.source_name || evidence.sourceName || evidence.title || ''),
+      headingPath: String(evidence.heading_path || evidence.headingPath || evidence.location_label || ''),
+      snippet: String(evidence.evidence_quote || evidence.shelfExcerpt || ''),
+      highlightSnippet: String(evidence.evidence_quote || evidence.shelfExcerpt || ''),
+      blockId: String(evidence.block_id || evidence.blockId || '') || undefined,
+      anchorId: String(evidence.anchor_id || evidence.anchorId || '') || undefined,
+      strictLocate: true,
+    })
+  }, [S.reader_missing_path, openReader])
+
+  const handleProjectStatusAction = useCallback(async (action: ProjectResearchStatusAction) => {
+    const projectId = projectStatusId
+    if (!projectId) return
+    closeProjectStatus()
+    if (action.target === 'evidence_matrix') {
+      await launchProjectMatrix(
+        projectId,
+        action.matrix_id,
+        action.workspace_tab === 'comparisons' ? 'comparisons' : 'matrix',
+      )
+      return
+    }
+    if (action.target === 'research_gaps') {
+      setProjectMatrixLaunch(null)
+      setProjectBriefLaunch(null)
+      setProjectGapId(projectId)
+      return
+    }
+    if (action.target === 'research_brief') {
+      await launchProjectBrief(projectId, action.matrix_id, action.brief_id)
+      return
+    }
+    if (action.target === 'citation_shelf') {
+      selectProject(projectId)
+      const activeProject = String(activeConversation?.project_id || '')
+      if (!activeConvId || activeProject !== projectId) {
+        await createConversation()
+      }
+      window.setTimeout(openReaderCitationShelf, 0)
+    }
+  }, [
+    activeConvId,
+    activeConversation?.project_id,
+    closeProjectStatus,
+    createConversation,
+    launchProjectBrief,
+    launchProjectMatrix,
+    openReaderCitationShelf,
+    projectStatusId,
+    selectProject,
+  ])
 
   const handleResearchContextFollowUp = useCallback((pack: SelectedResearchContextPack, promptText: string) => {
     handleResearchContextPackChange(pack)
@@ -706,6 +838,55 @@ export default function ChatPage() {
           onOpenCitationShelf={openReaderCitationShelf}
         />
       ) : null}
+      <ProjectActionCenter
+        open={Boolean(projectStatusId)}
+        projectId={projectStatusId}
+        projectName={projectStatusName}
+        onClose={closeProjectStatus}
+        onAction={handleProjectStatusAction}
+      />
+      <ResearchGapWorkspace
+        open={Boolean(projectGapId)}
+        projectId={projectGapId}
+        onClose={() => setProjectGapId('')}
+        onOpenEvidence={openProjectEvidence}
+        onOpenBrief={(briefId, matrixId) => {
+          const projectId = projectGapId
+          void launchProjectBrief(projectId, matrixId, briefId)
+        }}
+        onOpenMatrix={(matrixId) => {
+          const projectId = projectGapId
+          void launchProjectMatrix(projectId, matrixId)
+        }}
+      />
+      <EvidenceMatrixWorkspace
+        open={Boolean(projectMatrixLaunch)}
+        projectId={projectMatrixLaunch?.projectId || ''}
+        activeConvId={activeConvId}
+        seedItems={projectMatrixLaunch?.seedItems || []}
+        initialMatrixId={projectMatrixLaunch?.matrixId || ''}
+        initialTab={projectMatrixLaunch?.tab || 'matrix'}
+        onClose={() => setProjectMatrixLaunch(null)}
+        onOpenEvidence={openProjectEvidence}
+        onUseForBrief={(matrix) => {
+          const projectId = projectMatrixLaunch?.projectId || ''
+          void launchProjectBrief(projectId, matrix.id)
+        }}
+        onOpenBrief={(briefId, matrixId) => {
+          const projectId = projectMatrixLaunch?.projectId || ''
+          void launchProjectBrief(projectId, matrixId, briefId)
+        }}
+      />
+      <ResearchBriefWorkspace
+        open={Boolean(projectBriefLaunch)}
+        projectId={projectBriefLaunch?.projectId || ''}
+        activeConvId={activeConvId}
+        seedItems={projectBriefLaunch?.seedItems || []}
+        sourceMatrixId={projectBriefLaunch?.matrixId || ''}
+        initialBriefId={projectBriefLaunch?.briefId || ''}
+        onClose={() => setProjectBriefLaunch(null)}
+        onOpenEvidence={openProjectEvidence}
+      />
     </div>
   )
 }

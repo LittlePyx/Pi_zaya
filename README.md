@@ -6,7 +6,8 @@ generate verifiable answers, turn a project's literature basket into a
 persistent cell-level evidence matrix, and create an editable research brief
 from the verified matrix. A project research gap queue then turns audited
 missing evidence and stale dependencies into an impact-ranked, human-reviewed
-worklist.
+worklist. A project research status center then measures the complete structured
+workflow and routes the researcher to exactly one quality-first next action.
 
 This is a production-oriented AI agent / RAG engineering portfolio project, not
 a toy PDF chatbot. It connects PDF conversion, structured indexing, hybrid
@@ -43,6 +44,7 @@ web context.
 | Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. A persistent change inbox fingerprints full text separately from metadata, reports downstream row/comparison/brief/citation impact, blocks stale indexes, and refreshes only user-confirmed affected sources while preserving unaffected evidence. A high-precision candidate scan can prefill paired comparison contracts from structured metric tables, but requires human confirmation of every semantic mapping and a fresh server-side strict audit before producing any result. Explicit paired audits produce a result only after task, dataset, protocol, metric, target, value, and both source excerpts pass the comparison contract. Exports Markdown, CSV, or XLSX. |
 | Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix, audits every substantive claim, distinguishes historically verified snapshots from the latest matrix state, and turns changed fields/citations into a reviewable incremental update. Users accept or keep each affected claim, unaffected Markdown remains byte-for-byte intact, and the merged revision receives a complete evidence audit before export. |
 | Research gap queue | Aggregates explicit missing/unsupported matrix cells, non-comparable audits, stale brief lineage, and source changes into a deterministic project worklist. It reports downstream matrix/brief/citation/comparison impact. A same-source repair path can propose exact, locatable sentences from the matrix row's own freshly indexed paper. Cross-paper discovery uses a separate two-stage review: first confirm the candidate into the literature basket, then inspect a full extractive row preview before adding that paper as a new matrix source. Neither path can attribute another paper's evidence to the original row. |
+| Project research status | Measures source freshness, matrix verification, evidence gaps, complete comparison-candidate coverage, and brief lineage, then exposes exactly one deterministic next action. Changed sources and evidence defects always outrank comparison review or export. The center shows scan coverage and phase timings and navigates directly to the affected workflow without accepting evidence or comparison conclusions. |
 | Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
@@ -68,6 +70,13 @@ flowchart LR
   EM --> RG["Project Research Gap Queue"]
   F --> RG
   RB --> RG
+  EM --> PS["Project Research Status"]
+  F --> PS
+  RG --> PS
+  RB --> PS
+  PS --> L
+  PS --> EM
+  PS --> RB
   RG --> L
   RG --> EM
   P --> O["Grounded Answer + Citation Trace UI"]
@@ -124,6 +133,11 @@ At a high level:
     and the server recomputes the candidate before running the unchanged strict
     comparison audit. Only that audited revision can refresh research gaps or
     brief lineage.
+11. The project research status center refreshes source/gap state, measures
+    comparison-candidate coverage across every eligible current matrix, and
+    returns one fixed quality-first action. It can route to the exact matrix,
+    comparison tab, gap queue, brief, or literature basket, but cannot resolve
+    any evidence contract on the researcher's behalf.
 
 Key backend entry points:
 
@@ -140,6 +154,7 @@ Key backend entry points:
 - `kb/research_brief_lineage.py`: matrix fingerprinting, freshness, change impact, and export provenance rules
 - `kb/research_brief_update.py`: stable citation slots, affected-block planning, grounded candidate synthesis, exact-span merge, and preservation metrics
 - `kb/research_gap.py`: deterministic gap identity, priority, impact, and local candidate evidence search
+- `kb/project_status.py`: deterministic project readiness stages and unique next-action priority
 - `kb/agent/`: lightweight Research Agent layer
 
 Key frontend entry points:
@@ -151,6 +166,7 @@ Key frontend entry points:
 - `web/src/components/chat/CiteShelf.tsx`: literature basket UI
 - `web/src/components/chat/EvidenceMatrixWorkspace.tsx`: persistent matrix editor, evidence, versions, and exports
 - `web/src/components/chat/ResearchBriefWorkspace.tsx`: brief editor, preview, evidence, versions, and exports
+- `web/src/components/chat/ProjectActionCenter.tsx`: measured project status, single next action, and exact workflow navigation
 - `web/src/api/*.ts`: typed API contracts
 
 ## Research Agent Mode

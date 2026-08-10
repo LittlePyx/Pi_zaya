@@ -1294,6 +1294,41 @@ def _bind_planned_source_citations(
         return text
     edits: dict[tuple[int, int, int], list[int]] = {}
 
+    def _taxonomy_relation_alignment(claim: str, evidence: str) -> bool:
+        """Recognize a translated classification claim that preserves all facets.
+
+        Cross-language token alignment can recover the category names while the
+        ordinary support score remains low because the relation words themselves
+        are translated.  Requiring a classification relation on both sides and
+        at least two non-generic shared facets keeps this boost narrow: a claim
+        that mentions only one child category cannot claim the parent taxonomy.
+        """
+
+        relation_pattern = re.compile(
+            r"(?i)\b(?:classif(?:y|ies|ied|ication)|categori(?:ze[sd]?|es|zation)|"
+            r"divid(?:e[sd]?|ing)|group(?:ed|ing)?\s+into|"
+            r"(?:two|three|four|several)\s+(?:types|families|categories|classes))\b|"
+            r"分类|划分|分为|分成|归为|类别|大类"
+        )
+        if not relation_pattern.search(claim) or not relation_pattern.search(evidence):
+            return False
+        shared_facets = (
+            evidence_alignment_tokens(claim) & evidence_alignment_tokens(evidence)
+        ) - {
+            "approach",
+            "approaches",
+            "category",
+            "categories",
+            "class",
+            "classes",
+            "domain",
+            "method",
+            "methods",
+            "type",
+            "types",
+        }
+        return len(shared_facets) >= 2
+
     def _candidate_rank(candidate: dict, planned_index: int) -> tuple[int, int, int, int] | None:
         planned = planned_slots[planned_index]
         claim = normalize_inline_markdown(candidate["text"])
@@ -1307,6 +1342,8 @@ def _bind_planned_source_citations(
             evidence,
             allow_comparison_scope=True,
         )
+        if _taxonomy_relation_alignment(claim, evidence):
+            direct_score = max(direct_score, 8)
         # A source-name cell alone may share one acronym with the evidence but
         # is not the factual cell the citation must support. Requiring the same
         # strict direct score as the evidence audit keeps row context from
@@ -1349,25 +1386,24 @@ def _bind_planned_source_citations(
 
     for planned_index, planned in enumerate(planned_slots):
         number = int(planned["number"])
-        ranked: list[tuple[tuple[int, int, int, int], dict]] = []
-        already_bound = False
+        ranked: list[tuple[tuple[int, int, int, int], dict, bool]] = []
         for candidate in candidates:
             rank = _candidate_rank(candidate, planned_index)
             if rank is None:
                 continue
             if number in candidate["numeric_citations"]:
-                already_bound = True
-                break
+                ranked.append((rank, candidate, True))
+                continue
             # A stale System-A number must not block the correct plan marker:
             # the final audit can then remove the disallowed old number without
             # dropping the now-grounded claim. Structured System-B citations
             # are a separate route and remain untouched.
             if candidate["has_structured_citation"]:
                 continue
-            ranked.append((rank, candidate))
-        if already_bound or not ranked:
+            ranked.append((rank, candidate, False))
+        if not ranked:
             continue
-        rank, candidate = max(
+        rank, candidate, already_bound = max(
             ranked,
             key=lambda item: (
                 item[0],
@@ -1376,6 +1412,8 @@ def _bind_planned_source_citations(
             ),
         )
         del rank
+        if already_bound:
+            continue
         edit_key = (
             int(candidate["line_index"]),
             int(candidate["start"]),

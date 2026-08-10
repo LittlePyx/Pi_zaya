@@ -1046,6 +1046,102 @@ export interface ResearchGapSummary {
   affected_brief_count: number
 }
 
+export type ProjectResearchReadiness = 'blocked' | 'needs_review' | 'ready' | string
+
+export interface ProjectResearchStatusAction {
+  code: string
+  target: 'project_status' | 'citation_shelf' | 'evidence_matrix' | 'research_gaps' | 'research_brief' | string
+  priority: number
+  reason: string
+  matrix_id: string
+  matrix_title: string
+  matrix_revision: number
+  brief_id: string
+  brief_title: string
+  brief_revision: number
+  gap_count: number
+  candidate_count: number
+  workspace_tab: string
+}
+
+export interface ProjectResearchStatus {
+  contract_version: number
+  project: { id: string; name: string }
+  readiness: ProjectResearchReadiness
+  stages: {
+    sources: {
+      status: string
+      project_source_count: number
+      shelf_source_count: number
+      matrix_source_count: number
+      changed_source_count: number
+      stale_index_matrix_count: number
+    }
+    matrices: {
+      status: string
+      total: number
+      verified: number
+      needs_review: number
+      latest_matrix_id: string
+      latest_matrix_title: string
+      latest_matrix_revision: number
+    }
+    evidence: {
+      status: string
+      active_gap_count: number
+      unsupported_count: number
+      missing_count: number
+      matrix_review_count: number
+    }
+    comparisons: {
+      status: string
+      verified_count: number
+      not_comparable_count: number
+      boundary_gap_count: number
+      pending_candidate_count: number
+      eligible_matrix_count: number
+      scanned_matrix_count: number
+      skipped_stale_matrix_count: number
+      scan_complete: boolean
+    }
+    briefs: {
+      status: string
+      total: number
+      verified: number
+      current: number
+      stale: number
+      lineage_blocked: number
+      latest_brief_id: string
+      latest_brief_title: string
+      latest_brief_revision: number
+    }
+  }
+  active_gap_count: number
+  gap_counts: Record<string, number>
+  recommended_action: ProjectResearchStatusAction
+  refreshed: boolean
+  generated_at: number
+  comparison_scan: {
+    candidate_count: number
+    eligible_matrix_count: number
+    scanned_matrix_count: number
+    skipped_stale_matrix_count: number
+    first_stale_matrix_id?: string
+    scan_complete: boolean
+    examined_row_pairs: number
+    structured_observation_count: number
+    elapsed_ms: number
+    matrix_results?: Array<Record<string, unknown>>
+  }
+  phase_timings_ms: {
+    load_artifacts: number
+    scan_and_sync_gaps: number
+    scan_comparison_candidates: number
+    assemble: number
+    total: number
+  }
+}
+
 export interface ResearchGapScanResult {
   items: ResearchGapRecord[]
   summary: ResearchGapSummary
@@ -1415,6 +1511,15 @@ export const chatApi = {
   scanResearchGaps: (projectId: string) =>
     api.post<ResearchGapScanResult>(
       `/api/projects/${encodeURIComponent(projectId)}/research-gaps/scan`,
+      {},
+    ),
+  getProjectResearchStatus: (projectId: string) =>
+    api.get<ProjectResearchStatus>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-status`,
+    ),
+  refreshProjectResearchStatus: (projectId: string) =>
+    api.post<ProjectResearchStatus>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-status/refresh`,
       {},
     ),
   ignoreResearchGap: (projectId: string, gapId: string, reason = '') =>

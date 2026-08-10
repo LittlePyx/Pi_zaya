@@ -291,6 +291,60 @@ def test_planned_source_binder_places_markers_inside_aligned_table_cells() -> No
     assert "BetaGS [2]" not in bound
 
 
+def test_planned_source_binder_prefers_complete_taxonomy_over_cited_child_facet() -> None:
+    source_path = "review.en.md"
+    taxonomy = (
+        "Image denoising methods can be roughly classified as spatial domain methods "
+        "and transform domain methods."
+    )
+    spatial_detail = (
+        "Spatial domain methods remove noise using correlations between pixels or "
+        "image patches."
+    )
+    plan = {
+        "intent": "method_explain",
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Classical denoising method",
+                "candidate_hits": [1],
+                "evidence_quote": taxonomy,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "Classical denoising method",
+                "candidate_hits": [1],
+                "evidence_quote": spatial_detail,
+            },
+        ],
+    }
+    hits = [{"text": taxonomy, "meta": {"source_path": source_path}}]
+    answer = (
+        "这篇综述把经典去噪方法划分为空间域方法和变换域方法两大类。\n\n"
+        "空间域方法利用像素或图像块之间的相关性去噪 [1]。"
+    )
+
+    bound = finalize_runtime._bind_planned_source_citations(
+        answer,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "两大类 [1]。" in bound
+    assert "相关性去噪 [1]。" in bound
+    assert (
+        finalize_runtime._bind_planned_source_citations(
+            bound,
+            citation_plan=plan,
+            answer_hits=hits,
+        )
+        == bound
+    )
+
+
 def test_planned_source_binder_leaves_ambiguous_multi_source_claim_unchanged() -> None:
     plan = {
         "intent": "comparison",

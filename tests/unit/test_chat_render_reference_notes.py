@@ -969,6 +969,69 @@ def test_inline_system_a_compound_card_and_reader_locator_ignore_plan_order() ->
         assert output["strict_locate"] is True
 
 
+def test_inline_system_a_taxonomy_uses_prompt_complete_page_locator_across_title_variants() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = r"F:\db\denoising-review\denoising-review.en.md"
+    taxonomy = (
+        "Image denoising methods can be roughly classified as spatial domain methods "
+        "and transform domain methods."
+    )
+    spatial_detail = (
+        "Spatial domain methods remove noise using correlations between pixels or "
+        "image patches."
+    )
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source_path,
+            "source_name": "denoising-review.pdf",
+            "heading_path": "Brief review of image denoising techniques / Classical denoising method",
+            "evidence_quote": spatial_detail,
+            "summary_line": spatial_detail,
+            "raw": spatial_detail,
+            "page_start": 7,
+            "answer_claim": "经典去噪方法分为空间域方法和变换域方法两大类。",
+            "citation_plan_slot": True,
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [3],
+                "source_path": source_path,
+                "heading_path": "Stored article filename / Classical denoising method",
+                "evidence_quote": taxonomy,
+                "evidence_selection_reason": "prompt_aligned_source_sentence",
+                "page_start": 2,
+                "page_end": 2,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [],
+                "source_path": source_path,
+                "heading_path": "Brief review of image denoising techniques / Classical denoising method",
+                "evidence_quote": spatial_detail,
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="zh",
+    )[0]
+
+    assert "spatial domain methods" in refined["evidence_quote"]
+    assert "transform domain methods" in refined["evidence_quote"]
+    assert refined["reader_evidence_quote"] == taxonomy
+    assert refined["page_start"] == 2
+    assert refined["page_end"] == 2
+    assert refined["heading_path"].endswith("Classical denoising method")
+
+
 def test_final_display_cleanup_removes_empty_citation_wrappers_but_keeps_task_boxes() -> None:
     value = (
         "Claim [ [[CITE:nonexistent:1]] ].\n"

@@ -610,6 +610,76 @@ independent final 29/29 run. The original failure remains in
 `test_results/research_qa_eval/20260810_185236`; the validator, source set, and
 evidence/card thresholds were not changed.
 
+## 2026-08-10 Project Research Status and Citation-Binding Release Gate
+
+The project research status center measures source freshness, matrix
+verification, explicit gaps, complete comparison-candidate coverage, and brief
+lineage, then returns exactly one deterministic next action. Its fixed priority
+order prevents a polished brief or export action from hiding changed sources,
+unsupported evidence, unresolved gaps, or pending comparisons. Opening the
+center performs the current gap and comparison scans and exposes their coverage
+and phase timings; it does not accept evidence, confirm a semantic mapping, or
+generate a conclusion.
+
+The real-paper status report at
+`test_results/project_research_status/20260810_210830/report.json` passed all
+5/5 project states. It loaded 2,233 real indexed chunks, found all 18 pending
+SCIGS/SCINeRF comparison candidates, retained exact same-source evidence and
+reader locators, and built the deterministic recommendation in 2.662/2.856 ms
+median/max. The companion candidate report at
+`test_results/evidence_comparison_candidates/20260810_210831/report.json` also
+passed 5/5 with zero evidence, prefill, contract, cross-dataset, or uncontrolled-
+metric failures. Its complete scan took 84.217 ms and strict re-audit took
+104.494/107.158 ms median/max.
+
+The first complete live release attempt was 28/29 at
+`test_results/research_qa_project_status_full_library/20260810_202439`. The
+`denoising-classical-map` case returned the right paper and answer shape but
+bound the two-child spatial-domain detail as if it satisfied the complete
+spatial/transform taxonomy claim, then retained a weaker stale card locator.
+The release fix ranks taxonomy evidence by complete claim alignment, recognizes
+the same leaf heading across article-title variants, and permits a prompt-
+aligned page locator to replace weaker evidence only when claim overlap
+improves. The focused real-model retest passed with the exact page-2 taxonomy at
+`test_results/research_qa_project_status_denoising_fix_v2/20260810_205400`.
+
+The final unchanged release gates were:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_project_status_full_library_release/20260810_210412`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_project_status_live_smoke_release/20260810_210839`.
+3. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_eval/20260810_214001`; source validation: 41/41;
+   grounded replay: 6/6; reviewed Agent replay: 5/5; converter quality: 13/13.
+4. Backend: 4,372 passed and 43 configuration-dependent skips. Frontend smoke:
+   126 passed with two private-auth-gate-only skips; core E2E: 109/109; public-
+   surface E2E: 4/4. Ruff, ESLint, and the production build passed.
+
+The accepted 29-question run reported first-visible p50/p95/max of
+2,917/4,861/4,946 ms, answer-complete p50/p95/max of
+4,610/10,557/12,714 ms, evidence-card p50/p95/max of
+7,436/12,872/13,848 ms, UI-ready p50/p95/max of
+7,436/13,637/14,393 ms, and final-validation p50/p95/max of
+8,810/13,963/14,950 ms. Compared with the initial 28/29 run, every recorded
+maximum fell, including final validation from 16,985 to 14,950 ms; p95 values
+were not uniformly lower and remain visible as real provider variance. No
+timeout, evidence term, locator, source scope, card threshold, or case was
+removed to obtain the pass.
+
+An additional non-gating diagnostic deliberately ran all 56 fixture questions
+at
+`test_results/research_qa_project_status_full_library_fixed/20260810_205431`.
+It passed 49/56 and exposed seven long-tail backlog cases:
+`iism-live-cell-benefit`, `qclfm-correlation-resolution`,
+`scinerf-motion-assumption-en`, `perovskite-dual-cavity-threshold`,
+`sph-heterodyne-sampling-conditions`, `three-d-video-daq-budget`, and
+`sequential-cs-two-stage-elimination`. These are answer-term, citation-card
+copy, and high-risk claim-binding defects outside the formal 29-question
+release suite; they are recorded rather than reclassified, hidden, or used to
+weaken the release gate. The expanded run's final-validation p50/p95/max was
+8,440/15,271/20,114 ms and defines the next long-tail quality backlog.
+
 ## Outputs
 
 Default output directory:

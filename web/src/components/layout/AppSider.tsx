@@ -30,6 +30,7 @@ import {
   MenuUnfoldOutlined,
   ApiOutlined,
   CloudDownloadOutlined,
+  FundProjectionScreenOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useT } from '../../i18n'
@@ -72,6 +73,13 @@ function conversationSearch(search: string, conversationId?: string | null) {
   if (convId) params.set('conversation', convId)
   const next = params.toString()
   return next ? `?${next}` : ''
+}
+
+function projectStatusSearch(search: string, projectId: string) {
+  const params = new URLSearchParams(search)
+  for (const key of LINKED_CONVERSATION_QUERY_KEYS) params.delete(key)
+  params.set('project_status', projectId)
+  return `?${params.toString()}`
 }
 
 function formatRelativeTime(ts: number | undefined, txt: { just_now: string; minutes_ago: string; hours_ago: string; days_ago: string }) {
@@ -249,6 +257,7 @@ function ProjectSection({
   onDeleteConversation,
   onMoveConversation,
   moveMenuItems,
+  onOpenStatus,
   onRename,
   onDelete,
 }: {
@@ -264,6 +273,7 @@ function ProjectSection({
   onDeleteConversation: (id: string) => void
   onMoveConversation: (id: string, targetProjectId: string | null) => void
   moveMenuItems?: MenuProps['items']
+  onOpenStatus: () => void
   onRename: () => void
   onDelete: () => void
 }) {
@@ -293,11 +303,16 @@ function ProjectSection({
             trigger={['click']}
             menu={{
               items: [
+                { key: 'status', icon: <FundProjectionScreenOutlined />, label: S.project_status_menu },
                 { key: 'rename', icon: <EditOutlined />, label: S.rename_project },
                 { key: 'delete', icon: <DeleteOutlined />, label: S.delete_project, danger: true },
               ],
               onClick: ({ key, domEvent }) => {
                 domEvent.stopPropagation()
+                if (key === 'status') {
+                  onOpenStatus()
+                  return
+                }
                 if (key === 'rename') {
                   onRename()
                   return
@@ -701,6 +716,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
     selectProject(projectId)
   }, [selectProject])
 
+  const openProjectStatus = useCallback((project: Project) => {
+    selectProject(project.id)
+    nav({ pathname: '/', search: projectStatusSearch(loc.search, project.id) })
+  }, [loc.search, nav, selectProject])
+
   const openCreateProject = () => {
     setProjectModalMode('create')
     setEditingProject(null)
@@ -934,6 +954,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
                     void moveConversationWithFeedback(conversationId, targetProjectId)
                   }}
                   moveMenuItems={getConversationMoveMenuItems(project.id)}
+                  onOpenStatus={() => openProjectStatus(project)}
                   onRename={() => openRenameProject(project)}
                   onDelete={async () => {
                     await deleteProject(project.id)

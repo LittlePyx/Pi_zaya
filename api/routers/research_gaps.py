@@ -25,6 +25,7 @@ from kb.research_gap import (
     find_research_gap_candidates,
     research_gap_summary,
 )
+from kb.project_status import build_project_research_status
 from kb.store import load_all_chunks
 
 
@@ -202,6 +203,154 @@ def _comparison_candidate_result(
         limit=limit,
     )
     return result, chunks
+
+
+def _project_comparison_candidate_scan(
+    matrices: list[dict[str, Any]],
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    eligible = [
+        matrix
+        for matrix in matrices
+        if str(matrix.get("quality_status") or "") == "verified"
+        and len([item for item in list(matrix.get("rows") or []) if isinstance(item, dict)]) >= 2
+    ]
+    fresh: list[dict[str, Any]] = []
+    skipped_stale = 0
+    first_stale_matrix_id = ""
+    for matrix in eligible:
+        source_paths = [
+            str(item.get("source_path") or "")
+            for item in list(matrix.get("rows") or [])
+            if isinstance(item, dict)
+            and str(item.get("source_status") or "active") == "active"
+            and str(item.get("source_path") or "")
+        ]
+        if any(not _indexed_source_is_fresh(source_path) for source_path in source_paths):
+            skipped_stale += 1
+            if not first_stale_matrix_id:
+                first_stale_matrix_id = str(matrix.get("id") or "")
+            continue
+        fresh.append(matrix)
+    chunks = [item for item in load_all_chunks(get_settings().db_dir) if isinstance(item, dict)] if fresh else []
+    candidate_count = 0
+    first_candidate_matrix_id = ""
+    examined_row_pairs = 0
+    structured_observation_count = 0
+    per_matrix: list[dict[str, Any]] = []
+    for matrix in fresh:
+        result = find_evidence_comparison_candidates(
+            matrix,
+            db_dir=get_settings().db_dir,
+            corpus_chunks=chunks,
+            limit=8,
+        )
+        count = int(result.get("candidate_count") or 0)
+        candidate_count += count
+        examined_row_pairs += int(result.get("examined_row_pairs") or 0)
+        structured_observation_count += int(result.get("structured_observation_count") or 0)
+        matrix_id = str(matrix.get("id") or "")
+        if count and not first_candidate_matrix_id:
+            first_candidate_matrix_id = matrix_id
+        per_matrix.append(
+            {
+                "matrix_id": matrix_id,
+                "matrix_revision": int(matrix.get("revision") or 0),
+                "candidate_count": count,
+                "phase_timings_ms": dict(result.get("phase_timings_ms") or {}),
+            }
+        )
+    return {
+        "contract_version": 1,
+        "candidate_count": candidate_count,
+        "first_candidate_matrix_id": first_candidate_matrix_id,
+        "eligible_matrix_count": len(eligible),
+        "scanned_matrix_count": len(fresh),
+        "skipped_stale_matrix_count": skipped_stale,
+        "first_stale_matrix_id": first_stale_matrix_id,
+        "scan_complete": len(fresh) == len(eligible),
+        "examined_row_pairs": examined_row_pairs,
+        "structured_observation_count": structured_observation_count,
+        "matrix_results": per_matrix,
+        "elapsed_ms": round((time.perf_counter() - started) * 1000.0, 3),
+    }
+
+
+def _project_research_status(project_id: str, *, refresh: bool) -> dict[str, Any]:
+    total_started = time.perf_counter()
+    project = _project_or_404(project_id)
+    artifact_started = time.perf_counter()
+    matrices = _project_matrices(project_id)
+    matrix_by_id = {str(item.get("id") or ""): item for item in matrices if str(item.get("id") or "")}
+    briefs = _project_briefs_with_lineage(project_id, matrix_by_id=matrix_by_id)
+    shelf = get_chat_store().get_citation_shelf(project_id=project_id, scope="project") or {}
+    artifact_ms = (time.perf_counter() - artifact_started) * 1000.0
+
+    gap_started = time.perf_counter()
+    if refresh:
+        changes = _scan_project_evidence_changes(project_id)
+        generated = build_project_research_gaps(
+            project_id=project_id,
+            matrices=matrices,
+            briefs=briefs,
+            evidence_changes=[item for item in list(changes.get("items") or []) if isinstance(item, dict)],
+        )
+        gaps = get_chat_store().sync_research_gap_items(project_id=project_id, gaps=generated)
+    else:
+        gaps = get_chat_store().list_project_research_gaps(project_id, status="active", limit=300)
+    gap_ms = (time.perf_counter() - gap_started) * 1000.0
+
+    comparison_scan = _project_comparison_candidate_scan(matrices) if refresh else {
+        "eligible_matrix_count": len(
+            [
+                item
+                for item in matrices
+                if str(item.get("quality_status") or "") == "verified"
+                and len([row for row in list(item.get("rows") or []) if isinstance(row, dict)]) >= 2
+            ]
+        ),
+        "scanned_matrix_count": 0,
+        "skipped_stale_matrix_count": 0,
+        "first_stale_matrix_id": "",
+        "candidate_count": 0,
+        "scan_complete": False,
+        "elapsed_ms": 0.0,
+    }
+    assemble_started = time.perf_counter()
+    payload = build_project_research_status(
+        project=project,
+        citation_shelf=shelf,
+        matrices=matrices,
+        briefs=briefs,
+        gaps=gaps,
+        comparison_scan=comparison_scan,
+    )
+    assemble_ms = (time.perf_counter() - assemble_started) * 1000.0
+    payload.update(
+        {
+            "refreshed": refresh,
+            "generated_at": time.time(),
+            "comparison_scan": comparison_scan,
+            "phase_timings_ms": {
+                "load_artifacts": round(artifact_ms, 3),
+                "scan_and_sync_gaps": round(gap_ms, 3),
+                "scan_comparison_candidates": round(float(comparison_scan.get("elapsed_ms") or 0.0), 3),
+                "assemble": round(assemble_ms, 3),
+                "total": round((time.perf_counter() - total_started) * 1000.0, 3),
+            },
+        }
+    )
+    return payload
+
+
+@router.get("/projects/{project_id}/research-status")
+def get_project_research_status(project_id: str):
+    return _project_research_status(project_id, refresh=False)
+
+
+@router.post("/projects/{project_id}/research-status/refresh")
+def refresh_project_research_status(project_id: str):
+    return _project_research_status(project_id, refresh=True)
 
 
 @router.get("/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates")

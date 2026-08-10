@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "source_fixture": "evidence_comparison_candidate_eval_v1.json",
+  "cases": [
+    {
+      "id": "changed-source-blocks-downstream",
+      "state": "source_change",
+      "expected_action": "refresh_changed_sources",
+      "expected_readiness": "blocked"
+    },
+    {
+      "id": "unsupported-evidence-precedes-comparison",
+      "state": "unsupported_evidence",
+      "expected_action": "repair_evidence",
+      "expected_readiness": "needs_review"
+    },
+    {
+      "id": "real-comparison-candidates-require-review",
+      "state": "comparison_candidates",
+      "expected_action": "review_comparison_candidates",
+      "expected_readiness": "needs_review"
+    },
+    {
+      "id": "stale-brief-follows-resolved-comparisons",
+      "state": "stale_brief",
+      "expected_action": "update_research_brief",
+      "expected_readiness": "needs_review"
+    },
+    {
+      "id": "current-brief-is-export-ready",
+      "state": "ready",
+      "expected_action": "export_current_brief",
+      "expected_readiness": "ready"
+    }
+  ]
+}

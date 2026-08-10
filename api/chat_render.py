@@ -273,6 +273,11 @@ def _render_primary_heading_identity(raw: dict | None) -> str:
     return str(raw.get("heading_path") or raw.get("headingPath") or "").strip().lower()
 
 
+def _render_primary_heading_leaf_identity(raw: dict | None) -> str:
+    heading = _render_primary_heading_identity(raw)
+    return heading.rsplit(" / ", 1)[-1].strip() if heading else ""
+
+
 def _primary_evidence_is_compatible(base: dict | None, candidate: dict | None) -> bool:
     if not isinstance(base, dict) or not isinstance(candidate, dict):
         return False
@@ -1888,10 +1893,15 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                     ]
         if len(matches) > 1:
             heading_key = _render_primary_heading_identity(detail)
+            heading_leaf = _render_primary_heading_leaf_identity(detail)
             exact_heading = [
                 slot
                 for slot in matches
                 if _render_primary_heading_identity(slot) == heading_key
+                or (
+                    heading_leaf
+                    and _render_primary_heading_leaf_identity(slot) == heading_leaf
+                )
             ]
             if exact_heading:
                 matches = exact_heading
@@ -2030,7 +2040,31 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         locator_anchor_id = str(
             locator_slot.get("anchor_id") or locator_slot.get("anchorId") or ""
         ).strip()
-        if locator_occurrence_bound:
+        locator_reason = str(
+            locator_slot.get("evidence_selection_reason")
+            or locator_slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
+        try:
+            locator_page_start = int(
+                locator_slot.get("page_start")
+                or locator_slot.get("pageStart")
+                or 0
+            )
+            locator_page_end = int(
+                locator_slot.get("page_end")
+                or locator_slot.get("pageEnd")
+                or locator_page_start
+                or 0
+            )
+        except (TypeError, ValueError):
+            locator_page_start = 0
+            locator_page_end = 0
+        prompt_aligned_page_locator = bool(
+            locator_reason == "prompt_aligned_source_sentence"
+            and locator_page_start > 0
+        )
+        if locator_occurrence_bound or prompt_aligned_page_locator:
             locator_heading = str(
                 locator_slot.get("heading_path")
                 or locator_slot.get("headingPath")
@@ -2038,7 +2072,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
             ).strip()
             if locator_heading:
                 detail["heading_path"] = locator_heading
-        if locator_block_id or locator_anchor_id:
+        if locator_block_id or locator_anchor_id or prompt_aligned_page_locator:
             reader_evidence = _clean_evidence_display_text(
                 locator_slot.get("evidence_quote")
                 or locator_slot.get("evidenceQuote")
@@ -2054,22 +2088,12 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 or detail.get("anchor_kind")
                 or "paragraph"
             ).strip()
-            detail["strict_locate"] = True
-            try:
-                locator_page_start = int(
-                    locator_slot.get("page_start")
-                    or locator_slot.get("pageStart")
-                    or 0
-                )
-                locator_page_end = int(
-                    locator_slot.get("page_end")
-                    or locator_slot.get("pageEnd")
-                    or locator_page_start
-                    or 0
-                )
-            except (TypeError, ValueError):
-                locator_page_start = 0
-                locator_page_end = 0
+            detail["strict_locate"] = bool(
+                locator_block_id
+                or locator_anchor_id
+                or locator_slot.get("strict_locate")
+                or locator_slot.get("strictLocate")
+            )
             if locator_page_start > 0:
                 detail["page_start"] = locator_page_start
                 detail["page_end"] = locator_page_end or locator_page_start
@@ -2109,10 +2133,16 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 )
             )
         )
+        prompt_aligned_locator_upgrade = bool(
+            prompt_aligned_page_locator
+            and readable
+            and readable_overlap > existing_overlap
+        )
         if (
             not authoritative_entity_occurrence
             and not (locator_occurrence_bound and bool(compound))
             and not mechanism_bundle_upgrade
+            and not prompt_aligned_locator_upgrade
             and (
                 not readable
                 or not claim_terms

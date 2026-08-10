@@ -47,6 +47,7 @@ interface Props {
   activeConvId?: string | null
   seedItems: CiteShelfItem[]
   initialMatrixId?: string
+  initialTab?: 'matrix' | 'comparisons'
   onClose: () => void
   onOpenEvidence?: (evidence: Record<string, unknown>) => void
   onUseForBrief?: (matrix: EvidenceMatrixRecord) => void
@@ -105,6 +106,7 @@ export function EvidenceMatrixWorkspace({
   activeConvId,
   seedItems,
   initialMatrixId = '',
+  initialTab = 'matrix',
   onClose,
   onOpenEvidence,
   onUseForBrief,
@@ -226,8 +228,9 @@ export function EvidenceMatrixWorkspace({
 
   useEffect(() => {
     if (!open || !projectId) return
+    setTab(initialTab)
     void loadMatrices()
-  }, [loadMatrices, open, projectId])
+  }, [initialTab, loadMatrices, open, projectId])
 
   const dirty = useMemo(() => {
     if (!active) return Boolean(title.trim() || objective.trim() || rows.length)

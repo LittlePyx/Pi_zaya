@@ -11,6 +11,107 @@ html.theme-switching *::after {
   animation: none !important;
 }
 
+.kb-project-status-stack {
+  display: grid;
+  gap: 18px;
+}
+
+.kb-project-status-project {
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.kb-project-status-contract,
+.kb-project-status-primary-reason,
+.kb-project-status-stage-detail,
+.kb-project-status-coverage {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.kb-project-status-primary {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.kb-project-status-eyebrow,
+.kb-project-status-section-title {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.kb-project-status-primary-title {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.kb-project-status-primary-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.kb-project-status-primary .ant-btn-primary {
+  width: fit-content;
+}
+
+.kb-project-status-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.kb-project-status-stage {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--panel);
+}
+
+.kb-project-status-stage:last-child {
+  grid-column: 1 / -1;
+}
+
+.kb-project-status-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.kb-project-status-coverage {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
+@media (max-width: 680px) {
+  .kb-project-status-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-project-status-stage:last-child {
+    grid-column: auto;
+  }
+}
+
 :root {
   --bg: #fcfcfd;
   --panel: #ffffff;
