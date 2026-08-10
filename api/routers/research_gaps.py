@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -11,8 +11,11 @@ from api.routers.evidence_matrices import _indexed_source_is_fresh, _scan_projec
 from kb.evidence_matrix import (
     apply_evidence_matrix_cell_repair,
     apply_evidence_matrix_source_expansion,
+    audit_evidence_comparison,
     evidence_matrix_cell_repair_candidates,
+    evidence_comparison_quality,
     evidence_matrix_source_expansion_preview,
+    find_evidence_comparison_candidates,
 )
 from kb.evidence_watch import source_identity, source_watch_snapshot
 from kb.research_brief_lineage import research_brief_lineage
@@ -22,6 +25,7 @@ from kb.research_gap import (
     find_research_gap_candidates,
     research_gap_summary,
 )
+from kb.store import load_all_chunks
 
 
 router = APIRouter(prefix="/api", tags=["research-gaps"])
@@ -43,6 +47,15 @@ class ResearchGapExpansionApplyBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     expected_revision: int = Field(..., ge=1)
+
+
+class ComparisonCandidateAuditBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(..., ge=1)
+    confirmed_mappings: list[
+        Literal["task", "dataset", "evaluation_protocol"]
+    ] = Field(default_factory=list, max_length=3)
 
 
 def _project_or_404(project_id: str) -> dict:
@@ -148,6 +161,169 @@ def _scan_project_research_gaps(project_id: str) -> dict[str, Any]:
         "matrix_count": len(matrices),
         "brief_count": len(briefs),
         "source_change_count": len(list(changes.get("items") or [])),
+    }
+
+
+def _comparison_matrix(project_id: str, matrix_id: str) -> dict[str, Any]:
+    matrix = get_chat_store().get_evidence_matrix(str(matrix_id or "").strip())
+    if not isinstance(matrix, dict) or str(matrix.get("project_id") or "") != str(project_id or ""):
+        raise HTTPException(404, "evidence matrix not found")
+    if str(matrix.get("quality_status") or "") != "verified":
+        raise HTTPException(400, "comparison candidates require a verified evidence matrix")
+    source_paths = [
+        str(item.get("source_path") or "")
+        for item in list(matrix.get("rows") or [])
+        if isinstance(item, dict)
+        and str(item.get("source_status") or "active") == "active"
+        and str(item.get("source_path") or "")
+    ]
+    if any(not _indexed_source_is_fresh(source_path) for source_path in source_paths):
+        raise HTTPException(
+            409,
+            "a matrix source is not freshly indexed; reindex changed papers before finding comparisons",
+        )
+    return matrix
+
+
+def _comparison_candidate_result(
+    matrix: dict[str, Any],
+    *,
+    limit: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    chunks = [
+        item
+        for item in load_all_chunks(get_settings().db_dir)
+        if isinstance(item, dict)
+    ]
+    result = find_evidence_comparison_candidates(
+        matrix,
+        db_dir=get_settings().db_dir,
+        corpus_chunks=chunks,
+        limit=limit,
+    )
+    return result, chunks
+
+
+@router.get("/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates")
+def list_evidence_comparison_candidates(
+    project_id: str,
+    matrix_id: str,
+    limit: int = Query(8, ge=1, le=50),
+):
+    _project_or_404(project_id)
+    matrix = _comparison_matrix(project_id, matrix_id)
+    result, _chunks = _comparison_candidate_result(matrix, limit=limit)
+    return result
+
+
+@router.post(
+    "/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates/{candidate_id}/audit"
+)
+def audit_evidence_comparison_candidate(
+    project_id: str,
+    matrix_id: str,
+    candidate_id: str,
+    body: ComparisonCandidateAuditBody,
+):
+    _project_or_404(project_id)
+    matrix = _comparison_matrix(project_id, matrix_id)
+    current_revision = int(matrix.get("revision") or 1)
+    if current_revision != int(body.expected_revision):
+        raise HTTPException(
+            409,
+            f"evidence matrix revision conflict; current revision is {current_revision}",
+        )
+    candidate_result, chunks = _comparison_candidate_result(matrix, limit=100)
+    candidate = next(
+        (
+            item
+            for item in list(candidate_result.get("items") or [])
+            if isinstance(item, dict) and str(item.get("id") or "") == str(candidate_id or "")
+        ),
+        None,
+    )
+    if not isinstance(candidate, dict):
+        raise HTTPException(409, "comparison candidate is no longer available; scan again")
+    required = {
+        str(item or "")
+        for item in list(candidate.get("required_confirmations") or [])
+        if str(item or "")
+    }
+    confirmed = {str(item or "") for item in body.confirmed_mappings if str(item or "")}
+    if confirmed - required:
+        raise HTTPException(400, "only candidate-marked semantic mappings can be confirmed")
+    missing = sorted(required - confirmed)
+    if missing:
+        raise HTTPException(
+            400,
+            "confirm every reviewed semantic mapping before auditing: " + ", ".join(missing),
+        )
+    dimensions = []
+    for item in list(candidate.get("dimensions") or []):
+        if not isinstance(item, dict):
+            continue
+        dimension = str(item.get("dimension") or "")
+        dimensions.append(
+            {
+                "dimension": dimension,
+                "left_value": str(item.get("left_value") or ""),
+                "right_value": str(item.get("right_value") or ""),
+                "mapping_confirmed": dimension in confirmed,
+            }
+        )
+    audit = audit_evidence_comparison(
+        rows=[item for item in list(matrix.get("rows") or []) if isinstance(item, dict)],
+        spec={
+            "mode": "ranking",
+            "left_row_id": str(candidate.get("left_row_id") or ""),
+            "right_row_id": str(candidate.get("right_row_id") or ""),
+            "dimensions": dimensions,
+            "left_target": str(candidate.get("left_target") or ""),
+            "right_target": str(candidate.get("right_target") or ""),
+            "target_mapping_confirmed": False,
+            "left_result": str(candidate.get("left_result") or ""),
+            "right_result": str(candidate.get("right_result") or ""),
+        },
+        db_dir=get_settings().db_dir,
+        corpus_chunks=chunks,
+    )
+    audits = [
+        item
+        for item in list(matrix.get("comparison_audits") or [])
+        if isinstance(item, dict) and str(item.get("id") or "") != str(audit.get("id") or "")
+    ]
+    audits.append(audit)
+    quality = dict(matrix.get("quality") or {})
+    quality["contract_version"] = max(2, int(quality.get("contract_version") or 1))
+    quality.update(evidence_comparison_quality(audits))
+    quality["last_comparison_candidate_audit"] = {
+        "contract_version": 1,
+        "candidate_id": str(candidate.get("id") or ""),
+        "status": str(audit.get("status") or ""),
+        "confirmed_mappings": sorted(confirmed),
+        "left_row_id": str(candidate.get("left_row_id") or ""),
+        "right_row_id": str(candidate.get("right_row_id") or ""),
+        "audited_at": time.time(),
+    }
+    store = get_chat_store()
+    record, conflict = store.update_evidence_matrix(
+        matrix_id,
+        expected_revision=body.expected_revision,
+        comparison_audits=audits,
+        quality=quality,
+    )
+    if conflict:
+        current = int((record or {}).get("revision") or 0)
+        raise HTTPException(409, f"evidence matrix revision conflict; current revision is {current}")
+    if not isinstance(record, dict):
+        raise HTTPException(404, "evidence matrix not found")
+    scan = _scan_project_research_gaps(project_id)
+    return {
+        "candidate": candidate,
+        "audit": audit,
+        "matrix": record,
+        "affected_briefs": _affected_briefs_for_matrix(project_id, record),
+        "research_gaps": scan,
     }
 
 

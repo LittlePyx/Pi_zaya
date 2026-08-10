@@ -72,6 +72,24 @@ a matrix cell or brief. A separately confirmed source-expansion workflow can
 then add that other paper as its own matrix row; it can never fill the original
 paper's row.
 
+## Comparison Candidate Workflow
+
+A verified matrix can also discover comparison candidates directly from its
+own active rows. This is separate from cross-paper gap search: it pairs only
+already selected matrix sources, accepts only structured metric tables, and
+requires exact normalized task and dataset plus a controlled metric and matching
+unit. Each side carries its own quote and reader locator. The candidate preloads
+the complete paired contract but does not create a comparison or resolve a gap.
+
+The researcher reviews both source excerpts and explicitly confirms every
+semantic mapping flagged by the server. On submission, the API checks the matrix
+revision and fresh indexes, regenerates the candidate, rejects extra or missing
+confirmations, and invokes the existing strict paired audit. Only the stored
+audit revision triggers a fresh gap scan. If it is not comparable, the resulting
+`comparison_not_comparable` gap remains visible. If the matrix revision changes,
+affected briefs are reported as update-ready and still use their existing
+claim-by-claim incremental review; no brief text is silently rewritten.
+
 ## Cross-Source Matrix Expansion Workflow
 
 A confirmed cross-paper candidate exposes an extractive new-row preview. This
@@ -147,6 +165,8 @@ then returns, it reopens.
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/candidates/{candidate_id}/expansion/apply`
 - `GET /api/projects/{project_id}/research-gaps/{gap_id}/repairs`
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/repairs/{repair_id}/apply`
+- `GET /api/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates`
+- `POST /api/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates/{candidate_id}/audit`
 
 List status is one of `active`, `open`, `in_progress`, `ignored`, or `resolved`.
 Project ownership is checked on every mutation. Candidate confirmation fails

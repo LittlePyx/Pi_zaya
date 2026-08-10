@@ -194,6 +194,120 @@ async function installBackend(page: Page) {
     await fulfillJson(route, matrix ? [matrix] : [])
   })
 
+  const comparisonCandidate = {
+    id: 'candidate-comparison-1',
+    contract_version: 1,
+    matrix_id: 'matrix-1',
+    matrix_revision: 1,
+    mode: 'ranking',
+    left_row_id: 'row-a',
+    right_row_id: 'row-b',
+    left_source_name: 'Paper A',
+    right_source_name: 'Paper B',
+    dimensions: [
+      { dimension: 'task', left_value: 'SCI image reconstruction', right_value: 'SCI image reconstruction', match_type: 'exact', mapping_confirmed: false },
+      { dimension: 'dataset', left_value: 'Cozy2room', right_value: 'Cozy2room', match_type: 'exact', mapping_confirmed: false },
+      { dimension: 'evaluation_protocol', left_value: 'static datasets', right_value: 'synthetic datasets', match_type: 'review_required', mapping_confirmed: false },
+      { dimension: 'metric', left_value: 'LPIPS', right_value: 'LPIPS', match_type: 'controlled_alias', mapping_confirmed: false },
+    ],
+    left_target: 'SCIGS(ours)',
+    right_target: 'ours',
+    left_result: '.0423',
+    right_result: '.0445',
+    required_confirmations: ['evaluation_protocol'],
+    status: 'review_required',
+    evidence: [{
+      chunk_id: 'left-table',
+      source_name: 'Paper A',
+      source_path: SHELF_ITEM.sourcePath,
+      heading_path: 'Results / Table 1',
+      page_start: 6,
+      evidence_quote: 'Cozy2room LPIPS (lower is better): SCIGS(ours) = .0423',
+    }, {
+      chunk_id: 'right-table',
+      source_name: 'Paper B',
+      source_path: 'db/Library/PaperB.en.md',
+      heading_path: 'Results / Table 1',
+      page_start: 6,
+      evidence_quote: 'Cozy2room LPIPS (lower is better): ours = .0445',
+    }],
+  }
+  await page.route(
+    `**/api/projects/${PROJECT.id}/evidence-matrices/matrix-1/comparison-candidates?*`,
+    async (route) => {
+      await fulfillJson(route, {
+        items: matrix?.comparison_audits.length ? [] : [comparisonCandidate],
+        candidate_count: matrix?.comparison_audits.length ? 0 : 1,
+        matrix_id: 'matrix-1',
+        matrix_revision: matrix?.revision || 1,
+        examined_row_pairs: 1,
+        structured_observation_count: 2,
+        phase_timings_ms: { total: 18.4 },
+      })
+    },
+  )
+  await page.route(
+    `**/api/projects/${PROJECT.id}/evidence-matrices/matrix-1/comparison-candidates/${comparisonCandidate.id}/audit`,
+    async (route) => {
+      if (!matrix) {
+        await fulfillJson(route, { detail: 'not found' }, 404)
+        return
+      }
+      const comparisonAudit = {
+        id: 'comparison-candidate-audit-1',
+        contract_version: 1,
+        status: 'verified',
+        mode: 'ranking',
+        input: {},
+        left_row_id: 'row-a',
+        right_row_id: 'row-b',
+        left_source_name: 'Paper A',
+        right_source_name: 'Paper B',
+        dimensions: comparisonCandidate.dimensions,
+        metric: 'lpips',
+        metric_direction: 'lower',
+        result_unit: '',
+        relation: 'left_more_favorable',
+        preferred_side: 'left',
+        target_match_type: 'not_required',
+        confirmed_conflict: false,
+        conclusion: 'Paper A reports .0423 and Paper B reports .0445 for LPIPS on Cozy2room; Paper A has the more favorable reported value because lower is better.',
+        reasons: [],
+        warnings: ['user_confirmed_mapping'],
+        user_confirmed_mappings: ['evaluation_protocol'],
+        evidence: comparisonCandidate.evidence,
+        evidence_bindings: {},
+        phase_timings_ms: { total: 42.5 },
+        created_at: 12,
+      }
+      matrix = {
+        ...matrix,
+        comparison_audits: [comparisonAudit],
+        quality: { ...matrix.quality, comparison_audit_count: 1, verified_comparison_count: 1 },
+        revision: matrix.revision + 1,
+        updated_at: 12,
+      }
+      revisions.push({ ...matrix })
+      await fulfillJson(route, {
+        candidate: comparisonCandidate,
+        audit: comparisonAudit,
+        matrix,
+        affected_briefs: [{
+          id: 'brief-1',
+          title: 'Living imaging brief',
+          revision: 1,
+          lineage_status: 'matrix_updated',
+          update_ready: true,
+          impact: { changed_comparison_count: 1 },
+        }],
+        research_gaps: {
+          items: [],
+          summary: { total: 0, open: 0, in_progress: 0, high: 0, medium: 0, low: 0, searchable: 0, affected_matrix_count: 0, affected_brief_count: 0 },
+        },
+      })
+    },
+  )
+
   await page.route(`**/api/projects/${PROJECT.id}/evidence-changes**`, async (route) => {
     const items = watchEvent ? [watchEvent] : []
     await fulfillJson(route, {
@@ -454,4 +568,35 @@ test('evidence change inbox reports impact and refreshes only the affected sourc
   await expect(inbox).not.toBeVisible()
   await expect(page.getByTestId('project-evidence-matrix-row').first()).toContainText('adaptive coded optical network')
   await expect(page.getByTestId('project-evidence-matrix-row').nth(1)).toContainText('SCINeRF reconstructs')
+})
+
+test('evidence-bound comparison candidate requires mapping review before strict audit', async ({ page }) => {
+  await installBackend(page)
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
+  await page.getByRole('button', { name: 'New matrix' }).click()
+  await page.getByTestId('evidence-matrix-title').fill('Candidate comparison matrix')
+  await page.getByTestId('evidence-matrix-generate').click()
+
+  await page.getByRole('tab', { name: /Comparisons/ }).click()
+  await page.getByTestId('evidence-comparison-find-candidates').click()
+
+  const candidate = page.getByTestId('evidence-comparison-candidate')
+  await expect(candidate).toContainText('Paper A / Paper B')
+  await expect(candidate).toContainText('Cozy2room')
+  await expect(candidate).toContainText('static datasets')
+  await expect(candidate).toContainText('synthetic datasets')
+  await expect(candidate).toContainText('SCIGS(ours) = .0423')
+  await expect(candidate).toContainText('ours = .0445')
+  await expect(candidate.getByTestId('evidence-comparison-audit-candidate')).toBeDisabled()
+
+  await candidate.locator('input[type="checkbox"]').check()
+  await expect(candidate.getByTestId('evidence-comparison-audit-candidate')).toBeEnabled()
+  await candidate.getByTestId('evidence-comparison-audit-candidate').click()
+  await page.getByRole('button', { name: 'Confirm and audit comparison', exact: true }).last().click()
+
+  const result = page.getByTestId('evidence-comparison-candidate-result')
+  await expect(result).toContainText('more favorable reported value')
+  await expect(result.getByTestId('evidence-comparison-candidate-open-brief')).toContainText('Living imaging brief')
+  await expect(page.getByTestId('evidence-comparison-result')).toContainText('more favorable reported value')
 })

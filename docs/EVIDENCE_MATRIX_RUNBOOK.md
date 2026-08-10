@@ -1,6 +1,6 @@
 # Evidence Matrix Runbook
 
-Updated: 2026-08-08
+Updated: 2026-08-10
 
 ## Purpose
 
@@ -15,6 +15,12 @@ names the task, dataset, evaluation protocol, metric, compared target, and
 reported value for each source. The verifier locates those phrases in each
 paper's own local full text and produces a ranking, replication agreement, or
 reporting conflict only when the complete contract passes.
+
+Before entering that contract manually, a researcher can run a high-precision
+candidate scan over structured metric-table chunks. A candidate only preloads
+reviewable values and exact source excerpts. It is not a comparison conclusion:
+every semantic mapping still requires explicit confirmation, and the server
+recomputes the candidate before invoking the same strict paired verifier.
 
 This workflow is intentionally conservative. It must not fill a cell by
 inference, copy evidence from another paper, broaden retrieval beyond the
@@ -35,10 +41,15 @@ cell stays empty.
    marked `needs_review` until the matrix is regenerated from source evidence.
 6. Inspect or restore immutable revisions, export the current revision, or use a
    verified matrix to create a research brief.
-7. Open **Comparisons**, select two sources, and enter the exact phrases and
-   values to audit. Review any user-confirmed semantic mapping, the paired
-   source excerpts, and the explicit comparable/not-comparable result.
-8. Use **Scan evidence changes** or review the automatic scan when the workspace
+7. Open **Comparisons** and run **Find comparison candidates**. Inspect the two
+   independently located structured-table excerpts, all 12 prefilled contract
+   values, and the exact task/dataset/protocol/metric labels. Confirm each
+   required semantic mapping; no audit action is enabled before confirmation.
+8. Run the candidate audit, or select two sources and enter the contract
+   manually. The server recomputes candidate evidence and stores only the
+   strict verifier's comparable/not-comparable result. Inspect both paired
+   excerpts and their reader locators.
+9. Use **Scan evidence changes** or review the automatic scan when the workspace
    opens. Inspect the affected rows, fields, comparison audits, briefs, and
    citations before acknowledging metadata-only changes or confirming an
    affected-source refresh.
@@ -110,6 +121,25 @@ with concrete reasons and never emits a preferred source. A
 user-confirmed target under the complete matched contract; its wording
 explicitly avoids claiming a broader scientific contradiction.
 
+Comparison candidate discovery adds no weaker path around this contract. It
+accepts only active verified-matrix rows and `table_metric` structured chunks;
+requires an exact normalized task and dataset on both sides; uses only the
+controlled metric alias registry and matching result units; and requires an
+exact quote plus page, heading, block, or anchor locator for each source. It
+prefills four dimensions, two targets, and two results for both papers (12
+values total). Protocol differences are exposed as a required human mapping,
+not silently normalized. Metric equivalence and cross-dataset ranking cannot be
+confirmed manually. Saved audits suppress duplicate candidates for the same row
+pair, dataset, and metric.
+
+Candidate audit is an optimistic-concurrency mutation. The server reloads the
+current verified matrix, rejects any stale source index, regenerates the
+candidate from the current corpus, accepts only the mappings the candidate
+explicitly marked for review, and then calls the unchanged strict paired audit.
+The resulting matrix revision updates comparison quality, rescans project gaps,
+and reports affected brief lineage. A `not_comparable` result remains stored and
+visible; it is never converted into a ranking to make the workflow look faster.
+
 The generator performs source-balanced retrieval: it builds one local BM25
 index per selected paper, queries all five field facets within that paper, and
 extracts the best qualifying source sentence. The full corpus is loaded for
@@ -135,6 +165,8 @@ creation fails.
 - `POST /api/evidence-matrices/{matrix_id}/restore`
 - `POST /api/evidence-matrices/{matrix_id}/comparison-audits`
 - `DELETE /api/evidence-matrices/{matrix_id}/comparison-audits/{comparison_id}`
+- `GET /api/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates`
+- `POST /api/projects/{project_id}/evidence-matrices/{matrix_id}/comparison-candidates/{candidate_id}/audit`
 - `GET /api/projects/{project_id}/evidence-changes`
 - `POST /api/projects/{project_id}/evidence-changes/scan`
 - `POST /api/projects/{project_id}/evidence-changes/{event_id}/ignore`
@@ -151,9 +183,11 @@ cannot replace source identity or evidence locators.
 Run the focused backend and UI checks:
 
 ```bash
-python -m pytest -q tests/unit/test_evidence_matrix.py tests/unit/test_evidence_watch.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_evidence_matrices_api.py tests/unit/test_research_brief.py tests/sanity/test_research_briefs_api.py
+python -m pytest -q tests/unit/test_evidence_matrix.py tests/unit/test_evidence_comparison_candidates.py tests/unit/test_evidence_watch.py tests/unit/test_chat_store_evidence_matrices.py tests/sanity/test_evidence_matrices_api.py tests/sanity/test_evidence_comparison_candidates_api.py tests/unit/test_research_brief.py tests/sanity/test_research_briefs_api.py
 python tools/evidence_matrix/run_comparison_eval.py --dry-run
 python tools/evidence_matrix/run_comparison_eval.py --db-root db
+python tools/evidence_matrix/run_comparison_candidate_eval.py --dry-run
+python tools/evidence_matrix/run_comparison_candidate_eval.py --db-root db
 cd web
 npm run lint
 npm run build
@@ -171,6 +205,11 @@ For paired comparisons, the reviewed fixture is
 `docs/evidence_comparison_eval_v1.json`. Require all comparable and
 not-comparable cases to match their reviewed outcome, zero false comparisons,
 same-source exact evidence, and a reader locator on every recorded excerpt.
+Candidate discovery adds
+`docs/evidence_comparison_candidate_eval_v1.json`. Require every reviewed pair
+to be discovered and then pass the strict audit, every discovered candidate to
+have exact same-source locators and all 12 prefilled values, and zero
+cross-dataset or uncontrolled-metric candidates.
 
 Then run the unchanged gates in `docs/RESEARCH_QA_EVAL_RUNBOOK.md`: 29-question
 live full-library QA, five-question paid-model smoke, 29-question deterministic
@@ -328,3 +367,42 @@ extra English background card was suppressed in the Chinese locale. Both cases
 passed immediate focused reruns and the independent final 29-question run.
 These failures remain recorded in their reports; they were not hidden by
 weakening a validator or reducing the source set.
+
+## 2026-08-10 Comparison Candidate Acceptance
+
+The candidate workflow was evaluated against five human-reviewed SCIGS/SCINeRF
+table results spanning Airplants, Cozy2room, Factory, Hotdog, and Tanabata and
+the LPIPS, PSNR, and SSIM metrics. The accepted report is
+`test_results/evidence_comparison_candidates/20260810_192837/report.json`.
+All 5/5 reviewed pairs were discovered and then passed the unchanged strict
+paired audit. The scan found 18 total candidates; all 18 had exact same-source
+table evidence, reader locators, controlled metrics, and all 12 contract values.
+There were zero failed candidate contracts, zero evidence/locator failures,
+zero incomplete prefills, zero cross-dataset candidates, and zero
+uncontrolled-metric candidates. The one protocol difference on each reviewed
+pair remained an explicit human confirmation.
+
+Loading the 2,233-chunk corpus took 39.549 ms in the accepted run. Candidate
+scanning took 69.066 ms; strict audit median/max were 68.982/71.758 ms. These
+are local deterministic timings and exclude human review. The feature does not
+alter the ordinary retrieval or generation path and does not claim to measure
+saved human time.
+
+The unchanged release gates passed after implementation: paid-model smoke 5/5
+at `test_results/research_qa_eval/20260810_185202`, final full-library live QA
+29/29 at `test_results/research_qa_eval/20260810_191501`, deterministic retrieval
+29/29, source validation 41/41, reviewed replay 6/6, reviewed Agent replay 5/5,
+paired comparison audit 5/5 with zero false comparisons, and converter quality
+13/13. The backend suite passed 4,358 tests with 43 configuration-dependent
+skips. Frontend smoke passed 125 tests with two private-auth-gate-only skips;
+core E2E passed 109/109 and public-surface E2E passed 4/4. ESLint and the
+production build passed.
+
+One preliminary 29-question live run was 28/29 because an extra background
+reference card was locale-suppressed and therefore failed the existing card-copy
+contract. The answer and primary evidence were valid; the affected case then
+passed two focused reruns and the independent final 29/29 run. The failing
+report remains at `test_results/research_qa_eval/20260810_185236`; no source,
+card, evidence, or citation gate was changed. An initial full backend run also
+hit one pre-existing Windows scheduler boundary in a synthetic deadline test;
+the exact test passed five consecutive reruns and the final full suite passed.

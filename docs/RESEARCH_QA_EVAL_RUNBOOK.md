@@ -565,6 +565,51 @@ report. The five-question smoke reported UI-ready p50/p95/max of
 4,017/6,524/6,885 ms. No retrieval, source, citation, locator, or evidence-card
 gate was reduced.
 
+## 2026-08-10 Evidence-Bound Comparison Candidate Gate
+
+Verified evidence matrices can now discover paired comparison inputs from
+structured metric-table chunks. The discovery stage requires exact normalized
+task and dataset, controlled metric identity, matching units, and an exact
+same-source locator on both sides. It only preloads a contract. A researcher
+must confirm every flagged semantic mapping, after which the server recomputes
+the candidate and runs the existing strict paired audit before creating a
+matrix revision, rescanning gaps, or refreshing brief lineage.
+
+The reviewed candidate report is
+`test_results/evidence_comparison_candidates/20260810_192837/report.json`. Five
+reviewed real comparisons passed 5/5. The scan discovered 18 candidates with
+zero strict-audit, evidence/locator, or incomplete-prefill failures, zero
+cross-dataset candidates, zero uncontrolled metrics, and 12 prefilled contract
+values per candidate. Candidate scan time was 69.066 ms; strict-audit median/max
+were 68.982/71.758 ms. The original reviewed
+paired audit independently remained 5/5 with zero false comparisons.
+
+The complete unchanged product gates were:
+
+1. Paid-model smoke: 5/5 in
+   `test_results/research_qa_eval/20260810_185202`.
+2. Final full-library live QA: 29/29 in
+   `test_results/research_qa_eval/20260810_191501`.
+3. Deterministic retrieval: 29/29; source validation: 41/41; grounded replay:
+   6/6; reviewed Agent replay: 5/5; converter quality: 13/13.
+4. Backend: 4,358 passed and 43 configuration-dependent skips. Frontend smoke:
+   125 passed and two private-auth-gate-only skips; core E2E 109/109;
+   public-surface E2E 4/4. ESLint and production build passed.
+
+The accepted 29-question run reported first-visible p50/p95/max of
+2,482/3,918/5,335 ms, answer-complete p50/p95/max of
+3,870/9,535/12,359 ms, evidence-card p50/p95/max of
+6,684/10,459/13,593 ms, and final validation p50/p95/max of
+7,803/11,409/14,737 ms. The five-question smoke reported final validation
+p50/p95/max of 4,144/8,415/9,174 ms.
+
+A preliminary full-library run was 28/29 because one additional background
+reference card was correctly rejected after locale suppression left it without
+summary and relevance copy. That case passed two focused reruns, followed by the
+independent final 29/29 run. The original failure remains in
+`test_results/research_qa_eval/20260810_185236`; the validator, source set, and
+evidence/card thresholds were not changed.
+
 ## Outputs
 
 Default output directory:

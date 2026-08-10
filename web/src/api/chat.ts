@@ -841,6 +841,48 @@ export interface EvidenceComparisonAuditBody {
   right_result: string
 }
 
+export interface EvidenceComparisonCandidateDimension extends EvidenceComparisonDimensionInput {
+  match_type: 'exact' | 'controlled_alias' | 'review_required' | string
+}
+
+export interface EvidenceComparisonCandidate {
+  id: string
+  contract_version: number
+  matrix_id: string
+  matrix_revision: number
+  mode: 'ranking'
+  left_row_id: string
+  right_row_id: string
+  left_source_name: string
+  right_source_name: string
+  dimensions: EvidenceComparisonCandidateDimension[]
+  left_target: string
+  right_target: string
+  left_result: string
+  right_result: string
+  required_confirmations: EvidenceComparisonDimensionName[]
+  status: 'review_required' | 'ready_for_confirmation' | string
+  evidence: Array<Record<string, unknown>>
+}
+
+export interface EvidenceComparisonCandidateResult {
+  items: EvidenceComparisonCandidate[]
+  candidate_count: number
+  matrix_id: string
+  matrix_revision: number
+  examined_row_pairs: number
+  structured_observation_count: number
+  phase_timings_ms: Record<string, number>
+}
+
+export interface EvidenceComparisonCandidateAuditResult {
+  candidate: EvidenceComparisonCandidate
+  audit: EvidenceComparisonAudit
+  matrix: EvidenceMatrixRecord
+  affected_briefs: ResearchGapAffectedBrief[]
+  research_gaps: ResearchGapScanResult
+}
+
 export interface EvidenceMatrixRecord {
   id: string
   project_id: string
@@ -1451,6 +1493,22 @@ export const chatApi = {
       `/api/evidence-matrices/${encodeURIComponent(matrixId)}/comparison-audits`,
       body,
     ),
+  listEvidenceComparisonCandidates: (projectId: string, matrixId: string, limit = 50) =>
+    api.get<EvidenceComparisonCandidateResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/evidence-matrices/${encodeURIComponent(matrixId)}`
+      + `/comparison-candidates?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  auditEvidenceComparisonCandidate: (
+    projectId: string,
+    matrixId: string,
+    candidateId: string,
+    expectedRevision: number,
+    confirmedMappings: EvidenceComparisonDimensionName[],
+  ) => api.post<EvidenceComparisonCandidateAuditResult>(
+    `/api/projects/${encodeURIComponent(projectId)}/evidence-matrices/${encodeURIComponent(matrixId)}`
+    + `/comparison-candidates/${encodeURIComponent(candidateId)}/audit`,
+    { expected_revision: expectedRevision, confirmed_mappings: confirmedMappings },
+  ),
   deleteEvidenceComparison: (matrixId: string, comparisonId: string, expectedRevision: number) =>
     api.delete<EvidenceMatrixRecord>(
       `/api/evidence-matrices/${encodeURIComponent(matrixId)}/comparison-audits/${encodeURIComponent(comparisonId)}?expected_revision=${encodeURIComponent(String(expectedRevision))}`,

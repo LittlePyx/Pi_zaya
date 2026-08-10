@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "description": "Human-reviewed real-corpus acceptance cases for evidence-bound comparison candidate discovery. Every case requires exact same-dataset controlled-metric evidence in both sources and a separate protocol-mapping confirmation.",
+  "sources": {
+    "scigs": "db/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md",
+    "scinerf": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md"
+  },
+  "cases": [
+    {
+      "id": "airplants-lpips",
+      "dataset": "Airplants",
+      "metric": "LPIPS",
+      "left_target": "SCIGS(ours)",
+      "right_target": "ours",
+      "left_result": ".3003",
+      "right_result": ".0728",
+      "expected_preferred_side": "right"
+    },
+    {
+      "id": "cozy2room-lpips",
+      "dataset": "Cozy2room",
+      "metric": "LPIPS",
+      "left_target": "SCIGS(ours)",
+      "right_target": "ours",
+      "left_result": ".0423",
+      "right_result": ".0445",
+      "expected_preferred_side": "left"
+    },
+    {
+      "id": "factory-psnr",
+      "dataset": "Factory",
+      "metric": "PSNR",
+      "left_target": "SCIGS(ours)",
+      "right_target": "ours",
+      "left_result": "37.75",
+      "right_result": "36.60",
+      "expected_preferred_side": "left"
+    },
+    {
+      "id": "hotdog-ssim",
+      "dataset": "Hotdog",
+      "metric": "SSIM",
+      "left_target": "SCIGS(ours)",
+      "right_target": "ours",
+      "left_result": ".9369",
+      "right_result": ".9878",
+      "expected_preferred_side": "right"
+    },
+    {
+      "id": "tanabata-lpips",
+      "dataset": "Tanabata",
+      "metric": "LPIPS",
+      "left_target": "SCIGS(ours)",
+      "right_target": "ours",
+      "left_result": ".0271",
+      "right_result": ".0374",
+      "expected_preferred_side": "left"
+    }
+  ]
+}

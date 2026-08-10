@@ -2684,6 +2684,13 @@ export function MessageList({
           setResearchBriefInitialId('')
           setResearchBriefOpen(true)
         }}
+        onOpenBrief={(briefId, matrixId) => {
+          setEvidenceMatrixOpen(false)
+          setResearchBriefSeedItems(evidenceMatrixSeedItems)
+          setResearchBriefSourceMatrixId(matrixId)
+          setResearchBriefInitialId(briefId)
+          setResearchBriefOpen(true)
+        }}
       />
       {renderedShelfNode}
     </>
