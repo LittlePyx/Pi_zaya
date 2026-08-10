@@ -494,6 +494,28 @@ def test_pidl_pascal_claim_rebinds_from_adjacent_review_to_primary_paper() -> No
     assert audit["minimum_ok"] is True
 
 
+def test_grounded_system_a_allowlist_excludes_unplanned_retrieval_hits() -> None:
+    source_path = "F:/kb/db/pidl/pidl.en.md"
+    hits = [
+        {"text": "planned evidence", "meta": {"source_path": source_path}},
+        {"text": "neighboring paragraph", "meta": {"source_path": source_path}},
+        {"text": "unplanned review", "meta": {"source_path": "F:/kb/db/review.en.md"}},
+    ]
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "evidence_quote": "planned evidence",
+            }
+        ],
+    }
+
+    assert finalize_runtime._planned_grounded_system_a_numbers(plan, hits) == {1}
+
+
 def test_pidl_pascal_normalizer_rewrites_only_the_unsupported_disentanglement_tail() -> None:
     source_path = "F:/kb/db/High-resolution single-photon imaging with physics-informed deep learning.en.md"
     evidence = (

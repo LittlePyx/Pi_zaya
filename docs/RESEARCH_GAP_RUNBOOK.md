@@ -10,11 +10,11 @@ matrix-backed research briefs, paired comparison audits, and source-change
 monitoring without asking a model to invent a task or infer a missing fact.
 
 The queue is intentionally downstream of the existing evidence contracts. It
-does not relax matrix verification, fill empty cells, treat a retrieved passage
-as accepted evidence, rewrite a brief, or hide a source-change event. It only
-helps a researcher see what is missing, understand the impact, find other local
-papers that may contain relevant evidence, and record a human-selected
-candidate in the project literature basket.
+does not relax matrix verification, treat an unconfirmed passage as accepted
+evidence, rewrite a brief, or hide a source-change event. It helps a researcher
+see what is missing, understand the impact, search the affected paper for a
+strict same-source repair, find other local papers that may expand coverage,
+and keep each decision human-reviewed.
 
 ## Gap Sources
 
@@ -71,6 +71,35 @@ basket, and marks the gap `in_progress`. It does not update a matrix cell or
 brief. The researcher must use the existing matrix generation, edit, comparison
 audit, or brief update workflow to produce a newly verified artifact.
 
+## Same-Source Cell Repair Workflow
+
+`missing_cell` and `unsupported_cell` items expose a separate repair action.
+This path never searches another paper to fill the affected row. It:
+
+1. requires the gap's saved matrix revision to equal the current revision;
+2. verifies that the row's source file and committed index SHA still match;
+3. searches and then scans only chunks whose resolved source identity equals
+   the row's source paper, including protection against same-filename files in
+   other directories;
+4. applies the existing field-specific method, experiment, metric, result, and
+   limitation guards, excluding references, captions, positive statements
+   about absent limitations, and passages already assigned to another field;
+5. returns only exact indexed sentences with a page, heading, block, or anchor
+   locator;
+6. recomputes the candidate on confirmation and rejects stale or missing
+   candidates with HTTP 409;
+7. writes the exact sentence and evidence identity into a new matrix revision,
+   then reruns the matrix quality contract and every saved comparison involving
+   the repaired row.
+
+The repair is marked `grounded` only because the stored value is the exact
+same-source evidence sentence; arbitrary manual edits still use the existing
+`needs_review` path. A gap becomes `resolved` only when a fresh structured scan
+no longer emits that row/field identity. Matrix changes can create a
+`brief_stale` item. When lineage reports `matrix_updated`, the UI opens the
+affected brief directly in the existing incremental update workflow, where
+each proposed block remains separately accepted or rejected.
+
 `source_change` gaps cannot be deferred from this queue; they must be handled in
 the source-change inbox. Other gaps may be deferred and remain outside the
 active view for the same stable gap identity. An active or in-progress gap that
@@ -84,6 +113,8 @@ then returns, it reopens.
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/ignore`
 - `GET /api/projects/{project_id}/research-gaps/{gap_id}/candidates`
 - `POST /api/projects/{project_id}/research-gaps/{gap_id}/candidates/{candidate_id}/confirm`
+- `GET /api/projects/{project_id}/research-gaps/{gap_id}/repairs`
+- `POST /api/projects/{project_id}/research-gaps/{gap_id}/repairs/{repair_id}/apply`
 
 List status is one of `active`, `open`, `in_progress`, `ignored`, or `resolved`.
 Project ownership is checked on every mutation. Candidate confirmation fails
@@ -94,8 +125,9 @@ with HTTP 409 if a fresh server-side search no longer returns the candidate.
 Run the focused contract, persistence, API, and browser checks:
 
 ```bash
-python -m pytest -q tests/unit/test_research_gap.py tests/unit/test_chat_store_research_gaps.py tests/sanity/test_research_gaps_api.py
+python -m pytest -q tests/unit/test_research_gap.py tests/unit/test_research_gap_repair.py tests/unit/test_chat_store_research_gaps.py tests/sanity/test_research_gaps_api.py
 python tools/evidence_matrix/run_research_gap_eval.py --db-root db
+python tools/evidence_matrix/run_research_gap_repair_eval.py --db-root db
 cd web
 npm run lint
 npm run build
@@ -144,3 +176,27 @@ The final 29-question run reported first-visible p50/p95/max of
 8,690/14,470/17,249 ms. The queue does not modify the ordinary answer path, so
 these values remain a visible real-model/provider baseline rather than a speed
 claim for this feature.
+
+## 2026-08-10 Same-Source Repair Acceptance
+
+The repair replay created one holdout per reviewed real matrix by removing a
+previously grounded cell while preserving its original paper and indexed
+corpus. All 5/5 cases recovered the exact original value from the same source
+chunk with a reader locator, applied it as a non-manual grounded cell, and
+finished with zero unsupported cells. Searching the nine pre-existing honest
+missing cells did not mutate the matrices: all 9/9 structured missing
+identities remained present until an explicit repair application.
+
+The accepted report is
+`test_results/research_gap_repair/20260810_152124/report.json`. Same-source deep
+search had a 91.209 ms median and 135.090 ms maximum. Applying the selected
+repair and rerunning affected matrix/comparison audits had an 8.869 ms median
+and 11.395 ms maximum. These timings are local deterministic measurements; the
+path is explicit and does not alter ordinary chat retrieval or generation.
+
+The unchanged release contract also passed after the final code: full-library
+live QA 29/29, paid-model smoke 5/5, deterministic retrieval 29/29, source
+validation 41/41, reviewed replay 6/6, backend 4,353 passed with 43 skips,
+frontend smoke 123 passed with two private-auth-gate-only skips, core E2E
+109/109, and public-surface E2E 4/4. Exact result paths and phase timings are in
+`docs/RESEARCH_QA_EVAL_RUNBOOK.md`.

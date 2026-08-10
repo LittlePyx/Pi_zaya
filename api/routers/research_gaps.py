@@ -7,7 +7,11 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from api.deps import get_chat_store, get_settings
-from api.routers.evidence_matrices import _scan_project_evidence_changes
+from api.routers.evidence_matrices import _indexed_source_is_fresh, _scan_project_evidence_changes
+from kb.evidence_matrix import (
+    apply_evidence_matrix_cell_repair,
+    evidence_matrix_cell_repair_candidates,
+)
 from kb.research_brief_lineage import research_brief_lineage
 from kb.research_gap import (
     ACTIVE_RESEARCH_GAP_STATUSES,
@@ -24,6 +28,12 @@ class ResearchGapIgnoreBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     reason: str = Field("", max_length=500)
+
+
+class ResearchGapRepairApplyBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(..., ge=1)
 
 
 def _project_or_404(project_id: str) -> dict:
@@ -165,6 +175,35 @@ def _gap_candidates(gap: dict[str, Any], *, limit: int) -> list[dict[str, Any]]:
     )
 
 
+def _repair_matrix(gap: dict[str, Any]) -> dict[str, Any]:
+    if str(gap.get("kind") or "") not in {"missing_cell", "unsupported_cell"}:
+        raise HTTPException(400, "this research gap does not support same-source cell repair")
+    matrix_id = str(gap.get("matrix_id") or "")
+    matrix = get_chat_store().get_evidence_matrix(matrix_id) if matrix_id else None
+    if not isinstance(matrix, dict) or str(matrix.get("project_id") or "") != str(gap.get("project_id") or ""):
+        raise HTTPException(409, "the research gap's evidence matrix is unavailable")
+    if int(matrix.get("revision") or 0) != int(gap.get("matrix_revision") or 0):
+        raise HTTPException(409, "the evidence matrix changed; scan research gaps again")
+    source_path = str(gap.get("source_path") or "")
+    if not source_path or not _indexed_source_is_fresh(source_path):
+        raise HTTPException(409, "the source paper is not freshly indexed; reindex it before repairing evidence")
+    return matrix
+
+
+def _gap_repairs(
+    gap: dict[str, Any],
+    matrix: dict[str, Any],
+    *,
+    limit: int,
+) -> list[dict[str, Any]]:
+    return evidence_matrix_cell_repair_candidates(
+        matrix,
+        gap,
+        db_dir=get_settings().db_dir,
+        limit=limit,
+    )
+
+
 @router.get("/projects/{project_id}/research-gaps/{gap_id}/candidates")
 def list_research_gap_candidates(
     project_id: str,
@@ -179,6 +218,134 @@ def list_research_gap_candidates(
         raise HTTPException(400, "this research gap does not support local candidate search")
     items = _gap_candidates(gap, limit=limit)
     return {"items": items, "query": str(gap.get("candidate_query") or ""), "gap_id": gap_id}
+
+
+@router.get("/projects/{project_id}/research-gaps/{gap_id}/repairs")
+def list_research_gap_repairs(
+    project_id: str,
+    gap_id: str,
+    limit: int = Query(3, ge=1, le=8),
+):
+    _project_or_404(project_id)
+    gap = _gap_or_404(project_id, gap_id)
+    if str(gap.get("status") or "") not in ACTIVE_RESEARCH_GAP_STATUSES:
+        raise HTTPException(409, "research gap is no longer active")
+    matrix = _repair_matrix(gap)
+    return {
+        "items": _gap_repairs(gap, matrix, limit=limit),
+        "gap_id": gap_id,
+        "matrix_id": str(matrix.get("id") or ""),
+        "matrix_revision": int(matrix.get("revision") or 1),
+        "source_path": str(gap.get("source_path") or ""),
+    }
+
+
+@router.post("/projects/{project_id}/research-gaps/{gap_id}/repairs/{repair_id}/apply")
+def apply_research_gap_repair(
+    project_id: str,
+    gap_id: str,
+    repair_id: str,
+    body: ResearchGapRepairApplyBody,
+):
+    _project_or_404(project_id)
+    gap = _gap_or_404(project_id, gap_id)
+    if str(gap.get("status") or "") not in ACTIVE_RESEARCH_GAP_STATUSES:
+        raise HTTPException(409, "research gap is no longer active")
+    matrix = _repair_matrix(gap)
+    if int(matrix.get("revision") or 1) != int(body.expected_revision):
+        raise HTTPException(
+            409,
+            f"evidence matrix revision conflict; current revision is {int(matrix.get('revision') or 1)}",
+        )
+    repair = next(
+        (
+            item
+            for item in _gap_repairs(gap, matrix, limit=8)
+            if str(item.get("id") or "") == str(repair_id or "")
+        ),
+        None,
+    )
+    if not isinstance(repair, dict):
+        raise HTTPException(409, "repair candidate is no longer available; search again")
+    try:
+        payload = apply_evidence_matrix_cell_repair(
+            matrix,
+            gap,
+            repair,
+            db_dir=get_settings().db_dir,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    store = get_chat_store()
+    record, conflict = store.update_evidence_matrix(
+        str(matrix.get("id") or ""),
+        expected_revision=body.expected_revision,
+        rows=payload["rows"],
+        evidence=payload["evidence"],
+        comparison_flags=payload["comparison_flags"],
+        comparison_audits=payload["comparison_audits"],
+        quality_status=str(payload["quality_status"]),
+        quality=payload["quality"],
+    )
+    if conflict:
+        current_revision = int((record or {}).get("revision") or 0)
+        raise HTTPException(409, f"evidence matrix revision conflict; current revision is {current_revision}")
+    if not isinstance(record, dict):
+        raise HTTPException(404, "evidence matrix not found")
+    snapshot = payload["quality"].get("source_watch_snapshot")
+    if isinstance(snapshot, dict):
+        store.set_evidence_watch_baseline(
+            str(record.get("id") or ""),
+            project_id=project_id,
+            matrix_revision=int(record.get("revision") or 1),
+            snapshot=snapshot,
+        )
+    store.set_research_gap_status(
+        gap_id,
+        project_id=project_id,
+        status="in_progress",
+        action={
+            "repair_applied_at": time.time(),
+            "repair_candidate_id": str(repair.get("id") or ""),
+            "repair_evidence_id": str(repair.get("evidence_id") or ""),
+            "repair_source_path": str(repair.get("source_path") or ""),
+            "matrix_revision": int(record.get("revision") or 1),
+        },
+    )
+    scan = _scan_project_research_gaps(project_id)
+    matrix_by_id = {str(record.get("id") or ""): record}
+    affected_brief_ids = {
+        str(item.get("brief_id") or "")
+        for item in list((gap.get("impact") or {}).get("affected_briefs") or [])
+        if isinstance(item, dict) and str(item.get("brief_id") or "")
+    }
+    affected_briefs: list[dict[str, Any]] = []
+    for brief in _project_briefs_with_lineage(project_id, matrix_by_id=matrix_by_id):
+        brief_id = str(brief.get("id") or "")
+        quality = brief.get("quality") if isinstance(brief.get("quality"), dict) else {}
+        if str(quality.get("source_matrix_id") or "") != str(record.get("id") or ""):
+            continue
+        if affected_brief_ids and brief_id not in affected_brief_ids:
+            continue
+        lineage = brief.get("lineage") if isinstance(brief.get("lineage"), dict) else {}
+        affected_briefs.append(
+            {
+                "id": brief_id,
+                "title": str(brief.get("title") or ""),
+                "revision": int(brief.get("revision") or 1),
+                "lineage_status": str(lineage.get("status") or "untracked"),
+                "update_ready": str(lineage.get("status") or "") == "matrix_updated",
+                "impact": dict(lineage.get("impact") or {}),
+            }
+        )
+    return {
+        "gap": store.get_research_gap(gap_id) or gap,
+        "repair": repair,
+        "matrix": record,
+        "reaudited_comparison_count": int(payload.get("reaudited_comparison_count") or 0),
+        "affected_briefs": affected_briefs,
+        "research_gaps": scan,
+    }
 
 
 @router.post("/projects/{project_id}/research-gaps/{gap_id}/candidates/{candidate_id}/confirm")

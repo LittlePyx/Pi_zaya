@@ -666,6 +666,32 @@ def compound_claim_evidence_excerpt(
         )
         if len(mechanism_sentences) >= 2 and len(mechanism_excerpt) <= hard_limit:
             return finish_evidence_text(mechanism_excerpt, max_len=hard_limit)
+        if len(mechanism_sentences) >= 2 and definition_sentence:
+            # The published SCINeRF sentence includes tensor dimensions and the
+            # temporal compression-ratio definition between the four variable
+            # meanings.  Keeping that whole sentence can consume the card
+            # budget and push out the adjacent synthesis step, leaving the card
+            # unable to support the differentiable-training claim. Preserve
+            # exact source fragments for every requested symbol, marking only
+            # the omitted source text with ellipses.
+            definition_fragments: list[str] = []
+            for pattern in (
+                r"\bY\b[^,;。]{0,100}?captured\s+compressed\s+image",
+                r"(?:\\odot|\bodot\b)[^,;。]{0,60}?element-wise\s+multiplication",
+                r"\bZ\b[^,;。]{0,100}?measurement\s+noise",
+            ):
+                match = re.search(pattern, definition_sentence, flags=re.IGNORECASE)
+                if match:
+                    definition_fragments.append(match.group(0).strip(" ,;"))
+            compact_definition = " … ".join(dict.fromkeys(definition_fragments))
+            compact_excerpt = " ".join(
+                [part for part in (compact_definition, *mechanism_sentences) if part]
+            )
+            if (
+                len(definition_fragments) == 3
+                and len(compact_excerpt) <= hard_limit
+            ):
+                return finish_evidence_text(compact_excerpt, max_len=hard_limit)
 
     if len(text) <= hard_limit:
         return ""

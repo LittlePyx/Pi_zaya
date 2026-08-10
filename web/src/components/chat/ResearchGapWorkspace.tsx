@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, Button, Modal, Popconfirm, Select, Spin, Tag, message } from 'antd'
 import {
   CheckCircleOutlined,
+  DiffOutlined,
   EyeOutlined,
   ReloadOutlined,
   SearchOutlined,
   StopOutlined,
+  ToolOutlined,
 } from '@ant-design/icons'
 import {
   chatApi,
   type CitationShelfRecord,
   type ResearchGapCandidate,
+  type ResearchGapRepairApplyResult,
+  type ResearchGapRepairCandidate,
   type ResearchGapRecord,
   type ResearchGapSummary,
 } from '../../api/chat'
@@ -23,6 +27,7 @@ interface Props {
   onClose: () => void
   onOpenEvidence?: (evidence: Record<string, unknown>) => void
   onShelfChanged?: (shelf: CitationShelfRecord) => void
+  onOpenBrief?: (briefId: string, matrixId: string) => void
 }
 
 type GapFilter = 'all' | 'high' | 'open' | 'in_progress'
@@ -62,6 +67,7 @@ export function ResearchGapWorkspace({
   onClose,
   onOpenEvidence,
   onShelfChanged,
+  onOpenBrief,
 }: Props) {
   const S = useT()
   const [items, setItems] = useState<ResearchGapRecord[]>([])
@@ -72,6 +78,10 @@ export function ResearchGapWorkspace({
   const [confirmingCandidateId, setConfirmingCandidateId] = useState('')
   const [ignoringGapId, setIgnoringGapId] = useState('')
   const [candidatesByGap, setCandidatesByGap] = useState<Record<string, ResearchGapCandidate[]>>({})
+  const [repairLoadingId, setRepairLoadingId] = useState('')
+  const [applyingRepairId, setApplyingRepairId] = useState('')
+  const [repairsByGap, setRepairsByGap] = useState<Record<string, ResearchGapRepairCandidate[]>>({})
+  const [lastRepair, setLastRepair] = useState<ResearchGapRepairApplyResult | null>(null)
 
   const scan = useCallback(async (quiet = false) => {
     if (!projectId) return
@@ -81,6 +91,8 @@ export function ResearchGapWorkspace({
       setItems(result.items || [])
       setSummary(result.summary || EMPTY_SUMMARY)
       setCandidatesByGap({})
+      setRepairsByGap({})
+      setLastRepair(null)
       if (!quiet) {
         message.success(
           result.summary.total > 0
@@ -139,6 +151,41 @@ export function ResearchGapWorkspace({
     }
   }
 
+  const findRepairs = async (gap: ResearchGapRecord) => {
+    setRepairLoadingId(gap.id)
+    try {
+      const result = await chatApi.listResearchGapRepairs(projectId, gap.id)
+      setRepairsByGap((current) => ({ ...current, [gap.id]: result.items || [] }))
+      if ((result.items || []).length === 0) message.info(S.research_gap_repair_empty)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_gap_repair_failed)
+    } finally {
+      setRepairLoadingId('')
+    }
+  }
+
+  const applyRepair = async (gap: ResearchGapRecord, repair: ResearchGapRepairCandidate) => {
+    setApplyingRepairId(repair.id)
+    try {
+      const result = await chatApi.applyResearchGapRepair(
+        projectId,
+        gap.id,
+        repair.id,
+        gap.matrix_revision,
+      )
+      setItems(result.research_gaps.items || [])
+      setSummary(result.research_gaps.summary || EMPTY_SUMMARY)
+      setRepairsByGap({})
+      setCandidatesByGap({})
+      setLastRepair(result)
+      message.success(S.research_gap_repair_applied)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_gap_repair_apply_failed)
+    } finally {
+      setApplyingRepairId('')
+    }
+  }
+
   const ignoreGap = async (gap: ResearchGapRecord) => {
     setIgnoringGapId(gap.id)
     try {
@@ -178,6 +225,42 @@ export function ResearchGapWorkspace({
           message={S.research_gap_contract_title}
           description={S.research_gap_contract_detail}
         />
+        {lastRepair ? (
+          <Alert
+            type={lastRepair.matrix.quality_status === 'verified' ? 'success' : 'warning'}
+            showIcon
+            message={S.research_gap_repair_result_title}
+            description={(
+              <div className="kb-research-gap-repair-result" data-testid="research-gap-repair-result">
+                <p>
+                  {S.research_gap_repair_result_detail
+                    .replace('{matrix}', lastRepair.matrix.title)
+                    .replace('{revision}', String(lastRepair.matrix.revision))
+                    .replace('{comparisons}', String(lastRepair.reaudited_comparison_count))}
+                </p>
+                {lastRepair.affected_briefs.length > 0 ? (
+                  <div>
+                    <strong>{S.research_gap_repair_briefs_title}</strong>
+                    {lastRepair.affected_briefs.map((brief) => (
+                      <Button
+                        key={brief.id}
+                        size="small"
+                        icon={<DiffOutlined />}
+                        disabled={!brief.update_ready || !onOpenBrief}
+                        onClick={() => onOpenBrief?.(brief.id, lastRepair.matrix.id)}
+                        data-testid="research-gap-open-affected-brief"
+                      >
+                        {brief.title} · {brief.update_ready
+                          ? S.research_gap_repair_brief_ready
+                          : S.research_gap_repair_brief_blocked}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+          />
+        ) : null}
         <div className="kb-research-gap-summary">
           <div><strong>{summary.total}</strong><span>{S.research_gap_summary_total}</span></div>
           <div><strong>{summary.high}</strong><span>{S.research_gap_priority_high}</span></div>
@@ -212,6 +295,7 @@ export function ResearchGapWorkspace({
             ) : null}
             {visibleItems.map((gap) => {
               const candidates = candidatesByGap[gap.id]
+              const repairs = repairsByGap[gap.id]
               const impact = gap.impact || {}
               return (
                 <article key={gap.id} className={`kb-research-gap-card priority-${gap.priority}`} data-testid="research-gap-card">
@@ -242,6 +326,18 @@ export function ResearchGapWorkspace({
                     </div>
                   ) : null}
                   <div className="kb-research-gap-actions">
+                    {gap.kind === 'missing_cell' || gap.kind === 'unsupported_cell' ? (
+                      <Button
+                        type="primary"
+                        ghost
+                        icon={<ToolOutlined />}
+                        loading={repairLoadingId === gap.id}
+                        onClick={() => void findRepairs(gap)}
+                        data-testid="research-gap-find-repairs"
+                      >
+                        {S.research_gap_find_repairs}
+                      </Button>
+                    ) : null}
                     {gap.candidate_searchable ? (
                       <Button
                         icon={<SearchOutlined />}
@@ -268,6 +364,45 @@ export function ResearchGapWorkspace({
                       <span className="kb-research-gap-source-lock">{S.research_gap_source_lock}</span>
                     )}
                   </div>
+
+                  {repairs ? (
+                    <div className="kb-research-gap-candidates is-repair" data-testid="research-gap-repairs">
+                      <strong>{S.research_gap_repairs_title}</strong>
+                      <p>{S.research_gap_repairs_detail}</p>
+                      {repairs.length === 0 ? <span>{S.research_gap_repair_empty}</span> : null}
+                      {repairs.map((repair) => (
+                        <div key={repair.id} className="kb-research-gap-candidate">
+                          <div>
+                            <strong>{repair.title || repair.source_name}</strong>
+                            <small>{repair.location_label || repair.heading_path || repair.source_path}</small>
+                          </div>
+                          <blockquote>{repair.evidence_quote}</blockquote>
+                          <div className="kb-research-gap-candidate-actions">
+                            {onOpenEvidence ? (
+                              <Button icon={<EyeOutlined />} onClick={() => onOpenEvidence({ ...repair })}>
+                                {S.research_gap_open_evidence}
+                              </Button>
+                            ) : null}
+                            <Popconfirm
+                              title={S.research_gap_repair_confirm_title}
+                              description={S.research_gap_repair_confirm_detail}
+                              onConfirm={() => void applyRepair(gap, repair)}
+                              okText={S.research_gap_repair_apply}
+                              cancelText={S.confirm_cancel}
+                            >
+                              <Button
+                                type="primary"
+                                loading={applyingRepairId === repair.id}
+                                data-testid="research-gap-apply-repair"
+                              >
+                                {S.research_gap_repair_apply}
+                              </Button>
+                            </Popconfirm>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
 
                   {candidates ? (
                     <div className="kb-research-gap-candidates" data-testid="research-gap-candidates">

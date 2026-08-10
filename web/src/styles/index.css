@@ -5756,6 +5756,22 @@ body.kb-reader-resizing .kb-reader-content {
   background: var(--panel-2, rgba(120, 130, 150, 0.07));
 }
 
+.kb-research-gap-candidates.is-repair {
+  border: 1px solid color-mix(in srgb, #4aa26b 45%, var(--border));
+  background: color-mix(in srgb, #4aa26b 8%, var(--panel));
+}
+
+.kb-research-gap-repair-result p {
+  margin: 0 0 8px;
+}
+
+.kb-research-gap-repair-result > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .kb-research-gap-candidate {
   margin-top: 10px;
   padding: 11px;

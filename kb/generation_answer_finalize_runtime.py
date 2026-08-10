@@ -262,6 +262,45 @@ def _strict_comparison_system_a_numbers(
     return numbers
 
 
+def _planned_grounded_system_a_numbers(
+    citation_plan: dict | None,
+    answer_hits: list[dict] | None = None,
+) -> set[int] | None:
+    """Return the numeric hits that the visible System-A plan can render.
+
+    The final claim gate must use the same allowlist as citation rendering.
+    Otherwise a model marker can be rebound to an unplanned retrieval hit,
+    pass the runtime audit, and then disappear from the user-visible answer.
+    """
+
+    if not isinstance(citation_plan, dict):
+        return None
+    slots = [
+        slot
+        for slot in list(citation_plan.get("slots") or [])
+        if isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() == "system_a"
+        and bool(
+            str(slot.get("evidence_quote") or slot.get("evidenceQuote") or "").strip()
+        )
+    ]
+    if not slots:
+        return None
+    budget = citation_plan.get("budget") if isinstance(citation_plan.get("budget"), dict) else {}
+    try:
+        limit = (
+            max(0, int(budget.get("system_a") or 0))
+            if "system_a" in budget
+            else len(slots)
+        )
+    except (TypeError, ValueError):
+        limit = len(slots)
+    numbers: set[int] = set()
+    for slot in slots[:limit]:
+        numbers.update(_citation_plan_slot_hit_numbers(slot, answer_hits))
+    return numbers
+
+
 def _claim_evidence_hits_with_citation_plan(
     answer_hits: list[dict] | None,
     citation_plan: dict | None,
@@ -9342,12 +9381,23 @@ def _finalize_generation_answer(
         and bool(_citation_plan_slot_hit_numbers(slot, list(answer_hits or [])))
         for slot in list(citation_plan_seed.get("slots") or [])
     )
+    planned_system_a_numbers = _planned_grounded_system_a_numbers(
+        citation_plan_seed,
+        list(answer_hits or []),
+    )
+    final_gate_allowed_numbers = (
+        strict_comparison_numbers
+        if strict_comparison_numbers is not None
+        else planned_system_a_numbers
+        if final_gate_has_grounded_system_a
+        else None
+    )
     answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
         answer,
         answer_hits=claim_evidence_hits,
         allow_citation_repairs=True,
         prompt=prompt_for_user or prompt,
-        allowed_citation_numbers=strict_comparison_numbers,
+        allowed_citation_numbers=final_gate_allowed_numbers,
         drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
         drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
         enforce_user_visible_binding=final_gate_has_grounded_system_a,
@@ -9378,7 +9428,7 @@ def _finalize_generation_answer(
             answer_hits=claim_evidence_hits,
             allow_citation_repairs=True,
             prompt=prompt_for_user or prompt,
-            allowed_citation_numbers=strict_comparison_numbers,
+            allowed_citation_numbers=final_gate_allowed_numbers,
             drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
             drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
             enforce_user_visible_binding=final_gate_has_grounded_system_a,

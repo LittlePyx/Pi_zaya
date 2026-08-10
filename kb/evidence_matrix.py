@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import copy
 import hashlib
 import io
 import math
@@ -188,6 +189,13 @@ _NON_LIMITATION_CHALLENGE_RE = re.compile(
     r"\bchallenge\s+(?:track\d*|dataset|benchmark|competition)\b",
     re.IGNORECASE,
 )
+_LIMITATION_ABSENCE_RE = re.compile(
+    r"\b(?:no|without|not)\s+(?:(?:known|reported|explicit|significant|major|clear|apparent|any|a|an)\s+){0,3}"
+    r"(?:limits?|limitations?|drawbacks?|challenges?|weaknesses?)\b"
+    r"|\bwithout\s+(?:reporting|mentioning|identifying|showing)\s+(?:any\s+|a\s+|an\s+)?"
+    r"(?:limits?|limitations?|drawbacks?|challenges?|weaknesses?)\b",
+    re.IGNORECASE,
+)
 _DATASET_META_RE = re.compile(
     r"\b(?:images? for the dataset|dataset|results?)\b.{0,50}\b(?:shown|presented|listed)\s+in\s+(?:fig(?:ure)?|table)\b"
     r"|\b(?:images? for the )?dataset\b.{0,50}\bsee\b"
@@ -335,6 +343,8 @@ def _candidate_score(
     if field == "limitation" and _LIMITATION_RESOLUTION_RE.search(sentence):
         return -1.0
     if field == "limitation" and _NON_LIMITATION_CHALLENGE_RE.search(sentence):
+        return -1.0
+    if field == "limitation" and _LIMITATION_ABSENCE_RE.search(sentence):
         return -1.0
     sentence_tokens = {str(token).lower() for token in tokenize(sentence) if str(token).strip()}
     objective_weight = 0.8 if field == "method" else 0.45
@@ -1021,6 +1031,169 @@ def build_project_evidence_matrix(
     return rows, evidence, _comparison_flags(rows)
 
 
+def evidence_matrix_cell_repair_candidates(
+    matrix: dict[str, Any],
+    gap: dict[str, Any],
+    *,
+    db_dir: str | Path,
+    limit: int = 3,
+    chunks: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Find strict, same-source repair candidates for one audited matrix cell."""
+    if str(gap.get("kind") or "") not in {"missing_cell", "unsupported_cell"}:
+        return []
+    if str(gap.get("matrix_id") or "") != str(matrix.get("id") or ""):
+        return []
+    gap_revision = int(gap.get("matrix_revision") or 0)
+    matrix_revision = int(matrix.get("revision") or 0)
+    if gap_revision > 0 and gap_revision != matrix_revision:
+        return []
+    row_id = str(gap.get("row_id") or "")
+    field = str(gap.get("field") or "")
+    if field not in MATRIX_CELL_FIELDS or not row_id:
+        return []
+    row = next(
+        (
+            item
+            for item in list(matrix.get("rows") or [])
+            if isinstance(item, dict) and str(item.get("id") or "") == row_id
+        ),
+        None,
+    )
+    if not isinstance(row, dict):
+        return []
+    source_path = _text(row.get("source_path"), limit=1_200)
+    source_identity = _source_identity(source_path)
+    if not source_identity:
+        return []
+    corpus = [
+        item
+        for item in (chunks if chunks is not None else load_all_chunks(Path(db_dir)))
+        if isinstance(item, dict)
+    ]
+    source_chunks = _source_chunks(corpus, source_path)
+    if not source_chunks:
+        return []
+
+    query_terms, pattern = _FIELD_SPECS[field]
+    objective = _text(matrix.get("objective"), limit=4_000)
+    retriever = BM25Retriever(source_chunks)
+    ranked: list[dict[str, Any]] = []
+    seen_chunks: set[str] = set()
+    for query in (query_terms, f"{objective} {query_terms}" if objective else ""):
+        if not query:
+            continue
+        for hit in retriever.search(query, top_k=min(48, max(12, len(source_chunks)))):
+            chunk_id = _text(hit.get("id") or _meta(hit).get("chunk_id"), limit=500)
+            identity = chunk_id or str(id(hit))
+            if identity in seen_chunks:
+                continue
+            seen_chunks.add(identity)
+            ranked.append(hit)
+    # Deep repair is an explicit action, so inspect remaining same-paper chunks
+    # after BM25 ordering. Field-specific guards still reject weak sentences.
+    for hit in source_chunks:
+        chunk_id = _text(hit.get("id") or _meta(hit).get("chunk_id"), limit=500)
+        identity = chunk_id or str(id(hit))
+        if identity not in seen_chunks:
+            seen_chunks.add(identity)
+            ranked.append(hit)
+
+    objective_tokens = {
+        str(token).lower()
+        for token in tokenize(objective)
+        if len(str(token).strip()) >= 2
+    }
+    other_cell_values = {
+        _normal(cell.get("value"))
+        for other_field, cell in dict(row.get("cells") or {}).items()
+        if other_field != field and isinstance(cell, dict) and _normal(cell.get("value"))
+    }
+    scored: list[tuple[float, str, dict[str, Any]]] = []
+    seen_quotes: set[str] = set()
+    for rank, hit in enumerate(ranked):
+        meta = _meta(hit)
+        if meta.get("evidence_ready") is False:
+            continue
+        if _source_identity(_source_path(hit)) != source_identity:
+            continue
+        heading = _text(meta.get("heading_path") or meta.get("top_heading"), limit=800)
+        if _REFERENCE_HEADING_RE.search(heading):
+            continue
+        for sentence in _sentence_candidates(hit.get("text")):
+            normalized = _normal(sentence)
+            if not normalized or normalized in seen_quotes or normalized in other_cell_values:
+                continue
+            if _CAPTION_ONLY_RE.search(sentence):
+                continue
+            score = _candidate_score(
+                sentence,
+                field=field,
+                pattern=pattern,
+                objective_tokens=objective_tokens,
+                heading=heading,
+            )
+            if score < 0:
+                continue
+            if pattern.search(heading):
+                score += 0.6
+            score += max(0.0, 0.35 - rank * 0.01)
+            chunk_id = _text(hit.get("id") or meta.get("chunk_id"), limit=500)
+            block_id = _text(meta.get("block_id"), limit=500)
+            anchor_id = _text(meta.get("anchor_id") or meta.get("anchor"), limit=500)
+            page_start = meta.get("page_start") or meta.get("page") or None
+            page_end = meta.get("page_end") or meta.get("page") or None
+            location_label = _text(meta.get("location_label") or heading, limit=500)
+            if not (anchor_id or block_id or heading or page_start is not None):
+                continue
+            value = _text(sentence, limit=_MAX_CELL_VALUE)
+            evidence_id = _evidence_id(source_path, field, hit, value)
+            candidate_seed = "|".join(
+                (
+                    str(gap.get("gap_key") or ""),
+                    str(matrix_revision),
+                    row_id,
+                    field,
+                    evidence_id,
+                )
+            )
+            candidate_id = f"repair_{hashlib.sha1(candidate_seed.encode('utf-8', errors='ignore')).hexdigest()[:18]}"
+            seen_quotes.add(normalized)
+            scored.append(
+                (
+                    score,
+                    candidate_id,
+                    {
+                        "id": candidate_id,
+                        "gap_id": str(gap.get("id") or ""),
+                        "gap_key": str(gap.get("gap_key") or ""),
+                        "matrix_id": str(matrix.get("id") or ""),
+                        "matrix_revision": matrix_revision,
+                        "row_id": row_id,
+                        "field": field,
+                        "value": value,
+                        "source_path": source_path,
+                        "source_name": _text(row.get("source_name") or row.get("paper"), limit=500),
+                        "title": _text(row.get("paper") or row.get("source_name"), limit=800),
+                        "chunk_id": chunk_id,
+                        "evidence_id": evidence_id,
+                        "evidence_quote": value,
+                        "heading_path": heading,
+                        "location_label": location_label,
+                        "page_start": page_start,
+                        "page_end": page_end,
+                        "block_id": block_id,
+                        "anchor_id": anchor_id,
+                        "score": round(float(score), 6),
+                        "same_source_verified": True,
+                        "match_reason": "The field-specific extractor found this exact passage in the matrix row's source paper.",
+                    },
+                )
+            )
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in scored[: max(1, min(8, int(limit or 3)))]]
+
+
 def evidence_matrix_quality(
     *,
     rows: list[dict[str, Any]],
@@ -1135,6 +1308,152 @@ def evidence_matrix_quality(
         "edited_after_verification": False,
     }
     return ("verified" if not reasons else "needs_review"), quality
+
+
+def apply_evidence_matrix_cell_repair(
+    matrix: dict[str, Any],
+    gap: dict[str, Any],
+    candidate: dict[str, Any],
+    *,
+    db_dir: str | Path,
+) -> dict[str, Any]:
+    """Apply a recomputed same-source candidate and rerun matrix contracts."""
+    matrix_id = str(matrix.get("id") or "")
+    matrix_revision = int(matrix.get("revision") or 0)
+    row_id = str(gap.get("row_id") or "")
+    field = str(gap.get("field") or "")
+    if (
+        str(candidate.get("gap_key") or "") != str(gap.get("gap_key") or "")
+        or str(candidate.get("matrix_id") or "") != matrix_id
+        or int(candidate.get("matrix_revision") or 0) != matrix_revision
+        or str(candidate.get("row_id") or "") != row_id
+        or str(candidate.get("field") or "") != field
+        or field not in MATRIX_CELL_FIELDS
+    ):
+        raise ValueError("repair candidate does not match the current matrix gap")
+    rows = copy.deepcopy([item for item in list(matrix.get("rows") or []) if isinstance(item, dict)])
+    row = next((item for item in rows if str(item.get("id") or "") == row_id), None)
+    if not isinstance(row, dict):
+        raise ValueError("repair row is unavailable")
+    if (
+        not bool(candidate.get("same_source_verified"))
+        or _source_identity(candidate.get("source_path")) != _source_identity(row.get("source_path"))
+    ):
+        raise ValueError("repair evidence must come from the matrix row's source paper")
+    value = _text(candidate.get("value"), limit=_MAX_CELL_VALUE)
+    quote = _text(candidate.get("evidence_quote"), limit=_MAX_EVIDENCE_QUOTE)
+    if not value or _normal(value) not in _normal(quote):
+        raise ValueError("repair value is not bound to its exact evidence quote")
+    evidence_id = _text(candidate.get("evidence_id"), limit=300)
+    if not evidence_id:
+        raise ValueError("repair evidence identity is missing")
+
+    cells = copy.deepcopy(dict(row.get("cells") or {}))
+    previous_cell = dict(cells.get(field) or {}) if isinstance(cells.get(field), dict) else {}
+    previous_evidence_ids = {
+        str(item or "") for item in list(previous_cell.get("evidence_ids") or []) if str(item or "")
+    }
+    cells[field] = {
+        "field": field,
+        "value": value,
+        "support_status": "grounded",
+        "evidence_ids": [evidence_id],
+        "manual_override": False,
+        "repair_confirmed": True,
+    }
+    row["cells"] = cells
+
+    referenced_elsewhere = {
+        str(evidence_ref or "")
+        for matrix_row in rows
+        if isinstance(matrix_row, dict)
+        for other_field, cell in dict(matrix_row.get("cells") or {}).items()
+        if isinstance(cell, dict) and not (str(matrix_row.get("id") or "") == row_id and other_field == field)
+        for evidence_ref in list(cell.get("evidence_ids") or [])
+        if str(evidence_ref or "")
+    }
+    evidence = [
+        copy.deepcopy(item)
+        for item in list(matrix.get("evidence") or [])
+        if isinstance(item, dict)
+        and str(item.get("id") or "") != evidence_id
+        and not (
+            str(item.get("id") or "") in previous_evidence_ids
+            and str(item.get("id") or "") not in referenced_elsewhere
+        )
+    ]
+    evidence.append(
+        {
+            "id": evidence_id,
+            "field": field,
+            "source_item_key": _text(row.get("source_item_key"), limit=500),
+            "source_path": _text(row.get("source_path"), limit=1_200),
+            "source_name": _text(row.get("source_name") or row.get("paper"), limit=500),
+            "title": _text(row.get("paper") or row.get("source_name"), limit=800),
+            "heading_path": _text(candidate.get("heading_path"), limit=800),
+            "location_label": _text(candidate.get("location_label"), limit=500),
+            "page_start": candidate.get("page_start"),
+            "page_end": candidate.get("page_end"),
+            "block_id": _text(candidate.get("block_id"), limit=500),
+            "anchor_id": _text(candidate.get("anchor_id"), limit=500),
+            "evidence_quote": quote,
+            "chunk_id": _text(candidate.get("chunk_id"), limit=500),
+            "score": float(candidate.get("score") or 0.0),
+            "repair_gap_id": str(gap.get("id") or ""),
+            "repair_gap_key": str(gap.get("gap_key") or ""),
+        }
+    )
+
+    current_audits = copy.deepcopy(
+        [item for item in list(matrix.get("comparison_audits") or []) if isinstance(item, dict)]
+    )
+    positions = [
+        index
+        for index, audit in enumerate(current_audits)
+        if str(audit.get("left_row_id") or "") == row_id or str(audit.get("right_row_id") or "") == row_id
+    ]
+    refreshed = reaudit_evidence_comparisons(
+        rows=rows,
+        audits=[current_audits[index] for index in positions],
+        db_dir=db_dir,
+    )
+    comparison_audits = list(current_audits)
+    for index, audit in zip(positions, refreshed):
+        comparison_audits[index] = audit
+    comparison_flags = evidence_matrix_comparison_flags(rows)
+    selected_items = [
+        item for item in list(matrix.get("source_items") or []) if isinstance(item, dict)
+    ]
+    quality_status, quality = evidence_matrix_quality(
+        rows=rows,
+        evidence=evidence,
+        selected_items=selected_items,
+        comparison_flags=comparison_flags,
+        comparison_audits=comparison_audits,
+    )
+    current_quality = matrix.get("quality") if isinstance(matrix.get("quality"), dict) else {}
+    if isinstance(current_quality.get("source_watch_snapshot"), dict):
+        quality["source_watch_snapshot"] = copy.deepcopy(current_quality["source_watch_snapshot"])
+    quality["last_research_gap_repair"] = {
+        "contract_version": 1,
+        "gap_id": str(gap.get("id") or ""),
+        "gap_key": str(gap.get("gap_key") or ""),
+        "row_id": row_id,
+        "field": field,
+        "source_path": _text(row.get("source_path"), limit=1_200),
+        "evidence_id": evidence_id,
+        "candidate_id": str(candidate.get("id") or ""),
+        "reaudited_comparison_count": len(refreshed),
+    }
+    return {
+        "rows": rows,
+        "evidence": evidence,
+        "comparison_flags": comparison_flags,
+        "comparison_audits": comparison_audits,
+        "quality_status": quality_status,
+        "quality": quality,
+        "reaudited_comparison_count": len(refreshed),
+    }
 
 
 def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:

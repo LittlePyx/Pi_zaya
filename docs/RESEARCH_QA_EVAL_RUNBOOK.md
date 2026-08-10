@@ -474,6 +474,55 @@ The final 29-question run reported first-visible p50/p95/max of
 8,690/14,470/17,249 ms. These values stay visible as ordinary real-model and
 provider variance; no evidence or coverage gate was weakened to obtain them.
 
+## 2026-08-10 Same-Source Gap Repair Gate
+
+The same-source repair path is an explicit project action outside ordinary chat
+retrieval and generation. It accepts only exact indexed sentences from the
+affected matrix row's freshly indexed source paper, recomputes the candidate on
+apply, creates a new matrix revision, and reruns matrix and affected comparison
+audits. Other-paper discovery remains a separate literature-basket workflow and
+cannot fill the original row.
+
+The five reviewed real matrices passed 5/5 repair holdouts in
+`test_results/research_gap_repair/20260810_152124/report.json`. Every recovered
+cell exactly matched its original same-source indexed value and carried a reader
+locator. The nine honest pre-existing missing identities remained 9/9 after
+search-only replay. Same-source search measured 91.209/135.090 ms median/max;
+apply plus re-audit measured 8.869/11.395 ms median/max. These checks supplement,
+and do not replace, the unchanged 29-question retrieval, 5/5 live QA, source,
+citation, and evidence validation gates.
+
+The final product gates after all implementation and evidence-binding fixes were:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_gap_repair_full_library_release/20260810_151311`.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_gap_repair_live_smoke_release_v2/20260810_151232`.
+3. Deterministic full-library retrieval: 29/29; source validation: 41/41;
+   reviewed replay: 6/6; paired comparison audit: 5/5 with zero false
+   comparisons; same-source repair replay: 5/5 while preserving all 9/9 honest
+   missing identities.
+4. Backend suite: 4,353 passed with 43 configuration-dependent skips. Frontend
+   smoke: 123 passed with two private-auth-gate-only skips; all 109 core
+   citation/library tests and all four public-surface tests passed. ESLint and
+   the production build passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+2,825/5,672/7,321 ms, answer-complete p50/p95/max of
+5,016/10,522/12,232 ms, evidence-card p50/p95/max of
+7,666/12,370/13,044 ms, and final validation p50/p95/max of
+8,508/13,687/14,463 ms. The final five-question smoke reported UI-ready
+p50/p95/max of 4,232/6,565/6,823 ms.
+
+Earlier complete runs remain under `test_results`: one 29-question run failed a
+PIDL answer whose retrieval-boundary sentence was rebound to an unplanned hit,
+and one five-question run failed because SCINeRF's compact evidence card kept
+the variable definitions and differentiability sentence but omitted the
+intervening synthesis sentence. The release fixes align the claim audit with
+the visible citation-plan allowlist and preserve the exact, page-4 compound
+source excerpt within the card budget. No source, citation, coverage, or quality
+threshold was relaxed.
+
 ## Outputs
 
 Default output directory:

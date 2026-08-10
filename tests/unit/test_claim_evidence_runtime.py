@@ -230,6 +230,29 @@ def test_absolute_negative_is_scoped_to_current_cited_evidence():
     assert meta["uncited_high_risk_claims"] == 0
 
 
+def test_existing_evidence_boundary_does_not_bind_an_unrelated_citation():
+    answer = (
+        "需要指出的是，现有证据并未明确说明该方法在训练数据极度匮乏时的鲁棒性边界，"
+        "这些属于超出当前证据范围的推断 [3]。"
+    )
+    hits = [
+        {"text": "A calibrated SPAD noise model is used to synthesize training pairs."},
+        {"text": "A transformer reconstructs high-resolution single-photon images."},
+        {"text": "Single-pixel imaging can improve reconstruction speed."},
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        drop_unsupported_high_risk_claims=True,
+    )
+
+    assert "当前引用证据未直接说明" in repaired
+    assert "[3]" not in repaired
+    assert meta["rebound_citations"] == 0
+    assert meta["uncited_high_risk_claims"] == 0
+
+
 def test_false_single_pixel_single_photon_equivalence_is_repaired():
     answer = "单像素成像（一种单光子成像的变体）可以加速重建 [1]。"
 

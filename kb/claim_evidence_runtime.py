@@ -923,6 +923,13 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
         ),
         (
             re.compile(
+                r"(?:现有|当前)(?:检索到的)?证据(?:片段)?(?:并)?(?:没有|未)"
+                r"(?:明确|直接)?(提供|说明|显示|报告|验证|讨论|提及)"
+            ),
+            lambda match: f"当前引用证据未直接{match.group(1)}",
+        ),
+        (
+            re.compile(
                 r"(?:this\s+paper|the\s+paper)\s+(?:does\s+not|did\s+not|doesn't)\s+"
                 r"(directly\s+)?(provide|state|show|report|validate|discuss)",
                 flags=re.IGNORECASE,
@@ -933,6 +940,20 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
     for pattern, replacement in patterns:
         text, changed = pattern.subn(replacement, text)
         count += changed
+    # A retrieval-boundary statement describes what the current evidence
+    # window does not establish; it is not a factual claim from any one paper.
+    # Models sometimes append a numeric marker anyway.  Leaving that marker in
+    # place can make the claim auditor bind the caveat to a semantically nearby
+    # but unrelated hit, while the renderer later (correctly) rejects it.  Strip
+    # only markers inside the normalized boundary sentence so the visible
+    # answer and the final evidence audit apply the same contract.
+    text = re.sub(
+        r"(当前引用证据未直接[^。！？.!?\n]*?)\s*"
+        r"(?<!\[)\[\d{1,5}\](?:\([^\n)]+\))?(?!\])",
+        r"\1",
+        text,
+    )
+    text = re.sub(r"\s+([。！？.!?；;])", r"\1", text)
     return text, count
 
 

@@ -329,6 +329,7 @@ export function MessageList({
   const [researchBriefOpen, setResearchBriefOpen] = useState(false)
   const [researchBriefSeedItems, setResearchBriefSeedItems] = useState<CiteShelfItem[]>([])
   const [researchBriefSourceMatrixId, setResearchBriefSourceMatrixId] = useState('')
+  const [researchBriefInitialId, setResearchBriefInitialId] = useState('')
   const [evidenceMatrixOpen, setEvidenceMatrixOpen] = useState(false)
   const [evidenceMatrixSeedItems, setEvidenceMatrixSeedItems] = useState<CiteShelfItem[]>([])
   const [researchGapOpen, setResearchGapOpen] = useState(false)
@@ -2035,6 +2036,7 @@ export function MessageList({
     }
     setResearchBriefSeedItems(seedItems)
     setResearchBriefSourceMatrixId('')
+    setResearchBriefInitialId('')
     setResearchBriefOpen(true)
   }, [S, activeConvId, shelfProjectId])
 
@@ -2641,6 +2643,7 @@ export function MessageList({
         activeConvId={activeConvId}
         seedItems={researchBriefSeedItems}
         sourceMatrixId={researchBriefSourceMatrixId}
+        initialBriefId={researchBriefInitialId}
         onClose={() => setResearchBriefOpen(false)}
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
       />
@@ -2650,6 +2653,13 @@ export function MessageList({
         onClose={() => setResearchGapOpen(false)}
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
         onShelfChanged={applyResearchGapShelf}
+        onOpenBrief={(briefId, matrixId) => {
+          setResearchGapOpen(false)
+          setResearchBriefSeedItems(shelfItems)
+          setResearchBriefSourceMatrixId(matrixId)
+          setResearchBriefInitialId(briefId)
+          setResearchBriefOpen(true)
+        }}
       />
       <EvidenceMatrixWorkspace
         open={evidenceMatrixOpen}
@@ -2662,6 +2672,7 @@ export function MessageList({
           setEvidenceMatrixOpen(false)
           setResearchBriefSourceMatrixId(matrix.id)
           setResearchBriefSeedItems(evidenceMatrixSeedItems)
+          setResearchBriefInitialId('')
           setResearchBriefOpen(true)
         }}
       />

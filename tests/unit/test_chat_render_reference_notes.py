@@ -17374,11 +17374,21 @@ def test_citation_plan_refiner_keeps_scinerf_synthesis_and_differentiability_bun
                 "The rendered views synthesize the compressed image, and the result "
                 "is differentiable with respect to NeRF parameters and camera poses."
             ),
+            "answer_claims": [
+                "SCINeRF uses the SCI forward equation for the captured compressed image.",
+                "The mask denotes element-wise multiplication and Z is measurement noise.",
+                "The rendered views synthesize the compressed image Y.",
+                "The result is differentiable with respect to NeRF and the poses.",
+            ],
             "summary_line": (
-                "We can see that Y is differentiable with respect to NeRF and the poses."
+                "where Y is the captured compressed image, the mask denotes element-wise "
+                "multiplication, and Z is the measurement noise. We can see that Y is "
+                "differentiable with respect to NeRF and the poses."
             ),
             "evidence_quote": (
-                "We can see that Y is differentiable with respect to NeRF and the poses."
+                "where Y is the captured compressed image, the mask denotes element-wise "
+                "multiplication, and Z is the measurement noise. We can see that Y is "
+                "differentiable with respect to NeRF and the poses."
             ),
         }
     ]
@@ -17419,4 +17429,5 @@ def test_citation_plan_refiner_keeps_scinerf_synthesis_and_differentiability_bun
     assert "measurement noise" in evidence
     assert "synthesize the compressed image" in evidence
     assert "differentiable with respect to NeRF and the poses" in evidence
+    assert refined[0]["compound_plan_evidence"] is True
     assert refined[0]["heading_path"].endswith("3. Method")

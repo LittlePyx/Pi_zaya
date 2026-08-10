@@ -218,6 +218,32 @@ def test_scinerf_compound_excerpt_keeps_synthesis_and_differentiability() -> Non
     assert "measurement noise" in excerpt
 
 
+def test_scinerf_long_compound_excerpt_keeps_all_formula_training_terms() -> None:
+    plan_text = (
+        "where Y, X_i \\in \\mathbb{R}^{H \\times W} are the captured compressed image "
+        "and the i^{th} virtual image within exposure time respectively, N is the temporal CR, "
+        "\\odot denotes element-wise multiplication, and Z \\in \\mathbb{R}^{H \\times W} "
+        "is the measurement noise. The individual pixel value in the binary mask is randomly "
+        "generated. For N masks across the exposure time, the probability of assigning 1 to "
+        "the same pixel location is fixed and defined as overlapping ratio. Given the NeRF "
+        "representation and corresponding camera poses, we are able to render X_i to synthesize "
+        "the compressed image Y. We can see that Y is differentiable with respect to NeRF and "
+        "the poses, which lay the foundation for our optimization step."
+    )
+
+    excerpt = refs_renderer._compound_plan_evidence_excerpt(
+        plan_text,
+        "解释 SCI 公式中的压缩图像、逐元素相乘和测量噪声，并说明合成图像为何对 NeRF 和位姿可微。",
+    )
+
+    assert len(excerpt) <= 520
+    assert "captured compressed image" in excerpt
+    assert "element-wise multiplication" in excerpt
+    assert "measurement noise" in excerpt
+    assert "synthesize the compressed image" in excerpt
+    assert "differentiable with respect to NeRF and the poses" in excerpt
+
+
 def test_missing_canonical_source_does_not_fall_back_to_wrong_display_hit(monkeypatch):
     monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
     monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", lambda *a, **kw: None)

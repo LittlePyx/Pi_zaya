@@ -1039,6 +1039,58 @@ export interface ResearchGapCandidateResult {
   gap_id: string
 }
 
+export interface ResearchGapRepairCandidate {
+  id: string
+  gap_id: string
+  gap_key: string
+  matrix_id: string
+  matrix_revision: number
+  row_id: string
+  field: string
+  value: string
+  source_path: string
+  source_name: string
+  title: string
+  chunk_id: string
+  evidence_id: string
+  evidence_quote: string
+  heading_path: string
+  location_label: string
+  page_start?: number | null
+  page_end?: number | null
+  block_id: string
+  anchor_id: string
+  score: number
+  same_source_verified: boolean
+  match_reason: string
+}
+
+export interface ResearchGapRepairResult {
+  items: ResearchGapRepairCandidate[]
+  gap_id: string
+  matrix_id: string
+  matrix_revision: number
+  source_path: string
+}
+
+export interface ResearchGapAffectedBrief {
+  id: string
+  title: string
+  revision: number
+  lineage_status: string
+  update_ready: boolean
+  impact: ResearchBriefLineageImpact
+}
+
+export interface ResearchGapRepairApplyResult {
+  gap: ResearchGapRecord
+  repair: ResearchGapRepairCandidate
+  matrix: EvidenceMatrixRecord
+  reaudited_comparison_count: number
+  affected_briefs: ResearchGapAffectedBrief[]
+  research_gaps: ResearchGapScanResult
+}
+
 export interface ResearchGapConfirmResult {
   gap: ResearchGapRecord
   candidate: ResearchGapCandidate
@@ -1300,6 +1352,19 @@ export const chatApi = {
       `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/candidates/${encodeURIComponent(candidateId)}/confirm`,
       {},
     ),
+  listResearchGapRepairs: (projectId: string, gapId: string, limit = 3) =>
+    api.get<ResearchGapRepairResult>(
+      `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/repairs?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  applyResearchGapRepair: (
+    projectId: string,
+    gapId: string,
+    repairId: string,
+    expectedRevision: number,
+  ) => api.post<ResearchGapRepairApplyResult>(
+    `/api/projects/${encodeURIComponent(projectId)}/research-gaps/${encodeURIComponent(gapId)}/repairs/${encodeURIComponent(repairId)}/apply`,
+    { expected_revision: expectedRevision },
+  ),
   ignoreEvidenceChange: (projectId: string, eventId: string, reason = '') =>
     api.post<EvidenceWatchEvent>(
       `/api/projects/${encodeURIComponent(projectId)}/evidence-changes/${encodeURIComponent(eventId)}/ignore`,

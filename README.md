@@ -42,7 +42,7 @@ web context.
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
 | Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. A persistent change inbox fingerprints full text separately from metadata, reports downstream row/comparison/brief/citation impact, blocks stale indexes, and refreshes only user-confirmed affected sources while preserving unaffected evidence. Explicit paired audits produce a result only after task, dataset, protocol, metric, target, value, and both source excerpts pass the comparison contract. Exports Markdown, CSV, or XLSX. |
 | Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix, audits every substantive claim, distinguishes historically verified snapshots from the latest matrix state, and turns changed fields/citations into a reviewable incremental update. Users accept or keep each affected claim, unaffected Markdown remains byte-for-byte intact, and the merged revision receives a complete evidence audit before export. |
-| Research gap queue | Aggregates explicit missing/unsupported matrix cells, non-comparable audits, stale brief lineage, and source changes into a deterministic project worklist. It reports downstream matrix/brief/citation/comparison impact and searches other locally indexed papers for exact, locatable candidate passages. Candidates require human confirmation and enter the literature basket; they never auto-fill a matrix or rewrite a brief. |
+| Research gap queue | Aggregates explicit missing/unsupported matrix cells, non-comparable audits, stale brief lineage, and source changes into a deterministic project worklist. It reports downstream matrix/brief/citation/comparison impact. A same-source repair path can propose exact, locatable sentences from the matrix row's own freshly indexed paper; only explicit confirmation creates a grounded matrix revision and reruns audits. A separate discovery path searches other local papers and adds confirmed candidates to the literature basket without misattributing them to the original row. |
 | Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
@@ -69,6 +69,7 @@ flowchart LR
   F --> RG
   RB --> RG
   RG --> L
+  RG --> EM
   P --> O["Grounded Answer + Citation Trace UI"]
   R --> O
   X --> O
@@ -107,9 +108,12 @@ At a high level:
 8. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
 9. The project research gap queue reuses structured matrix, comparison, brief,
-   and source-change facts to prioritize unresolved evidence work. Local
-   candidates exclude the matrix's current sources and require explicit human
-   confirmation before entering the literature basket.
+   and source-change facts to prioritize unresolved evidence work. Cell gaps
+   first offer strict same-paper repair candidates; accepting an exact passage
+   creates a new matrix revision, reruns matrix/comparison audits, and exposes
+   affected briefs to the existing incremental review flow. Cross-paper
+   candidates remain a separate expansion path, exclude current matrix sources,
+   and require explicit confirmation before entering the literature basket.
 
 Key backend entry points:
 
@@ -119,9 +123,9 @@ Key backend entry points:
 - `api/routers/library.py`: library, conversion, quality, metadata, and indexing APIs
 - `api/routers/evidence_matrices.py`: project evidence-matrix generation, revisions, cell audit, and export
 - `api/routers/research_briefs.py`: project brief generation, revisions, evidence audit, and export
-- `api/routers/research_gaps.py`: project gap aggregation, candidate search, and human confirmation
+- `api/routers/research_gaps.py`: project gap aggregation, same-source cell repair, cross-source candidate search, and human confirmation
 - `kb/task_runtime.py`: background generation/conversion runtime
-- `kb/evidence_matrix.py`: source-balanced cell extraction, comparison boundaries, audit, and exporters
+- `kb/evidence_matrix.py`: source-balanced cell extraction, strict same-source repair, comparison boundaries, audit, and exporters
 - `kb/research_brief.py`: brief source normalization, quality contract, bibliography, and exporters
 - `kb/research_brief_lineage.py`: matrix fingerprinting, freshness, change impact, and export provenance rules
 - `kb/research_brief_update.py`: stable citation slots, affected-block planning, grounded candidate synthesis, exact-span merge, and preservation metrics

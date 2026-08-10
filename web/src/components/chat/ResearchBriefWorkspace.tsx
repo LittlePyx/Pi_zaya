@@ -39,6 +39,7 @@ interface Props {
   activeConvId?: string | null
   seedItems: CiteShelfItem[]
   sourceMatrixId?: string
+  initialBriefId?: string
   onClose: () => void
   onOpenEvidence?: (evidence: Record<string, unknown>) => void
 }
@@ -74,6 +75,7 @@ export function ResearchBriefWorkspace({
   activeConvId,
   seedItems,
   sourceMatrixId = '',
+  initialBriefId = '',
   onClose,
   onOpenEvidence,
 }: Props) {
@@ -152,7 +154,9 @@ export function ResearchBriefWorkspace({
       const rows = await chatApi.listResearchBriefs(projectId)
       setBriefs(rows)
       if (rows.length > 0) {
-        const record = await chatApi.getResearchBrief(rows[0].id)
+        const requestedId = String(initialBriefId || '').trim()
+        const selected = rows.find((item) => item.id === requestedId) || rows[0]
+        const record = await chatApi.getResearchBrief(selected.id)
         applyRecord(record)
         await Promise.all([loadRevisions(record.id), loadOpenUpdatePlan(record)])
       } else {
@@ -165,7 +169,7 @@ export function ResearchBriefWorkspace({
     } finally {
       setLoading(false)
     }
-  }, [S.research_brief_load_failed, applyRecord, configureUpdatePlan, loadOpenUpdatePlan, loadRevisions, projectId])
+  }, [S.research_brief_load_failed, applyRecord, configureUpdatePlan, initialBriefId, loadOpenUpdatePlan, loadRevisions, projectId])
 
   const loadMatrices = useCallback(async () => {
     if (!projectId) return

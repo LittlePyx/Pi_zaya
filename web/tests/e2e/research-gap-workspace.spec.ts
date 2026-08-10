@@ -36,6 +36,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 
 async function installBackend(page: Page) {
   let status = 'open'
+  let repaired = false
   const gap = () => ({
     id: 'gap-limitation',
     gap_key: 'gap-key-limitation',
@@ -69,6 +70,29 @@ async function installBackend(page: Page) {
     created_at: 1,
     updated_at: 2,
   })
+  const briefGap = () => ({
+    ...gap(),
+    id: 'gap-brief-stale',
+    gap_key: 'gap-key-brief-stale',
+    kind: 'brief_stale',
+    status: 'open',
+    priority: 'medium',
+    priority_score: 80,
+    title: 'Brief needs review: Living imaging brief',
+    detail: 'The brief\'s matrix lineage is matrix_updated; its historical evidence must stay visible until reviewed.',
+    matrix_revision: 4,
+    brief_id: 'brief-1',
+    brief_title: 'Living imaging brief',
+    brief_revision: 2,
+    row_id: '',
+    row_label: '',
+    field: '',
+    source_path: '',
+    source_name: '',
+    reasons: ['source_matrix_updated'],
+    candidate_query: '',
+    candidate_searchable: false,
+  })
   const candidate = {
     id: 'candidate-new-paper',
     gap_id: 'gap-limitation',
@@ -87,6 +111,31 @@ async function installBackend(page: Page) {
     anchor_id: 'candidate-anchor-7',
     matched_terms: ['dynamic', 'limitation'],
     match_reason: 'Local indexed passage shares the deterministic gap query terms.',
+  }
+  const repair = {
+    id: 'repair-paper-a-limitation',
+    gap_id: 'gap-limitation',
+    gap_key: 'gap-key-limitation',
+    matrix_id: 'matrix-1',
+    matrix_revision: 3,
+    row_id: 'row-a',
+    field: 'limitation',
+    value: 'However, our reconstruction remains limited by motion and calibration errors.',
+    source_path: SHELF_ITEM.sourcePath,
+    source_name: 'Paper A',
+    title: 'Paper A',
+    chunk_id: 'paper-a:9',
+    evidence_id: 'ev-paper-a-limitation',
+    evidence_quote: 'However, our reconstruction remains limited by motion and calibration errors.',
+    heading_path: 'Discussion / Limitations',
+    location_label: 'Discussion / Limitations',
+    page_start: 9,
+    page_end: 9,
+    block_id: 'paper-a-block-9',
+    anchor_id: 'paper-a-anchor-9',
+    score: 8.4,
+    same_source_verified: true,
+    match_reason: 'The field-specific extractor found this exact passage in the matrix row\'s source paper.',
   }
 
   await installAppShellMocks(page, {
@@ -135,8 +184,10 @@ async function installBackend(page: Page) {
 
   await page.route(`**/api/projects/${PROJECT.id}/research-gaps/scan`, async (route) => {
     await fulfillJson(route, {
-      items: [gap()],
-      summary: { total: 1, open: status === 'open' ? 1 : 0, in_progress: status === 'in_progress' ? 1 : 0, high: 0, medium: 1, low: 0, searchable: 1, affected_matrix_count: 1, affected_brief_count: 1 },
+      items: repaired ? [briefGap()] : [gap()],
+      summary: repaired
+        ? { total: 1, open: 1, in_progress: 0, high: 0, medium: 1, low: 0, searchable: 0, affected_matrix_count: 1, affected_brief_count: 1 }
+        : { total: 1, open: status === 'open' ? 1 : 0, in_progress: status === 'in_progress' ? 1 : 0, high: 0, medium: 1, low: 0, searchable: 1, affected_matrix_count: 1, affected_brief_count: 1 },
       scanned_at: 3,
       matrix_count: 1,
       brief_count: 1,
@@ -145,6 +196,57 @@ async function installBackend(page: Page) {
   })
   await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/candidates**`, async (route) => {
     await fulfillJson(route, { items: [candidate], query: gap().candidate_query, gap_id: gap().id })
+  })
+  await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/repairs**`, async (route) => {
+    await fulfillJson(route, {
+      items: [repair],
+      gap_id: gap().id,
+      matrix_id: 'matrix-1',
+      matrix_revision: 3,
+      source_path: SHELF_ITEM.sourcePath,
+    })
+  })
+  await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/repairs/${repair.id}/apply`, async (route) => {
+    repaired = true
+    status = 'resolved'
+    const matrix = {
+      id: 'matrix-1',
+      project_id: PROJECT.id,
+      title: 'Imaging evidence matrix',
+      objective: 'Compare dynamic imaging evidence.',
+      rows: [],
+      evidence: [],
+      source_items: [SHELF_ITEM],
+      comparison_flags: [],
+      comparison_audits: [],
+      quality_status: 'verified',
+      quality: { missing_cell_count: 0, unsupported_cell_count: 0 },
+      revision: 4,
+      created_at: 1,
+      updated_at: 5,
+    }
+    await fulfillJson(route, {
+      gap: gap(),
+      repair,
+      matrix,
+      reaudited_comparison_count: 1,
+      affected_briefs: [{
+        id: 'brief-1',
+        title: 'Living imaging brief',
+        revision: 2,
+        lineage_status: 'matrix_updated',
+        update_ready: true,
+        impact: { changed_row_count: 1, changed_field_count: 1 },
+      }],
+      research_gaps: {
+        items: [briefGap()],
+        summary: { total: 1, open: 1, in_progress: 0, high: 0, medium: 1, low: 0, searchable: 0, affected_matrix_count: 1, affected_brief_count: 1 },
+        scanned_at: 5,
+        matrix_count: 1,
+        brief_count: 1,
+        source_change_count: 0,
+      },
+    })
   })
   await page.route(`**/api/projects/${PROJECT.id}/research-gaps/gap-limitation/candidates/${candidate.id}/confirm`, async (route) => {
     status = 'in_progress'
@@ -204,4 +306,26 @@ test('project gap queue exposes impact and requires human confirmation for candi
   await expect(dialog.getByTestId('research-gap-card')).toContainText('Evidence selected')
   await dialog.getByRole('button', { name: 'Close' }).click()
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(2)
+})
+
+test('same-source repair updates the matrix and exposes the affected brief workflow', async ({ page }) => {
+  await installBackend(page)
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+
+  await page.getByTestId('citation-shelf-open-research-gaps').click()
+  const dialog = page.getByRole('dialog', { name: 'Project research gap queue' })
+  await expect(dialog).toBeVisible()
+  await dialog.getByTestId('research-gap-find-repairs').click()
+  await expect(dialog.getByTestId('research-gap-repairs')).toContainText(
+    'However, our reconstruction remains limited by motion and calibration errors.',
+  )
+  await dialog.getByTestId('research-gap-apply-repair').click()
+  await page.getByRole('button', { name: 'Apply grounded repair', exact: true }).last().click()
+
+  await expect(dialog.getByTestId('research-gap-repair-result')).toContainText('revision 4')
+  await expect(dialog.getByTestId('research-gap-repair-result')).toContainText('1 saved comparisons')
+  await expect(dialog.getByTestId('research-gap-open-affected-brief')).toContainText('Living imaging brief')
+  await expect(dialog.getByTestId('research-gap-card')).toHaveCount(1)
+  await expect(dialog.getByTestId('research-gap-card')).not.toContainText('Paper A: limitation')
+  await expect(dialog.getByTestId('research-gap-card')).toContainText('Brief needs review: Living imaging brief')
 })

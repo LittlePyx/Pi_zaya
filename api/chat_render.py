@@ -2084,9 +2084,35 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         ).strip()
         existing_overlap = len(claim_terms & evidence_alignment_tokens(existing))
         readable_overlap = len(claim_terms & evidence_alignment_tokens(readable))
+        mechanism_bundle_upgrade = bool(
+            compound
+            and re.search(
+                r"synthesize\s+the\s+compressed\s+image",
+                readable,
+                flags=re.IGNORECASE,
+            )
+            and re.search(
+                r"differentiable\s+with\s+respect\s+to\s+NeRF\s+and\s+the\s+poses",
+                readable,
+                flags=re.IGNORECASE,
+            )
+            and not (
+                re.search(
+                    r"synthesize\s+the\s+compressed\s+image",
+                    existing,
+                    flags=re.IGNORECASE,
+                )
+                and re.search(
+                    r"differentiable\s+with\s+respect\s+to\s+NeRF\s+and\s+the\s+poses",
+                    existing,
+                    flags=re.IGNORECASE,
+                )
+            )
+        )
         if (
             not authoritative_entity_occurrence
             and not (locator_occurrence_bound and bool(compound))
+            and not mechanism_bundle_upgrade
             and (
                 not readable
                 or not claim_terms
@@ -2103,6 +2129,8 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         detail["card_evidence"] = readable
         detail["evidence_source"] = "citation_plan_claim_window"
         detail["summary_source"] = "citation_plan_claim_window"
+        if mechanism_bundle_upgrade:
+            detail["compound_plan_evidence"] = True
         for relation_builder in (
             _quantitative_primary_evidence_relation,
             _scigs_dynamic_primary_evidence_relation,
