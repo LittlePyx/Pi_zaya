@@ -599,4 +599,6 @@ test('evidence-bound comparison candidate requires mapping review before strict 
   await expect(result).toContainText('more favorable reported value')
   await expect(result.getByTestId('evidence-comparison-candidate-open-brief')).toContainText('Living imaging brief')
   await expect(page.getByTestId('evidence-comparison-result')).toContainText('more favorable reported value')
+  await expect(page.getByTestId('evidence-comparison-candidate')).not.toBeVisible()
+  await expect(page.getByTestId('evidence-comparison-candidate-remaining')).toContainText('0 comparison candidates')
 })

@@ -816,3 +816,56 @@ Every new case should include:
 7. For `sourceGrounded: true`, every claim and locate contract must include a
    `sourcePage` and page-local `evidenceTerms` verified against the current
    Markdown with `--validate-sources`.
+
+## 2026-08-11 Continuous Project-Journey Acceptance
+
+The project research-status follow-up now validates a real three-paper journey,
+not only isolated status snapshots. The first full run at
+`test_results/project_research_journey_baseline/20260811_143756/report.json`
+passed 13/18 and exposed a genuine source-balance defect: dense verified
+comparison observations consumed the matrix-brief hit budget before the third
+selected paper could contribute evidence. The brief audit remained
+`needs_review`, so the workflow correctly did not reach ready/export.
+
+The accepted run at
+`test_results/project_research_journey_source_balance/20260811_144024/report.json`
+passed 18/18 after reserving one ordinary grounded matrix cell per active source
+row. It retained all 18 strictly audited comparison candidates, produced a
+20-evidence verified brief with all three bibliography sources, preserved two
+reviewed unavailable limitation cells as explicit deferrals, reached the exact
+six-action sequence, and exported only after current verified lineage. The
+16,899.798 ms total, 5,303.581 ms brief stage, 5,754.490 ms comparison-audit
+total, and 218.205 ms status-refresh median remain visible.
+
+This gate supplements the unchanged 56/56 long-tail acceptance, 29/29 formal
+full-library suite, 5/5 paid-model smoke, 29/29 deterministic retrieval, 41/41
+source validation, grounded and Agent replays, and strict comparison evidence
+checks. It does not lower any answer, evidence, citation, locator, source-
+coverage, audit, readiness, or export requirement.
+
+The complete exact-code release gates then passed:
+
+1. Full-library live QA: 29/29 in
+   `test_results/research_qa_project_journey_full_library_release/20260811_145735`;
+   paid-model smoke: 5/5 in
+   `test_results/research_qa_project_journey_live_smoke_release/20260811_150139`.
+2. Deterministic retrieval: 29/29 in
+   `test_results/research_qa_project_journey_retrieval_release/20260811_150225`;
+   source validation: 41/41; paired comparison audit: 5/5 with zero false
+   comparisons; candidate audit: 5/5 with 18 discoveries and zero evidence or
+   contract failures.
+3. The final continuous project journey passed 18/18 at
+   `test_results/project_research_journey_final_release/20260811_150754/report.json`;
+   the independent status snapshots passed 5/5.
+4. Backend unit tests passed 4,127 with 41 configuration-dependent skips;
+   sanity passed 262 with two skips. Frontend smoke passed 126 with two private-
+   auth-only skips; core citation/library E2E passed 109/109; public-surface E2E
+   passed 4/4. Ruff, ESLint, and the production build passed.
+
+The final 29-question run reported first-visible p50/p95/max of
+2,868/4,757/5,952 ms, answer-complete p50/p95/max of
+3,969/10,447/13,156 ms, evidence-card complete p50/p95/max of
+8,226/11,519/14,674 ms, and final-validation p50/p95/max of
+9,157/11,911/15,706 ms. The five-question smoke's final-validation p50/p95/max
+was 3,935/9,421/10,436 ms. These real-model tails remain visible; no timeout,
+source, evidence, locator, card, or quality threshold was reduced.

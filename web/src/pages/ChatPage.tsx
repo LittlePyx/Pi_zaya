@@ -151,6 +151,14 @@ export default function ChatPage() {
     () => projects.find((project) => project.id === projectStatusId)?.name || '',
     [projectStatusId, projects],
   )
+  const projectJourneyId = useMemo(
+    () => String(new URLSearchParams(location.search).get('project_journey') || '').trim(),
+    [location.search],
+  )
+  const projectJourneyName = useMemo(
+    () => projects.find((project) => project.id === projectJourneyId)?.name || '',
+    [projectJourneyId, projects],
+  )
   const activeGuideBinding = useMemo(() => {
     const convId = String(activeConvId || '').trim()
     return convId ? guideBindings?.[convId] : undefined
@@ -281,6 +289,29 @@ export default function ChatPage() {
     navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true })
   }, [location.pathname, location.search, navigate])
 
+  const beginProjectJourney = useCallback((projectId: string) => {
+    const params = new URLSearchParams(location.search)
+    params.delete('project_status')
+    params.set('project_journey', projectId)
+    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true })
+  }, [location.pathname, location.search, navigate])
+
+  const continueProjectJourney = useCallback(() => {
+    if (!projectJourneyId) return
+    const params = new URLSearchParams(location.search)
+    params.set('project_journey', projectJourneyId)
+    params.set('project_status', projectJourneyId)
+    navigate({ pathname: location.pathname, search: `?${params.toString()}` }, { replace: true })
+  }, [location.pathname, location.search, navigate, projectJourneyId])
+
+  const endProjectJourney = useCallback(() => {
+    const params = new URLSearchParams(location.search)
+    params.delete('project_journey')
+    params.delete('project_status')
+    const search = params.toString()
+    navigate({ pathname: location.pathname, search: search ? `?${search}` : '' }, { replace: true })
+  }, [location.pathname, location.search, navigate])
+
   const loadProjectShelfItems = useCallback(async (projectId: string): Promise<CiteShelfItem[]> => {
     const shelf = await chatApi.getCitationShelf({ projectId, scope: 'project' })
     return restoreShelfItems(Array.isArray(shelf.items) ? shelf.items : [])
@@ -329,7 +360,7 @@ export default function ChatPage() {
   const handleProjectStatusAction = useCallback(async (action: ProjectResearchStatusAction) => {
     const projectId = projectStatusId
     if (!projectId) return
-    closeProjectStatus()
+    beginProjectJourney(projectId)
     if (action.target === 'evidence_matrix') {
       await launchProjectMatrix(
         projectId,
@@ -359,7 +390,7 @@ export default function ChatPage() {
   }, [
     activeConvId,
     activeConversation?.project_id,
-    closeProjectStatus,
+    beginProjectJourney,
     createConversation,
     launchProjectBrief,
     launchProjectMatrix,
@@ -527,6 +558,22 @@ export default function ChatPage() {
   })
   const chatComposer = (
     <>
+      {projectJourneyId && !projectStatusId ? (
+        <div className="kb-project-journey-resume" data-testid="project-journey-resume">
+          <div className="kb-project-journey-resume-copy">
+            <span>{S.project_journey_active}</span>
+            <strong>{projectJourneyName || S.project_status_project_fallback}</strong>
+          </div>
+          <div className="kb-project-journey-resume-actions">
+            <Button size="small" type="primary" onClick={continueProjectJourney}>
+              {S.project_journey_continue}
+            </Button>
+            <Button size="small" type="text" onClick={endProjectJourney}>
+              {S.project_journey_end}
+            </Button>
+          </div>
+        </div>
+      ) : null}
       {currentSelectedResearchContext ? (
         <div className="kb-chat-context-pack-wrap" data-testid="chat-context-pack">
           <div className="kb-chat-context-pack">

@@ -210,4 +210,16 @@ test('project menu opens measured status and the primary action lands on compari
   await expect(page.getByText('Project evidence matrices', { exact: true })).toBeVisible()
   await expect(page.getByTestId('evidence-comparison-find-candidates')).toBeVisible()
   await expect(page.getByText('Explicit comparison contract', { exact: true })).toBeVisible()
+
+  const matrixDialog = page.getByRole('dialog').filter({ hasText: 'Project evidence matrices' })
+  await matrixDialog.getByRole('button', { name: 'Close' }).click()
+
+  const resume = page.getByTestId('project-journey-resume')
+  await expect(resume).toBeVisible()
+  await expect(resume).toContainText(PROJECT.name)
+  await expect(page).toHaveURL(new RegExp(`project_journey=${PROJECT.id}`))
+
+  await resume.getByRole('button', { name: 'Continue with the next action' }).click()
+  await expect(page.getByTestId('project-action-center')).toBeVisible()
+  await expect(page.getByTestId('project-status-project-name')).toHaveText(PROJECT.name)
 })

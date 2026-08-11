@@ -11,6 +11,50 @@ html.theme-switching *::after {
   animation: none !important;
 }
 
+.kb-project-journey-resume {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.kb-project-journey-resume-copy {
+  display: grid;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kb-project-journey-resume-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-project-journey-resume-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+}
+
+@media (max-width: 680px) {
+  .kb-project-journey-resume {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .kb-project-journey-resume-actions .ant-btn-primary {
+    flex: 1;
+  }
+}
+
 .kb-project-status-stack {
   display: grid;
   gap: 18px;

@@ -558,6 +558,10 @@ export function EvidenceMatrixWorkspace({
     }
     setAuditingCandidateId(candidate.id)
     try {
+      const remainingCandidates = comparisonCandidates.filter((item) => item.id !== candidate.id)
+      const remainingConfirmations = { ...candidateConfirmations }
+      delete remainingConfirmations[candidate.id]
+      const completedScanDetail = candidateScanDetail
       const result = await chatApi.auditEvidenceComparisonCandidate(
         projectId,
         active.id,
@@ -566,6 +570,9 @@ export function EvidenceMatrixWorkspace({
         confirmed,
       )
       await refreshListsAfterRecord(result.matrix)
+      setComparisonCandidates(remainingCandidates)
+      setCandidateConfirmations(remainingConfirmations)
+      setCandidateScanDetail(completedScanDetail)
       setLastCandidateAudit(result)
       setTab('comparisons')
       message.success(
@@ -859,12 +866,17 @@ export function EvidenceMatrixWorkspace({
                         </Button>
                       </div>
                       {candidateScanDetail ? (
-                        <small className="kb-evidence-comparison-candidate-scan-detail">
-                          {S.evidence_matrix_candidate_scan_detail
-                            .replace('{pairs}', String(candidateScanDetail.pairs))
-                            .replace('{observations}', String(candidateScanDetail.observations))
-                            .replace('{ms}', candidateScanDetail.ms.toFixed(1))}
-                        </small>
+                        <div className="kb-evidence-comparison-candidate-scan-detail">
+                          <small>
+                            {S.evidence_matrix_candidate_scan_detail
+                              .replace('{pairs}', String(candidateScanDetail.pairs))
+                              .replace('{observations}', String(candidateScanDetail.observations))
+                              .replace('{ms}', candidateScanDetail.ms.toFixed(1))}
+                          </small>
+                          <small data-testid="evidence-comparison-candidate-remaining">
+                            {S.evidence_matrix_candidate_remaining.replace('{n}', String(comparisonCandidates.length))}
+                          </small>
+                        </div>
                       ) : null}
                       {lastCandidateAudit ? (
                         <Alert

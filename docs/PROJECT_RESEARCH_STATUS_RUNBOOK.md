@@ -1,6 +1,6 @@
 # Project Research Status Runbook
 
-Updated: 2026-08-10
+Updated: 2026-08-11
 
 ## Purpose
 
@@ -76,6 +76,17 @@ Opening a comparison candidate does not accept it. The matrix workspace still
 requires exact paired evidence, any server-marked semantic confirmations, a
 fresh server-side recomputation, and the unchanged strict comparison audit.
 
+After the primary action opens a child workspace, the chat composer keeps a
+compact project-journey control. **Continue with the next action** refreshes the
+measured project status and opens the next required stage; **End workflow**
+clears the journey explicitly. This state is carried in the URL, so closing a
+matrix or brief does not strand the researcher or silently skip a stage.
+
+After a comparison candidate is accepted, its review card is removed and the
+remaining-candidate count is updated. An accepted card cannot remain visible as
+an apparently actionable control that would only produce a duplicate-request
+error.
+
 ## API Surface
 
 - `GET /api/projects/{project_id}/research-status`
@@ -93,10 +104,12 @@ Run the focused deterministic and real-paper checks:
 python -m pytest -q tests/unit/test_project_status.py tests/sanity/test_project_research_status_api.py
 python tools/evidence_matrix/run_project_status_eval.py --dry-run
 python tools/evidence_matrix/run_project_status_eval.py --db-root db
+python tools/evidence_matrix/run_project_research_journey_eval.py --dry-run
+python tools/evidence_matrix/run_project_research_journey_eval.py --out-root test_results/project_research_journey
 cd web
 npm run lint
 npm run build
-node scripts/playwright-with-port.mjs project-action-center.spec.ts
+node scripts/playwright-with-port.mjs project-action-center.spec.ts evidence-matrix-workspace.spec.ts
 ```
 
 Then run the full backend and frontend suites. The unchanged release gates in
@@ -124,3 +137,53 @@ candidate discovery from the inexpensive deterministic status assembly. The
 earlier baseline remains at
 `test_results/project_research_status/20260810_195918/report.json` so the final
 release result does not replace or hide the first measurement.
+
+## 2026-08-11 Continuous Real-Project Journey Acceptance
+
+`docs/project_research_journey_eval_v1.json` defines a reviewed three-paper
+project using SCIGS, SCINeRF, and the indexed 3D single-pixel-video paper. The
+evaluator drives only public project APIs through the complete operational
+sequence: add sources, create a matrix, resolve or explicitly defer reviewed
+gaps, audit every discovered comparison candidate, create a matrix-backed brief,
+and export the verified current brief. It verifies exact indexed evidence,
+same-source identity, reader locators, source coverage, matrix and brief audits,
+lineage, and the exact six-action recommendation sequence.
+
+The first complete run remains at
+`test_results/project_research_journey_baseline/20260811_143756/report.json`. It
+passed 13/18 checks but correctly stopped before ready/export because dense
+comparison observations exhausted the 20-hit brief budget and excluded the
+third source. The brief covered only 2/3 papers, its bibliography contained two
+sources, and the audit marked it `needs_review`. This was not retried away or
+accepted as a timing success.
+
+The fix reserves one ordinary grounded matrix cell for every active row before
+filling the remaining brief hit budget with verified comparison observations.
+It retains the comparison evidence and the 20-hit budget while guaranteeing
+that a dense source pair cannot starve another selected paper. The exact-code
+run at
+`test_results/project_research_journey_source_balance/20260811_144024/report.json`
+passed 18/18: all three sources and bibliography entries were represented, the
+13-evidence matrix and 20-evidence brief were verified, all 18 comparison
+candidates were audited, the brief was current, and the status reached ready
+and export. Total wall time was 16,899.798 ms; brief generation took 5,303.581
+ms; all comparison audits took 5,754.490 ms; status refresh median was 218.205
+ms.
+
+The fixture permits exactly two explicit deferrals: the reviewed unavailable
+limitation cells for SCIGS and the 3D-video source. They remain visible as honest
+source limitations and are never filled with invented evidence. No evidence,
+source, locator, comparison, matrix-audit, brief-audit, or readiness gate was
+removed to obtain the final pass.
+
+The final release rerun against the complete working tree and the CI-portable
+fixture check is
+`test_results/project_research_journey_final_release/20260811_150754/report.json`.
+It again passed 18/18 with 13 matrix evidence records, 18/18 verified
+comparisons, 20 brief evidence records, all three sources in the bibliography,
+current lineage, and a verified export. Total wall time was 16,102.208 ms;
+brief generation took 4,598.957 ms; all comparison audits took 5,744.330 ms;
+status refresh median/max were 223.543/237.132 ms. The companion five-state
+status report at
+`test_results/project_research_status_journey_release/20260811_150304/report.json`
+passed 5/5 with 2.357/2.567 ms status-build median/max.

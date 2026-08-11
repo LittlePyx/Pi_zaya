@@ -1963,6 +1963,7 @@ def apply_evidence_matrix_cell_repair(
 
 
 def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dict[str, Any]]:
+    hit_limit = max(1, int(limit))
     rows = [item for item in list(record.get("rows") or []) if isinstance(item, dict)]
     evidence = [item for item in list(record.get("evidence") or []) if isinstance(item, dict)]
     evidence_by_id = {str(item.get("id") or ""): item for item in evidence if str(item.get("id") or "")}
@@ -2011,30 +2012,51 @@ def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dic
                     },
                 }
             )
-    comparison_hits = comparison_hits[: max(0, int(limit))]
-    cell_limit = max(0, int(limit) - len(comparison_hits))
-    selected: list[dict[str, Any]] = []
+    reserved: list[dict[str, Any]] = []
+    extras: list[dict[str, Any]] = []
     seen_evidence: set[str] = set()
-    for field in MATRIX_CELL_FIELDS if cell_limit > 0 else ():
-        for row in rows:
-            cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
-            cell = cells.get(field) if isinstance(cells.get(field), dict) else {}
-            if str(cell.get("support_status") or "") != "grounded" or bool(cell.get("manual_override")):
+
+    def append_cell(row: dict[str, Any], field: str, target: list[dict[str, Any]]) -> bool:
+        cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
+        cell = cells.get(field) if isinstance(cells.get(field), dict) else {}
+        if str(cell.get("support_status") or "") != "grounded" or bool(cell.get("manual_override")):
+            return False
+        for evidence_id in list(cell.get("evidence_ids") or []):
+            key = str(evidence_id or "")
+            item = evidence_by_id.get(key)
+            if not item or key in seen_evidence:
                 continue
-            for evidence_id in list(cell.get("evidence_ids") or []):
-                key = str(evidence_id or "")
-                item = evidence_by_id.get(key)
-                if not item or key in seen_evidence:
-                    continue
-                seen_evidence.add(key)
-                selected.append(item)
+            seen_evidence.add(key)
+            target.append(item)
+            return True
+        return False
+
+    # Dense comparison audits can otherwise consume the entire hit budget and
+    # silently remove a less-comparable matrix source from the generated brief.
+    # Reserve one ordinary grounded cell per active row before spending the
+    # remaining budget on verified comparison observations.
+    for row in rows:
+        if str(row.get("source_status") or "active") != "active":
+            continue
+        for field in MATRIX_CELL_FIELDS:
+            if append_cell(row, field, reserved):
                 break
-            if len(selected) >= cell_limit:
-                break
-        if len(selected) >= cell_limit:
+        if len(reserved) >= hit_limit:
             break
+
+    comparison_budget = max(0, hit_limit - len(reserved))
+    selected_comparisons = comparison_hits[:comparison_budget]
+    extra_budget = max(0, hit_limit - len(reserved) - len(selected_comparisons))
+    for field in MATRIX_CELL_FIELDS if extra_budget > 0 else ():
+        for row in rows:
+            append_cell(row, field, extras)
+            if len(extras) >= extra_budget:
+                break
+        if len(extras) >= extra_budget:
+            break
+    selected = [*reserved, *extras[:extra_budget]]
     hits: list[dict[str, Any]] = []
-    for item in selected[: max(1, int(limit))]:
+    for item in selected:
         hits.append(
             {
                 "id": str(item.get("id") or ""),
@@ -2054,7 +2076,7 @@ def evidence_matrix_hits(record: dict[str, Any], *, limit: int = 20) -> list[dic
                 },
             }
         )
-    return [*hits, *comparison_hits][: max(1, int(limit))]
+    return [*hits, *selected_comparisons][:hit_limit]
 
 
 def _cell_value(row: dict[str, Any], field: str) -> str:

@@ -132,6 +132,9 @@ jobs:
       - name: Check project research status regression fixture
         run: python tools/evidence_matrix/run_project_status_eval.py --dry-run
 
+      - name: Check end-to-end project research journey fixture
+        run: python tools/evidence_matrix/run_project_research_journey_eval.py --dry-run
+
       - name: Check reviewed real-paper answer quality replay
         run: python tools/research_qa/run_research_qa_eval.py --replay docs/research_qa_grounded_replay_v1.jsonl --fail-on-quality
 

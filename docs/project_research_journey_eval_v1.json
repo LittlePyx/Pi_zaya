@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "description": "Reviewed three-paper end-to-end project journey. Every transition uses the public API, real indexed Markdown, strict same-source evidence, human-confirmed comparison audits, a verified matrix-backed brief, and an export check.",
+  "project_name": "Reviewed 3D computational imaging journey",
+  "matrix_title": "Three-paper 3D imaging evidence matrix",
+  "matrix_objective": "Compare 3D reconstruction methods, acquisition protocols, reported metrics, results, and limitations.",
+  "brief_title": "Audited 3D computational imaging brief",
+  "brief_objective": "Compare the selected 3D computational imaging papers using only verified matrix evidence.",
+  "sources": {
+    "scigs": "db/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image/ICIP-2025-SCIGS- 3D Gaussians Splatting from A Snapshot Compressive Image.en.md",
+    "scinerf": "db/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image/CVPR-2024-SCINeRF- Neural Radiance Fields from a Snapshot Compressive Image.en.md",
+    "video3d": "db/Journal of Optics-2016-3D single-pixel video/Journal of Optics-2016-3D single-pixel video.en.md"
+  },
+  "allowed_deferred_gaps": [
+    {
+      "source_key": "scigs",
+      "field": "limitation",
+      "reason": "The reviewed source does not expose a strict same-source limitation sentence; preserve the matrix cell as intentionally unavailable."
+    },
+    {
+      "source_key": "video3d",
+      "field": "limitation",
+      "reason": "The reviewed source does not expose a strict same-source limitation sentence; preserve the matrix cell as intentionally unavailable."
+    }
+  ],
+  "expected_actions": [
+    "add_project_sources",
+    "create_evidence_matrix",
+    "fill_evidence_gaps",
+    "review_comparison_candidates",
+    "create_research_brief",
+    "export_current_brief"
+  ],
+  "expected_matrix_rows": 3,
+  "expected_comparison_candidates": 18,
+  "minimum_matrix_evidence": 13,
+  "minimum_brief_evidence": 20
+}

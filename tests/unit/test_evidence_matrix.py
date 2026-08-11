@@ -341,3 +341,75 @@ def test_verified_comparison_adds_source_specific_brief_hits_without_adding_a_cr
     assert any("SCIGS(ours) = .0423" in hit["text"] for hit in hits)
     assert any("ours = .0445" in hit["text"] for hit in hits)
     assert all("more favorable" not in hit["text"] for hit in hits)
+
+
+def test_matrix_brief_hits_reserve_every_source_before_dense_comparisons() -> None:
+    rows = []
+    evidence = []
+    for index in range(3):
+        evidence_id = f"cell-{index}"
+        source_path = f"F:/papers/source-{index}.md"
+        rows.append(
+            {
+                "id": f"row-{index}",
+                "source_path": source_path,
+                "source_name": f"Paper {index}",
+                "source_status": "active",
+                "cells": {
+                    "method": {
+                        "support_status": "grounded",
+                        "manual_override": False,
+                        "evidence_ids": [evidence_id],
+                    }
+                },
+            }
+        )
+        evidence.append(
+            {
+                "id": evidence_id,
+                "field": "method",
+                "source_path": source_path,
+                "source_name": f"Paper {index}",
+                "evidence_quote": f"Paper {index} reports its own grounded method.",
+            }
+        )
+    comparison_audits = []
+    for index in range(12):
+        comparison_audits.append(
+            {
+                "id": f"comparison-{index}",
+                "status": "verified",
+                "metric_direction": "lower",
+                "input": {
+                    "dimensions": [
+                        {"dimension": "dataset", "left_value": f"Dataset {index}", "right_value": f"Dataset {index}"},
+                        {"dimension": "metric", "left_value": "LPIPS", "right_value": "LPIPS"},
+                    ],
+                    "left_target": "Paper 0",
+                    "right_target": "Paper 1",
+                    "left_result": ".10",
+                    "right_result": ".20",
+                },
+                "evidence": [
+                    {"id": f"left-{index}", "source_path": "F:/papers/source-0.md", "source_name": "Paper 0"},
+                    {"id": f"right-{index}", "source_path": "F:/papers/source-1.md", "source_name": "Paper 1"},
+                ],
+                "evidence_bindings": {
+                    "left": {"result": f"left-{index}"},
+                    "right": {"result": f"right-{index}"},
+                },
+            }
+        )
+
+    hits = evidence_matrix_hits(
+        {"rows": rows, "evidence": evidence, "comparison_audits": comparison_audits},
+        limit=20,
+    )
+
+    assert len(hits) == 20
+    assert {hit["meta"]["source_path"] for hit in hits[:3]} == {
+        "F:/papers/source-0.md",
+        "F:/papers/source-1.md",
+        "F:/papers/source-2.md",
+    }
+    assert hits[2]["meta"]["matrix_field"] == "method"
