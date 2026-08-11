@@ -70,6 +70,13 @@ def _load_fixture(path: Path) -> dict[str, Any]:
         raise ValueError("expected matrix rows must cover every reviewed source")
     if int(payload.get("expected_comparison_candidates") or 0) <= 0:
         raise ValueError("expected comparison candidate coverage must be positive")
+    review_groups = int(payload.get("expected_review_groups") or 0)
+    confirmation_prompts = int(payload.get("expected_confirmation_prompts_before_reuse") or 0)
+    confirmation_signatures = int(payload.get("expected_confirmation_signatures_after_reuse") or 0)
+    if review_groups <= 0:
+        raise ValueError("expected review group coverage must be positive")
+    if confirmation_prompts <= 0 or not 0 < confirmation_signatures <= confirmation_prompts:
+        raise ValueError("confirmation reuse expectations must preserve at least one reviewed signature")
     if int(payload.get("minimum_matrix_evidence") or 0) <= 0:
         raise ValueError("minimum matrix evidence must be positive")
     if int(payload.get("minimum_brief_evidence") or 0) <= 0:
@@ -109,6 +116,48 @@ def _locator_present(item: dict[str, Any]) -> bool:
         or item.get("blockId")
         or item.get("anchor_id")
         or item.get("anchorId")
+    )
+
+
+def _review_value(value: object) -> str:
+    return " ".join(str(value or "").split()).casefold()
+
+
+def _candidate_dimension(candidate: dict[str, Any], name: str) -> dict[str, Any]:
+    return next(
+        (
+            item
+            for item in _records(candidate.get("dimensions"))
+            if str(item.get("dimension") or "") == name
+        ),
+        {},
+    )
+
+
+def _candidate_review_group_signature(candidate: dict[str, Any]) -> tuple[str, ...]:
+    task = _candidate_dimension(candidate, "task")
+    dataset = _candidate_dimension(candidate, "dataset")
+    return (
+        str(candidate.get("matrix_id") or ""),
+        str(candidate.get("left_row_id") or ""),
+        str(candidate.get("right_row_id") or ""),
+        _review_value(task.get("left_value")),
+        _review_value(task.get("right_value")),
+        _review_value(dataset.get("left_value")),
+        _review_value(dataset.get("right_value")),
+    )
+
+
+def _candidate_confirmation_signature(
+    candidate: dict[str, Any],
+    dimension_name: str,
+) -> tuple[str, ...]:
+    dimension = _candidate_dimension(candidate, dimension_name)
+    return (
+        *_candidate_review_group_signature(candidate),
+        dimension_name,
+        _review_value(dimension.get("left_value")),
+        _review_value(dimension.get("right_value")),
     )
 
 
@@ -345,6 +394,9 @@ def run_eval(*, fixture_path: Path, max_tokens: int) -> dict[str, Any]:
 
             audited: list[dict[str, Any]] = []
             initial_candidate_count: int | None = None
+            review_group_count = 0
+            confirmation_prompt_count = 0
+            confirmation_signature_count = 0
             for _index in range(100):
                 candidate_result = journey.request(
                     "scan_comparison_candidates",
@@ -354,6 +406,19 @@ def run_eval(*, fixture_path: Path, max_tokens: int) -> dict[str, Any]:
                 candidates = _records(candidate_result.get("items"))
                 if initial_candidate_count is None:
                     initial_candidate_count = len(candidates)
+                    review_group_count = len({_candidate_review_group_signature(item) for item in candidates})
+                    confirmation_prompt_count = sum(
+                        len(list(item.get("required_confirmations") or []))
+                        for item in candidates
+                    )
+                    confirmation_signature_count = len(
+                        {
+                            _candidate_confirmation_signature(item, str(dimension or ""))
+                            for item in candidates
+                            for dimension in list(item.get("required_confirmations") or [])
+                            if str(dimension or "")
+                        }
+                    )
                 if not candidates:
                     break
                 candidate = candidates[0]
@@ -430,6 +495,12 @@ def run_eval(*, fixture_path: Path, max_tokens: int) -> dict[str, Any]:
                 ),
                 "expected_candidate_coverage": int(initial_candidate_count or 0)
                 == int(fixture.get("expected_comparison_candidates") or 0),
+                "expected_review_group_coverage": review_group_count
+                == int(fixture.get("expected_review_groups") or 0),
+                "conservative_confirmation_reuse": confirmation_prompt_count
+                == int(fixture.get("expected_confirmation_prompts_before_reuse") or 0)
+                and confirmation_signature_count
+                == int(fixture.get("expected_confirmation_signatures_after_reuse") or 0),
                 "all_candidates_strictly_audited": len(audited) == int(initial_candidate_count or 0)
                 and all(str(item.get("status") or "") == "verified" for item in audited),
                 "all_comparison_evidence_exact_and_locatable": bool(audited)
@@ -466,6 +537,15 @@ def run_eval(*, fixture_path: Path, max_tokens: int) -> dict[str, Any]:
                 "comparisons": {
                     "initial_candidate_count": int(initial_candidate_count or 0),
                     "audited_count": len(audited),
+                    "review_efficiency": {
+                        "group_count": review_group_count,
+                        "confirmation_prompts_before_reuse": confirmation_prompt_count,
+                        "confirmation_signatures_after_reuse": confirmation_signature_count,
+                        "confirmation_actions_saved": max(
+                            0,
+                            confirmation_prompt_count - confirmation_signature_count,
+                        ),
+                    },
                     "items": audited,
                 },
                 "brief": {
@@ -511,6 +591,10 @@ def main() -> int:
                     "source_count": len(dict(fixture.get("sources") or {})),
                     "expected_actions": list(fixture.get("expected_actions") or []),
                     "expected_comparison_candidates": int(fixture.get("expected_comparison_candidates") or 0),
+                    "expected_review_groups": int(fixture.get("expected_review_groups") or 0),
+                    "expected_confirmation_signatures_after_reuse": int(
+                        fixture.get("expected_confirmation_signatures_after_reuse") or 0
+                    ),
                 },
                 ensure_ascii=False,
                 indent=2,

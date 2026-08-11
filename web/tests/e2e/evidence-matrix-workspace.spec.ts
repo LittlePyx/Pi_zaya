@@ -67,7 +67,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installBackend(page: Page) {
+async function installBackend(page: Page, options: { groupedCandidates?: boolean } = {}) {
   let matrix: Matrix | null = null
   let watchEvent: Record<string, unknown> | null = null
   let generatedPayload: Record<string, unknown> | null = null
@@ -232,12 +232,55 @@ async function installBackend(page: Page) {
       evidence_quote: 'Cozy2room LPIPS (lower is better): ours = .0445',
     }],
   }
+  const comparisonCandidates = options.groupedCandidates ? [
+    comparisonCandidate,
+    {
+      ...comparisonCandidate,
+      id: 'candidate-comparison-2',
+      dimensions: comparisonCandidate.dimensions.map((dimension) => (
+        dimension.dimension === 'metric'
+          ? { ...dimension, left_value: 'PSNR', right_value: 'PSNR' }
+          : { ...dimension }
+      )),
+      left_result: '31.20',
+      right_result: '30.80',
+      evidence: comparisonCandidate.evidence.map((item, index) => ({
+        ...item,
+        chunk_id: `${item.chunk_id}-psnr`,
+        evidence_quote: index === 0
+          ? 'Cozy2room PSNR (higher is better): SCIGS(ours) = 31.20'
+          : 'Cozy2room PSNR (higher is better): ours = 30.80',
+      })),
+    },
+    {
+      ...comparisonCandidate,
+      id: 'candidate-comparison-3',
+      dimensions: comparisonCandidate.dimensions.map((dimension) => {
+        if (dimension.dimension === 'dataset') {
+          return { ...dimension, left_value: 'Factory', right_value: 'Factory' }
+        }
+        if (dimension.dimension === 'metric') {
+          return { ...dimension, left_value: 'LPIPS', right_value: 'LPIPS' }
+        }
+        return { ...dimension }
+      }),
+      left_result: '.0520',
+      right_result: '.0510',
+      evidence: comparisonCandidate.evidence.map((item, index) => ({
+        ...item,
+        chunk_id: `${item.chunk_id}-factory`,
+        evidence_quote: index === 0
+          ? 'Factory LPIPS (lower is better): SCIGS(ours) = .0520'
+          : 'Factory LPIPS (lower is better): ours = .0510',
+      })),
+    },
+  ] : [comparisonCandidate]
   await page.route(
     `**/api/projects/${PROJECT.id}/evidence-matrices/matrix-1/comparison-candidates?*`,
     async (route) => {
       await fulfillJson(route, {
-        items: matrix?.comparison_audits.length ? [] : [comparisonCandidate],
-        candidate_count: matrix?.comparison_audits.length ? 0 : 1,
+        items: matrix?.comparison_audits.length ? [] : comparisonCandidates,
+        candidate_count: matrix?.comparison_audits.length ? 0 : comparisonCandidates.length,
         matrix_id: 'matrix-1',
         matrix_revision: matrix?.revision || 1,
         examined_row_pairs: 1,
@@ -251,6 +294,17 @@ async function installBackend(page: Page) {
     async (route) => {
       if (!matrix) {
         await fulfillJson(route, { detail: 'not found' }, 404)
+        return
+      }
+      const auditRequest = route.request().postDataJSON() as {
+        expected_revision?: number
+        confirmed_mappings?: string[]
+      }
+      if (
+        Number(auditRequest.expected_revision || 0) !== matrix.revision
+        || !auditRequest.confirmed_mappings?.includes('evaluation_protocol')
+      ) {
+        await fulfillJson(route, { detail: 'strict candidate confirmation contract failed' }, 400)
         return
       }
       const comparisonAudit = {
@@ -577,6 +631,7 @@ test('evidence-bound comparison candidate requires mapping review before strict 
   await page.getByRole('button', { name: 'New matrix' }).click()
   await page.getByTestId('evidence-matrix-title').fill('Candidate comparison matrix')
   await page.getByTestId('evidence-matrix-generate').click()
+  await expect(page.getByTestId('project-evidence-matrix-row')).toHaveCount(2)
 
   await page.getByRole('tab', { name: /Comparisons/ }).click()
   await page.getByTestId('evidence-comparison-find-candidates').click()
@@ -601,4 +656,44 @@ test('evidence-bound comparison candidate requires mapping review before strict 
   await expect(page.getByTestId('evidence-comparison-result')).toContainText('more favorable reported value')
   await expect(page.getByTestId('evidence-comparison-candidate')).not.toBeVisible()
   await expect(page.getByTestId('evidence-comparison-candidate-remaining')).toContainText('0 comparison candidates')
+})
+
+test('comparison review groups datasets and reuses only an exact in-group mapping confirmation', async ({ page }) => {
+  await installBackend(page, { groupedCandidates: true })
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
+  await page.getByRole('button', { name: 'New matrix' }).click()
+  await page.getByTestId('evidence-matrix-title').fill('Grouped comparison matrix')
+  await page.getByTestId('evidence-matrix-generate').click()
+  await expect(page.getByTestId('project-evidence-matrix-row')).toHaveCount(2)
+  await page.getByRole('tab', { name: /Comparisons/ }).click()
+  await page.getByTestId('evidence-comparison-find-candidates').click()
+
+  await expect(page.getByTestId('evidence-comparison-review-group')).toHaveCount(2)
+  await expect(page.getByTestId('evidence-comparison-candidate')).toHaveCount(1)
+  await expect(page.getByText('Candidate 1 of 3')).toBeVisible()
+  await expect(page.getByTestId('evidence-comparison-shared-confirmation')).toContainText('2 metrics')
+
+  const firstCandidate = page.getByTestId('evidence-comparison-candidate')
+  await firstCandidate.locator('input[type="checkbox"]').check()
+  await expect(firstCandidate.getByTestId('evidence-comparison-audit-candidate')).toBeEnabled()
+
+  await firstCandidate.getByTestId('evidence-comparison-audit-candidate').click()
+  await page.getByRole('button', { name: 'Confirm and audit comparison', exact: true }).last().click()
+  await expect(page.getByTestId('evidence-comparison-candidate-remaining')).toContainText('2 comparison candidates')
+  const secondCandidate = page.getByTestId('evidence-comparison-candidate')
+  await expect(secondCandidate).toContainText('PSNR')
+  await expect(secondCandidate.locator('input[type="checkbox"]')).toBeChecked()
+  await expect(secondCandidate.getByTestId('evidence-comparison-audit-candidate')).toBeEnabled()
+
+  await page.getByTestId('evidence-comparison-review-next').click()
+  const thirdCandidate = page.getByTestId('evidence-comparison-candidate')
+  await expect(thirdCandidate).toContainText('Factory')
+  await expect(thirdCandidate.locator('input[type="checkbox"]')).not.toBeChecked()
+  await expect(thirdCandidate.getByTestId('evidence-comparison-audit-candidate')).toBeDisabled()
+
+  await page.locator('.kb-evidence-comparison-review-current').click({ position: { x: 4, y: 4 } })
+  await page.keyboard.press('ArrowLeft')
+  await expect(page.getByTestId('evidence-comparison-candidate')).toContainText('PSNR')
+  await expect(page.getByTestId('evidence-comparison-candidate').locator('input[type="checkbox"]')).toBeChecked()
 })

@@ -33,6 +33,9 @@
   ],
   "expected_matrix_rows": 3,
   "expected_comparison_candidates": 18,
+  "expected_review_groups": 6,
+  "expected_confirmation_prompts_before_reuse": 18,
+  "expected_confirmation_signatures_after_reuse": 6,
   "minimum_matrix_evidence": 13,
   "minimum_brief_evidence": 20
 }

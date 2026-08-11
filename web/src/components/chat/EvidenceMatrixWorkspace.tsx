@@ -100,6 +100,67 @@ function rowIncomplete(row: ProjectEvidenceMatrixRow): boolean {
   return CELL_FIELDS.some((field) => !cellValue(row, field).trim())
 }
 
+function normalizedReviewValue(value: unknown): string {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase()
+}
+
+function candidateDimension(
+  candidate: EvidenceComparisonCandidate,
+  name: EvidenceComparisonDimensionName,
+) {
+  return candidate.dimensions.find((item) => item.dimension === name)
+}
+
+function candidateReviewGroupKey(candidate: EvidenceComparisonCandidate): string {
+  const task = candidateDimension(candidate, 'task')
+  const dataset = candidateDimension(candidate, 'dataset')
+  return [
+    candidate.matrix_id,
+    candidate.left_row_id,
+    candidate.right_row_id,
+    normalizedReviewValue(task?.left_value),
+    normalizedReviewValue(task?.right_value),
+    normalizedReviewValue(dataset?.left_value),
+    normalizedReviewValue(dataset?.right_value),
+  ].join('\u001f')
+}
+
+function candidateConfirmationSignature(
+  candidate: EvidenceComparisonCandidate,
+  dimensionName: EvidenceComparisonDimensionName,
+): string {
+  const dimension = candidateDimension(candidate, dimensionName)
+  return [
+    candidateReviewGroupKey(candidate),
+    dimensionName,
+    normalizedReviewValue(dimension?.left_value),
+    normalizedReviewValue(dimension?.right_value),
+  ].join('\u001f')
+}
+
+function candidateMetric(candidate: EvidenceComparisonCandidate): string {
+  const metric = candidateDimension(candidate, 'metric')
+  const left = String(metric?.left_value || '').trim()
+  const right = String(metric?.right_value || '').trim()
+  return left === right || !right ? left : `${left} / ${right}`
+}
+
+function candidateDataset(candidate: EvidenceComparisonCandidate): string {
+  const dataset = candidateDimension(candidate, 'dataset')
+  const left = String(dataset?.left_value || '').trim()
+  const right = String(dataset?.right_value || '').trim()
+  return left === right || !right ? left : `${left} / ${right}`
+}
+
+function groupComparisonCandidates(candidates: EvidenceComparisonCandidate[]) {
+  const groups = new Map<string, EvidenceComparisonCandidate[]>()
+  for (const candidate of candidates) {
+    const key = candidateReviewGroupKey(candidate)
+    groups.set(key, [...(groups.get(key) || []), candidate])
+  }
+  return [...groups.entries()].map(([key, items]) => ({ key, items }))
+}
+
 export function EvidenceMatrixWorkspace({
   open,
   projectId,
@@ -143,7 +204,8 @@ export function EvidenceMatrixWorkspace({
   const [comparisonCandidates, setComparisonCandidates] = useState<EvidenceComparisonCandidate[]>([])
   const [findingComparisonCandidates, setFindingComparisonCandidates] = useState(false)
   const [auditingCandidateId, setAuditingCandidateId] = useState('')
-  const [candidateConfirmations, setCandidateConfirmations] = useState<Record<string, EvidenceComparisonDimensionName[]>>({})
+  const [activeCandidateId, setActiveCandidateId] = useState('')
+  const [candidateConfirmationSignatures, setCandidateConfirmationSignatures] = useState<string[]>([])
   const [candidateScanDetail, setCandidateScanDetail] = useState<{ pairs: number; observations: number; ms: number } | null>(null)
   const [lastCandidateAudit, setLastCandidateAudit] = useState<EvidenceComparisonCandidateAuditResult | null>(null)
 
@@ -162,7 +224,8 @@ export function EvidenceMatrixWorkspace({
     setLeftResult('')
     setRightResult('')
     setComparisonCandidates([])
-    setCandidateConfirmations({})
+    setActiveCandidateId('')
+    setCandidateConfirmationSignatures([])
     setCandidateScanDetail(null)
     setLastCandidateAudit(null)
   }, [])
@@ -516,7 +579,8 @@ export function EvidenceMatrixWorkspace({
     try {
       const result = await chatApi.listEvidenceComparisonCandidates(projectId, active.id, 50)
       setComparisonCandidates(result.items || [])
-      setCandidateConfirmations({})
+      setActiveCandidateId(String(result.items?.[0]?.id || ''))
+      setCandidateConfirmationSignatures([])
       setLastCandidateAudit(null)
       setCandidateScanDetail({
         pairs: Number(result.examined_row_pairs || 0),
@@ -536,21 +600,25 @@ export function EvidenceMatrixWorkspace({
   }
 
   const toggleCandidateConfirmation = (
-    candidateId: string,
+    candidate: EvidenceComparisonCandidate,
     dimension: EvidenceComparisonDimensionName,
     checked: boolean,
   ) => {
-    setCandidateConfirmations((current) => {
-      const values = new Set(current[candidateId] || [])
-      if (checked) values.add(dimension)
-      else values.delete(dimension)
-      return { ...current, [candidateId]: [...values] }
+    const signature = candidateConfirmationSignature(candidate, dimension)
+    setCandidateConfirmationSignatures((current) => {
+      const values = new Set(current)
+      if (checked) values.add(signature)
+      else values.delete(signature)
+      return [...values]
     })
   }
 
   const auditComparisonCandidate = async (candidate: EvidenceComparisonCandidate) => {
     if (!active) return
-    const confirmed = candidateConfirmations[candidate.id] || []
+    const confirmedSignatures = new Set(candidateConfirmationSignatures)
+    const confirmed = candidate.required_confirmations.filter((dimension) => (
+      confirmedSignatures.has(candidateConfirmationSignature(candidate, dimension))
+    ))
     const missing = candidate.required_confirmations.filter((dimension) => !confirmed.includes(dimension))
     if (missing.length > 0) {
       message.warning(S.evidence_matrix_candidate_confirm_all)
@@ -558,9 +626,10 @@ export function EvidenceMatrixWorkspace({
     }
     setAuditingCandidateId(candidate.id)
     try {
+      const currentIndex = comparisonCandidates.findIndex((item) => item.id === candidate.id)
       const remainingCandidates = comparisonCandidates.filter((item) => item.id !== candidate.id)
-      const remainingConfirmations = { ...candidateConfirmations }
-      delete remainingConfirmations[candidate.id]
+      const nextCandidate = remainingCandidates[Math.min(Math.max(0, currentIndex), remainingCandidates.length - 1)]
+      const completedConfirmationSignatures = [...candidateConfirmationSignatures]
       const completedScanDetail = candidateScanDetail
       const result = await chatApi.auditEvidenceComparisonCandidate(
         projectId,
@@ -571,7 +640,8 @@ export function EvidenceMatrixWorkspace({
       )
       await refreshListsAfterRecord(result.matrix)
       setComparisonCandidates(remainingCandidates)
-      setCandidateConfirmations(remainingConfirmations)
+      setActiveCandidateId(String(nextCandidate?.id || ''))
+      setCandidateConfirmationSignatures(completedConfirmationSignatures)
       setCandidateScanDetail(completedScanDetail)
       setLastCandidateAudit(result)
       setTab('comparisons')
@@ -603,6 +673,49 @@ export function EvidenceMatrixWorkspace({
   const quality = active?.quality || {}
   const comparisonFlags = active?.comparison_flags || []
   const comparisonAudits = active?.comparison_audits || []
+  const candidateConfirmationSignatureSet = useMemo(
+    () => new Set(candidateConfirmationSignatures),
+    [candidateConfirmationSignatures],
+  )
+  const candidateReviewGroups = useMemo(
+    () => groupComparisonCandidates(comparisonCandidates),
+    [comparisonCandidates],
+  )
+  const activeCandidate = useMemo(
+    () => comparisonCandidates.find((candidate) => candidate.id === activeCandidateId) || comparisonCandidates[0],
+    [activeCandidateId, comparisonCandidates],
+  )
+  const activeCandidateIndex = activeCandidate
+    ? comparisonCandidates.findIndex((candidate) => candidate.id === activeCandidate.id)
+    : -1
+  const activeReviewGroupKey = activeCandidate ? candidateReviewGroupKey(activeCandidate) : ''
+  const selectRelativeCandidate = useCallback((offset: number) => {
+    if (!activeCandidate || comparisonCandidates.length <= 1) return
+    const index = comparisonCandidates.findIndex((candidate) => candidate.id === activeCandidate.id)
+    const nextIndex = Math.min(comparisonCandidates.length - 1, Math.max(0, index + offset))
+    setActiveCandidateId(comparisonCandidates[nextIndex]?.id || '')
+  }, [activeCandidate, comparisonCandidates])
+
+  useEffect(() => {
+    if (!open || tab !== 'comparisons' || !activeCandidate || auditingCandidateId) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      const target = event.target
+      if (target instanceof HTMLElement && (
+        target.isContentEditable
+        || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(target.tagName)
+      )) return
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault()
+        selectRelativeCandidate(-1)
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault()
+        selectRelativeCandidate(1)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [activeCandidate, auditingCandidateId, open, selectRelativeCandidate, tab])
+
   const fieldLabels: Record<EvidenceMatrixCellField, string> = {
     method: S.evidence_matrix_col_method,
     dataset_or_experiment: S.evidence_matrix_col_experiment,
@@ -907,100 +1020,171 @@ export function EvidenceMatrixWorkspace({
                         />
                       ) : null}
                       {comparisonCandidates.length > 0 ? (
-                        <div className="kb-evidence-comparison-candidates" data-testid="evidence-comparison-candidates">
-                          {comparisonCandidates.map((candidate) => {
-                            const confirmed = candidateConfirmations[candidate.id] || []
+                        <div className="kb-evidence-comparison-review-workbench" data-testid="evidence-comparison-candidates">
+                          <aside className="kb-evidence-comparison-review-groups" data-testid="evidence-comparison-review-groups">
+                            <div>
+                              <strong>{S.evidence_matrix_candidate_workbench_title}</strong>
+                              <small>{S.evidence_matrix_candidate_group_count.replace('{n}', String(candidateReviewGroups.length))}</small>
+                            </div>
+                            {candidateReviewGroups.map((group) => {
+                              const first = group.items[0]
+                              const metrics = [...new Set(group.items.map(candidateMetric).filter(Boolean))].join(' · ')
+                              return (
+                                <button
+                                  key={group.key}
+                                  type="button"
+                                  className={activeReviewGroupKey === group.key ? 'is-active' : ''}
+                                  onClick={() => setActiveCandidateId(first.id)}
+                                  data-testid="evidence-comparison-review-group"
+                                >
+                                  <span>{first.left_source_name} / {first.right_source_name}</span>
+                                  <strong>{candidateDataset(first)}</strong>
+                                  <small>{metrics} · {group.items.length}</small>
+                                </button>
+                              )
+                            })}
+                          </aside>
+                          {activeCandidate ? (() => {
+                            const candidate = activeCandidate
+                            const confirmed = candidate.required_confirmations.filter((dimension) => (
+                              candidateConfirmationSignatureSet.has(
+                                candidateConfirmationSignature(candidate, dimension),
+                              )
+                            ))
                             const missingConfirmation = candidate.required_confirmations.some(
                               (dimension) => !confirmed.includes(dimension),
                             )
                             return (
-                              <article key={candidate.id} data-testid="evidence-comparison-candidate">
-                                <div className="kb-evidence-comparison-card-head">
+                              <section className="kb-evidence-comparison-review-current">
+                                <div className="kb-evidence-comparison-review-progress">
                                   <div>
-                                    <Tag color={candidate.required_confirmations.length > 0 ? 'gold' : 'blue'}>
-                                      {candidate.required_confirmations.length > 0
-                                        ? S.evidence_matrix_candidate_review_required
-                                        : S.evidence_matrix_candidate_ready}
-                                    </Tag>
-                                    <strong>{candidate.left_source_name} / {candidate.right_source_name}</strong>
+                                    <strong>
+                                      {S.evidence_matrix_candidate_review_progress
+                                        .replace('{current}', String(activeCandidateIndex + 1))
+                                        .replace('{total}', String(comparisonCandidates.length))}
+                                    </strong>
+                                    <small>{S.evidence_matrix_candidate_keyboard_hint}</small>
                                   </div>
-                                  <span>
-                                    {candidate.left_result} / {candidate.right_result}
-                                  </span>
-                                </div>
-                                <div className="kb-evidence-comparison-candidate-contract">
-                                  {candidate.dimensions.map((dimension) => {
-                                    const requiresConfirmation = candidate.required_confirmations.includes(dimension.dimension)
-                                    return (
-                                      <div key={dimension.dimension}>
-                                        <strong>{comparisonDimensionLabels[dimension.dimension]}</strong>
-                                        <span>{dimension.left_value}</span>
-                                        <span>{dimension.right_value}</span>
-                                        {requiresConfirmation ? (
-                                          <Checkbox
-                                            checked={confirmed.includes(dimension.dimension)}
-                                            onChange={(event) => toggleCandidateConfirmation(
-                                              candidate.id,
-                                              dimension.dimension,
-                                              event.target.checked,
-                                            )}
-                                          >
-                                            {S.evidence_matrix_candidate_confirm_mapping}
-                                          </Checkbox>
-                                        ) : (
-                                          <Tag color="green">
-                                            {dimension.match_type === 'controlled_alias'
-                                              ? S.evidence_matrix_candidate_controlled_match
-                                              : S.evidence_matrix_candidate_exact_match}
-                                          </Tag>
-                                        )}
-                                      </div>
-                                    )
-                                  })}
                                   <div>
-                                    <strong>{S.evidence_matrix_candidate_target_result}</strong>
-                                    <span>{candidate.left_target} = {candidate.left_result}</span>
-                                    <span>{candidate.right_target} = {candidate.right_result}</span>
-                                    <Tag>{S.evidence_matrix_comparison_mode_ranking}</Tag>
-                                  </div>
-                                </div>
-                                <div className="kb-evidence-comparison-evidence">
-                                  {candidate.evidence.map((item, index) => (
-                                    <button
-                                      key={String(item.chunk_id || index)}
-                                      type="button"
-                                      onClick={() => onOpenEvidence?.(item)}
-                                      disabled={!onOpenEvidence}
+                                    <Button
+                                      size="small"
+                                      disabled={activeCandidateIndex <= 0}
+                                      onClick={() => selectRelativeCandidate(-1)}
+                                      data-testid="evidence-comparison-review-previous"
                                     >
-                                      <strong>{String(item.source_name || item.source_path || S.default_source_fallback)}</strong>
-                                      <span>{String(item.heading_path || item.location_label || '')}</span>
-                                      <p>{String(item.evidence_quote || '')}</p>
-                                    </button>
-                                  ))}
+                                      {S.evidence_matrix_candidate_previous}
+                                    </Button>
+                                    <Button
+                                      size="small"
+                                      disabled={activeCandidateIndex >= comparisonCandidates.length - 1}
+                                      onClick={() => selectRelativeCandidate(1)}
+                                      data-testid="evidence-comparison-review-next"
+                                    >
+                                      {S.evidence_matrix_candidate_next}
+                                    </Button>
+                                  </div>
                                 </div>
-                                <Popconfirm
-                                  title={S.evidence_matrix_candidate_confirm_title}
-                                  description={S.evidence_matrix_candidate_confirm_detail}
-                                  onConfirm={() => { void auditComparisonCandidate(candidate) }}
-                                  okText={S.evidence_matrix_candidate_audit}
-                                  cancelText={S.confirm_cancel}
-                                  disabled={missingConfirmation}
-                                >
-                                  <Button
-                                    type="primary"
-                                    icon={<CheckCircleOutlined />}
-                                    loading={auditingCandidateId === candidate.id}
+                                <article key={candidate.id} data-testid="evidence-comparison-candidate">
+                                  <div className="kb-evidence-comparison-card-head">
+                                    <div>
+                                      <Tag color={candidate.required_confirmations.length > 0 ? 'gold' : 'blue'}>
+                                        {candidate.required_confirmations.length > 0
+                                          ? S.evidence_matrix_candidate_review_required
+                                          : S.evidence_matrix_candidate_ready}
+                                      </Tag>
+                                      <strong>{candidate.left_source_name} / {candidate.right_source_name}</strong>
+                                      <Tag>{candidateMetric(candidate)}</Tag>
+                                    </div>
+                                    <span>
+                                      {candidate.left_result} / {candidate.right_result}
+                                    </span>
+                                  </div>
+                                  <div className="kb-evidence-comparison-candidate-contract">
+                                    {candidate.dimensions.map((dimension) => {
+                                      const requiresConfirmation = candidate.required_confirmations.includes(dimension.dimension)
+                                      const signature = candidateConfirmationSignature(candidate, dimension.dimension)
+                                      const sharedCandidateCount = requiresConfirmation
+                                        ? comparisonCandidates.filter((item) => (
+                                            item.required_confirmations.includes(dimension.dimension)
+                                            && candidateConfirmationSignature(item, dimension.dimension) === signature
+                                          )).length
+                                        : 0
+                                      return (
+                                        <div key={dimension.dimension}>
+                                          <strong>{comparisonDimensionLabels[dimension.dimension]}</strong>
+                                          <span>{dimension.left_value}</span>
+                                          <span>{dimension.right_value}</span>
+                                          {requiresConfirmation ? (
+                                            <Checkbox
+                                              checked={confirmed.includes(dimension.dimension)}
+                                              onChange={(event) => toggleCandidateConfirmation(
+                                                candidate,
+                                                dimension.dimension,
+                                                event.target.checked,
+                                              )}
+                                            >
+                                              {S.evidence_matrix_candidate_confirm_mapping}
+                                              {sharedCandidateCount > 1 ? (
+                                                <small data-testid="evidence-comparison-shared-confirmation">
+                                                  {S.evidence_matrix_candidate_shared_mapping.replace('{n}', String(sharedCandidateCount))}
+                                                </small>
+                                              ) : null}
+                                            </Checkbox>
+                                          ) : (
+                                            <Tag color="green">
+                                              {dimension.match_type === 'controlled_alias'
+                                                ? S.evidence_matrix_candidate_controlled_match
+                                                : S.evidence_matrix_candidate_exact_match}
+                                            </Tag>
+                                          )}
+                                        </div>
+                                      )
+                                    })}
+                                    <div>
+                                      <strong>{S.evidence_matrix_candidate_target_result}</strong>
+                                      <span>{candidate.left_target} = {candidate.left_result}</span>
+                                      <span>{candidate.right_target} = {candidate.right_result}</span>
+                                      <Tag>{S.evidence_matrix_comparison_mode_ranking}</Tag>
+                                    </div>
+                                  </div>
+                                  <div className="kb-evidence-comparison-evidence">
+                                    {candidate.evidence.map((item, index) => (
+                                      <button
+                                        key={String(item.chunk_id || index)}
+                                        type="button"
+                                        onClick={() => onOpenEvidence?.(item)}
+                                        disabled={!onOpenEvidence}
+                                      >
+                                        <strong>{String(item.source_name || item.source_path || S.default_source_fallback)}</strong>
+                                        <span>{String(item.heading_path || item.location_label || '')}</span>
+                                        <p>{String(item.evidence_quote || '')}</p>
+                                      </button>
+                                    ))}
+                                  </div>
+                                  <Popconfirm
+                                    title={S.evidence_matrix_candidate_confirm_title}
+                                    description={S.evidence_matrix_candidate_confirm_detail}
+                                    onConfirm={() => { void auditComparisonCandidate(candidate) }}
+                                    okText={S.evidence_matrix_candidate_audit}
+                                    cancelText={S.confirm_cancel}
                                     disabled={missingConfirmation}
-                                    data-testid="evidence-comparison-audit-candidate"
                                   >
-                                    {missingConfirmation
-                                      ? S.evidence_matrix_candidate_confirm_all
-                                      : S.evidence_matrix_candidate_audit}
-                                  </Button>
-                                </Popconfirm>
-                              </article>
+                                    <Button
+                                      type="primary"
+                                      icon={<CheckCircleOutlined />}
+                                      loading={auditingCandidateId === candidate.id}
+                                      disabled={missingConfirmation}
+                                      data-testid="evidence-comparison-audit-candidate"
+                                    >
+                                      {missingConfirmation
+                                        ? S.evidence_matrix_candidate_confirm_all
+                                        : S.evidence_matrix_candidate_audit}
+                                    </Button>
+                                  </Popconfirm>
+                                </article>
+                              </section>
                             )
-                          })}
+                          })() : null}
                         </div>
                       ) : candidateScanDetail ? (
                         <div className="kb-evidence-matrix-empty">{S.evidence_matrix_candidate_empty}</div>

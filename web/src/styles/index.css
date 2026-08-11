@@ -5648,19 +5648,85 @@ body.kb-reader-resizing .kb-reader-content {
   line-height: 1.5;
 }
 
-.kb-evidence-comparison-candidates {
+.kb-evidence-comparison-review-workbench {
   display: grid;
+  grid-template-columns: minmax(210px, 260px) minmax(0, 1fr);
   gap: 12px;
 }
 
-.kb-evidence-comparison-candidates > article {
+.kb-evidence-comparison-review-groups {
+  display: flex;
+  max-height: 720px;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.kb-evidence-comparison-review-groups > div,
+.kb-evidence-comparison-review-groups > button {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 3px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  text-align: left;
+}
+
+.kb-evidence-comparison-review-groups > button {
+  cursor: pointer;
+}
+
+.kb-evidence-comparison-review-groups > button:hover,
+.kb-evidence-comparison-review-groups > button.is-active {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+.kb-evidence-comparison-review-groups span,
+.kb-evidence-comparison-review-groups small,
+.kb-evidence-comparison-review-progress small {
+  color: var(--muted-text);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.kb-evidence-comparison-review-current,
+.kb-evidence-comparison-review-current > article {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.kb-evidence-comparison-review-current > article {
   padding: 12px;
   border: 1px solid color-mix(in srgb, #4b8af4 42%, var(--border));
   border-radius: 10px;
   background: color-mix(in srgb, #4b8af4 6%, var(--bg));
+}
+
+.kb-evidence-comparison-review-progress,
+.kb-evidence-comparison-review-progress > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kb-evidence-comparison-review-progress > div:first-child {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.kb-evidence-comparison-candidate-contract .ant-checkbox-wrapper small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted-text);
+  font-size: 11px;
+  line-height: 1.35;
 }
 
 .kb-evidence-comparison-candidate-contract {
@@ -5827,6 +5893,20 @@ body.kb-reader-resizing .kb-reader-content {
   .kb-evidence-comparison-candidate-toolbar {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .kb-evidence-comparison-review-workbench {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-evidence-comparison-review-groups {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    max-height: 260px;
+  }
+
+  .kb-evidence-comparison-review-groups > div {
+    grid-column: 1 / -1;
   }
 }
 

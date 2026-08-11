@@ -869,3 +869,41 @@ The final 29-question run reported first-visible p50/p95/max of
 9,157/11,911/15,706 ms. The five-question smoke's final-validation p50/p95/max
 was 3,935/9,421/10,436 ms. These real-model tails remain visible; no timeout,
 source, evidence, locator, card, or quality threshold was reduced.
+
+## 2026-08-11 Grouped Comparison Review Workbench
+
+The comparison-candidate UI now groups the real 18-item SCIGS/SCINeRF queue into
+six dataset groups and shows one fully evidenced metric candidate at a time.
+Confirmation reuse is deliberately narrower than text equality alone: matrix,
+paper rows, task, dataset, dimension, and both dimension values must match. A
+confirmation therefore applies to the three metrics within one dataset group,
+but never to another dataset, task, or paper pair.
+
+The exact-code project report at
+`test_results/project_comparison_review_workbench/20260811_213123/report.json`
+passed 20/20. It reduced 18 repeated protocol-confirmation actions to six exact
+signatures while still performing and passing 18/18 independent server-side
+candidate recomputations and strict paired audits. Matrix evidence remained 13,
+brief evidence remained 20, bibliography coverage remained 3/3, and the brief
+remained verified and current. The 21,245.084 ms total and 7,340.202 ms audit
+total are retained as measured variance; no answer, retrieval, source, evidence,
+locator, comparison, brief, readiness, or export gate was weakened.
+
+The complete release rerun against the final worktree also passed. Full-library
+live QA was 29/29 at
+`test_results/research_qa_comparison_review_workbench_full_library_release/20260811_214828`,
+with first-visible p50/p95/max of 2,804/4,758/5,617 ms and final-validation
+p50/p95/max of 8,074/12,172/14,994 ms. The independent paid-model smoke was 5/5
+at
+`test_results/research_qa_comparison_review_workbench_live_smoke_release/20260811_215235`,
+with final-validation p50/p95/max of 4,074/9,370/10,420 ms. Deterministic
+retrieval remained 29/29, source validation remained 41/41, paired comparisons
+passed 5/5 with zero false comparisons, and candidate acceptance passed 5/5
+with all 18 candidates discovered and zero contract, evidence, prefill,
+cross-dataset, or uncontrolled-metric failures.
+
+Backend unit and sanity suites passed 4,127 and 262 tests respectively, with 41
+and two configuration-dependent skips. Frontend smoke passed all 127 applicable
+tests with two private-auth-only skips; core citation/library regressions passed
+109/109; public-surface isolation passed 4/4. Ruff, the Agent 5/5 contract,
+reviewed replays, converter 13/13, ESLint, and the production build all passed.

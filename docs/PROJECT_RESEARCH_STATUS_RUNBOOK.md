@@ -87,6 +87,15 @@ remaining-candidate count is updated. An accepted card cannot remain visible as
 an apparently actionable control that would only produce a duplicate-request
 error.
 
+The comparison workspace presents one candidate at a time and groups the queue
+by paper pair, task, and dataset. Metrics remain separate candidates, with
+previous/next controls and left/right keyboard navigation. A reviewed semantic
+mapping is reused only when matrix, row pair, task, dataset, dimension, and both
+normalized dimension values are identical. Reuse never crosses a dataset or
+paper pair. Every candidate still sends its own confirmation list to the server,
+which recomputes it from the current index, checks the current matrix revision,
+and runs the complete paired evidence audit before saving a new revision.
+
 ## API Surface
 
 - `GET /api/projects/{project_id}/research-status`
@@ -187,3 +196,29 @@ status refresh median/max were 223.543/237.132 ms. The companion five-state
 status report at
 `test_results/project_research_status_journey_release/20260811_150304/report.json`
 passed 5/5 with 2.357/2.567 ms status-build median/max.
+
+## 2026-08-11 Grouped Comparison Review Acceptance
+
+The three-paper fixture now also pins the human review shape: all 18 candidates
+must remain discoverable, they must form six paper/task/dataset groups, and the
+18 required protocol confirmations may collapse only to six exact contextual
+signatures. This saves 12 repeated confirmations (66.7%) while retaining 18
+separate server recomputations and strict audits.
+
+The final report at
+`test_results/project_comparison_review_workbench/20260811_213123/report.json`
+passed 20/20. The verified matrix retained 13 evidence records; all 18
+comparisons passed exact two-source evidence and locator checks; the current
+brief retained 20 evidence records and all three bibliography sources. Total
+wall time was 21,245.084 ms, comparison audits totaled 7,340.202 ms, and brief
+generation took 5,834.247 ms. These times are higher than the preceding
+16,102.208 ms project run and remain visible as real local/model variance. The
+feature reduces human repetition, not server evidence work, source coverage, or
+quality thresholds.
+
+The final UI regression exercised the grouped workbench, exact in-group reuse,
+cross-dataset isolation, keyboard navigation, and an independent audit request
+for every accepted candidate. The evidence-matrix file passed 4/4, the complete
+smoke set passed 127/127 applicable tests, and the unchanged full release gates
+remained 29/29 live QA, 5/5 paid-model smoke, 29/29 deterministic retrieval,
+41/41 source validation, and both comparison acceptance sets at 5/5.
