@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-11
+Updated: 2026-08-12
 
 ## Purpose
 
@@ -907,3 +907,64 @@ and two configuration-dependent skips. Frontend smoke passed all 127 applicable
 tests with two private-auth-only skips; core citation/library regressions passed
 109/109; public-surface isolation passed 4/4. Ruff, the Agent 5/5 contract,
 reviewed replays, converter 13/13, ESLint, and the production build all passed.
+
+## 2026-08-12 Historical Same-Corpus A/B Acceptance
+
+The strict historical evaluator in `tools/version_ab/run_version_ab_eval.py`
+compares the 2026-07-11 baseline (`e11096db`) with the exact product candidate
+(`0c47135d`). Its checked contract is `docs/version_ab_eval_v1.json`: 29 full-
+library questions, five paid-model smoke questions, a 45-second per-case total
+deadline, and three complete project research journeys. Unsupported historical
+capabilities, timeouts, missing coverage, and quality failures count as failures;
+they are never skipped.
+
+Both services used the same active, read-only corpus root and separate writable
+chat/library databases. The strong corpus fingerprint covered 1,472 files and
+568,628,457 bytes, with aggregate SHA-256
+`5c679c7fd920fbe4d698d37118643dc8d3fb027548a54d080ced93b478e9e8a5`.
+The `docs.json` and `references_index.json` identities also matched exactly.
+
+The accepted report is
+`F:\research-papers\2026\Jan\else\kb_chat_ab_runtime\version_ab_fair\20260812_002419\report.json`.
+The first aggregate incorrectly treated the valid integer zero in
+`failed: 0` as missing; the tested report rebuild recomputed the aggregate from
+the unchanged per-suite JSON/JSONL and project reports. It now reports a complete
+comparison, release-ready candidate, QA pass delta +34, and project pass delta
++3.
+
+| Version | Full library | Live smoke | Project journeys | Full UI p50 / p95 / max | Smoke UI p50 / p95 / max |
+|---|---:|---:|---:|---:|---:|
+| 2026-07-11 baseline | 0/29 | 0/5 | 0/3 unsupported | 45,056 / 45,967 / 48,322 ms | 45,084 / 45,507 / 45,606 ms |
+| 2026-08-12 candidate | 29/29 | 5/5 | 3/3, each 20/20 | 8,285 / 13,324 / 15,974 ms | 3,970 / 7,673 / 8,235 ms |
+
+Candidate first-visible p50/p95 was 2,740/4,523 ms for the 29-question suite
+and 2,066/2,873 ms for smoke. The baseline full suite produced no usable first-
+answer samples; all 29 cases hit the bounded runner-error path. In baseline
+smoke, three cases timed out and two completed answers still failed answer,
+evidence, citation-card, route, or locator contracts. The old version also lacks
+the evidence-matrix, research-gap, and research-brief journey APIs, so all three
+historical project journeys remain explicitly unsupported rather than hidden.
+
+The old service was terminated after its smoke suite because historical cancel
+requests could leave provider calls running for minutes. The candidate's first
+four full-library cases began during that conservative handoff and all passed in
+1.16-11.38 seconds; retaining them can only make the candidate latency result
+worse, not manufacture an improvement. The remaining candidate cases ran after
+the old port was closed. No answer terms, source coverage, retrieval top-k,
+evidence binding, citation route, locator, card-quality, project audit, or export
+gate was reduced.
+
+CI validates the immutable A/B contract without calling a model:
+
+```bash
+python tools/version_ab/run_version_ab_eval.py --dry-run
+```
+
+For a live comparison, start both exact revisions against the same corpus and
+run the evaluator with explicit repositories, URLs, and source roots. If only an
+aggregate bug is corrected after the expensive run, recompute solely from the
+saved immutable artifacts:
+
+```bash
+python tools/version_ab/run_version_ab_eval.py --rebuild-report <report.json>
+```

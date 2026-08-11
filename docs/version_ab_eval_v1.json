@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "description": "Strict same-environment comparison of the 2026-07-11 product baseline and the current 2026-08-11 product. Failures, timeouts, missing capabilities, and incomplete coverage remain visible.",
+  "description": "Strict same-environment comparison of the 2026-07-11 product baseline and the current 2026-08-12 product. Failures, timeouts, missing capabilities, and incomplete coverage remain visible.",
   "baseline": {
     "label": "2026-07-11 baseline",
     "sha": "e11096db68cf9045bb49bec950e6d19915bba2af"
   },
   "candidate": {
-    "label": "2026-08-11 candidate",
-    "sha": "1ace934332b0e3a0ff2e0159896b69fc33f31318"
+    "label": "2026-08-12 candidate",
+    "sha": "0c47135d0c866a28701d550d10e6db0686e971b9"
   },
   "corpus": {
     "exclude_top_level": [

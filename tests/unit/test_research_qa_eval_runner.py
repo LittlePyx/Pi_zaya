@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 import pytest
 
@@ -303,6 +304,21 @@ def test_bounded_request_timeout_honors_case_deadline(monkeypatch) -> None:
     assert eval_mod._bounded_request_timeout(30.0, 105.0) == 5.0
     with pytest.raises(TimeoutError, match="total wall-clock deadline"):
         eval_mod._bounded_request_timeout(30.0, 100.0)
+
+
+def test_stream_response_read_timeout_tracks_remaining_deadline() -> None:
+    seen: list[float] = []
+    response = SimpleNamespace(
+        fp=SimpleNamespace(
+            raw=SimpleNamespace(
+                _sock=SimpleNamespace(settimeout=lambda value: seen.append(value))
+            )
+        )
+    )
+
+    eval_mod._set_response_read_timeout(response, 2.75)
+
+    assert seen == [2.75]
 
 
 def test_progressive_refs_poll_stops_at_case_deadline() -> None:

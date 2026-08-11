@@ -110,6 +110,16 @@ def _bounded_request_timeout(timeout_s: float, deadline: float | None) -> float:
     return max(0.1, min(float(timeout_s), remaining_s))
 
 
+def _set_response_read_timeout(response: Any, timeout_s: float) -> None:
+    """Keep a streamed HTTP read bounded by the remaining case deadline."""
+    fp = getattr(response, "fp", None)
+    raw = getattr(fp, "raw", None)
+    sock = getattr(raw, "_sock", None)
+    setter = getattr(sock, "settimeout", None)
+    if callable(setter):
+        setter(max(0.1, float(timeout_s)))
+
+
 def _stream_generation(
     base_url: str,
     session_id: str,
@@ -123,8 +133,15 @@ def _stream_generation(
     origin = float(started_at) if started_at is not None else time.perf_counter()
     first_answer_ms: float | None = None
     with request.urlopen(req, timeout=_bounded_request_timeout(timeout_s, deadline)) as resp:
-        for raw in resp:
-            _bounded_request_timeout(timeout_s, deadline)
+        while True:
+            read_timeout_s = _bounded_request_timeout(timeout_s, deadline)
+            # ``urllib`` otherwise keeps the timeout chosen when the stream was
+            # opened.  A late partial event could therefore reset a long socket
+            # wait past the total case deadline.
+            _set_response_read_timeout(resp, read_timeout_s)
+            raw = resp.readline()
+            if not raw:
+                break
             line = raw.decode("utf-8", errors="ignore").strip()
             if not line.startswith("data:"):
                 continue

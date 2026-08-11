@@ -155,6 +155,16 @@ def _qa_failure_summary(raw_path: Path | None) -> tuple[list[dict[str, Any]], di
     return failures, dict(sorted(buckets.items()))
 
 
+def _summary_count(summary: dict[str, Any], key: str, default: int) -> int:
+    value = summary.get(key)
+    if value is None:
+        return int(default)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _run_qa_suite(
     *,
     side: str,
@@ -197,15 +207,15 @@ def _run_qa_suite(
     raw_path = summary_path.parent / "raw_results.jsonl" if summary_path else None
     failures, buckets = _qa_failure_summary(raw_path)
     expected_cases = int(suite["expected_cases"])
-    actual_cases = int(summary.get("total") or 0)
-    failed = int(summary.get("failed") or expected_cases)
+    actual_cases = _summary_count(summary, "total", 0)
+    failed = _summary_count(summary, "failed", expected_cases)
     return {
         "name": str(suite["name"]),
         "suite": str(suite["suite"]),
         "expected_cases": expected_cases,
         "actual_cases": actual_cases,
         "coverage_complete": actual_cases == expected_cases,
-        "passed": int(summary.get("passed") or 0),
+        "passed": _summary_count(summary, "passed", 0),
         "failed": failed,
         "quality_ok": actual_cases == expected_cases and failed == 0,
         "process_exit_code": int(completed.returncode),
@@ -352,6 +362,92 @@ def _build_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _comparison_summary(
+    versions: dict[str, Any],
+    *,
+    project_runs: int,
+) -> dict[str, Any]:
+    baseline_qa_passed = sum(item["passed"] for item in versions["baseline"]["qa"])
+    candidate_qa_passed = sum(item["passed"] for item in versions["candidate"]["qa"])
+    candidate_release_ok = all(
+        item["quality_ok"] for item in versions["candidate"]["qa"]
+    ) and all(item["passed"] for item in versions["candidate"]["project_journeys"])
+    complete = all(
+        item["coverage_complete"]
+        for side in ("baseline", "candidate")
+        for item in versions[side]["qa"]
+    ) and all(
+        len(versions[side]["project_journeys"]) == int(project_runs)
+        for side in ("baseline", "candidate")
+    )
+    baseline_project_passed = sum(
+        1 for item in versions["baseline"]["project_journeys"] if item["passed"]
+    )
+    candidate_project_passed = sum(
+        1 for item in versions["candidate"]["project_journeys"] if item["passed"]
+    )
+    return {
+        "complete": complete,
+        "qa_pass_delta": candidate_qa_passed - baseline_qa_passed,
+        "project_pass_delta": candidate_project_passed - baseline_project_passed,
+        "candidate_release_ok": candidate_release_ok,
+        "candidate_materially_better": bool(
+            candidate_release_ok
+            and candidate_qa_passed > baseline_qa_passed
+            and candidate_project_passed > baseline_project_passed
+        ),
+    }
+
+
+def rebuild_report(report_path: Path) -> dict[str, Any]:
+    """Recompute aggregate gates from immutable suite and journey artifacts."""
+    report = _load_json(report_path.resolve(strict=True))
+    versions = dict(report["versions"])
+    for side in ("baseline", "candidate"):
+        for row in versions[side]["qa"]:
+            summary_path_text = str(row.get("summary_path") or "").strip()
+            if not summary_path_text:
+                continue
+            summary_path = Path(summary_path_text).resolve(strict=True)
+            summary = _load_json(summary_path)
+            raw_path = summary_path.parent / "raw_results.jsonl"
+            failures, buckets = _qa_failure_summary(raw_path)
+            expected_cases = int(row["expected_cases"])
+            actual_cases = _summary_count(summary, "total", 0)
+            failed = _summary_count(summary, "failed", expected_cases)
+            row.update(
+                {
+                    "actual_cases": actual_cases,
+                    "coverage_complete": actual_cases == expected_cases,
+                    "passed": _summary_count(summary, "passed", 0),
+                    "failed": failed,
+                    "quality_ok": actual_cases == expected_cases and failed == 0,
+                    "timing": dict(summary.get("timing") or {}),
+                    "failure_buckets": buckets,
+                    "failure_cases": failures,
+                }
+            )
+    project_runs = int(
+        dict(dict(report.get("settings") or {}).get("project_journeys") or {}).get("runs")
+        or 0
+    )
+    report["versions"] = versions
+    report["comparison"] = _comparison_summary(
+        versions,
+        project_runs=project_runs,
+    )
+    report["recomputed_at"] = datetime.now(timezone.utc).astimezone().isoformat()
+    report_path.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    report_path.with_name("report.md").write_text(
+        _build_markdown(report),
+        encoding="utf-8",
+    )
+    return report
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Run a strict same-corpus historical QA and project-journey A/B evaluation."
@@ -364,11 +460,28 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--baseline-source-root", type=Path)
     parser.add_argument("--candidate-source-root", type=Path)
     parser.add_argument("--out-root", type=Path, default=DEFAULT_OUT_ROOT)
+    parser.add_argument(
+        "--rebuild-report",
+        type=Path,
+        help="Recompute aggregate gates from an existing report and its raw artifacts.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
 
     contract_path = args.fixture.resolve(strict=True)
     contract = load_contract(contract_path)
+    if args.rebuild_report:
+        report = rebuild_report(args.rebuild_report)
+        print(
+            json.dumps(
+                {"report": str(args.rebuild_report.resolve()), **report["comparison"]},
+                ensure_ascii=False,
+            )
+        )
+        return 0 if (
+            report["comparison"]["complete"]
+            and report["comparison"]["candidate_release_ok"]
+        ) else 1
     if args.dry_run:
         print(
             json.dumps(
@@ -490,18 +603,10 @@ def main(argv: list[str] | None = None) -> int:
             "project_journeys": project_rows,
         }
 
-    baseline_qa_passed = sum(item["passed"] for item in versions["baseline"]["qa"])
-    candidate_qa_passed = sum(item["passed"] for item in versions["candidate"]["qa"])
-    candidate_release_ok = all(item["quality_ok"] for item in versions["candidate"]["qa"]) and all(
-        item["passed"] for item in versions["candidate"]["project_journeys"]
+    comparison = _comparison_summary(
+        versions,
+        project_runs=int(project["runs"]),
     )
-    complete = all(
-        item["coverage_complete"]
-        for side in ("baseline", "candidate")
-        for item in versions[side]["qa"]
-    ) and all(len(versions[side]["project_journeys"]) == int(project["runs"]) for side in ("baseline", "candidate"))
-    baseline_project_passed = sum(1 for item in versions["baseline"]["project_journeys"] if item["passed"])
-    candidate_project_passed = sum(1 for item in versions["candidate"]["project_journeys"] if item["passed"])
     report = {
         "created_at": datetime.now(timezone.utc).astimezone().isoformat(),
         "fixture": str(contract_path),
@@ -509,17 +614,7 @@ def main(argv: list[str] | None = None) -> int:
         "settings": {"qa": qa, "project_journeys": project},
         "corpus": {"identical": corpus_identical, "fingerprints": fingerprints},
         "versions": versions,
-        "comparison": {
-            "complete": complete,
-            "qa_pass_delta": candidate_qa_passed - baseline_qa_passed,
-            "project_pass_delta": candidate_project_passed - baseline_project_passed,
-            "candidate_release_ok": candidate_release_ok,
-            "candidate_materially_better": bool(
-                candidate_release_ok
-                and candidate_qa_passed > baseline_qa_passed
-                and candidate_project_passed > baseline_project_passed
-            ),
-        },
+        "comparison": comparison,
     }
     report_path = output_root / "report.json"
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -533,7 +628,7 @@ def main(argv: list[str] | None = None) -> int:
             ensure_ascii=False,
         )
     )
-    return 0 if complete and candidate_release_ok else 1
+    return 0 if comparison["complete"] and comparison["candidate_release_ok"] else 1
 
 
 if __name__ == "__main__":
