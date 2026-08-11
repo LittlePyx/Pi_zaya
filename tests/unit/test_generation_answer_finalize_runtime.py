@@ -2293,6 +2293,69 @@ def test_exact_source_bound_stabilizes_scinerf_forward_equation() -> None:
     assert out.count("[1]") == 3
 
 
+def test_scinerf_formula_answer_is_not_prefixed_by_training_summary() -> None:
+    evidence = (
+        "The physical imaging process of SCI is part of the training of NeRF. "
+        "Y is the captured compressed image, Xi is a virtual image, odot denotes "
+        "element-wise multiplication, and Z is the measurement noise. Given NeRF and "
+        "camera poses, the synthesized image is differentiable with respect to NeRF and the poses."
+    )
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "SCINeRF compresses virtual frames into one measurement.",
+        prompt="What does the SCINeRF forward model equation mean?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "scinerf.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "scinerf.en.md"}}],
+    )
+
+    assert out.startswith("SCINeRF uses the SCI forward model")
+    assert "part of the training of NeRF" not in out.split("\n\n", 1)[0]
+
+
+def test_fdm_exact_evidence_restores_acquisition_speed_term() -> None:
+    evidence = (
+        "Frequency-division-multiplexed single-pixel imaging implements frequency-division "
+        "methods to parallelize the single-pixel imaging process. The technique enables a "
+        "trade-off between signal-to-noise ratio and acquisition speed without altering "
+        "detector integration time."
+    )
+
+    out = finalize_runtime._normalize_citation_plan_supported_terms(
+        "Frequency-division multiplexing parallelizes the imaging process, so it is faster [1].",
+        prompt="Why is frequency-division-multiplexed single-pixel imaging faster?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "Frequency-division-multiplexed single-pixel imaging.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "Frequency-division-multiplexed single-pixel imaging.en.md"
+                },
+            }
+        ],
+    )
+
+    assert "acquisition speed" in out
+    assert "unchanged detector integration time" in out
+
+
 def test_evidence_complete_override_skips_only_full_scinerf_replacement() -> None:
     evidence = (
         "$$\\mathbf{Y}=\\sum_i\\mathbf{X}_i\\odot\\mathbf{M}_i+\\mathbf{Z}.$$ "

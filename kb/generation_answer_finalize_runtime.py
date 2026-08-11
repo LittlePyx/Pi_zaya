@@ -8171,6 +8171,13 @@ def _normalize_citation_plan_supported_terms(
     answer_mentions_parallelization = bool(
         re.search(r"\bparalleliz\w*\b|并行", text, flags=re.I)
     )
+    answer_mentions_acquisition_speed = bool(
+        re.search(
+            r"\bacquisition\s+speed\b|\u91c7\u96c6\u901f\u5ea6",
+            text,
+            flags=re.I,
+        )
+    )
     optional_result_re = re.compile(
         r"(?:fourfold|four[- ]fold|四倍|4\s*倍).{0,160}"
         r"(?:image\s+size|scalab|图像尺寸|可扩展)",
@@ -8193,6 +8200,7 @@ def _normalize_citation_plan_supported_terms(
         and fdm_hit_num > 0
         and (
             not answer_mentions_parallelization
+            or not answer_mentions_acquisition_speed
             or (replace_idx >= 0 and not plan_supports_optional_result)
         )
     ):
@@ -8205,7 +8213,7 @@ def _normalize_citation_plan_supported_terms(
             mechanism = (
                 "Frequency-division multiplexing parallelizes multiple single-pixel "
                 "encoding channels within the unchanged detector integration time, "
-                f"so acquisition is faster than sequential encoding [{fdm_hit_num}]."
+                f"so acquisition speed is higher than with sequential encoding [{fdm_hit_num}]."
             )
         if replace_idx >= 0:
             paragraphs[replace_idx] = mechanism
@@ -8347,7 +8355,20 @@ def _normalize_citation_plan_supported_terms(
         re.search(r"physical\s+imaging\s+process\s+of\s+SCI", evidence, flags=re.I)
         and re.search(r"part\s+of\s+the\s+training\s+of\s+NeRF", evidence, flags=re.I)
     )
-    if has_scinerf_training_contract and re.search(r"\bSCINeRF\b|\bNeRF\b", text, flags=re.I):
+    scinerf_formula_question = bool(
+        re.search(r"\bSCINeRF\b", str(prompt or ""), flags=re.I)
+        and re.search(
+            r"\b(?:formula|equation|forward\s+model|image\s+formation)\b|"
+            r"\u516c\u5f0f|\u524d\u5411|\u6210\u50cf\u6a21\u578b",
+            str(prompt or ""),
+            flags=re.I,
+        )
+    )
+    if (
+        has_scinerf_training_contract
+        and not scinerf_formula_question
+        and re.search(r"\bSCINeRF\b|\bNeRF\b", text, flags=re.I)
+    ):
         if prefer_zh and not re.search(r"NeRF\s*(?:的)?\s*训练", text, flags=re.I):
             text = re.sub(
                 r"(SCI\s*的物理成像过程.{0,20}?)(进入|嵌入)(?:了|到|至)?\s*训练",

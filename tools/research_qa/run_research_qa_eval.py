@@ -101,19 +101,30 @@ def _get_json_with_meta(base_url: str, path: str, timeout_s: float) -> tuple[Any
     return json.loads(raw or "{}"), meta
 
 
+def _bounded_request_timeout(timeout_s: float, deadline: float | None) -> float:
+    if deadline is None:
+        return max(0.1, float(timeout_s))
+    remaining_s = float(deadline) - time.perf_counter()
+    if remaining_s <= 0:
+        raise TimeoutError("research QA case exceeded its total wall-clock deadline")
+    return max(0.1, min(float(timeout_s), remaining_s))
+
+
 def _stream_generation(
     base_url: str,
     session_id: str,
     timeout_s: float,
     *,
     started_at: float | None = None,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     req = request.Request(f"{base_url}/api/generate/{parse.quote(session_id)}/stream", method="GET")
     final_payload: dict[str, Any] = {}
     origin = float(started_at) if started_at is not None else time.perf_counter()
     first_answer_ms: float | None = None
-    with request.urlopen(req, timeout=timeout_s) as resp:
+    with request.urlopen(req, timeout=_bounded_request_timeout(timeout_s, deadline)) as resp:
         for raw in resp:
+            _bounded_request_timeout(timeout_s, deadline)
             line = raw.decode("utf-8", errors="ignore").strip()
             if not line.startswith("data:"):
                 continue
@@ -2604,6 +2615,7 @@ def _poll_refs_for_case(
     generation_started: float,
     generation_done: threading.Event,
     wait_for_full_refs: threading.Event,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Follow the terminal refs path used by the React client.
 
@@ -2618,12 +2630,13 @@ def _poll_refs_for_case(
     events: list[dict[str, Any]] = []
     latest_payload: Any = {}
     settle_deadline: float | None = None
-    generation_done.wait(timeout=max(1.0, float(timeout_s)))
+    generation_done.wait(timeout=_bounded_request_timeout(timeout_s, deadline))
     while True:
+        request_timeout_s = _bounded_request_timeout(timeout_s, deadline)
         request_started = time.perf_counter()
         started_ms = round((request_started - generation_started) * 1000.0, 2)
         try:
-            latest_payload, meta = _get_json_with_meta(base_url, refs_path, timeout_s)
+            latest_payload, meta = _get_json_with_meta(base_url, refs_path, request_timeout_s)
             error = ""
         except Exception as exc:
             meta = {}
@@ -2681,6 +2694,8 @@ def _poll_refs_for_case(
                 }
             if settle_deadline is None:
                 settle_deadline = completed_at + min(45.0, max(1.0, float(timeout_s)))
+                if deadline is not None:
+                    settle_deadline = min(settle_deadline, float(deadline))
             if completed_at >= settle_deadline:
                 return {
                     "refs_payload": latest_payload,
@@ -2699,6 +2714,7 @@ def run_case(
     timeout_s: float,
     top_k: int,
     max_tokens: int,
+    case_timeout_s: float = 0.0,
 ) -> dict[str, Any]:
     case_id = str(case.get("id") or "").strip()
     question = str(case.get("question") or "").strip()
@@ -2731,6 +2747,11 @@ def run_case(
         raise RuntimeError("conversation creation returned no id")
 
     generation_started = time.perf_counter()
+    case_deadline = (
+        generation_started + float(case_timeout_s)
+        if float(case_timeout_s or 0.0) > 0
+        else None
+    )
     gen = _post_json(
         base_url,
         "/api/generate",
@@ -2745,7 +2766,7 @@ def run_case(
             "query_scope": query_scope,
             "prompt_context": prompt_context,
         },
-        timeout_s=timeout_s,
+        timeout_s=_bounded_request_timeout(timeout_s, case_deadline),
     )
     session_id = str(gen.get("session_id") or "").strip()
     if not session_id:
@@ -2765,14 +2786,28 @@ def run_case(
             generation_started=generation_started,
             generation_done=generation_done,
             wait_for_full_refs=wait_for_full_refs,
+            deadline=case_deadline,
         )
         try:
-            final_payload = _stream_generation(
-                base_url,
-                session_id,
-                timeout_s=timeout_s,
-                started_at=generation_started,
-            )
+            try:
+                final_payload = _stream_generation(
+                    base_url,
+                    session_id,
+                    timeout_s=timeout_s,
+                    started_at=generation_started,
+                    deadline=case_deadline,
+                )
+            except TimeoutError:
+                try:
+                    _post_json(
+                        base_url,
+                        f"/api/generate/{parse.quote(session_id)}/cancel",
+                        {},
+                        timeout_s=min(5.0, max(0.1, float(timeout_s))),
+                    )
+                except Exception:
+                    pass
+                raise
             if _generation_should_wait_for_full_refs(final_payload, expected):
                 wait_for_full_refs.set()
         finally:
@@ -2782,7 +2817,7 @@ def run_case(
             payload = _get_json(
                 base_url,
                 f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
-                timeout_s,
+                _bounded_request_timeout(timeout_s, case_deadline),
             )
             completed_ms = round((time.perf_counter() - generation_started) * 1000.0, 2)
             return payload, completed_ms
@@ -2812,7 +2847,7 @@ def run_case(
         messages = _get_json(
             base_url,
             f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
-            timeout_s,
+            _bounded_request_timeout(timeout_s, case_deadline),
         )
         validation_completed_ms = round(
             (time.perf_counter() - generation_started) * 1000.0,
@@ -2860,7 +2895,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fixture", default=str(DEFAULT_FIXTURE), help="Shared research QA fixture JSON.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="API base URL.")
     parser.add_argument("--out-dir", default=str(DEFAULT_OUT_DIR), help="Output directory root.")
+    parser.add_argument(
+        "--source-root",
+        default="",
+        help=(
+            "Override fixture dbRoot for live request source paths and response identity mapping. "
+            "Use this when evaluating an isolated corpus copy."
+        ),
+    )
     parser.add_argument("--timeout-s", type=float, default=180.0, help="HTTP timeout seconds.")
+    parser.add_argument(
+        "--case-timeout-s",
+        type=float,
+        default=0.0,
+        help="Optional total wall-clock deadline per live case; timed-out generation is cancelled.",
+    )
     parser.add_argument("--limit", type=int, default=0, help="Optional case limit.")
     parser.add_argument("--case-id", action="append", default=[], help="Run one or more case ids.")
     parser.add_argument(
@@ -2909,6 +2958,15 @@ def main(argv: list[str] | None = None) -> int:
 
     fixture_path = Path(args.fixture)
     fixture = load_fixture(fixture_path)
+    if str(args.source_root or "").strip():
+        fixture = ResearchQaFixture(
+            db_root=str(Path(args.source_root).resolve()),
+            docs=fixture.docs,
+            cases=fixture.cases,
+            forbidden_phrases=fixture.forbidden_phrases,
+            splits=fixture.splits,
+            suites=fixture.suites,
+        )
     fixture_errors = validate_fixture_contracts(fixture)
     if fixture_errors:
         for error in fixture_errors:
@@ -3063,6 +3121,7 @@ def main(argv: list[str] | None = None) -> int:
         for idx, case in enumerate(selected_cases, start=1):
             case_id = str(case.get("id") or f"case-{idx}")
             desired_locale = _case_ui_locale(case)
+            case_started = time.perf_counter()
             try:
                 if desired_locale != active_locale:
                     _patch_json(
@@ -3082,6 +3141,7 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_s=float(args.timeout_s),
                     top_k=int(args.top_k),
                     max_tokens=int(args.max_tokens),
+                    case_timeout_s=float(args.case_timeout_s),
                 )
                 row["ui_locale"] = desired_locale
             except Exception as exc:
@@ -3090,6 +3150,9 @@ def main(argv: list[str] | None = None) -> int:
                     "status": "error",
                     "done": True,
                     "error": str(exc),
+                    "error_type": type(exc).__name__,
+                    "latency_ms": round((time.perf_counter() - case_started) * 1000.0, 2),
+                    "case_wall_ms": round((time.perf_counter() - case_started) * 1000.0, 2),
                     "ui_locale": desired_locale,
                     "quality": {"ok": False, "failures": [{"name": "runner_error", "detail": str(exc)}]},
                 }

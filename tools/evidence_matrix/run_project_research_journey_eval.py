@@ -84,11 +84,46 @@ def _load_fixture(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _source_records(fixture: dict[str, Any], *, fixture_path: Path) -> list[dict[str, Any]]:
+def _source_records(
+    fixture: dict[str, Any],
+    *,
+    fixture_path: Path,
+    db_root: Path | None = None,
+) -> list[dict[str, Any]]:
+    indexed_paths: list[str] = []
+    if db_root is not None:
+        indexed_paths = sorted(
+            {
+                str((item.get("meta") or {}).get("source_path") or "").strip()
+                for item in _records(load_all_chunks(db_root))
+                if isinstance(item.get("meta"), dict)
+                and str((item.get("meta") or {}).get("source_path") or "").strip()
+            }
+        )
     records: list[dict[str, Any]] = []
     missing: list[str] = []
     for key, relative in dict(fixture.get("sources") or {}).items():
-        path = (fixture_path.parent.parent / str(relative or "")).resolve(strict=False)
+        relative_path = Path(str(relative or ""))
+        if db_root is not None:
+            relative_parts = relative_path.parts
+            if relative_parts and relative_parts[0].casefold() == "db":
+                relative_path = Path(*relative_parts[1:])
+            relative_identity = relative_path.as_posix().casefold()
+            indexed_path = next(
+                (
+                    Path(candidate).resolve(strict=False)
+                    for candidate in indexed_paths
+                    if Path(candidate).as_posix().casefold().endswith(relative_identity)
+                    and Path(candidate).is_file()
+                ),
+                None,
+            )
+            # Copied indices intentionally retain their canonical source_path.
+            # Bind the journey to that path when it is still available so the
+            # production freshness guard evaluates the same indexed identity.
+            path = indexed_path or (db_root / relative_path).resolve(strict=False)
+        else:
+            path = (fixture_path.parent.parent / relative_path).resolve(strict=False)
         if not path.is_file():
             missing.append(str(path))
             continue
@@ -161,9 +196,9 @@ def _candidate_confirmation_signature(
     )
 
 
-def _corpus_text_by_source() -> dict[str, list[str]]:
+def _corpus_text_by_source(db_root: Path = ROOT / "db") -> dict[str, list[str]]:
     by_source: dict[str, list[str]] = {}
-    for chunk in _records(load_all_chunks(ROOT / "db")):
+    for chunk in _records(load_all_chunks(db_root)):
         meta = chunk.get("meta") if isinstance(chunk.get("meta"), dict) else {}
         identity = _normal_path(meta.get("source_path"))
         text = " ".join(str(chunk.get("text") or "").split()).casefold()
@@ -270,14 +305,24 @@ def _allowed_deferred_gaps(
     }
 
 
-def run_eval(*, fixture_path: Path, max_tokens: int) -> dict[str, Any]:
+def run_eval(
+    *,
+    fixture_path: Path,
+    max_tokens: int,
+    db_root: Path | None = None,
+) -> dict[str, Any]:
     fixture = _load_fixture(fixture_path)
-    sources = _source_records(fixture, fixture_path=fixture_path)
+    resolved_db_root = (db_root or ROOT / "db").resolve(strict=False)
+    sources = _source_records(
+        fixture,
+        fixture_path=fixture_path,
+        db_root=resolved_db_root,
+    )
     allowed_deferred = _allowed_deferred_gaps(fixture, sources)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     total_started = time.perf_counter()
     corpus_started = time.perf_counter()
-    corpus_text = _corpus_text_by_source()
+    corpus_text = _corpus_text_by_source(resolved_db_root)
     corpus_load_ms = round((time.perf_counter() - corpus_started) * 1_000.0, 3)
     with TemporaryDirectory(prefix="pi_zaya_project_journey_") as temp_dir:
         with _isolated_store(Path(temp_dir) / "chat.sqlite3"):
@@ -520,6 +565,7 @@ def run_eval(*, fixture_path: Path, max_tokens: int) -> dict[str, Any]:
             return {
                 "created_at": datetime.now(timezone.utc).astimezone().isoformat(),
                 "fixture": str(fixture_path),
+                "db_root": str(resolved_db_root),
                 "isolated_store": True,
                 "source_count": len(sources),
                 "corpus_source_count": len(corpus_text),
@@ -578,6 +624,12 @@ def main() -> int:
         default=ROOT / "test_results" / "project_research_journey",
     )
     parser.add_argument("--max-tokens", type=int, default=1_800)
+    parser.add_argument(
+        "--db-root",
+        type=Path,
+        default=ROOT / "db",
+        help="Indexed corpus root; also remaps fixture db/... source paths for isolated evaluation.",
+    )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     fixture_path = args.fixture.resolve(strict=False)
@@ -601,7 +653,11 @@ def main() -> int:
             )
         )
         return 0
-    report = run_eval(fixture_path=fixture_path, max_tokens=max(400, min(4_096, int(args.max_tokens))))
+    report = run_eval(
+        fixture_path=fixture_path,
+        max_tokens=max(400, min(4_096, int(args.max_tokens))),
+        db_root=args.db_root.resolve(strict=False),
+    )
     folder = args.out_root / datetime.now().strftime("%Y%m%d_%H%M%S")
     folder.mkdir(parents=True, exist_ok=True)
     report_path = folder / "report.json"

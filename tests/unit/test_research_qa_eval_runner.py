@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from tools.research_qa import run_research_qa_eval as eval_mod
 from tools.research_qa.run_research_qa_eval import (
     ResearchQaFixture,
@@ -292,6 +294,34 @@ def test_progressive_refs_poll_records_backend_phases_and_waits_for_full_cards(m
     assert result["cards_complete_ms"] is not None
     assert [event["mode"] for event in result["events"]] == ["pending", "full"]
     assert result["events"][1]["server_timing"] == "total;dur=3.0"
+
+
+def test_bounded_request_timeout_honors_case_deadline(monkeypatch) -> None:
+    monkeypatch.setattr(eval_mod.time, "perf_counter", lambda: 100.0)
+
+    assert eval_mod._bounded_request_timeout(30.0, None) == 30.0
+    assert eval_mod._bounded_request_timeout(30.0, 105.0) == 5.0
+    with pytest.raises(TimeoutError, match="total wall-clock deadline"):
+        eval_mod._bounded_request_timeout(30.0, 100.0)
+
+
+def test_progressive_refs_poll_stops_at_case_deadline() -> None:
+    generation_done = threading.Event()
+    generation_done.set()
+
+    with pytest.raises(TimeoutError, match="total wall-clock deadline"):
+        eval_mod._poll_refs_for_case(
+            base_url="http://test",
+            conv_id="conv",
+            user_msg_id=9,
+            expected={},
+            forbidden_phrases=[],
+            timeout_s=5.0,
+            generation_started=eval_mod.time.perf_counter(),
+            generation_done=generation_done,
+            wait_for_full_refs=threading.Event(),
+            deadline=eval_mod.time.perf_counter() - 1.0,
+        )
 
 
 def test_quality_contract_waits_for_full_reference_cards() -> None:
