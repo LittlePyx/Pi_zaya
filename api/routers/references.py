@@ -4656,6 +4656,7 @@ def get_conversation_refs(
 
     def _finish(payload: dict | None, mode: str) -> dict:
         payload_out = payload if isinstance(payload, dict) else {}
+        finish_phase_started_at = time.perf_counter()
         incomplete_overlay_ids = {
             int(user_msg_id)
             for user_msg_id, pack in payload_out.items()
@@ -4664,16 +4665,20 @@ def get_conversation_refs(
             and _pack_has_answer_citation_overlay(pack)
             and not _answer_citation_overlay_pack_is_complete(pack)
         }
+        _record("finish_overlay_scan", finish_phase_started_at)
+        finish_phase_started_at = time.perf_counter()
         payload_out = _overlay_refs_payload_with_answer_citations(
             store=store,
             conv_id=conv_id,
             payload=payload_out,
             answer_citation_state=answer_citation_state_for_finish,
         )
+        _record("finish_answer_overlay", finish_phase_started_at)
         if (
             _answer_citation_overlay_payload_needs_refresh(payload_out)
             and refs_for_finish
         ):
+            finish_phase_started_at = time.perf_counter()
             incomplete_overlay_ids.update(
                 int(user_msg_id)
                 for user_msg_id, pack in payload_out.items()
@@ -4698,7 +4703,11 @@ def get_conversation_refs(
                     payload=payload_out,
                     answer_citation_state=rendered_state,
                 )
+            _record("finish_overlay_refresh", finish_phase_started_at)
+        finish_phase_started_at = time.perf_counter()
         payload_out = _normalize_completed_answer_citation_overlay_state(payload_out)
+        _record("finish_overlay_normalize", finish_phase_started_at)
+        finish_phase_started_at = time.perf_counter()
         completed_payloads = {
             int(user_msg_id): pack
             for user_msg_id, pack in payload_out.items()
@@ -4715,7 +4724,9 @@ def get_conversation_refs(
                 or int(user_msg_id) in incomplete_overlay_ids
             )
         }
+        _record("finish_completed_scan", finish_phase_started_at)
         if completed_payloads:
+            finish_phase_started_at = time.perf_counter()
             _persist_rendered_refs_payloads(
                 refs={
                     user_msg_id: refs_for_finish[user_msg_id]
@@ -4735,11 +4746,13 @@ def get_conversation_refs(
                     refs=refs_for_finish,
                     state_signature=refs_state_signature,
                 )
+            _record("finish_persist_completed", finish_phase_started_at)
         elif (
             _answer_citation_overlay_payload_needs_refresh(payload_out)
             and signature
             and refs_for_finish
         ):
+            finish_phase_started_at = time.perf_counter()
             # Replace a misleading state-validated ``full`` snapshot with the
             # explicitly incomplete overlay. The next poll will bypass that
             # cache, load the final cite details, and persist the repaired
@@ -4752,6 +4765,7 @@ def get_conversation_refs(
                 refs=refs_for_finish,
                 state_signature=refs_state_signature,
             )
+            _record("finish_persist_incomplete", finish_phase_started_at)
         # Card construction/background warming already embeds cached local
         # bibliography metadata. Re-scanning every source and rebuilding every
         # message render packet on this read path caused 10–45 second stalls,

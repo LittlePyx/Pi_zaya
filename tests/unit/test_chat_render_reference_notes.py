@@ -1487,6 +1487,138 @@ def test_authoritative_system_a_plan_covers_each_visible_answer_citation() -> No
     )
 
 
+def test_block_located_candidate_plan_is_authoritative_without_reason_label() -> None:
+    from api import chat_render
+
+    source = "hadamard-fourier.en.md"
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "Comparison / Basis patterns",
+                "block_id": "blk-basis",
+                "anchor_id": "p-basis",
+                "evidence_quote": (
+                    "Hadamard patterns use binary entries while Fourier patterns "
+                    "use sinusoidal phase-shifted measurements."
+                ),
+            }
+        ]
+    }
+
+    assert (
+        chat_render._authoritative_system_a_plan_covers_answer(
+            plan,
+            answer_text="The two basis families differ at the encoding layer [1].",
+            canonical_paths=[source],
+        )
+        is True
+    )
+
+
+def test_enrich_messages_reuses_exact_plan_before_answer_alignment_scan(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "hadamard-fourier.en.md"
+    evidence = (
+        "Hadamard patterns use binary entries while Fourier patterns use "
+        "sinusoidal phase-shifted measurements."
+    )
+    source.write_text(
+        f"# Comparison\n\n## Basis patterns\n\n{evidence}\n",
+        encoding="utf-8",
+    )
+    primary = {
+        "source_path": str(source),
+        "source_name": "Hadamard versus Fourier",
+        "heading_path": "Comparison / Basis patterns",
+        "snippet": evidence,
+        "highlight_snippet": evidence,
+        "block_id": "blk-basis",
+        "anchor_id": "p-basis",
+        "anchor_kind": "paragraph",
+        "page_start": 2,
+        "page_end": 2,
+        "strict_locate": True,
+    }
+    hit = {
+        "text": evidence,
+        "meta": {
+            "source_path": str(source),
+            "source_name": "Hadamard versus Fourier",
+            "heading_path": "Comparison / Basis patterns",
+            "ref_answer_citation_num": 1,
+            "block_id": "blk-basis",
+            "anchor_id": "p-basis",
+            "page_start": 2,
+        },
+        "ui_meta": {
+            "source_path": str(source),
+            "heading_path": "Comparison / Basis patterns",
+            "primary_evidence": primary,
+        },
+    }
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": str(source),
+                "source_name": "Hadamard versus Fourier",
+                "heading_path": "Comparison / Basis patterns",
+                "block_id": "blk-basis",
+                "anchor_id": "p-basis",
+                "anchor_kind": "paragraph",
+                "page_start": 2,
+                "page_end": 2,
+                "evidence_quote": evidence,
+            }
+        ],
+    }
+    messages = [
+        {"id": 1, "role": "user", "content": "How do the bases differ?"},
+        {
+            "id": 2,
+            "role": "assistant",
+            "content": (
+                "Hadamard uses binary entries while Fourier uses sinusoidal "
+                "phase-shifted measurements [1]."
+            ),
+            "meta": {
+                "canonical_hit_paths": [str(source)],
+                "canonical_hit_evidence": [hit],
+                "answer_quality": {
+                    "output_mode": "reading_guide",
+                    "citation_plan": plan,
+                },
+            },
+        },
+    ]
+    monkeypatch.setattr(
+        chat_render,
+        "_answer_aligned_reference_render_pack",
+        lambda *_args, **_kwargs: pytest.fail(
+            "an exact answer-bound plan must bypass whole-pack answer alignment"
+        ),
+    )
+
+    rendered = chat_render.enrich_messages_with_reference_render(
+        messages,
+        {1: {"prompt": messages[0]["content"], "hits": [hit]}},
+        conv_id="exact-plan-no-rescan",
+        render_packet_only=True,
+    )
+
+    assert rendered[-1]["content"].startswith("Hadamard uses binary entries")
+    assert rendered[-1]["meta"]["answer_quality"]["citation_plan"] == plan
+
+
 def test_scope_boundary_abstract_plan_is_authoritative_without_seed_hit(tmp_path: Path) -> None:
     from api import chat_render
 
@@ -1886,7 +2018,9 @@ def test_canonical_citation_seeds_persisted_answer_evidence_before_legacy_scan(
     monkeypatch.setattr(
         chat_render.task_runtime,
         "load_source_blocks",
-        lambda *_args, **_kwargs: [],
+        lambda *_args, **_kwargs: pytest.fail(
+            "persisted canonical answer evidence must not rescan the paper"
+        ),
     )
 
     repaired = _augment_hits_with_canonical_answer_citations(

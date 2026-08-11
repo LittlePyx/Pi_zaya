@@ -968,3 +968,63 @@ saved immutable artifacts:
 ```bash
 python tools/version_ab/run_version_ab_eval.py --rebuild-report <report.json>
 ```
+
+## 2026-08-12 Answer-to-Citation Tail-Latency Follow-up
+
+This follow-up measured the current answer, citation-card, UI-ready, and final-
+validation milestones separately before changing code. The baseline repeated ten
+long-tail cases three times under
+`F:\research-papers\2026\Jan\else\kb_chat_ab_runtime\tail_latency_current\baseline_repeat_20260812`.
+It passed 29/30 cases. The retained failure was the second-round foveated dynamic
+supersampling answer: its second card's summary and relevance copy were too short
+and the terminal reference state was still pending. It was not retried, removed,
+or reclassified.
+
+Profiling showed that the dominant controllable post-answer work was not
+retrieval or evidence selection. The final reference read was rerunning whole-
+paper answer-alignment and canonical-evidence scans even though generation had
+already persisted an answer-bound citation plan and canonical hit evidence. On
+representative cases, `finish_overlay_refresh` alone cost 3.2-5.9 seconds. A
+fresh profiled render took 4.668 seconds, including 2.239 seconds in canonical
+citation augmentation and 1.613 seconds in answer-alignment. The change reuses
+only source-identity-checked, answer-ordinal-checked persisted evidence and exact
+block/anchor plans. Legacy, incomplete, mismatched, and unbound payloads retain
+the existing scan and repair path.
+
+The same four representative cases then passed 12/12 repeated runs under
+`F:\research-papers\2026\Jan\else\kb_chat_ab_runtime\tail_latency_current\optimized_repeat_20260812`.
+Median answer-to-card time changed as follows:
+
+| Case | Baseline | Optimized | Change |
+|---|---:|---:|---:|
+| Hadamard/Fourier basis choice | 7,326 ms | 1,034 ms | -86% |
+| Classical denoising map | 3,336 ms | 855 ms | -74% |
+| QCLFM refocus | 2,366 ms | 2,293 ms | -3% |
+| SCINeRF forward equation | 6,328 ms | 2,753 ms | -56% |
+
+The final exact-code 29-question release is
+`F:\research-papers\2026\Jan\else\kb_chat_ab_runtime\tail_latency_current\full_library_release\20260812_020222`.
+It passed 29/29 with first-visible p50/p95/max of
+2,776/4,819/5,684 ms, UI-ready p50/p95/max of
+6,520/12,650/16,526 ms, and final-validation p50/p95/max of
+6,520/12,650/17,612 ms. Answer-to-card p50/p95/max was
+1,169/2,872/3,781 ms. Compared with the accepted same-corpus candidate above,
+UI-ready p50 improved 21.3% and p95 improved 5.1%; max increased 3.5% and is
+reported rather than hidden. The max case was PILN: its measured LLM answer
+stage took 10.644 seconds, so the remaining extreme is provider/model output,
+not the removed citation scan. Answer length, evidence count, source coverage,
+and quality gates were not reduced to chase that extreme.
+
+The independent five-question paid-model smoke passed 5/5 at
+`F:\research-papers\2026\Jan\else\kb_chat_ab_runtime\tail_latency_current\live_smoke_release\20260812_020817`,
+with UI-ready p50/p95/max of 3,830/5,312/5,343 ms and final-validation
+p50/p95/max of 3,830/5,820/5,939 ms. Three complete project journeys under
+`F:\research-papers\2026\Jan\else\kb_chat_ab_runtime\tail_latency_current\project_journeys_release`
+each passed 20/20. Deterministic retrieval remained 29/29, source validation
+remained 41/41, and the reviewed grounded replay remained 6/6.
+
+CI-equivalent local validation passed 4,141 backend unit tests with 41
+configuration-dependent skips, 262 sanity tests with two skips, the visible
+Agent contract 5/5, Ruff, ESLint, the production build, all quality fixtures,
+frontend smoke 127 applicable tests with two private-auth skips, core citation
+and library regressions 109/109, and public-surface isolation 4/4.

@@ -2629,6 +2629,16 @@ def _authoritative_system_a_plan_covers_answer(
         strict_locate = bool(
             slot.get("strict_locate") or slot.get("strictLocate")
         )
+        has_exact_block_locator = bool(
+            str(slot.get("block_id") or slot.get("blockId") or "").strip()
+            or str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
+        )
+        has_bound_candidate = any(
+            str(value or "").isdigit() and int(value) > 0
+            for value in list(
+                slot.get("candidate_hits") or slot.get("candidateHits") or []
+            )
+        )
         authoritative = bool(
             (
                 reason
@@ -2657,6 +2667,12 @@ def _authoritative_system_a_plan_covers_answer(
                 == "scope_boundary"
                 and has_locator
             )
+            # A plan slot bound to a visible answer occurrence and an exact
+            # source block/anchor is already stricter than a second whole-paper
+            # similarity scan.  Reuse the passage that actually grounded the
+            # answer; rescanning can only add latency or move the card to a
+            # different same-paper occurrence.
+            or (has_bound_candidate and has_exact_block_locator)
             or bool(
                 has_locator
                 and re.search(
@@ -12143,6 +12159,18 @@ def _augment_hits_with_canonical_answer_citations(
             continue
         source_identity = _reading_slot_source_identity(source_path)
         def _is_authoritative_source_hit(hit: dict) -> bool:
+            hit_meta = (
+                hit.get("meta")
+                if isinstance(hit, dict) and isinstance(hit.get("meta"), dict)
+                else {}
+            )
+            hit_primary = (
+                (hit.get("ui_meta") or {}).get("primary_evidence")
+                if isinstance(hit, dict)
+                and isinstance(hit.get("ui_meta"), dict)
+                and isinstance((hit.get("ui_meta") or {}).get("primary_evidence"), dict)
+                else {}
+            )
             return bool(
                 isinstance(hit, dict)
                 and _reading_slot_source_identity(
@@ -12225,6 +12253,26 @@ def _augment_hits_with_canonical_answer_citations(
                             _primary_evidence_text(
                                 (hit.get("ui_meta") or {}).get("primary_evidence") or {}
                             )
+                        )
+                    )
+                    or (
+                        # ``canonical_hit_evidence`` is the compact source row
+                        # sent to the model and persisted with the final answer.
+                        # The loop above has already verified its ordinal and
+                        # full source identity before setting this flag.  Treat
+                        # that row as authoritative even when an older payload
+                        # lacks a strict block id, rather than rereading every
+                        # block in the same paper.
+                        bool(hit_meta.get("canonical_answer_evidence"))
+                        and _reading_slot_source_identity(
+                            hit_primary.get("source_path")
+                            or hit_primary.get("sourcePath")
+                            or hit_meta.get("source_path")
+                        )
+                        == source_identity
+                        and bool(
+                            _primary_evidence_text(hit_primary)
+                            or str(hit.get("text") or "").strip()
                         )
                     )
                 )
@@ -15652,17 +15700,16 @@ def enrich_messages_with_reference_render(
             if isinstance(rec_meta_for_plan.get("canonical_hit_paths"), list)
             else []
         )
-        if (
-            _authoritative_doc_list_plan_covers_pack(
-                raw_ref_pack_dict,
-                message_citation_plan,
-            )
-            or _authoritative_system_a_plan_covers_answer(
-                message_citation_plan,
-                answer_text=render_source,
-                canonical_paths=canonical_paths_for_plan,
-            )
-        ):
+        authoritative_doc_list_plan = _authoritative_doc_list_plan_covers_pack(
+            raw_ref_pack_dict,
+            message_citation_plan,
+        )
+        authoritative_system_a_plan = _authoritative_system_a_plan_covers_answer(
+            message_citation_plan,
+            answer_text=render_source,
+            canonical_paths=canonical_paths_for_plan,
+        )
+        if authoritative_doc_list_plan or authoritative_system_a_plan:
             raw_ref_pack_dict = dict(raw_ref_pack_dict or {})
             pipeline_debug = dict(raw_ref_pack_dict.get("pipeline_debug") or {})
             pipeline_debug["allow_answer_alignment_source_scan"] = False
@@ -15715,7 +15762,7 @@ def enrich_messages_with_reference_render(
             )
         ref_pack = (
             _effective_reference_render_pack(raw_ref_pack_dict)
-            if pre_aligned_cache is not None
+            if pre_aligned_cache is not None or authoritative_system_a_plan
             else _answer_aligned_reference_render_pack(raw_ref_pack_dict, render_source)
         )
         render_locale = _effective_citation_render_locale(ref_pack if isinstance(ref_pack, dict) else None)
