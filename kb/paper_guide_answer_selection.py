@@ -19,6 +19,7 @@ from kb.paper_guide_provenance import (
 from kb.paper_guide_retrieval_runtime import (
     _paper_guide_citation_lookup_signal_score,
     _paper_guide_hit_matches_requested_targets,
+    _paper_guide_semantic_query_terms,
 )
 from kb.paper_guide_shared import (
     _CLAIM_EXPERIMENT_HINT_RE,
@@ -380,6 +381,110 @@ def _paper_guide_method_aspect_priority_hits(
     return selected
 
 
+def _paper_guide_named_acronym_priority_hits(
+    ranked: list[tuple[float, dict]],
+    *,
+    prompt: str,
+) -> list[dict]:
+    """Reserve one source block for each named mechanism in a compound question."""
+
+    q = str(prompt or "").strip()
+    if re.search(
+        r"(?i)\b(?:observation|measurement|forward|imaging)\s+"
+        r"(?:model|matrix|equation)s?\b|\u89c2\u6d4b(?:\u6a21\u578b|\u77e9\u9635|\u65b9\u7a0b)",
+        q,
+    ):
+        # Observation-model comparisons often require one equation paragraph
+        # that deliberately defines both named systems together.
+        return []
+    named: list[str] = []
+    for token in re.findall(
+        r"(?<![A-Za-z0-9])([A-Z][A-Z0-9+_-]{1,15})(?![A-Za-z0-9])",
+        q,
+    ):
+        normalized = str(token or "").upper()
+        if normalized in {"PDF", "DOI", "RGB", "PSNR", "SSIM", "SNR", "CNR"}:
+            continue
+        # Dataset/version identifiers such as SA-1B are quantitative facets,
+        # not a second named mechanism to balance against SAM. Treating them
+        # as mechanism acronyms can reserve a low-value appendix occurrence
+        # and consume one of the bounded answer passages before the exact
+        # dataset-statistics block is considered.
+        if any(char.isdigit() for char in normalized):
+            continue
+        if normalized not in named:
+            named.append(normalized)
+    if len(named) < 2:
+        return []
+
+    semantic_terms = {
+        str(token or "").casefold()
+        for token in _paper_guide_semantic_query_terms(q)
+        if str(token or "").strip()
+    }
+    selected: list[dict] = []
+    for acronym in named:
+        matching: list[tuple[float, dict, str]] = []
+        for base_score, hit in ranked:
+            meta = hit.get("meta", {}) or {}
+            surface = " ".join(
+                (
+                    str(meta.get("heading_path") or meta.get("top_heading") or ""),
+                    str(hit.get("text") or ""),
+                )
+            )
+            if not re.search(
+                rf"(?<![A-Z0-9]){re.escape(acronym)}(?![A-Z0-9])",
+                surface.upper(),
+            ):
+                continue
+            matching.append((float(base_score), hit, surface))
+        if not matching:
+            continue
+        exclusive = [
+            item
+            for item in matching
+            if sum(
+                bool(
+                    re.search(
+                        rf"(?<![A-Z0-9]){re.escape(other)}(?![A-Z0-9])",
+                        item[2].upper(),
+                    )
+                )
+                for other in named
+            )
+            == 1
+        ]
+        exclusive_ids = {id(item[1]) for item in exclusive}
+
+        def priority_key(item: tuple[float, dict, str]) -> tuple[int, int, float]:
+            acronym_sentences = [
+                sentence
+                for sentence in re.split(r"(?<=[.!?])\s+|\n+", item[2])
+                if re.search(
+                    rf"(?<![A-Z0-9]){re.escape(acronym)}(?![A-Z0-9])",
+                    sentence.upper(),
+                )
+            ]
+            focused_surface = " ".join(acronym_sentences) or item[2]
+            source_terms = {
+                token.casefold()
+                for token in re.findall(
+                    r"[A-Za-z][A-Za-z0-9_-]{2,}", focused_surface
+                )
+            }
+            return (
+                len(source_terms & semantic_terms),
+                int(id(item[1]) in exclusive_ids),
+                item[0],
+            )
+
+        _score, chosen, _surface = max(matching, key=priority_key)
+        if all(chosen is not item for item in selected):
+            selected.append(chosen)
+    return selected
+
+
 def _select_paper_guide_answer_hits(
     *,
     grouped_docs: list[dict],
@@ -436,6 +541,43 @@ def _select_paper_guide_answer_hits(
         ranked.append((score, rec))
 
     ranked.sort(key=lambda item: item[0], reverse=True)
+    # Keep the immutable section-heading page alongside paragraphs that begin
+    # on the following page.  PDF conversion can place a heading at the foot
+    # of p. N and its first equation/paragraph at p. N+1.  Treating only the
+    # content block's page as the section location makes an otherwise exact
+    # citation miss the section the reader was told to open.
+    section_starts: dict[tuple[str, str], tuple[int, str]] = {}
+    for _score, hit in ranked:
+        meta = hit.get("meta", {}) or {}
+        if not _looks_like_heading_only_hit(hit):
+            continue
+        source_key = str(meta.get("source_path") or "").replace("\\", "/").casefold()
+        heading_key = normalize_match_text(str(meta.get("heading_path") or ""))
+        try:
+            page_start = int(meta.get("page_start") or 0)
+        except (TypeError, ValueError):
+            page_start = 0
+        heading_text = str(hit.get("text") or "").strip()
+        if not source_key or not heading_key or page_start <= 0 or not heading_text:
+            continue
+        previous = section_starts.get((source_key, heading_key))
+        if previous is None or page_start < previous[0]:
+            section_starts[(source_key, heading_key)] = (page_start, heading_text)
+    for _score, hit in ranked:
+        meta = dict(hit.get("meta") or {})
+        source_key = str(meta.get("source_path") or "").replace("\\", "/").casefold()
+        heading_key = normalize_match_text(str(meta.get("heading_path") or ""))
+        section_start = section_starts.get((source_key, heading_key))
+        if section_start is None:
+            continue
+        try:
+            page_start = int(meta.get("page_start") or 0)
+        except (TypeError, ValueError):
+            page_start = 0
+        if page_start > section_start[0]:
+            meta["section_page_start"] = int(section_start[0])
+            meta["section_heading_text"] = str(section_start[1])
+            hit["meta"] = meta
     out: list[dict] = []
     seen_out: set[tuple[str, str]] = set()
     target_filtered = bool(_paper_guide_requested_heading_hints(prompt))
@@ -459,11 +601,11 @@ def _select_paper_guide_answer_hits(
         _matches_effective_target(hit)
         for _score, hit in ranked
     )
-    priority_hits = (
-        _paper_guide_method_aspect_priority_hits(ranked, prompt=prompt)
-        if family == "method"
-        else []
-    )
+    priority_hits = _paper_guide_named_acronym_priority_hits(ranked, prompt=prompt)
+    if family == "method":
+        for hit in _paper_guide_method_aspect_priority_hits(ranked, prompt=prompt):
+            if all(hit is not item for item in priority_hits):
+                priority_hits.append(hit)
     ordered_ranked = [
         (float("inf"), hit)
         for hit in priority_hits
@@ -494,6 +636,149 @@ def _select_paper_guide_answer_hits(
         out.append(hit)
         if len(out) >= limit:
             break
+
+    # A multi-fact question may need two short immutable blocks from the same
+    # PDF page: e.g. one "Images" paragraph and one "Masks" paragraph, or an
+    # equation followed by the sentence that says it is unweighted.  Raw score
+    # alone tends to spend the last bounded passage on a broad ablation.  Swap
+    # in at most two same-page companions only when they add a term explicitly
+    # requested by the question.  This preserves the context/latency cap while
+    # improving factual completeness instead of broadening retrieval.
+    semantic_surface = " ".join(_paper_guide_semantic_query_terms(prompt))
+
+    def _facet_terms(value: object) -> set[str]:
+        return {
+            token.casefold()
+            for token in re.findall(
+                r"[A-Za-z][A-Za-z0-9_-]{1,}|\d+(?:\.\d+)?%?|[\u4e00-\u9fff]{2,8}",
+                f"{value or ''}",
+            )
+            if len(token.rstrip("%")) >= 2
+        }
+
+    requested_terms = _facet_terms(f"{prompt} {semantic_surface}")
+
+    def _candidate_surface(hit: dict) -> str:
+        meta = hit.get("meta", {}) or {}
+        return " ".join(
+            (
+                str(meta.get("heading_path") or meta.get("top_heading") or ""),
+                str(hit.get("text") or ""),
+            )
+        )
+
+    def _source_page(hit: dict) -> tuple[str, int]:
+        meta = hit.get("meta", {}) or {}
+        source = str(meta.get("source_path") or "").replace("\\", "/").casefold()
+        try:
+            page = int(meta.get("page_start") or 0)
+        except (TypeError, ValueError):
+            page = 0
+        return source, page
+
+    facet_doc_frequency: dict[str, int] = {term: 0 for term in requested_terms}
+    for _score, ranked_hit in ranked:
+        ranked_terms = _facet_terms(_candidate_surface(ranked_hit))
+        for term in requested_terms & ranked_terms:
+            facet_doc_frequency[term] = facet_doc_frequency.get(term, 0) + 1
+
+    chosen_ids = {id(hit) for hit in out}
+    protected_companion_ids: set[int] = set()
+    protected_base_ids: set[int] = set()
+    companion_rows: list[tuple[int, float, int, float, dict, dict]] = []
+    for base in list(out):
+        base_source, base_page = _source_page(base)
+        if not base_source or base_page <= 0:
+            continue
+        base_requested = requested_terms & _facet_terms(_candidate_surface(base))
+        for candidate_score, candidate in ranked:
+            if id(candidate) in chosen_ids or _looks_like_heading_only_hit(candidate):
+                continue
+            candidate_source, candidate_page = _source_page(candidate)
+            if candidate_source != base_source or candidate_page != base_page:
+                continue
+            candidate_requested = requested_terms & _facet_terms(_candidate_surface(candidate))
+            gained = candidate_requested - base_requested
+            if not gained or len(candidate_requested) < 2:
+                continue
+            numeric_gain = sum(
+                bool(re.fullmatch(r"\d+(?:\.\d+)?%?|\d+[a-z]+", token))
+                for token in gained
+            )
+            rarity_gain = sum(
+                1.0 / max(1, facet_doc_frequency.get(term, 1))
+                for term in gained
+            )
+            companion_rows.append(
+                (
+                    numeric_gain,
+                    rarity_gain,
+                    len(gained),
+                    float(candidate_score),
+                    candidate,
+                    base,
+                )
+            )
+    companion_rows.sort(
+        key=lambda item: (item[0], item[1], item[2], item[3]),
+        reverse=True,
+    )
+    replacements = 0
+    for _numeric_gain, _rarity, _gain, _score, candidate, base in companion_rows:
+        if replacements >= 2 or id(candidate) in chosen_ids:
+            continue
+        candidate_terms = requested_terms & _facet_terms(_candidate_surface(candidate))
+        victim_rows: list[tuple[int, float, int]] = []
+        for index, current in enumerate(out):
+            if (
+                current is base
+                or id(current) in protected_companion_ids
+                or id(current) in protected_base_ids
+            ):
+                continue
+            current_source, _current_page = _source_page(current)
+            candidate_source, _candidate_page = _source_page(candidate)
+            if current_source != candidate_source:
+                continue
+            current_terms = requested_terms & _facet_terms(_candidate_surface(current))
+            other_terms: set[str] = set()
+            for other_index, other in enumerate(out):
+                if other_index == index:
+                    continue
+                other_terms.update(
+                    requested_terms & _facet_terms(_candidate_surface(other))
+                )
+            unique_current_terms = current_terms - other_terms
+            current_heading = normalize_match_text(
+                str(((current.get("meta") or {}).get("heading_path") or ""))
+            )
+            low_value = int(
+                bool(re.search(r"\bablation|appendix|references?\b", current_heading))
+            )
+            try:
+                current_score = float(current.get("score") or 0.0)
+            except (TypeError, ValueError):
+                current_score = 0.0
+            victim_rows.append(
+                (
+                    len(unique_current_terms) - 3 * low_value,
+                    current_score,
+                    index,
+                )
+            )
+        if not victim_rows:
+            continue
+        victim_overlap, _victim_score, victim_index = min(victim_rows)
+        base_terms = requested_terms & _facet_terms(_candidate_surface(base))
+        candidate_gain = candidate_terms - base_terms
+        if len(candidate_gain) < max(1, victim_overlap):
+            continue
+        chosen_ids.discard(id(out[victim_index]))
+        out[victim_index] = candidate
+        chosen_ids.add(id(candidate))
+        protected_companion_ids.add(id(candidate))
+        protected_base_ids.add(id(base))
+        replacements += 1
     return out[:limit]
 
 
@@ -645,6 +930,125 @@ def _build_answer_hits_for_generation(
     if out:
         return out[:limit]
     return list((grouped_docs or heading_hits or [])[:limit])
+
+
+def _merge_same_source_answer_hits(
+    hits: list[dict],
+    *,
+    max_passages: int = 5,
+    passage_char_limit: int = 1100,
+) -> list[dict]:
+    """Represent complementary passages from one paper as one citeable doc.
+
+    Generation context labels are document identifiers. Giving several chunks
+    from the same paper separate ``DOC-n`` labels makes ordinary numeric model
+    citations ambiguous with the paper's bibliography. Preserve the passages,
+    headings, and pages in one source bundle so all answer claims cite DOC-1;
+    the citation plan can still bind each claim to its exact passage.
+    """
+
+    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
+    if len(rows) <= 1:
+        return rows
+    source_keys = {
+        _hit_source_path(hit).replace("\\", "/").casefold()
+        for hit in rows
+        if _hit_source_path(hit)
+    }
+    if len(source_keys) != 1:
+        return rows
+    try:
+        limit = max(1, int(max_passages or 5))
+    except Exception:
+        limit = 5
+    try:
+        text_limit = max(320, int(passage_char_limit or 1100))
+    except Exception:
+        text_limit = 1100
+
+    passages: list[str] = []
+    passage_meta: list[dict] = []
+    seen: set[str] = set()
+    for hit in rows:
+        if len(passages) >= limit:
+            break
+        meta = dict(hit.get("meta") or {})
+        body = str(hit.get("text") or "").strip()
+        if not body:
+            continue
+        fingerprint = hashlib.sha1(
+            normalize_match_text(body[:520]).encode("utf-8", "ignore")
+        ).hexdigest()[:16]
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        if len(body) > text_limit:
+            body = body[:text_limit].rsplit(" ", 1)[0].rstrip() + "..."
+        heading = str(meta.get("heading_path") or meta.get("top_heading") or "").strip()
+        try:
+            page_start = int(meta.get("page_start") or 0)
+            page_end = int(meta.get("page_end") or page_start or 0)
+        except Exception:
+            page_start = 0
+            page_end = 0
+        label_parts = [part for part in (heading, f"p. {page_start}" if page_start > 0 else "") if part]
+        label = " | ".join(label_parts) or f"Passage {len(passages) + 1}"
+        passages.append(f"[Source passage {len(passages) + 1}: {label}]\n{body}")
+        passage_meta.append(
+            {
+                key: value
+                for key, value in {
+                    "heading_path": heading,
+                    "page_start": page_start,
+                    "page_end": page_end,
+                    "block_id": str(meta.get("block_id") or "").strip(),
+                    "anchor_id": str(meta.get("anchor_id") or "").strip(),
+                    "anchor_kind": str(meta.get("anchor_kind") or "").strip(),
+                    "section_page_start": int(meta.get("section_page_start") or 0),
+                    "section_heading_text": str(meta.get("section_heading_text") or "").strip(),
+                    "score": float(hit.get("score") or 0.0),
+                    "text": body,
+                }.items()
+                if value not in ("", 0)
+            }
+        )
+    if len(passages) <= 1:
+        return rows[:1]
+
+    merged = dict(rows[0])
+    merged["text"] = "\n\n".join(passages)
+    merged["score"] = max(float(hit.get("score") or 0.0) for hit in rows)
+    merged_meta = dict(merged.get("meta") or {})
+    merged_meta["same_source_evidence_bundle"] = True
+    merged_meta["source_passage_count"] = len(passages)
+    merged_meta["source_passages"] = passage_meta
+    merged["meta"] = merged_meta
+    return [merged]
+
+
+def _bundle_answer_hits_by_source(hits: list[dict]) -> list[dict]:
+    """Bundle repeated passages per paper while preserving paper order."""
+
+    ordered_keys: list[str] = []
+    grouped: dict[str, list[dict]] = {}
+    passthrough: list[tuple[int, dict]] = []
+    for index, hit in enumerate(list(hits or [])):
+        if not isinstance(hit, dict):
+            continue
+        source_key = _hit_source_path(hit).replace("\\", "/").casefold()
+        if not source_key:
+            passthrough.append((index, dict(hit)))
+            continue
+        if source_key not in grouped:
+            ordered_keys.append(source_key)
+            grouped[source_key] = []
+        grouped[source_key].append(dict(hit))
+
+    out: list[dict] = []
+    for source_key in ordered_keys:
+        out.extend(_merge_same_source_answer_hits(grouped[source_key]))
+    out.extend(hit for _index, hit in sorted(passthrough, key=lambda item: item[0]))
+    return out
 
 
 def _has_anchor_grounded_answer_hits(answer_hits: list[dict]) -> bool:

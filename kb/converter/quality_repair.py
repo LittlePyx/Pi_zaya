@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import difflib
+import heapq
 import hashlib
 import json
 import os
@@ -16,9 +17,12 @@ from typing import Any
 from urllib.parse import unquote
 
 from .post_processing import postprocess_markdown
-from .post_math_rules import contains_bare_tagged_display_math
+from .post_math_rules import contains_bare_tagged_display_math, repair_inline_math_prose_boundaries_document
 from .post_references import _is_post_references_resume_heading_line
-from .quality_acceptance import summarize_conversion_quality
+from .quality_acceptance import (
+    is_prose_dominant_display_math_block,
+    summarize_conversion_quality,
+)
 from .quality_compare import compare_markdown_quality
 from .reference_markdown import (
     fix_references_format,
@@ -35,7 +39,12 @@ from .pdf_reference_text import (
     trim_reference_publisher_tail,
 )
 from .reference_page_vl import reference_markdown_entry_count
-from .tables import markdown_table_issue_counts, normalize_markdown_tables_document
+from .tables import (
+    markdown_table_issue_counts,
+    markdown_table_issue_spans,
+    normalize_markdown_tables_document,
+    repair_detached_markdown_table_rows_document,
+)
 from .text_utils import _normalize_text, contains_only_detached_accent_mojibake, normalize_detached_accents
 from kb.inpaper_citation_grounding import iter_inpaper_numeric_citations, parse_ref_num_set
 from kb.reference_index import extract_references_map_from_md
@@ -49,6 +58,8 @@ except ImportError:
 PAGE_MARKER_RE = re.compile(r"<!--\s*kb_page:\s*(\d+)\s*-->", re.IGNORECASE)
 DISPLAY_MATH_DELIMITER_RE = re.compile(r"^\s*\$\$\s*$")
 IMAGE_LINE_RE = re.compile(r"^(\s*)!\[([^\]]*)]\(([^)]+)\)\s*$")
+CONVERSION_RETRY_MARKER_RE = re.compile(r"<!--\s*kb:conversion_retry\s+(.+?)\s*-->", re.IGNORECASE)
+CONVERSION_RETRY_ATTR_RE = re.compile(r"([A-Za-z_][\w-]*)=(?:\"([^\"]*)\"|'([^']*)'|([^\s]+))")
 CAPTION_LINE_RE = re.compile(
     r"^\s*(?:\*{1,2}\s*)?(?:fig(?:ure)?\.?|table|algorithm)\s*(?:S?\d+[A-Za-z]?|[A-Za-z](?:\.\d+)?|[IVXLC]+)\b",
     re.IGNORECASE,
@@ -385,31 +396,43 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "safe": True,
         "action": "autofix",
         "scope": "markdown",
-        "strategies": ["normalize_markdown_tables", "postprocess_markdown", "balance_display_math", "figure_metadata_captions"],
+        "strategies": [
+            "repair_detached_table_rows",
+            "repair_inline_math_boundaries",
+            "normalize_markdown_tables",
+            "postprocess_markdown",
+            "balance_display_math",
+            "figure_metadata_captions",
+        ],
     },
     "analyzer_warnings": {
         "label": "Normalize headings, captions, tables, and layout noise",
         "safe": True,
         "action": "autofix",
         "scope": "markdown",
-        "strategies": ["normalize_markdown_tables", "postprocess_markdown", "figure_metadata_captions", "pdf_text_captions"],
+        "strategies": [
+            "normalize_markdown_tables",
+            "postprocess_markdown",
+            "figure_metadata_captions",
+            "pdf_text_captions",
+            "recover_ambiguous_table_pages",
+        ],
     },
     "collapsed_table_rows": {
-        "label": "Recover collapsed Markdown table rows",
+        "label": "Recover collapsed table rows or preserve the source PDF page",
         "safe": True,
         "action": "autofix",
         "scope": "markdown",
         "reason": "Multiple logical data rows were packed into cells with literal HTML break markers.",
-        "strategies": ["normalize_markdown_tables"],
+        "strategies": ["normalize_markdown_tables", "recover_ambiguous_table_pages"],
     },
     "ambiguous_table_break_rows": {
-        "label": "Reconvert ambiguous multi-row table cells",
-        "safe": False,
-        "action": "reconvert",
-        "scope": "document",
-        "speed_mode": "normal",
-        "reason": "Table cells contain inconsistent row counts, so method-to-value coordinates cannot be recovered safely from Markdown alone.",
-        "strategies": [],
+        "label": "Preserve ambiguous tables as source PDF page evidence",
+        "safe": True,
+        "action": "autofix",
+        "scope": "pages",
+        "reason": "When row coordinates cannot be reconstructed safely, retain the original PDF page image and text layer instead of guessing cells.",
+        "strategies": ["recover_ambiguous_table_pages"],
     },
     "duplicate_table_representations": {
         "label": "Remove a nearby lower-quality duplicate table",
@@ -464,22 +487,20 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "strategies": ["balance_display_math"],
     },
     "conversion_retry_math_text": {
-        "label": "Reconvert unresolved math text",
-        "safe": False,
-        "action": "reconvert",
-        "scope": "document",
-        "speed_mode": "normal",
-        "reason": "The converter left unresolved math-text retry markers, so formulas or nearby prose are not reliable enough to index.",
-        "strategies": [],
+        "label": "Recover unresolved math text from its source PDF page",
+        "safe": True,
+        "action": "autofix",
+        "scope": "pages",
+        "reason": "Retain visual evidence and recover authoritative prose from the same PDF page.",
+        "strategies": ["recover_conversion_retry_pages"],
     },
     "conversion_retry_equation": {
-        "label": "Retry equation conversion",
-        "safe": False,
-        "action": "reconvert",
-        "scope": "document",
-        "speed_mode": "normal",
-        "reason": "One or more equations fell back to images after conversion retries and need a quality conversion pass.",
-        "strategies": [],
+        "label": "Ground equation fallbacks in their source PDF pages",
+        "safe": True,
+        "action": "autofix",
+        "scope": "pages",
+        "reason": "Keep the equation image and add the authoritative text layer from the same PDF page.",
+        "strategies": ["recover_conversion_retry_pages"],
     },
     "conversion_retry_other": {
         "label": "Review unresolved conversion retries",
@@ -495,7 +516,7 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "autofix",
         "scope": "markdown",
         "reason": "Natural-language prose was captured inside a display-math block, which breaks reading and formula rendering.",
-        "strategies": ["postprocess_markdown"],
+        "strategies": ["unwrap_prose_display_math", "postprocess_markdown"],
     },
     "display_math_markdown_link": {
         "label": "Reconvert Markdown links captured inside display math",
@@ -590,7 +611,7 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "review",
         "scope": "document",
         "reason": "A later numbered section appears before an earlier one, which can indicate cross-page text displacement.",
-        "strategies": [],
+        "strategies": ["demote_malformed_numbered_headings"],
     },
 }
 
@@ -931,6 +952,8 @@ _PERSISTENT_SOURCE_AUTOFIX_ISSUES = {
     "source_page_marker_alignment",
     "source_table_page_alignment",
     "source_page_prose_omission",
+    "conversion_retry_math_text",
+    "conversion_retry_equation",
 }
 
 
@@ -1008,8 +1031,24 @@ def _escalate_persistent_source_autofix(
             }
         )
     else:
+        retry_marker_codes = persistent & {
+            "conversion_retry_math_text",
+            "conversion_retry_equation",
+        }
         for row in issue_actions:
-            if str(row.get("code") or "").strip().lower() in persistent:
+            code = str(row.get("code") or "").strip().lower()
+            if code in retry_marker_codes:
+                row.update(
+                    {
+                        "action": "reconvert",
+                        "safe": False,
+                        "scope": "document",
+                        "speed_mode": "normal",
+                        "reason": "An unresolved conversion retry requires the source PDF to be restored and reconverted.",
+                        "strategies": ["source_reconversion"],
+                    }
+                )
+            elif code in persistent:
                 row.update(
                     {
                         "action": "review",
@@ -1019,22 +1058,40 @@ def _escalate_persistent_source_autofix(
                         "strategies": [],
                     }
                 )
-        review_codes = list(plan.get("review_issue_codes") or []) + sorted(persistent)
-        plan.update(
-            {
-                "action": "review",
-                "scope": "manual",
-                "speed_mode": "",
-                "no_llm": False,
-                "replace": False,
-                "md_autofix_first": bool(autofix_codes),
-                "reason": "Page anchors need review because the source PDF is unavailable.",
-                "reconvert_issue_codes": [],
-                "autofix_issue_codes": autofix_codes,
-                "review_issue_codes": list(dict.fromkeys(str(code) for code in review_codes)),
-                "issue_actions": issue_actions,
-            }
-        )
+        manual_codes = persistent - retry_marker_codes
+        review_codes = list(plan.get("review_issue_codes") or []) + sorted(manual_codes)
+        if retry_marker_codes:
+            plan.update(
+                {
+                    "action": "reconvert",
+                    "scope": "document",
+                    "speed_mode": "normal",
+                    "no_llm": False,
+                    "replace": True,
+                    "md_autofix_first": bool(autofix_codes),
+                    "reason": "Unresolved conversion retries remain; restore the source PDF and rerun source conversion.",
+                    "reconvert_issue_codes": sorted(retry_marker_codes),
+                    "autofix_issue_codes": autofix_codes,
+                    "review_issue_codes": list(dict.fromkeys(str(code) for code in review_codes)),
+                    "issue_actions": issue_actions,
+                }
+            )
+        else:
+            plan.update(
+                {
+                    "action": "review",
+                    "scope": "manual",
+                    "speed_mode": "",
+                    "no_llm": False,
+                    "replace": False,
+                    "md_autofix_first": bool(autofix_codes),
+                    "reason": "Page anchors need review because the source PDF is unavailable.",
+                    "reconvert_issue_codes": [],
+                    "autofix_issue_codes": autofix_codes,
+                    "review_issue_codes": list(dict.fromkeys(str(code) for code in review_codes)),
+                    "issue_actions": issue_actions,
+                }
+            )
     return plan
 
 
@@ -1257,6 +1314,37 @@ def _out_of_order_numbered_sections_likely(text: str) -> bool:
     return False
 
 
+def _demote_malformed_numbered_formula_headings(md: str) -> tuple[str, bool]:
+    """Demote only duplicated ``## N #`` artifacts next to display math."""
+
+    text = str(md or "")
+    lines = text.splitlines()
+    out: list[str] = []
+    highest = 0
+    changed = False
+    for index, line in enumerate(lines):
+        match = re.match(r"^##\s+(\d{1,2})\s+#+\s*$", line.strip())
+        if not match:
+            structural = re.match(r"^##\s+(\d{1,2})(?:\.\d+)*[.)]?\s+\S", line.strip())
+            if structural:
+                highest = max(highest, int(structural.group(1)))
+            out.append(line)
+            continue
+        number = int(match.group(1))
+        # A literal trailing ``#`` is not a valid numbered section title. If
+        # the same/later section has already appeared, this is an equation
+        # shard regardless of whether another OCR glyph precedes the ``$$``.
+        if highest >= number:
+            out.append(str(match.group(1)))
+            changed = True
+            continue
+        out.append(line)
+    fixed = "\n".join(out)
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed, changed and fixed != text
+
+
 _NUMERIC_ONLY_HEADING_RE = re.compile(
     r"^#{1,6}\s+(?:\d+(?:\.\d+)?\s*){2,}$",
     re.MULTILINE,
@@ -1404,6 +1492,40 @@ def _balance_display_math(md: str) -> tuple[str, bool]:
         changed = True
     fixed = "\n".join(out)
     return fixed, changed and fixed != str(md or "")
+
+
+def _unwrap_prose_dominant_display_math(md: str) -> tuple[str, bool]:
+    """Remove display delimiters only from blocks classified as prose-heavy.
+
+    The block body is preserved exactly so mixed prose/equation evidence is
+    never discarded. Genuine equation-only blocks retain their delimiters.
+    """
+
+    original = str(md or "")
+    lines = original.splitlines()
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        if not DISPLAY_MATH_DELIMITER_RE.match(lines[index]):
+            out.append(lines[index])
+            index += 1
+            continue
+        end = index + 1
+        while end < len(lines) and not DISPLAY_MATH_DELIMITER_RE.match(lines[end]):
+            end += 1
+        if end >= len(lines):
+            out.extend(lines[index:])
+            break
+        block_lines = lines[index + 1 : end]
+        if is_prose_dominant_display_math_block("\n".join(block_lines)):
+            out.extend(block_lines)
+        else:
+            out.extend(lines[index : end + 1])
+        index = end + 1
+    repaired = "\n".join(out)
+    if original.endswith("\n"):
+        repaired += "\n"
+    return repaired, repaired != original
 
 
 def _asset_name_from_image_target(target: str) -> str:
@@ -2167,6 +2289,7 @@ def _source_page_wrapped_word_damage(page_text: str, local_segment: str) -> dict
 
 _SOURCE_PROSE_BLOCK_SKIP_RE = re.compile(
     r"^\s*(?:"
+    r"\[\s*\d{1,4}\s*\]\s+|"
     r"fig(?:ure)?\.?\s*\d|table\s*\d|algorithm\s*\d|"
     r"acknowledg(?:e)?ments?|author\s+details?|funding|"
     r"supplementary\s+information|publisher(?:'s|’s)?\s+note|open\s+access"
@@ -2232,6 +2355,57 @@ def _eligible_source_prose_block(block: str) -> bool:
     return len(re.findall(r"[.!?](?:\s|$)", value)) >= SOURCE_PAGE_MIN_PROSE_SENTENCES
 
 
+def _anchored_local_prose_window(
+    source_tokens: list[str],
+    local_tokens: list[str],
+    local_positions: dict[str, list[int]],
+) -> list[str]:
+    """Bound paragraph comparison to its anchored region on the converted page.
+
+    Comparing every source block with every token on a long two-column page is
+    quadratic and made final quality verification dominate conversion time.
+    Stable token offsets identify the same paragraph even when a short interior
+    phrase is missing.  When there are too few anchors, retain the original
+    whole-page comparison so the quality gate never loses recall.
+    """
+
+    if len(local_tokens) <= max(320, len(source_tokens) * 3):
+        return local_tokens
+
+    deltas: list[int] = []
+    for source_index, token in enumerate(source_tokens):
+        positions = local_positions.get(token) or []
+        # Very common words are weak anchors and create large cross products.
+        if not positions or len(positions) > 8:
+            continue
+        deltas.extend(local_index - source_index for local_index in positions)
+    if len(deltas) < 6:
+        return local_tokens
+
+    # A small deletion shifts the suffix offsets by only a few positions. Find
+    # the densest offset cluster instead of requiring one exact delta.
+    sorted_deltas = sorted(deltas)
+    cluster_width = max(12, min(64, len(source_tokens) // 3))
+    best_start = 0
+    best_end = 0
+    left = 0
+    for right, delta in enumerate(sorted_deltas):
+        while delta - sorted_deltas[left] > cluster_width:
+            left += 1
+        if right - left > best_end - best_start:
+            best_start, best_end = left, right
+    cluster = sorted_deltas[best_start : best_end + 1]
+    if len(cluster) < 6:
+        return local_tokens
+
+    margin = max(40, min(160, len(source_tokens) // 2))
+    window_start = max(0, min(cluster) - margin)
+    window_end = min(len(local_tokens), max(cluster) + len(source_tokens) + margin)
+    if window_end - window_start < len(source_tokens):
+        return local_tokens
+    return local_tokens[window_start:window_end]
+
+
 def _source_page_prose_omission_damage(block_texts: list[str], local_segment: str) -> dict[str, Any]:
     """Detect source words deleted from inside otherwise matching prose.
 
@@ -2253,6 +2427,9 @@ def _source_page_prose_omission_damage(block_texts: list[str], local_segment: st
             "anchored_omission_examples": [],
             "text_omission": False,
         }
+    local_positions: dict[str, list[int]] = {}
+    for local_index, token in enumerate(local_tokens):
+        local_positions.setdefault(token, []).append(local_index)
 
     assessed = 0
     omitted_words = 0
@@ -2276,9 +2453,14 @@ def _source_page_prose_omission_damage(block_texts: list[str], local_segment: st
         ]
 
         assessed += 1
+        comparison_tokens = _anchored_local_prose_window(
+            source_tokens,
+            local_tokens,
+            local_positions,
+        )
         opcodes = difflib.SequenceMatcher(
             a=source_tokens,
-            b=local_tokens,
+            b=comparison_tokens,
             autojunk=False,
         ).get_opcodes()
         for opcode_index, (tag, source_start, source_end, _local_start, _local_end) in enumerate(opcodes):
@@ -2786,6 +2968,32 @@ def _source_page_anchor_alignment_quality(text: str, pdf_path: Path | None) -> d
     }
 
 
+_NON_CITATION_NUMERIC_ARRAY_CONTEXT_RE = re.compile(
+    r"(?:channels?|heads?|blocks?|dimensions?|sizes?|resolutions?|widths?|depths?|"
+    r"batch\s+sizes?|sequence\s+lengths?|kernel\s+sizes?|strides?|values?)"
+    r"\s+(?:are|is|=)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _plausible_reference_citation_indices(body: str) -> set[int]:
+    """Return numeric citations while excluding explicit parameter arrays.
+
+    This filter is deliberately local to reference-completeness diagnostics;
+    it does not change retrieval or citation grounding.  Architecture prose
+    such as ``number of channels are [48,96,192,384]`` otherwise makes a
+    complete 109-entry bibliography look truncated.
+    """
+
+    cited: set[int] = set()
+    for spec, start, _end, _style in iter_inpaper_numeric_citations(body):
+        prefix = str(body or "")[max(0, int(start) - 96):int(start)]
+        if _NON_CITATION_NUMERIC_ARRAY_CONTEXT_RE.search(prefix):
+            continue
+        cited.update(parse_ref_num_set(spec, max_items=256))
+    return cited
+
+
 def _reference_index_truncated(text: str, metrics: dict[str, Any]) -> bool:
     reference_lines = int(metrics.get("reference_line_count") or 0)
     max_index = int(metrics.get("max_reference_index") or 0)
@@ -2798,11 +3006,7 @@ def _reference_index_truncated(text: str, metrics: dict[str, Any]) -> bool:
     first_index = min(ref_map) if ref_map else 0
     ref_heading = re.search(r"(?mi)^#{1,6}\s+(?:References|Bibliography)\s*$", str(text or ""))
     body = str(text or "")[: int(ref_heading.start())] if ref_heading else str(text or "")
-    cited_indices = {
-        ref_num
-        for spec, _start, _end, _style in iter_inpaper_numeric_citations(body)
-        for ref_num in parse_ref_num_set(spec, max_items=256)
-    }
+    cited_indices = _plausible_reference_citation_indices(body)
     if first_index == 1 and max(cited_indices, default=0) > max_index:
         return True
     if first_index > 1:
@@ -2906,13 +3110,199 @@ def _normalize_markdown_tables_only(md: str) -> tuple[str, bool]:
     return fixed, fixed != str(md or "")
 
 
+def _repair_detached_table_rows_only(md: str) -> tuple[str, bool]:
+    fixed = repair_detached_markdown_table_rows_document(md)
+    return fixed, fixed != str(md or "")
+
+
+def _repair_inline_math_boundaries_only(md: str) -> tuple[str, bool]:
+    fixed = repair_inline_math_prose_boundaries_document(md)
+    return fixed, fixed != str(md or "")
+
+
+def _table_issue_page_spans(md: str) -> list[dict[str, int]]:
+    text = str(md or "")
+    lines = text.splitlines()
+    out: list[dict[str, int]] = []
+    for item in markdown_table_issue_spans(text):
+        start = int(item.get("start") or 0)
+        prefix = "\n".join(lines[:start])
+        markers = list(PAGE_MARKER_RE.finditer(prefix))
+        page_no = int(markers[-1].group(1)) if markers else 0
+        if page_no <= 0:
+            continue
+        out.append({**item, "page": page_no})
+    return out
+
+
+def _bounded_source_recovery_paragraphs(text: str, *, max_chars: int = 700) -> str:
+    """Split a long PDF text-layer block at sentence boundaries for reading."""
+
+    parts = [part.strip() for part in re.split(r"(?<=[.!?])\s+", str(text or "")) if part.strip()]
+    paragraphs: list[str] = []
+    current = ""
+    for part in parts:
+        if current and len(current) + 1 + len(part) > max_chars:
+            paragraphs.append(current)
+            current = part
+        else:
+            current = f"{current} {part}".strip()
+    if current:
+        paragraphs.append(current)
+    return "\n\n".join(paragraphs)
+
+
+def _prepare_ambiguous_table_page_assets(md_path: Path, md_text: str, pdf_path: Path) -> list[int]:
+    """Render authoritative PDF pages before transactional table recovery."""
+
+    if fitz is None or not pdf_path.is_file():
+        return []
+    page_spans = _table_issue_page_spans(md_text)
+    pages = sorted({int(item.get("page") or 0) for item in page_spans if int(item.get("page") or 0) > 0})
+    if not pages:
+        return []
+    assets_dir = md_path.parent / "assets"
+    recovery_dir = md_path.parent / ".conversion_cache" / "table_recovery"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    recovery_dir.mkdir(parents=True, exist_ok=True)
+    lines = str(md_text or "").splitlines()
+    prepared: list[int] = []
+    try:
+        doc = fitz.open(str(pdf_path))
+    except Exception:
+        return []
+    try:
+        for page_no in pages:
+            if page_no > len(doc):
+                continue
+            asset_path = assets_dir / f"page_{page_no}_table_recovery.png"
+            if not asset_path.is_file():
+                page = doc.load_page(page_no - 1)
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(2.25, 2.25), alpha=False)
+                pixmap.save(str(asset_path))
+            raw_blocks = [
+                "\n".join(lines[int(item["start"]):int(item["end"])])
+                for item in page_spans
+                if int(item.get("page") or 0) == page_no
+            ]
+            (recovery_dir / f"page_{page_no}_original_tables.md").write_text(
+                "\n\n---\n\n".join(raw_blocks).rstrip() + "\n",
+                encoding="utf-8",
+            )
+            prepared.append(page_no)
+    finally:
+        doc.close()
+    return prepared
+
+
+def _recover_ambiguous_table_pages_from_pdf_text(
+    md: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    """Replace lossy tables with the rendered source page plus its text layer."""
+
+    text = str(md or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if not pdf_path:
+        return text, False
+    page_spans = _table_issue_page_spans(text)
+    if not page_spans:
+        return text, False
+    lines = text.splitlines()
+    replacements: dict[int, list[str]] = {}
+    handled_pages: set[int] = set()
+    for item in page_spans:
+        page_no = int(item.get("page") or 0)
+        asset_name = f"page_{page_no}_table_recovery.png"
+        asset_path = md_path.parent / "assets" / asset_name
+        fallback = _pdf_page_fallback_markdown(pdf_path, page_no)
+        fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
+        if (
+            page_no <= 0
+            or not asset_path.is_file()
+            or len(_source_prose_tokens(fallback_body)) < SOURCE_PAGE_MIN_PROSE_BLOCK_TOKENS
+        ):
+            continue
+        start = int(item.get("start") or 0)
+        end = int(item.get("end") or start)
+        if page_no not in handled_pages:
+            replacement = [
+                f"<!-- kb_table_source_recovery: {page_no} -->",
+                "",
+                f"**Table evidence.** Original table preserved from source PDF page {page_no}.",
+                "",
+                f"![Source PDF page {page_no} containing the recovered table](./assets/{asset_name})",
+                "",
+                f"<!-- kb_source_recovery: {page_no} -->",
+                "",
+                _bounded_source_recovery_paragraphs(fallback_body),
+            ]
+            handled_pages.add(page_no)
+        else:
+            replacement = [f"<!-- additional damaged table preserved in source PDF page {page_no} recovery above -->"]
+        replacements[start] = replacement
+        for index in range(start + 1, end):
+            replacements[index] = []
+    if not replacements:
+        return text, False
+    out: list[str] = []
+    for index, line in enumerate(lines):
+        if index in replacements:
+            out.extend(replacements[index])
+        else:
+            out.append(line)
+    fixed = "\n".join(out)
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed, fixed != text
+
+
+def _escape_source_recovery_literal_headings(md: str) -> tuple[str, bool]:
+    """Escape short lowercase PDF column labels that begin with ``#``.
+
+    PDF text is not Markdown.  In a source-recovery segment a label such as
+    ``# masks sampled`` is a table column, not an H1 heading.
+    """
+
+    out: list[str] = []
+    in_source_recovery = False
+    changed = False
+    for line in str(md or "").splitlines():
+        if re.match(r"^<!--\s*kb_source_recovery:\s*\d+\s*-->$", line.strip(), re.IGNORECASE):
+            in_source_recovery = True
+            out.append(line)
+            continue
+        if in_source_recovery and PAGE_MARKER_RE.fullmatch(line.strip()):
+            in_source_recovery = False
+        match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        title = str(match.group(2) or "").strip() if match else ""
+        if (
+            in_source_recovery
+            and match
+            and len(match.group(1)) == 1
+            and title == title.lower()
+            and len(title.split()) <= 6
+        ):
+            out.append("\\" + line)
+            changed = True
+        else:
+            out.append(line)
+    fixed = "\n".join(out)
+    if str(md or "").endswith("\n"):
+        fixed += "\n"
+    return fixed, changed
+
+
 def _normalize_heading_level_jumps(md: str) -> tuple[str, bool]:
-    lines = str(md or "").splitlines()
+    original = str(md or "")
+    escaped, escaped_changed = _escape_source_recovery_literal_headings(original)
+    lines = escaped.splitlines()
     out: list[str] = []
     previous_level = 0
     in_fence = False
     in_math = False
-    changed = False
+    changed = escaped_changed
 
     for line in lines:
         stripped = str(line or "").strip()
@@ -2945,9 +3335,9 @@ def _normalize_heading_level_jumps(md: str) -> tuple[str, bool]:
         previous_level = target_level
 
     fixed = "\n".join(out)
-    if str(md or "").endswith("\n"):
+    if original.endswith("\n"):
         fixed += "\n"
-    return fixed, changed and fixed != str(md or "")
+    return fixed, changed and fixed != original
 
 
 _REVIEW_PROMOTABLE_HEADING_RE = re.compile(
@@ -3266,19 +3656,25 @@ def _select_page_alignment_offsets(
                     )
                 )
         if len(new_states) > PAGE_ALIGNMENT_BEAM_SIZE:
-            new_states.sort(key=lambda item: (int(item[0]), float(item[1]), -int(item[2])), reverse=True)
-            kept: list[tuple[int, float, int, tuple[tuple[int, int], ...]]] = []
-            buckets: dict[int, int] = {}
+            def _state_key(
+                item: tuple[int, float, int, tuple[tuple[int, int], ...]],
+            ) -> tuple[int, float, int]:
+                return int(item[0]), float(item[1]), -int(item[2])
+
+            by_matched: dict[int, list[tuple[int, float, int, tuple[tuple[int, int], ...]]]] = {}
             for state in new_states:
-                matched = int(state[0])
-                count = buckets.get(matched, 0)
-                if len(kept) >= PAGE_ALIGNMENT_BEAM_SIZE:
-                    break
-                if count >= PAGE_ALIGNMENT_BEAM_PER_MATCH:
-                    continue
-                kept.append(state)
-                buckets[matched] = count + 1
-            states = kept
+                by_matched.setdefault(int(state[0]), []).append(state)
+            # This is equivalent to sorting the full candidate set and taking
+            # at most PAGE_ALIGNMENT_BEAM_PER_MATCH from each matched-page
+            # bucket, then the global beam.  Heap selection avoids repeatedly
+            # sorting tens of thousands of states on long papers while keeping
+            # the same evidence-alignment scores and acceptance behavior.
+            eligible: list[tuple[int, float, int, tuple[tuple[int, int], ...]]] = []
+            for bucket in by_matched.values():
+                eligible.extend(
+                    heapq.nlargest(PAGE_ALIGNMENT_BEAM_PER_MATCH, bucket, key=_state_key)
+                )
+            states = heapq.nlargest(PAGE_ALIGNMENT_BEAM_SIZE, eligible, key=_state_key)
         else:
             states = new_states
 
@@ -3837,6 +4233,7 @@ def _pdf_page_fallback_markdown(pdf_path: Path, page_no: int) -> str:
             except Exception:
                 continue
             text = _clean_pdf_page_block_text(str(block[4] or ""))
+            text = re.sub(r"(?m)^(\s*)(#{1,6})(?=\s)", r"\1\\\2", text)
             if not text:
                 continue
             width = max(0.0, x1 - x0)
@@ -3934,12 +4331,31 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
             None,
         )
         if existing_marker is not None:
+            marker_start = int(existing_marker.get("start") or 0)
             segment_start = int(existing_marker.get("segment_start") or 0)
             segment_end = int(existing_marker.get("segment_end") or len(fixed))
-            if not _rare_source_tokens(fixed[segment_start:segment_end]):
-                marker_start = int(existing_marker.get("start") or 0)
+            current_body = fixed[segment_start:segment_end].strip()
+            if not _rare_source_tokens(current_body):
                 fixed = fixed[:marker_start] + fallback.strip() + "\n\n" + fixed[segment_end:]
                 continue
+            fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
+            # A low-coverage page can still contain valuable figures, captions,
+            # or tables. Keep that converted material and add the authoritative
+            # PDF text inside the same page segment. Inserting another full page
+            # block used to duplicate the page marker and could move the source
+            # recovery past the next page, creating an alignment regression.
+            replacement = "\n\n".join(
+                part
+                for part in (
+                    f"<!-- kb_page: {page_no} -->",
+                    current_body,
+                    f"<!-- kb_source_recovery: {page_no} -->",
+                    fallback_body,
+                )
+                if part
+            ).strip() + "\n\n"
+            fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
+            continue
         pos = _insertion_offset_for_missing_page(fixed, page_no)
         insert = fallback.strip() + "\n\n"
         if pos > 0 and not fixed[:pos].endswith("\n\n"):
@@ -4129,16 +4545,138 @@ def _recover_corrupted_source_pages_from_pdf_text(
         marker_start = int(occurrence.get("start") or 0)
         segment_end = int(occurrence.get("segment_end") or len(fixed))
         current_segment = fixed[marker_start:segment_end]
-        image_lines = [
-            str(line or "").strip()
-            for line in current_segment.splitlines()
-            if re.match(r"^\s*!\[[^\]]*]\([^)]+\)\s*$", str(line or ""))
-        ]
+        current_body = PAGE_MARKER_RE.sub("", current_segment, count=1).strip()
         fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
-        replacement_parts = [f"<!-- kb_page: {page_no} -->"]
-        replacement_parts.extend(dict.fromkeys(line for line in image_lines if line))
-        replacement_parts.append(fallback_body)
+        # Retain page-local visual and structured evidence, then append a clean
+        # source-text recovery. Replacing the whole segment fixed OCR prose but
+        # could drop valid Markdown tables and cause the transactional quality
+        # gate to reject an otherwise source-accurate repair.
+        replacement_parts = [
+            f"<!-- kb_page: {page_no} -->",
+            current_body,
+            f"<!-- kb_source_recovery: {page_no} -->",
+            fallback_body,
+        ]
         replacement = "\n\n".join(part for part in replacement_parts if part).strip() + "\n\n"
+        fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
+    return fixed, fixed != text
+
+
+def _conversion_retry_attrs(marker: re.Match[str]) -> dict[str, str]:
+    return {
+        item.group(1).lower(): next(
+            (value for value in item.groups()[1:] if value is not None),
+            "",
+        )
+        for item in CONVERSION_RETRY_ATTR_RE.finditer(marker.group(1))
+    }
+
+
+def _recover_conversion_retry_pages_from_pdf_text(
+    md_text: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    """Replace unresolved retry fragments with source-page text.
+
+    Math-text fragments are removed only after the same PDF page yields an
+    authoritative text fallback. Equation comments are cleared only when the
+    referenced image asset exists and remains linked in that page segment.
+    """
+
+    text = str(md_text or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if not pdf_path or not CONVERSION_RETRY_MARKER_RE.search(text):
+        return text, False
+
+    pages: set[int] = set()
+    for marker in CONVERSION_RETRY_MARKER_RE.finditer(text):
+        attrs = _conversion_retry_attrs(marker)
+        try:
+            page_no = int(attrs.get("page") or 0)
+        except Exception:
+            page_no = 0
+        if page_no > 0 and str(attrs.get("kind") or "").lower() in {"math_text", "equation"}:
+            pages.add(page_no)
+
+    fixed = text
+    for page_no in sorted(pages, reverse=True):
+        occurrence = next(
+            (
+                item
+                for item in _page_marker_occurrences(fixed)
+                if int(item.get("page") or 0) == page_no
+            ),
+            None,
+        )
+        fallback = _pdf_page_fallback_markdown(pdf_path, page_no)
+        if occurrence is None or not fallback:
+            continue
+        marker_start = int(occurrence.get("start") or 0)
+        segment_end = int(occurrence.get("segment_end") or len(fixed))
+        current_segment = fixed[marker_start:segment_end]
+        page_markers: list[tuple[re.Match[str], dict[str, str]]] = []
+        page_is_recoverable = True
+        for marker in CONVERSION_RETRY_MARKER_RE.finditer(current_segment):
+            attrs = _conversion_retry_attrs(marker)
+            try:
+                marker_page = int(attrs.get("page") or 0)
+            except Exception:
+                marker_page = 0
+            if marker_page != page_no:
+                continue
+            kind = str(attrs.get("kind") or "").strip().lower()
+            if kind not in {"math_text", "equation"}:
+                page_is_recoverable = False
+                break
+            if kind == "equation":
+                asset = str(attrs.get("asset") or "").strip()
+                asset_path = md_path.parent / "assets" / asset
+                if not asset or Path(asset).name != asset or not asset_path.is_file() or asset not in current_segment:
+                    page_is_recoverable = False
+                    break
+            page_markers.append((marker, attrs))
+        fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
+        if (
+            not page_is_recoverable
+            or not page_markers
+            or len(_source_prose_tokens(fallback_body)) < SOURCE_PAGE_MIN_PROSE_BLOCK_TOKENS
+        ):
+            continue
+
+        cleaned_lines: list[str] = []
+        for line in current_segment.splitlines():
+            relevant: list[dict[str, str]] = []
+            for marker in CONVERSION_RETRY_MARKER_RE.finditer(line):
+                attrs = _conversion_retry_attrs(marker)
+                try:
+                    marker_page = int(attrs.get("page") or 0)
+                except Exception:
+                    marker_page = 0
+                if marker_page == page_no:
+                    relevant.append(attrs)
+            if not relevant:
+                cleaned_lines.append(line)
+                continue
+            cleaned = CONVERSION_RETRY_MARKER_RE.sub("", line).rstrip()
+            if any(str(attrs.get("kind") or "").lower() == "math_text" for attrs in relevant):
+                if re.match(r"^\s*(?:#{1,6}\s+|!\[)", cleaned):
+                    cleaned_lines.append(cleaned)
+                continue
+            if cleaned.strip():
+                cleaned_lines.append(cleaned)
+
+        current_body = PAGE_MARKER_RE.sub("", "\n".join(cleaned_lines), count=1).strip()
+        replacement = "\n\n".join(
+            part
+            for part in (
+                f"<!-- kb_page: {page_no} -->",
+                current_body,
+                f"<!-- kb_source_recovery: {page_no} -->",
+                fallback_body,
+            )
+            if part
+        ).strip() + "\n\n"
         fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
     return fixed, fixed != text
 
@@ -4437,6 +4975,16 @@ def _replace_references_section(md: str, references_md: str) -> str:
     ref_signal = 0
     non_ref_run = 0
     non_ref_start = -1
+
+    def include_preceding_page_marker(index: int) -> int:
+        begin = max(ref_idx + 1, int(index))
+        probe = begin - 1
+        while probe > ref_idx and not str(lines[probe] or "").strip():
+            probe -= 1
+        if probe > ref_idx and PAGE_MARKER_RE.fullmatch(str(lines[probe] or "").strip()):
+            return probe
+        return begin
+
     for idx in range(ref_idx + 1, len(lines)):
         st = (lines[idx] or "").strip()
         if not st:
@@ -4449,17 +4997,17 @@ def _replace_references_section(md: str, references_md: str) -> str:
             non_ref_start = -1
             continue
         if ref_signal >= 1 and _is_post_references_resume_heading_line(st):
-            tail_idx = idx
+            tail_idx = include_preceding_page_marker(idx)
             break
         if ref_signal >= 3 and _post_reference_body_heading_line(st):
-            tail_idx = non_ref_start if non_ref_start >= 0 else idx
+            tail_idx = include_preceding_page_marker(non_ref_start if non_ref_start >= 0 else idx)
             break
         if ref_signal >= 8:
             if non_ref_run == 0:
                 non_ref_start = idx
             non_ref_run += 1
             if non_ref_run >= 8 and non_ref_start >= 0:
-                tail_idx = non_ref_start
+                tail_idx = include_preceding_page_marker(non_ref_start)
                 break
     tail_lines = lines[tail_idx:] if tail_idx < len(lines) else []
     if tail_lines and _post_reference_tail_should_precede_references(tail_lines):
@@ -4675,6 +5223,16 @@ def repair_markdown_text(
     applied: list[str] = []
 
     if active_strategy_names:
+        if "repair_detached_table_rows" in active_strategy_names:
+            text, changed = _repair_detached_table_rows_only(text)
+            if changed:
+                applied.append("repair_detached_table_rows")
+
+        if "repair_inline_math_boundaries" in active_strategy_names:
+            text, changed = _repair_inline_math_boundaries_only(text)
+            if changed:
+                applied.append("repair_inline_math_boundaries")
+
         if "normalize_detached_accents" in active_strategy_names:
             normalized = normalize_detached_accents(text)
             if normalized != text:
@@ -4712,6 +5270,11 @@ def repair_markdown_text(
             if changed:
                 applied.append("balance_display_math")
 
+        if "unwrap_prose_display_math" in active_strategy_names:
+            text, changed = _unwrap_prose_dominant_display_math(text)
+            if changed:
+                applied.append("unwrap_prose_display_math")
+
         if "figure_metadata_captions" in active_strategy_names:
             text, changed = _inject_figure_metadata_captions(path, text)
             if changed:
@@ -4742,10 +5305,20 @@ def repair_markdown_text(
             if changed:
                 applied.append("normalize_markdown_tables")
 
+        if source_repairs_enabled and "recover_ambiguous_table_pages" in active_strategy_names:
+            text, changed = _recover_ambiguous_table_pages_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("recover_ambiguous_table_pages")
+
         if "normalize_heading_levels" in active_strategy_names:
             text, changed = _normalize_heading_level_jumps(text)
             if changed:
                 applied.append("normalize_heading_levels")
+
+        if "demote_malformed_numbered_headings" in active_strategy_names:
+            text, changed = _demote_malformed_numbered_formula_headings(text)
+            if changed:
+                applied.append("demote_malformed_numbered_headings")
 
         if source_repairs_enabled and "recover_missing_source_pages" in active_strategy_names:
             text, changed = _recover_missing_source_pages_from_pdf_text(text, path, source_pdf_path)
@@ -4761,6 +5334,11 @@ def repair_markdown_text(
             text, changed = _recover_corrupted_source_pages_from_pdf_text(text, path, source_pdf_path)
             if changed:
                 applied.append("recover_corrupted_source_pages")
+
+        if source_repairs_enabled and "recover_conversion_retry_pages" in active_strategy_names:
+            text, changed = _recover_conversion_retry_pages_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("recover_conversion_retry_pages")
 
         if source_repairs_enabled and "pdf_reference_backfill" in active_strategy_names:
             text, changed = _backfill_references_from_pdf_text(text, path, source_pdf_path)
@@ -4810,6 +5388,12 @@ def repair_markdown_text(
         # prose. Other regression checks still protect real equations, tables,
         # figures, references, and overall content volume.
         regression_reasons = [reason for reason in regression_reasons if reason != "display_math_dropped"]
+    if (
+        "recover_ambiguous_table_pages" in applied
+        and not markdown_table_issue_spans(text)
+        and "kb_table_source_recovery" in text
+    ):
+        regression_reasons = [reason for reason in regression_reasons if reason != "tables_dropped"]
     transactional_target_codes = [
         code
         for code in active_codes
@@ -4842,10 +5426,16 @@ def repair_markdown_text(
     if changed_text and regression_reasons:
         fallback_text = before_text
         fallback_applied: list[str] = []
+        fallback_issue_codes_current = list(before_issue_codes)
+        fallback_detached_table_merge_accepted = False
         for label in applied:
             candidate = fallback_text
             changed = False
-            if source_repairs_enabled and label == "recover_page_markers_from_pdf":
+            if label == "repair_detached_table_rows":
+                candidate, changed = _repair_detached_table_rows_only(fallback_text)
+            elif label == "repair_inline_math_boundaries":
+                candidate, changed = _repair_inline_math_boundaries_only(fallback_text)
+            elif source_repairs_enabled and label == "recover_page_markers_from_pdf":
                 candidate, changed = _recover_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "ensure_page_anchor":
                 candidate, changed = _ensure_page_anchor(fallback_text)
@@ -4855,6 +5445,8 @@ def repair_markdown_text(
                 candidate, changed = _realign_table_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "normalize_page_markers":
                 candidate, changed = _normalize_page_marker_sequence(fallback_text)
+            elif label == "unwrap_prose_display_math":
+                candidate, changed = _unwrap_prose_dominant_display_math(fallback_text)
             elif label == "figure_metadata_captions":
                 candidate, changed = _inject_figure_metadata_captions(path, fallback_text)
             elif source_repairs_enabled and label == "pdf_text_captions":
@@ -4867,8 +5459,16 @@ def repair_markdown_text(
                 candidate, changed = _move_early_references_to_end(fallback_text)
             elif label == "normalize_markdown_tables":
                 candidate, changed = _normalize_markdown_tables_only(fallback_text)
+            elif source_repairs_enabled and label == "recover_ambiguous_table_pages":
+                candidate, changed = _recover_ambiguous_table_pages_from_pdf_text(
+                    fallback_text,
+                    path,
+                    source_pdf_path,
+                )
             elif label == "normalize_heading_levels":
                 candidate, changed = _normalize_heading_level_jumps(fallback_text)
+            elif label == "demote_malformed_numbered_headings":
+                candidate, changed = _demote_malformed_numbered_formula_headings(fallback_text)
             elif label == "promote_collapsed_review_headings":
                 candidate, changed = _promote_collapsed_review_headings(fallback_text)
             elif source_repairs_enabled and label == "recover_missing_source_pages":
@@ -4885,17 +5485,84 @@ def repair_markdown_text(
                     path,
                     source_pdf_path,
                 )
+            elif source_repairs_enabled and label == "recover_conversion_retry_pages":
+                candidate, changed = _recover_conversion_retry_pages_from_pdf_text(
+                    fallback_text,
+                    path,
+                    source_pdf_path,
+                )
             elif source_repairs_enabled and label == "pdf_reference_backfill":
                 candidate, changed = _backfill_references_from_pdf_text(fallback_text, path, source_pdf_path)
             if not changed or candidate == fallback_text:
                 continue
             step_reasons = _regression_reasons(fallback_text, candidate)
+            if label == "repair_detached_table_rows":
+                # This narrow transform only removes an empty placeholder and
+                # joins its following content row to the established table.
+                # A table-block count decrease therefore reflects a structural
+                # merge, not loss of any non-empty cell.
+                had_only_structural_table_drop = bool(step_reasons) and set(step_reasons) == {"tables_dropped"}
+                step_reasons = [reason for reason in step_reasons if reason != "tables_dropped"]
+            if (
+                label == "unwrap_prose_display_math"
+                and "prose_dominant_display_math" not in _issue_codes_from_metrics(_metric_view(path, candidate))
+            ):
+                step_reasons = [reason for reason in step_reasons if reason != "display_math_dropped"]
+            if (
+                label == "recover_ambiguous_table_pages"
+                and not markdown_table_issue_spans(candidate)
+                and "kb_table_source_recovery" in candidate
+            ):
+                step_reasons = [reason for reason in step_reasons if reason != "tables_dropped"]
+            step_target_codes = [
+                code
+                for code in active_codes
+                if label in conversion_repair_strategy_for_issue(code).get("strategies", [])
+            ]
+            candidate_issue_codes: list[str] | None = None
+            if any(code in _TRANSACTIONAL_STRUCTURE_ISSUES for code in step_target_codes):
+                candidate_metrics = _metric_view(path, candidate)
+                candidate_source_quality = _source_quality_view(
+                    path,
+                    candidate,
+                    candidate_metrics,
+                    source_pdf_path=source_pdf_path,
+                    allow_source_pdf_inference=allow_source_pdf_inference,
+                )
+                candidate_issue_codes = _issue_codes_from_context(
+                    path,
+                    candidate,
+                    candidate_metrics,
+                    source_quality=candidate_source_quality,
+                )
+                step_reasons = _dedupe_codes(
+                    [
+                        *step_reasons,
+                        *_transactional_structure_reasons(
+                            fallback_issue_codes_current,
+                            candidate_issue_codes,
+                            step_target_codes,
+                        ),
+                    ]
+                )
             if step_reasons:
                 continue
             fallback_text = candidate
             fallback_applied.append(label)
+            if label == "repair_detached_table_rows" and had_only_structural_table_drop:
+                fallback_detached_table_merge_accepted = True
+            if candidate_issue_codes is not None:
+                fallback_issue_codes_current = candidate_issue_codes
         if fallback_text != before_text:
             fallback_reasons = _regression_reasons(before_text, fallback_text)
+            if fallback_detached_table_merge_accepted:
+                fallback_reasons = [reason for reason in fallback_reasons if reason != "tables_dropped"]
+            if (
+                "recover_ambiguous_table_pages" in fallback_applied
+                and not markdown_table_issue_spans(fallback_text)
+                and "kb_table_source_recovery" in fallback_text
+            ):
+                fallback_reasons = [reason for reason in fallback_reasons if reason != "tables_dropped"]
             fallback_metrics = _metric_view(path, fallback_text)
             fallback_source_quality = _source_quality_view(
                 path,
@@ -4910,13 +5577,25 @@ def repair_markdown_text(
                 fallback_metrics,
                 source_quality=fallback_source_quality,
             )
+            if (
+                "unwrap_prose_display_math" in fallback_applied
+                and "prose_dominant_display_math" not in fallback_issue_codes
+            ):
+                fallback_reasons = [reason for reason in fallback_reasons if reason != "display_math_dropped"]
             fallback_reasons = _dedupe_codes(
                 [
                     *fallback_reasons,
                     *_transactional_structure_reasons(
                         before_issue_codes,
                         fallback_issue_codes,
-                        transactional_target_codes,
+                        [
+                            code
+                            for code in active_codes
+                            if any(
+                                str(name or "") in set(fallback_applied)
+                                for name in conversion_repair_strategy_for_issue(code).get("strategies") or []
+                            )
+                        ],
                     ),
                 ]
             )
@@ -4966,6 +5645,14 @@ def repair_markdown_quality(
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
     before_text = path.read_text(encoding="utf-8", errors="replace")
+    requested_codes = {str(code or "").strip().lower() for code in list(issue_codes or [])}
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(path)
+    if pdf_path and requested_codes & {
+        "collapsed_table_rows",
+        "ambiguous_table_break_rows",
+        "analyzer_warnings",
+    }:
+        _prepare_ambiguous_table_page_assets(path, before_text, pdf_path)
     result = repair_markdown_text(
         path,
         before_text,

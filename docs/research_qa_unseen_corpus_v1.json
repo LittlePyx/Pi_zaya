@@ -1,0 +1,508 @@
+{
+  "benchmark": {
+    "id": "unseen_corpus_v1",
+    "frozenImplementationSha": "37612690c24ae907ab4d25e11ebed4b90624d642",
+    "registeredOn": "2026-08-12",
+    "protocol": "Questions, answer terms, evidence terms, source pages, corpus identities, and acceptance thresholds were registered before the first model answer. PDF binaries and the generated isolated index remain outside the repository.",
+    "corpus": [
+      {"id": "nerf", "arxiv": "2003.08934", "sha256": "C7FC70B38F84CB2E42890A69A7C9B9C26DED464B221E0355031004F24FB8E727"},
+      {"id": "unet", "arxiv": "1505.04597", "sha256": "A3172B2124F38E260DC2C7ED968D87C31BC94DBC19A42A7AB3DCBD7534319C44"},
+      {"id": "restormer", "arxiv": "2111.09881", "sha256": "FED6EABACF50FB5F4159ED49FF8F0DA1632E3FBC9EF0FF0C19C995E0B50C185D"},
+      {"id": "sam", "arxiv": "2304.02643", "sha256": "C6CA524E47200C3E542587CA76AC1DBC89CC67340F948C819250D16FDBD90CFB"},
+      {"id": "ddpm", "arxiv": "2006.11239", "sha256": "AEE5E07A802E8DFD2A386374C94FD61D1D056CB7E1E0FEC4F28E8120FF5D8505"},
+      {"id": "lora", "arxiv": "2106.09685", "sha256": "E9A0D3128767DB616085DC0F4E6E455E672E89AF823E8ED1282793682787395A"},
+      {"id": "rag", "arxiv": "2005.11401", "sha256": "23E3249E9A1E75418D82EFECAB0EA8C4D033B89C93742F63208D47CE01F21233"},
+      {"id": "clip", "arxiv": "2103.00020", "sha256": "6478B6E571A7D6FCD846D8EF77BFD60C285F1986ABB8F475EEDC43DE403074F5"},
+      {"id": "flashattention", "arxiv": "2205.14135", "sha256": "CA7F9FDA10B90FC05DD291A3ACCC85E9C1A4A860B99B31928DAB03ED3FCB14E4"},
+      {"id": "dinov2", "arxiv": "2304.07193", "sha256": "3ADD205547F3ECE5FB1AC7A91720AA9FABF02D9CDE29A096643FF022449F3E91"}
+    ]
+  },
+  "dbRoot": "db",
+  "docs": [
+    {"id": "nerf", "title": "NeRF: Representing Scenes as Neural Radiance Fields for View Synthesis", "dir": "nerf", "file": "nerf", "topic": "neural radiance fields", "shortLabel": "NeRF"},
+    {"id": "unet", "title": "U-Net: Convolutional Networks for Biomedical Image Segmentation", "dir": "unet", "file": "unet", "topic": "biomedical image segmentation", "shortLabel": "U-Net"},
+    {"id": "restormer", "title": "Restormer: Efficient Transformer for High-Resolution Image Restoration", "dir": "restormer", "file": "restormer", "topic": "image restoration transformer", "shortLabel": "Restormer"},
+    {"id": "sam", "title": "Segment Anything", "dir": "sam", "file": "sam", "topic": "promptable segmentation", "shortLabel": "SAM"},
+    {"id": "ddpm", "title": "Denoising Diffusion Probabilistic Models", "dir": "ddpm", "file": "ddpm", "topic": "diffusion generative models", "shortLabel": "DDPM"},
+    {"id": "lora", "title": "LoRA: Low-Rank Adaptation of Large Language Models", "dir": "lora", "file": "lora", "topic": "parameter-efficient adaptation", "shortLabel": "LoRA"},
+    {"id": "rag", "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks", "dir": "rag", "file": "rag", "topic": "retrieval-augmented generation", "shortLabel": "RAG"},
+    {"id": "clip", "title": "Learning Transferable Visual Models From Natural Language Supervision", "dir": "clip", "file": "clip", "topic": "contrastive vision-language pretraining", "shortLabel": "CLIP"},
+    {"id": "flashattention", "title": "FlashAttention: Fast and Memory-Efficient Exact Attention with IO-Awareness", "dir": "flashattention", "file": "flashattention", "topic": "IO-aware exact attention", "shortLabel": "FlashAttention"},
+    {"id": "dinov2", "title": "DINOv2: Learning Robust Visual Features without Supervision", "dir": "dinov2", "file": "dinov2", "topic": "self-supervised visual features", "shortLabel": "DINOv2"}
+  ],
+  "forbiddenPhrases": [
+    "The paper cites",
+    "This hit is directly relevant",
+    "This is stated in",
+    "适合作为定位入口",
+    "直接定义或解释了"
+  ],
+  "splits": {
+    "unseen_corpus_v1": [
+      "nerf-representation-rendering",
+      "nerf-positional-encoding",
+      "unet-contract-expand",
+      "unet-overlap-weighted-loss",
+      "restormer-mdta-gdfn",
+      "restormer-resolution-boundary",
+      "sam-promptable-architecture",
+      "sam-data-engine",
+      "ddpm-forward-reverse",
+      "ddpm-epsilon-objective",
+      "lora-low-rank-injection",
+      "lora-latency-boundary",
+      "rag-sequence-token",
+      "rag-dpr-origin",
+      "clip-training-objective",
+      "clip-zero-shot-classifier",
+      "flashattention-io-exact",
+      "flashattention-vs-lora-efficiency",
+      "dinov2-curation",
+      "dinov2-distillation"
+    ]
+  },
+  "suites": {
+    "unseen_corpus_acceptance_v1": {
+      "description": "A pre-registered, isolated, unseen-paper transfer benchmark. It tests answer quality, evidence accuracy, document recall, source-page location, upstream-reference tracing, and bilingual behavior without weakening the production gates.",
+      "caseIds": [
+        "nerf-representation-rendering",
+        "nerf-positional-encoding",
+        "unet-contract-expand",
+        "unet-overlap-weighted-loss",
+        "restormer-mdta-gdfn",
+        "restormer-resolution-boundary",
+        "sam-promptable-architecture",
+        "sam-data-engine",
+        "ddpm-forward-reverse",
+        "ddpm-epsilon-objective",
+        "lora-low-rank-injection",
+        "lora-latency-boundary",
+        "rag-sequence-token",
+        "rag-dpr-origin",
+        "clip-training-objective",
+        "clip-zero-shot-classifier",
+        "flashattention-io-exact",
+        "flashattention-vs-lora-efficiency",
+        "dinov2-curation",
+        "dinov2-distillation"
+      ],
+      "minCases": 20,
+      "maxCases": 20,
+      "requireAllDocs": true,
+      "requiredLocales": ["zh", "en"],
+      "requiredCoverage": [
+        "single_paper_mechanism",
+        "formula_reasoning",
+        "figure_architecture",
+        "quantitative_fact",
+        "cross_paper_synthesis",
+        "upstream_reference",
+        "scope_boundary",
+        "exact_location",
+        "system_a",
+        "system_b",
+        "zh_locale",
+        "en_locale"
+      ],
+      "coverage": {
+        "single_paper_mechanism": ["nerf-representation-rendering", "ddpm-forward-reverse", "flashattention-io-exact"],
+        "formula_reasoning": ["ddpm-epsilon-objective"],
+        "figure_architecture": ["unet-contract-expand", "sam-promptable-architecture"],
+        "quantitative_fact": ["sam-data-engine", "clip-training-objective"],
+        "cross_paper_synthesis": ["flashattention-vs-lora-efficiency"],
+        "upstream_reference": ["rag-dpr-origin"],
+        "scope_boundary": ["restormer-resolution-boundary", "lora-latency-boundary"],
+        "exact_location": ["nerf-positional-encoding", "dinov2-distillation"],
+        "system_a": ["restormer-mdta-gdfn", "clip-zero-shot-classifier"],
+        "system_b": ["rag-dpr-origin"],
+        "zh_locale": ["nerf-positional-encoding", "sam-data-engine", "ddpm-epsilon-objective", "lora-latency-boundary", "flashattention-vs-lora-efficiency", "dinov2-distillation"],
+        "en_locale": ["nerf-representation-rendering", "unet-contract-expand", "rag-sequence-token", "clip-training-objective"]
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "nerf-representation-rendering",
+      "sourceGrounded": true,
+      "evaluationFocus": "paper_summary",
+      "queryScope": "current_paper",
+      "docIds": ["nerf"],
+      "question": "What does NeRF represent at each 5D coordinate, and how are those outputs turned into a novel-view image?",
+      "acceptance": ["Explain both the 5D input/output representation and volume-rendering path.", "Do not collapse view-dependent radiance into density."],
+      "expected": {
+        "requiredAnswerTermGroups": [["5D", "five-dimensional"], ["density", "volume density"], ["view-dependent", "viewing direction"], ["volume rendering"]],
+        "requiredRefDocIds": ["nerf"], "requiredCitationDocIds": ["nerf"], "allowedRefDocIds": ["nerf"], "allowedCitationDocIds": ["nerf"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "nerf-5d-rendering", "docId": "nerf", "route": "system_a", "sourcePage": 1, "answerTermGroups": [["5D", "five-dimensional"], ["density"], ["view-dependent"], ["volume rendering"]], "evidenceTerms": ["5D coordinate", "volume density", "view-dependent", "volume rendering"]}],
+        "requiredLocateContracts": [{"id": "nerf-abstract-locate", "docId": "nerf", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["5D coordinate", "volume rendering"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "nerf-positional-encoding",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["nerf"],
+      "question": "NeRF 为什么要对输入坐标做 positional encoding？直接把 xyzθφ 输入 MLP 时，论文观察到的表示问题是什么？",
+      "acceptance": ["Connect positional encoding to high-frequency functions/content.", "State that direct coordinate input represents high-frequency color and geometry poorly."],
+      "expected": {
+        "requiredAnswerTermGroups": [["positional encoding", "位置编码"], ["高频", "high-frequency", "higher frequency"], ["颜色", "color"], ["几何", "geometry"]],
+        "requiredRefDocIds": ["nerf"], "requiredCitationDocIds": ["nerf"], "allowedRefDocIds": ["nerf"], "allowedCitationDocIds": ["nerf"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "nerf-pe-ablation", "docId": "nerf", "route": "system_a", "sourcePage": 7, "answerTermGroups": [["positional encoding", "位置编码"], ["高频", "high-frequency"], ["颜色", "color"], ["几何", "geometry"]], "evidenceTerms": ["positional encoding", "high-frequency functions", "high-frequency variation in color and geometry"]}],
+        "requiredLocateContracts": [{"id": "nerf-pe-section-locate", "docId": "nerf", "route": "system_a", "sourcePage": 7, "locatorTerms": ["Positional encoding"], "evidenceTerms": ["high-frequency variation in color and geometry"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "unet-contract-expand",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["unet"],
+      "question": "How do U-Net's contracting and expansive paths divide the work, and how are high-resolution encoder features reused during decoding?",
+      "acceptance": ["Explain context capture versus precise localization.", "Mention concatenation with the correspondingly cropped contracting-path feature map."],
+      "expected": {
+        "requiredAnswerTermGroups": [["contracting path"], ["expansive path", "expanding path"], ["context"], ["localization"], ["concatenation", "concatenate", "skip connection"]],
+        "requiredRefDocIds": ["unet"], "requiredCitationDocIds": ["unet"], "allowedRefDocIds": ["unet"], "allowedCitationDocIds": ["unet"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "unet-paths", "docId": "unet", "route": "system_a", "sourcePage": 4, "answerTermGroups": [["contracting path"], ["expansive path", "expanding path"], ["concatenation", "concatenate", "skip connection"]], "evidenceTerms": ["contracting path", "expansive path", "concatenation", "cropped feature map"]}],
+        "requiredLocateContracts": [{"id": "unet-architecture-locate", "docId": "unet", "route": "system_a", "sourcePage": 4, "locatorTerms": ["Network Architecture"], "evidenceTerms": ["contracting path", "expansive path"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "unet-overlap-weighted-loss",
+      "sourceGrounded": true,
+      "evaluationFocus": "scope_boundary",
+      "queryScope": "current_paper",
+      "docIds": ["unet"],
+      "question": "U-Net 如何无缝处理任意大的图像边界，并让相互接触的同类细胞更容易被分开？请区分推理时铺块策略和训练损失策略。",
+      "acceptance": ["Separate overlap-tile plus mirrored borders from weighted-loss supervision.", "Tie high weights to separating background labels between touching cells."],
+      "expected": {
+        "requiredAnswerTermGroups": [["overlap-tile", "重叠铺块", "重叠分块"], ["mirror", "mirroring", "镜像"], ["weighted loss", "加权损失"], ["touching cells", "接触细胞", "相互接触"]],
+        "requiredRefDocIds": ["unet"], "requiredCitationDocIds": ["unet"], "allowedRefDocIds": ["unet"], "allowedCitationDocIds": ["unet"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "unet-boundary-separation", "docId": "unet", "route": "system_a", "sourcePage": 3, "answerTermGroups": [["overlap-tile", "重叠铺块", "重叠分块"], ["mirror", "镜像"], ["weighted loss", "加权损失"]], "evidenceTerms": ["overlap-tile strategy", "mirroring the input image", "weighted loss", "touching cells"]}],
+        "requiredLocateContracts": [{"id": "unet-overlap-locate", "docId": "unet", "route": "system_a", "sourcePage": 3, "locatorTerms": ["Fig. 2"], "evidenceTerms": ["overlap-tile strategy", "weighted loss"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "restormer-mdta-gdfn",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["restormer"],
+      "question": "In Restormer, what does MDTA transpose about self-attention, and what distinct filtering role does GDFN play?",
+      "acceptance": ["State that MDTA attends across channels/cross-covariance instead of spatial pairs.", "Explain GDFN gating as controlled feature flow."],
+      "expected": {
+        "requiredAnswerTermGroups": [["MDTA"], ["channel", "cross-covariance"], ["GDFN"], ["gate", "gating"], ["information flow", "useful features"]],
+        "requiredRefDocIds": ["restormer"], "requiredCitationDocIds": ["restormer"], "allowedRefDocIds": ["restormer"], "allowedCitationDocIds": ["restormer"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "restormer-mdta", "docId": "restormer", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["MDTA"], ["channel", "cross-covariance"]], "evidenceTerms": ["MDTA", "cross-covariance across feature channels"]},
+          {"id": "restormer-gdfn", "docId": "restormer", "route": "system_a", "sourcePage": 4, "answerTermGroups": [["GDFN"], ["gate", "gating"], ["information flow", "useful features"]], "evidenceTerms": ["GDFN controls the information flow", "fine details"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "restormer-mdta-locate", "docId": "restormer", "route": "system_a", "sourcePage": 2, "locatorTerms": ["MDTA"], "evidenceTerms": ["cross-covariance across feature channels"]},
+          {"id": "restormer-gdfn-locate", "docId": "restormer", "route": "system_a", "sourcePage": 4, "locatorTerms": ["GDFN"], "evidenceTerms": ["information flow"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "restormer-resolution-boundary",
+      "sourceGrounded": true,
+      "evaluationFocus": "scope_boundary",
+      "queryScope": "current_paper",
+      "docIds": ["restormer"],
+      "question": "Restormer 为什么比标准空间自注意力更适合高分辨率恢复？这个结论能否理解成它完全不再建模空间上下文？",
+      "acceptance": ["Connect linear complexity to channel-wise attention.", "Reject the claim that spatial/local context disappears; depth-wise convolutions enrich it."],
+      "expected": {
+        "requiredAnswerTermGroups": [["线性", "linear complexity"], ["通道", "channel"], ["空间", "spatial"], ["depth-wise", "depthwise", "深度卷积"]],
+        "requiredRefDocIds": ["restormer"], "requiredCitationDocIds": ["restormer"], "allowedRefDocIds": ["restormer"], "allowedCitationDocIds": ["restormer"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "restormer-linear-local-boundary", "docId": "restormer", "route": "system_a", "sourcePage": 4, "answerTermGroups": [["线性", "linear complexity"], ["通道", "channel"], ["depth-wise", "depthwise", "深度卷积"]], "evidenceTerms": ["linear complexity", "across channels", "depth-wise convolutions", "local context"]}],
+        "requiredLocateContracts": [{"id": "restormer-mdta-section-locate", "docId": "restormer", "route": "system_a", "sourcePage": 4, "locatorTerms": ["Multi-Dconv Head Transposed Attention"], "evidenceTerms": ["linear complexity", "local context"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sam-promptable-architecture",
+      "sourceGrounded": true,
+      "evaluationFocus": "paper_summary",
+      "queryScope": "current_paper",
+      "docIds": ["sam"],
+      "question": "What are SAM's three main model components, and why can one image embedding support fast interaction with multiple prompts?",
+      "acceptance": ["Name image encoder, prompt encoder, and mask decoder.", "Explain image-embedding reuse and amortized cost."],
+      "expected": {
+        "requiredAnswerTermGroups": [["image encoder"], ["prompt encoder"], ["mask decoder"], ["reuse", "reused", "amortized"]],
+        "requiredRefDocIds": ["sam"], "requiredCitationDocIds": ["sam"], "allowedRefDocIds": ["sam"], "allowedCitationDocIds": ["sam"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "sam-components-reuse", "docId": "sam", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["image encoder"], ["prompt encoder"], ["mask decoder"], ["reuse", "reused", "amortized"]], "evidenceTerms": ["image encoder", "prompt encoder", "mask decoder", "image embedding can be reused"]}],
+        "requiredLocateContracts": [{"id": "sam-model-locate", "docId": "sam", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Segment Anything Model"], "evidenceTerms": ["image encoder", "mask decoder"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sam-data-engine",
+      "sourceGrounded": true,
+      "evaluationFocus": "paper_summary",
+      "queryScope": "current_paper",
+      "docIds": ["sam"],
+      "question": "SAM 的数据引擎分哪三个阶段？最终 SA-1B 有多少图像和掩码，其中多少比例是全自动生成的？",
+      "acceptance": ["List assisted-manual, semi-automatic, and fully automatic stages.", "Give 11M images, 1.1B masks, and 99.1% fully automatic."],
+      "expected": {
+        "requiredAnswerTermGroups": [["辅助人工", "assisted-manual", "model-assisted"], ["半自动", "semi-automatic"], ["全自动", "fully automatic"], ["11M", "1100万", "11 million"], ["1.1B", "11亿", "1.1 billion"], ["99.1%"]],
+        "requiredRefDocIds": ["sam"], "requiredCitationDocIds": ["sam"], "allowedRefDocIds": ["sam"], "allowedCitationDocIds": ["sam"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "sam-engine-stages", "docId": "sam", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["辅助人工", "assisted-manual", "model-assisted"], ["半自动", "semi-automatic"], ["全自动", "fully automatic"]], "evidenceTerms": ["data engine has three stages", "assisted-manual", "semi-automatic", "fully automatic"]},
+          {"id": "sam-dataset-counts", "docId": "sam", "route": "system_a", "sourcePage": 6, "answerTermGroups": [["11M", "1100万", "11 million"], ["1.1B", "11亿", "1.1 billion"], ["99.1%"]], "evidenceTerms": ["1.1B masks", "99.1%", "11M images"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "sam-engine-locate", "docId": "sam", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Data engine"], "evidenceTerms": ["three stages"]},
+          {"id": "sam-counts-locate", "docId": "sam", "route": "system_a", "sourcePage": 6, "locatorTerms": ["Masks"], "evidenceTerms": ["99.1%"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "ddpm-forward-reverse",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["ddpm"],
+      "question": "How do the fixed forward process and learned reverse process differ in DDPM, including their transition type and endpoints?",
+      "acceptance": ["Describe the forward Markov chain as fixed gradual Gaussian noising.", "Describe the reverse Markov chain as learned Gaussian transitions starting from a standard normal."],
+      "expected": {
+        "requiredAnswerTermGroups": [["forward process"], ["reverse process"], ["fixed"], ["learned Gaussian"], ["noise", "noising"], ["normal", "Gaussian prior"]],
+        "requiredRefDocIds": ["ddpm"], "requiredCitationDocIds": ["ddpm"], "allowedRefDocIds": ["ddpm"], "allowedCitationDocIds": ["ddpm"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "ddpm-processes", "docId": "ddpm", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["forward process"], ["reverse process"], ["fixed"], ["learned Gaussian"], ["noise", "noising"]], "evidenceTerms": ["reverse process", "learned Gaussian transitions", "forward process", "gradually adds Gaussian noise"]}],
+        "requiredLocateContracts": [{"id": "ddpm-background-locate", "docId": "ddpm", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Background"], "evidenceTerms": ["forward process", "reverse process"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "ddpm-epsilon-objective",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["ddpm"],
+      "question": "DDPM 的 L_simple 实际让网络预测什么？它和变分下界的加权有何不同，论文报告的样本质量与码长权衡是什么？",
+      "acceptance": ["Identify epsilon/noise prediction and unweighted MSE-like objective.", "State that the true variational bound improves codelength while L_simple yields best sample quality."],
+      "expected": {
+        "requiredAnswerTermGroups": [["L_simple", "Lsimple"], ["噪声", "epsilon", "ε"], ["无权重", "unweighted"], ["变分下界", "variational bound"], ["样本质量", "sample quality"], ["码长", "codelength"]],
+        "requiredRefDocIds": ["ddpm"], "requiredCitationDocIds": ["ddpm"], "allowedRefDocIds": ["ddpm"], "allowedCitationDocIds": ["ddpm"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "ddpm-lsimple", "docId": "ddpm", "route": "system_a", "sourcePage": 5, "answerTermGroups": [["L_simple", "Lsimple"], ["噪声", "epsilon", "ε"], ["无权重", "unweighted"]], "evidenceTerms": ["unweighted version", "epsilon", "simplified objective"]},
+          {"id": "ddpm-quality-tradeoff", "docId": "ddpm", "route": "system_a", "sourcePage": 6, "answerTermGroups": [["变分下界", "variational bound"], ["样本质量", "sample quality"], ["码长", "codelength"]], "evidenceTerms": ["true variational bound", "better codelengths", "best sample quality"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "ddpm-objective-locate", "docId": "ddpm", "route": "system_a", "sourcePage": 4, "locatorTerms": ["Simplified training objective"], "evidenceTerms": ["Simplified training objective"]},
+          {"id": "ddpm-results-locate", "docId": "ddpm", "route": "system_a", "sourcePage": 6, "locatorTerms": ["Experiments"], "evidenceTerms": ["best sample quality"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "lora-low-rank-injection",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["lora"],
+      "question": "What does LoRA freeze, what trainable objects does it inject, and what low-rank assumption does that make about adaptation?",
+      "acceptance": ["State that pretrained weights remain frozen.", "Explain trainable rank-decomposition matrices representing a low-rank weight update."],
+      "expected": {
+        "requiredAnswerTermGroups": [["freeze", "frozen"], ["pre-trained weights", "pretrained weights"], ["low-rank", "rank decomposition"], ["trainable"], ["weight update", "change in weights"]],
+        "requiredRefDocIds": ["lora"], "requiredCitationDocIds": ["lora"], "allowedRefDocIds": ["lora"], "allowedCitationDocIds": ["lora"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "lora-injection", "docId": "lora", "route": "system_a", "sourcePage": 1, "answerTermGroups": [["freeze", "frozen"], ["low-rank", "rank decomposition"], ["trainable"]], "evidenceTerms": ["freezes the pre-trained model weights", "trainable rank decomposition matrices", "rank-deficiency"]}],
+        "requiredLocateContracts": [{"id": "lora-abstract-locate", "docId": "lora", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["Low-Rank Adaptation", "pre-trained model weights"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "lora-latency-boundary",
+      "sourceGrounded": true,
+      "evaluationFocus": "scope_boundary",
+      "queryScope": "current_paper",
+      "docIds": ["lora"],
+      "question": "LoRA 为什么可以宣称部署时没有额外推理延迟？这个结论是否等于基础模型本身的推理计算量被降低了？",
+      "acceptance": ["Explain merging W0 + BA before inference.", "Keep the boundary: no additional LoRA-module latency relative to the base/fine-tuned model is not base-model acceleration."],
+      "expected": {
+        "requiredAnswerTermGroups": [["合并", "merge", "吸收"], ["W0", "W_0"], ["BA"], ["无额外推理延迟", "no additional inference latency"], ["不等于", "并不", "not"]],
+        "requiredRefDocIds": ["lora"], "requiredCitationDocIds": ["lora"], "allowedRefDocIds": ["lora"], "allowedCitationDocIds": ["lora"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "lora-merge-boundary", "docId": "lora", "route": "system_a", "sourcePage": 4, "answerTermGroups": [["合并", "merge", "吸收"], ["W0", "W_0"], ["BA"], ["无额外推理延迟", "no additional inference latency"]], "evidenceTerms": ["No Additional Inference Latency", "compute and store", "perform inference as usual", "subtracting"]}],
+        "requiredLocateContracts": [{"id": "lora-latency-locate", "docId": "lora", "route": "system_a", "sourcePage": 4, "locatorTerms": ["No Additional Inference Latency"], "evidenceTerms": ["compute and store", "inference as usual"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "rag-sequence-token",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_comparison",
+      "queryScope": "current_paper",
+      "docIds": ["rag"],
+      "question": "Compare RAG-Sequence and RAG-Token at the latent-document level: what stays fixed, what may change, and at what granularity?",
+      "acceptance": ["RAG-Sequence uses the same retrieved document for the whole target sequence.", "RAG-Token may use a different latent document for each target token."],
+      "expected": {
+        "requiredAnswerTermGroups": [["RAG-Sequence"], ["RAG-Token"], ["same document", "single document"], ["different document"], ["token"], ["sequence"]],
+        "requiredRefDocIds": ["rag"], "requiredCitationDocIds": ["rag"], "allowedRefDocIds": ["rag"], "allowedCitationDocIds": ["rag"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "rag-variants", "docId": "rag", "route": "system_a", "sourcePage": 3, "answerTermGroups": [["RAG-Sequence"], ["RAG-Token"], ["same document", "single document"], ["different document"], ["token"]], "evidenceTerms": ["RAG-Sequence", "same retrieved document", "RAG-Token", "different latent document", "each target"]}],
+        "requiredLocateContracts": [{"id": "rag-models-locate", "docId": "rag", "route": "system_a", "sourcePage": 3, "locatorTerms": ["Models"], "evidenceTerms": ["RAG-Sequence Model", "RAG-Token Model"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "rag-dpr-origin",
+      "sourceGrounded": true,
+      "evaluationFocus": "upstream_reference",
+      "queryScope": "current_paper",
+      "docIds": ["rag"],
+      "question": "Did the RAG paper invent Dense Passage Retrieval (DPR), or reuse prior work? Identify the upstream paper and explain how RAG uses DPR.",
+      "acceptance": ["Say DPR is prior work, not invented by RAG.", "Identify Karpukhin et al.'s Dense Passage Retrieval for Open-Domain Question Answering and describe retriever initialization/index use."],
+      "expected": {
+        "requiredAnswerTermGroups": [["not", "prior work", "reuse", "reuses"], ["Dense Passage Retrieval"], ["Karpukhin"], ["retriever"], ["bi-encoder", "document index"]],
+        "requiredRefDocIds": ["rag"], "requiredCitationDocIds": ["rag"], "allowedRefDocIds": ["rag"], "allowedCitationDocIds": ["rag"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 1},
+        "claimEvidenceContracts": [
+          {"id": "rag-uses-dpr", "docId": "rag", "route": "system_a", "sourcePage": 3, "answerTermGroups": [["Dense Passage Retrieval"], ["retriever"], ["bi-encoder", "document index"]], "evidenceTerms": ["Retriever: DPR", "based on DPR", "pre-trained bi-encoder"]},
+          {"id": "dpr-upstream-paper", "docId": "rag", "route": "system_b", "sourcePage": 12, "answerTermGroups": [["Dense Passage Retrieval"], ["Karpukhin"]], "evidenceTerms": ["Karpukhin", "Dense Passage Retrieval for Open-Domain Question Answering"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "rag-dpr-context-locate", "docId": "rag", "route": "system_a", "sourcePage": 3, "locatorTerms": ["Retriever: DPR"], "evidenceTerms": ["based on DPR"]},
+          {"id": "rag-dpr-reference-locate", "docId": "rag", "route": "system_b", "sourcePage": 12, "locatorTerms": ["References"], "evidenceTerms": ["Karpukhin", "Dense Passage Retrieval"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "minSystemBQualityCount": 1, "maxSystemBCount": 1, "requireSystemB": true, "requiredSystemBTerms": ["Dense Passage Retrieval", "Karpukhin"], "requireSystemBTraceComplete": true, "forbidSystemBAnswerContextOnly": true, "forbidSystemBReferenceIndexFallback": true
+      }
+    },
+    {
+      "id": "clip-training-objective",
+      "sourceGrounded": true,
+      "evaluationFocus": "paper_summary",
+      "queryScope": "current_paper",
+      "docIds": ["clip"],
+      "question": "What supervision and batch-level prediction objective does CLIP use, and at what pretraining data scale?",
+      "acceptance": ["Mention 400 million image-text pairs.", "Explain the contrastive correct-pairing objective over image and text encoders."],
+      "expected": {
+        "requiredAnswerTermGroups": [["400 million", "400M"], ["image", "visual"], ["text", "caption"], ["pair", "pairing"], ["contrastive", "cosine similarity"]],
+        "requiredRefDocIds": ["clip"], "requiredCitationDocIds": ["clip"], "allowedRefDocIds": ["clip"], "allowedCitationDocIds": ["clip"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "clip-scale", "docId": "clip", "route": "system_a", "sourcePage": 1, "answerTermGroups": [["400 million", "400M"], ["caption", "text"]], "evidenceTerms": ["predicting which caption goes with which image", "400 million"]},
+          {"id": "clip-pairing-objective", "docId": "clip", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["image"], ["text"], ["pair", "pairing"], ["contrastive", "cosine similarity"]], "evidenceTerms": ["image encoder", "text encoder", "correct pairings"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "clip-abstract-locate", "docId": "clip", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["400 million"]},
+          {"id": "clip-figure-locate", "docId": "clip", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Figure 1"], "evidenceTerms": ["correct pairings"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "clip-zero-shot-classifier",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["clip"],
+      "question": "CLIP 怎样从类别名称构造零样本分类器，并把一张图像分到某个类别？",
+      "acceptance": ["Describe encoding class names/descriptions with the text encoder.", "Describe image/text embeddings, cosine similarity, temperature scaling, and softmax."],
+      "expected": {
+        "requiredAnswerTermGroups": [["类别名称", "class names"], ["文本编码器", "text encoder"], ["图像编码器", "image encoder"], ["余弦相似度", "cosine similarity"], ["softmax"], ["temperature", "温度"]],
+        "requiredRefDocIds": ["clip"], "requiredCitationDocIds": ["clip"], "allowedRefDocIds": ["clip"], "allowedCitationDocIds": ["clip"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "clip-zero-shot", "docId": "clip", "route": "system_a", "sourcePage": 6, "answerTermGroups": [["类别名称", "class names"], ["文本编码器", "text encoder"], ["余弦相似度", "cosine similarity"], ["softmax"]], "evidenceTerms": ["names of all the classes", "respective encoders", "cosine similarity", "softmax"]}],
+        "requiredLocateContracts": [{"id": "clip-zero-shot-locate", "docId": "clip", "route": "system_a", "sourcePage": 6, "locatorTerms": ["Using CLIP for Zero-Shot Transfer"], "evidenceTerms": ["class names", "cosine similarity"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "flashattention-io-exact",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_detail",
+      "queryScope": "current_paper",
+      "docIds": ["flashattention"],
+      "question": "Why is FlashAttention both exact and faster/more memory-efficient despite recomputation? Explain tiling, HBM/SRAM traffic, and the avoided intermediate.",
+      "acceptance": ["State that it computes exact attention rather than an approximation.", "Explain tiling into SRAM, fewer HBM accesses, avoiding materialization of the N x N attention matrix, and backward recomputation."],
+      "expected": {
+        "requiredAnswerTermGroups": [["exact attention"], ["tiling"], ["HBM"], ["SRAM"], ["N x N", "N × N"], ["recompute", "recomputation"]],
+        "requiredRefDocIds": ["flashattention"], "requiredCitationDocIds": ["flashattention"], "allowedRefDocIds": ["flashattention"], "allowedCitationDocIds": ["flashattention"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "flash-io", "docId": "flashattention", "route": "system_a", "sourcePage": 1, "answerTermGroups": [["exact attention"], ["tiling"], ["HBM"], ["SRAM"]], "evidenceTerms": ["IO-aware exact attention", "tiling", "HBM", "SRAM"]},
+          {"id": "flash-intermediate", "docId": "flashattention", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["N x N", "N × N"], ["recompute", "recomputation"]], "evidenceTerms": ["prevent materialization", "attention matrix", "recompute"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "flash-abstract-locate", "docId": "flashattention", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["exact attention", "tiling"]},
+          {"id": "flash-figure-locate", "docId": "flashattention", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Figure 1"], "evidenceTerms": ["attention matrix", "HBM"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "flashattention-vs-lora-efficiency",
+      "sourceGrounded": true,
+      "evaluationFocus": "multi_paper_synthesis",
+      "queryScope": "selected_context",
+      "docIds": ["flashattention", "lora"],
+      "question": "FlashAttention 和 LoRA 都被称为“高效”，但优化对象不同。请比较前者的运行时内存 I/O 优化与后者的训练参数/部署优化，并说明为什么两者可以互补而不是互相替代。",
+      "acceptance": ["Use evidence from both papers.", "Distinguish exact-attention HBM traffic from low-rank adaptation and merge-at-deployment."],
+      "expected": {
+        "requiredAnswerTerms": ["FlashAttention", "LoRA"],
+        "requiredAnswerTermGroups": [["HBM"], ["SRAM"], ["低秩", "low-rank"], ["可训练参数", "trainable parameters"], ["合并", "merge"], ["互补", "orthogonal", "complementary"]],
+        "requiredRefDocIds": ["flashattention", "lora"], "requiredCitationDocIds": ["flashattention", "lora"], "allowedRefDocIds": ["flashattention", "lora"], "allowedCitationDocIds": ["flashattention", "lora"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "flash-runtime-efficiency", "docId": "flashattention", "route": "system_a", "sourcePage": 1, "answerTerms": ["FlashAttention"], "answerTermGroups": [["HBM"], ["SRAM"]], "evidenceTerms": ["exact attention", "HBM", "SRAM"]},
+          {"id": "lora-adaptation-efficiency", "docId": "lora", "route": "system_a", "sourcePage": 1, "answerTerms": ["LoRA"], "answerTermGroups": [["低秩", "low-rank"], ["可训练参数", "trainable parameters"]], "evidenceTerms": ["Low-Rank Adaptation", "trainable parameters", "no additional inference latency"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "flash-runtime-locate", "docId": "flashattention", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["HBM", "SRAM"]},
+          {"id": "lora-efficiency-locate", "docId": "lora", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["Low-Rank Adaptation", "trainable parameters"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "dinov2-curation",
+      "sourceGrounded": true,
+      "evaluationFocus": "paper_summary",
+      "queryScope": "current_paper",
+      "docIds": ["dinov2"],
+      "question": "How is DINOv2's LVD-142M dataset assembled from uncurated data, and what roles do curated datasets, retrieval, and deduplication play?",
+      "acceptance": ["Explain retrieval of images close to curated-dataset examples from a large uncurated pool.", "Mention image deduplication as part of the pipeline and identify LVD-142M."],
+      "expected": {
+        "requiredAnswerTermGroups": [["LVD-142M"], ["curated datasets"], ["uncurated"], ["retrieval", "retrieving"], ["deduplication", "deduplicate"]],
+        "requiredRefDocIds": ["dinov2"], "requiredCitationDocIds": ["dinov2"], "allowedRefDocIds": ["dinov2"], "allowedCitationDocIds": ["dinov2"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "dinov2-curation-pipeline", "docId": "dinov2", "route": "system_a", "sourcePage": 4, "answerTermGroups": [["LVD-142M"], ["curated datasets"], ["uncurated"], ["retrieval", "retrieving"], ["deduplication", "deduplicate"]], "evidenceTerms": ["curated LVD-142M dataset", "uncurated data", "curated datasets", "image deduplication", "retrieval system"]}],
+        "requiredLocateContracts": [{"id": "dinov2-processing-locate", "docId": "dinov2", "route": "system_a", "sourcePage": 4, "locatorTerms": ["Data Processing"], "evidenceTerms": ["LVD-142M", "image deduplication"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "dinov2-distillation",
+      "sourceGrounded": true,
+      "evaluationFocus": "method_comparison",
+      "queryScope": "current_paper",
+      "docIds": ["dinov2"],
+      "question": "DINOv2 的小模型为何选择从 ViT-g 蒸馏而不是从头训练？蒸馏循环相对常规训练改了哪些关键设置，效果如何？",
+      "acceptance": ["Name the frozen ViT-g teacher and smaller student.", "Mention removal of masking/stochastic depth, iBOT on two global crops, spare EMA, and better-than-scratch result."],
+      "expected": {
+        "requiredAnswerTermGroups": [["ViT-g"], ["冻结教师", "frozen teacher"], ["masking", "掩码"], ["stochastic depth", "随机深度"], ["iBOT"], ["global crops", "全局裁剪"], ["EMA"], ["从头训练", "training from scratch"], ["更好", "better", "outperform"]],
+        "requiredRefDocIds": ["dinov2"], "requiredCitationDocIds": ["dinov2"], "allowedRefDocIds": ["dinov2"], "allowedCitationDocIds": ["dinov2"],
+        "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "dinov2-distillation-settings", "docId": "dinov2", "route": "system_a", "sourcePage": 7, "answerTermGroups": [["ViT-g"], ["冻结教师", "frozen teacher"], ["masking", "掩码"], ["stochastic depth", "随机深度"], ["iBOT"], ["global crops", "全局裁剪"], ["EMA"], ["从头训练", "training from scratch"]], "evidenceTerms": ["ViT-g", "frozen teacher", "remove the masking and stochastic depth", "iBOT loss on the two global crops", "better performance than training from scratch"]}],
+        "requiredLocateContracts": [{"id": "dinov2-distillation-locate", "docId": "dinov2", "route": "system_a", "sourcePage": 7, "locatorTerms": ["Model distillation"], "evidenceTerms": ["frozen teacher", "training from scratch"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    }
+  ]
+}

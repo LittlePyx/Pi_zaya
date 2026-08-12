@@ -44,6 +44,28 @@ def test_effective_ui_score_penalizes_weak_evidence_high_llm_score():
     assert score < 6.0
 
 
+def test_final_ref_card_copy_rebuilds_duplicate_guide_and_relevance(monkeypatch):
+    summary = "FlashAttention reduces memory traffic with IO-aware exact attention tiling."
+    monkeypatch.setattr(
+        reference_ui,
+        "_build_prompt_aligned_ref_why_line_v3",
+        lambda **_kwargs: "This directly supports the runtime memory-I/O side of the comparison.",
+    )
+
+    why, generation = reference_ui._dedupe_final_ref_card_copy(
+        prompt="Compare FlashAttention with LoRA.",
+        display_name="FlashAttention",
+        heading_path="Abstract",
+        summary_line=summary,
+        why_line=summary,
+        why_generation="exact_support",
+    )
+
+    assert why != summary
+    assert "memory-I/O" in why
+    assert generation == "deterministic_grounded"
+
+
 def test_heading_sanitizer_drops_pdf_shell_noise_without_hiding_real_abstract():
     source_path = r"db\Demo\Demo.en.md"
 
@@ -5138,6 +5160,34 @@ def test_full_polish_splits_duplicate_chinese_guide_and_relevance(monkeypatch):
     assert ui["summary_line"] == "该论文比较了各样本的 LPIPS 指标，并表明该补偿方法在真实多重退化场景下重建质量优于其他方案。"
     assert ui["why_line"] == duplicate
     assert ui["summary_line"] != ui["why_line"]
+
+
+def test_full_polish_recovers_localized_relevance_after_wrong_language_fallback(monkeypatch):
+    monkeypatch.setattr(reference_card_locale, "_refs_card_locale_pref", lambda: "zh")
+    prompt = (
+        "NeRF 为什么要对输入坐标做 positional encoding？"
+        "直接把 xyzθφ 输入 MLP 时，论文观察到的表示问题是什么？"
+    )
+    summary = (
+        "直接回答：NeRF 做 positional encoding 是因为直接输入 MLP 时，"
+        "网络难以表示颜色和几何中的高频变化。"
+    )
+
+    ui = reference_ui._finalize_polished_ref_card_locale(
+        prompt=prompt,
+        ui_meta={
+            "display_name": "nerf.pdf",
+            "heading_path": "NeRF / 5.1 Positional encoding",
+            "summary_kind": "guide",
+            "summary_line": summary,
+            "why_line": "This evidence explains why positional encoding helps the MLP.",
+        },
+    )
+
+    assert ui["render_locale"] == "zh"
+    assert "NeRF" in ui["why_line"]
+    assert len(ui["why_line"]) >= 20
+    assert ui["why_generation"] == "deterministic_grounded"
 
 
 def test_full_polish_replaces_relevance_template_guide_from_authoritative_evidence(monkeypatch):

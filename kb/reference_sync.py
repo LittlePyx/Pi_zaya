@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from kb.reference_index import build_reference_index
+from kb.source_filters import is_excluded_source_path
 
 
 _LOCK = threading.Lock()
@@ -141,6 +142,8 @@ def _pdf_md_coverage(src_root: Path, pdf_root: Path | None) -> dict[str, Any]:
         for p in Path(src_root).rglob("*.md"):
             n = str(p.name or "").lower()
             if n in {"assets_manifest.md", "quality_report.md", "output.md"}:
+                continue
+            if is_excluded_source_path(str(p)):
                 continue
             if _is_file(p):
                 md_paths.append(p)

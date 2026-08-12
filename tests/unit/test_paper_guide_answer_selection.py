@@ -1,6 +1,8 @@
 from kb.paper_guide_answer_selection import (
+    _bundle_answer_hits_by_source,
     _build_answer_hits_for_generation,
     _has_anchor_grounded_answer_hits,
+    _merge_same_source_answer_hits,
     _paper_guide_focus_heading,
     _rescue_multi_source_answer_hits,
     _select_paper_guide_answer_hits,
@@ -509,3 +511,263 @@ def test_has_anchor_grounded_answer_hits_detects_positive_anchor_match():
     ]
 
     assert _has_anchor_grounded_answer_hits(hits) is True
+
+
+def test_merge_same_source_answer_hits_preserves_passage_locators_under_one_doc():
+    source = r"db\demo\demo.en.md"
+    hits = [
+        {
+            "score": 12.0,
+            "text": "The contracting path captures context.",
+            "meta": {
+                "source_path": source,
+                "heading_path": "2 Network Architecture",
+                "page_start": 4,
+                "block_id": "blk-contract",
+            },
+        },
+        {
+            "score": 10.0,
+            "text": "The cropped feature map is concatenated with the upsampled output.",
+            "meta": {
+                "source_path": source,
+                "heading_path": "2 Network Architecture",
+                "page_start": 4,
+                "block_id": "blk-concat",
+            },
+        },
+    ]
+
+    out = _merge_same_source_answer_hits(hits)
+
+    assert len(out) == 1
+    assert "Source passage 1" in out[0]["text"]
+    assert "Source passage 2" in out[0]["text"]
+    assert "p. 4" in out[0]["text"]
+    assert out[0]["meta"]["source_passage_count"] == 2
+    assert len(out[0]["meta"]["source_passages"]) == 2
+    assert [
+        passage["score"] for passage in out[0]["meta"]["source_passages"]
+    ] == [12.0, 10.0]
+
+
+def test_merge_same_source_answer_hits_leaves_multiple_papers_separate():
+    hits = [
+        {"text": "Alpha evidence", "meta": {"source_path": "alpha.md"}},
+        {"text": "Beta evidence", "meta": {"source_path": "beta.md"}},
+    ]
+
+    assert _merge_same_source_answer_hits(hits) == hits
+
+
+def test_bundle_answer_hits_by_source_keeps_one_citation_doc_per_paper():
+    hits = [
+        {"text": "Alpha mechanism", "meta": {"source_path": "alpha.md", "page_start": 1}},
+        {"text": "Alpha limitation", "meta": {"source_path": "alpha.md", "page_start": 4}},
+        {"text": "Beta mechanism", "meta": {"source_path": "beta.md", "page_start": 2}},
+        {"text": "Beta deployment", "meta": {"source_path": "beta.md", "page_start": 5}},
+    ]
+
+    out = _bundle_answer_hits_by_source(hits)
+
+    assert len(out) == 2
+    assert "Alpha mechanism" in out[0]["text"]
+    assert "Alpha limitation" in out[0]["text"]
+    assert "Beta mechanism" in out[1]["text"]
+    assert "Beta deployment" in out[1]["text"]
+
+
+def test_named_mechanism_selection_reserves_distinct_source_blocks():
+    source = "restormer.en.md"
+    hits = [
+        {
+            "score": 150.0,
+            "text": (
+                "MDTA applies self-attention across channels. GDFN performs controlled "
+                "feature transformation."
+            ),
+            "meta": {"source_path": source, "heading_path": "Conclusion", "page_start": 8},
+        },
+        {
+            "score": 80.0,
+            "text": (
+                "MDTA computes cross-covariance across feature channels rather than the "
+                "spatial dimension."
+            ),
+            "meta": {"source_path": source, "heading_path": "Introduction", "page_start": 2},
+        },
+        {
+            "score": 78.0,
+            "text": (
+                "Overall, the GDFN controls the information flow and lets each level "
+                "focus on fine details."
+            ),
+            "meta": {"source_path": source, "heading_path": "3.2 GDFN", "page_start": 4},
+        },
+    ]
+
+    selected = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt=(
+            "In Restormer, what does MDTA transpose about self-attention, and what "
+            "distinct filtering role does GDFN play?"
+        ),
+        top_n=2,
+    )
+
+    assert [hit["meta"]["page_start"] for hit in selected] == [2, 4]
+
+
+def test_dataset_identifier_does_not_displace_exact_quantitative_passage() -> None:
+    source = "sam.en.md"
+    hits = [
+        {
+            "score": 179.5,
+            "text": "SA-1B contains 11M images and 1.1B masks.",
+            "meta": {
+                "source_path": source,
+                "heading_path": "1 Introduction",
+                "page_start": 3,
+                "block_id": "intro",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 154.0,
+            "text": (
+                "Our data engine has three stages: assisted-manual, semi-automatic, "
+                "and fully automatic."
+            ),
+            "meta": {
+                "source_path": source,
+                "heading_path": "4 Segment Anything Data Engine",
+                "page_start": 2,
+                "block_id": "engine",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 147.0,
+            "text": (
+                "Our data engine produced 1.1B masks, 99.1% of which were generated "
+                "fully automatically."
+            ),
+            "meta": {
+                "source_path": source,
+                "heading_path": "5 Segment Anything Dataset / Masks",
+                "page_start": 6,
+                "block_id": "masks",
+                "paper_guide_targeted_block": True,
+            },
+        },
+        {
+            "score": 128.0,
+            "text": "The SA-1B data card lists caveats and intended use cases.",
+            "meta": {
+                "source_path": source,
+                "heading_path": "F.2 Data Annotation Card",
+                "page_start": 28,
+                "block_id": "appendix",
+                "paper_guide_targeted_block": True,
+            },
+        },
+    ]
+
+    selected = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt=(
+            "SAM 的数据引擎分哪三个阶段？最终 SA-1B 有多少图像和掩码，"
+            "其中多少比例是全自动生成的？"
+        ),
+        top_n=3,
+    )
+
+    assert {hit["meta"]["block_id"] for hit in selected} == {
+        "intro",
+        "engine",
+        "masks",
+    }
+
+
+def test_multi_fact_selection_reserves_same_page_quantitative_companion() -> None:
+    source = "sam.en.md"
+    hits = [
+        {
+            "score": 180.0,
+            "text": "SA-1B contains 11M images and 1.1B masks.",
+            "meta": {"source_path": source, "heading_path": "Introduction", "page_start": 3, "block_id": "intro"},
+        },
+        {
+            "score": 160.0,
+            "text": "The data engine has assisted-manual, semi-automatic, and fully automatic stages.",
+            "meta": {"source_path": source, "heading_path": "Data Engine", "page_start": 2, "block_id": "stages"},
+        },
+        {
+            "score": 150.0,
+            "text": "Our data engine produced 1.1B masks, 99.1% fully automatically.",
+            "meta": {"source_path": source, "heading_path": "Dataset", "page_start": 6, "block_id": "masks"},
+        },
+        {
+            "score": 140.0,
+            "text": "A broad ablation studies model scaling.",
+            "meta": {"source_path": source, "heading_path": "Ablations", "page_start": 12, "block_id": "ablation"},
+        },
+        {
+            "score": 125.0,
+            "text": "Our dataset consists of 11M images and 1.1B segmentation masks.",
+            "meta": {"source_path": source, "heading_path": "Dataset", "page_start": 6, "block_id": "dataset-counts"},
+        },
+    ]
+
+    selected = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=hits,
+        prompt=(
+            "What are the assisted-manual, semi-automatic, and fully automatic stages, "
+            "and how many 11M images, 1.1B masks, and 99.1% automatic masks are in SA-1B?"
+        ),
+        top_n=4,
+    )
+
+    assert "masks" in {hit["meta"]["block_id"] for hit in selected}
+    assert "dataset-counts" in {hit["meta"]["block_id"] for hit in selected}
+    assert "ablation" not in {hit["meta"]["block_id"] for hit in selected}
+
+
+def test_section_heading_page_is_preserved_for_next_page_equation() -> None:
+    source = "ddpm.en.md"
+    selected = _select_paper_guide_answer_hits(
+        grouped_docs=[],
+        heading_hits=[
+            {
+                "score": 90.0,
+                "text": "3.4 Simplified training objective",
+                "meta": {
+                    "source_path": source,
+                    "heading_path": "3.4 Simplified training objective",
+                    "page_start": 4,
+                    "kind": "heading",
+                    "block_id": "heading",
+                },
+            },
+            {
+                "score": 130.0,
+                "text": r"L_simple predicts epsilon noise.",
+                "meta": {
+                    "source_path": source,
+                    "heading_path": "3.4 Simplified training objective",
+                    "page_start": 5,
+                    "kind": "equation",
+                    "block_id": "formula",
+                },
+            },
+        ],
+        prompt="What does the simplified training objective L_simple predict?",
+        top_n=1,
+    )
+
+    assert selected[0]["meta"]["block_id"] == "formula"
+    assert selected[0]["meta"]["section_page_start"] == 4
+    assert selected[0]["meta"]["section_heading_text"] == "3.4 Simplified training objective"

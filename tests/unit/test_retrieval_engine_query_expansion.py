@@ -349,7 +349,10 @@ def test_search_hits_fallback_does_not_index_internal_query_scope_instructions()
 
     assert hits[0]["text"] == "Table 6 comparison"
     assert used_query == "highest SIDD PSNR model"
-    assert variants == ["highest SIDD PSNR model"]
+    assert variants[0] == "highest SIDD PSNR model"
+    assert set(variants[1:]) == {"SIDD", "PSNR"}
+    assert not any("query scope" in variant.casefold() for variant in variants)
+    assert not any("whole indexed literature" in variant.casefold() for variant in variants)
 
 
 def test_search_hits_fallback_keeps_translated_hits_when_original_has_weak_match(monkeypatch):

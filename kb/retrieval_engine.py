@@ -2279,6 +2279,36 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
             "wavelengths outside FPA technology high frame rates three dimensions "
             "hazardous gas leaks autonomous vehicles camera architecture review"
         )
+
+    # A mixed-language comparison can name multiple methods while the compact
+    # translation fallback keeps only one of them.  When no more specific
+    # domain expansion applies, search each high-specificity identifier on its
+    # own so RRF preserves every explicitly named paper.  Requiring at least
+    # two identifiers keeps ordinary single-method queries unchanged.
+    if not variants:
+        named_identifiers: list[str] = []
+        seen_identifiers: set[str] = set()
+        for token in re.findall(
+            r"(?<![A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]{3,40}(?![A-Za-z0-9_-])",
+            q,
+        ):
+            raw_token = str(token or "").strip().strip("-_")
+            low_token = raw_token.lower()
+            if low_token in _DIRECT_PROMPT_STOP_TOKENS or low_token in seen_identifiers:
+                continue
+            has_identity_signal = (
+                raw_token.isupper()
+                or any(ch.isupper() for ch in raw_token[1:])
+                or any(ch.isdigit() for ch in raw_token)
+                or ("-" in raw_token)
+            )
+            if not has_identity_signal:
+                continue
+            seen_identifiers.add(low_token)
+            named_identifiers.append(raw_token)
+        if len(named_identifiers) >= 2:
+            for identifier in named_identifiers:
+                add(identifier)
     return variants[:4]
 
 

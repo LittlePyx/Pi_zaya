@@ -39,6 +39,24 @@ def test_extract_structured_cite_answer_context_stops_before_next_sentence() -> 
     assert "deep learning" not in out
 
 
+def test_extract_structured_cite_answer_context_keeps_et_al_identity() -> None:
+    sid = "abc12345"
+    token = f"[[CITE:{sid}:26]]"
+    text = (
+        "DPR was introduced by Karpukhin et al. in Dense Passage Retrieval for "
+        f"Open-Domain Question Answering {token}."
+    )
+
+    out = extract_structured_cite_answer_context_line(
+        text,
+        text.index(token),
+        text.index(token) + len(token),
+    )
+
+    assert "Karpukhin et al." in out
+    assert "Dense Passage Retrieval for Open-Domain Question Answering" in out
+
+
 def test_extract_structured_cite_answer_context_marker_after_period_stops_before_next_sentence() -> None:
     sid = "abc12345"
     token = f"[[CITE:{sid}:4]]"
@@ -146,3 +164,35 @@ def test_enrich_inpaper_detail_context_falls_back_to_answer_context_when_source_
     assert detail["citation_context_source"] == "answer_context"
     assert detail["evidence_source"] == "answer_context"
     assert detail["summary_source"] == "answer_context"
+
+
+def test_enrich_inpaper_detail_keeps_citing_context_and_locates_reference_entry(
+    tmp_path,
+) -> None:
+    source = tmp_path / "paper.en.md"
+    source.write_text(
+        "# Paper\n\n<!-- kb_page: 3 -->\n## Methods\nThe retriever is based on DPR [26].\n\n"
+        "<!-- kb_page: 12 -->\n## References\n[26] Vladimir Karpukhin et al. "
+        "Dense passage retrieval for open-domain question answering.\n",
+        encoding="utf-8",
+    )
+    detail: dict = {
+        "num": 26,
+        "raw": (
+            "Vladimir Karpukhin et al. Dense passage retrieval for open-domain "
+            "question answering."
+        ),
+    }
+
+    enrich_inpaper_detail_context(
+        detail,
+        source_path=str(source),
+        ref_num=26,
+        answer_context="DPR is upstream work.",
+    )
+
+    assert detail["citation_context_page_start"] == 3
+    assert detail["page_start"] == 12
+    assert detail["heading_path"].endswith("References")
+    assert detail["block_id"]
+    assert "retriever is based on DPR" in detail["citation_context"]

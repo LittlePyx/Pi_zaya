@@ -864,6 +864,9 @@ def detect_text_reference_opportunities(
                         "context_marker_verified": True,
                         "why_line": "The retrieved source paper explicitly cites this upstream work in the cited context.",
                         "ref_title": _compact_text(title, max_len=160),
+                        "ref_authors": _compact_text(
+                            str(ref.get("authors") or ""), max_len=160
+                        ),
                     },
                 )
             )
@@ -988,6 +991,10 @@ def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mappi
     if not label or label.lower().startswith("ref "):
         return False
     label_matches_line = _label_matches_surface(label, plain)
+    ref_title = str(opp.get("ref_title") or "").strip()
+    ref_title_matches_line = bool(
+        ref_title and _loose_ascii_text(ref_title) in _loose_ascii_text(plain)
+    )
     evidence_surface = " ".join(
         [
             str(opp.get("evidence_quote") or "").strip(),
@@ -1008,6 +1015,7 @@ def _line_has_grounded_opportunity_context(*, line: str, prompt: str, opp: Mappi
                 return False
         return bool(
             label_matches_line
+            or ref_title_matches_line
             or _line_can_take_prompt_bound_opportunity(line=plain, prompt=prompt, label=label)
         )
     if not label_matches_line:
@@ -1087,12 +1095,32 @@ def _iter_candidate_records(
     support_resolution: Sequence[Mapping[str, object]] | None,
     support_slots: Sequence[Mapping[str, object]] | None,
     cards: Sequence[Mapping[str, object]] | None,
+    answer_hits: Sequence[Mapping[str, object]] | None = None,
 ) -> list[Mapping[str, object]]:
     out: list[Mapping[str, object]] = []
     for group in (support_resolution, support_slots, cards):
         for item in list(group or []):
             if isinstance(item, Mapping):
                 out.append(item)
+    for hit in list(answer_hits or []):
+        if not isinstance(hit, Mapping):
+            continue
+        meta = hit.get("meta") if isinstance(hit.get("meta"), Mapping) else {}
+        passages = (meta or {}).get("source_passages")
+        if isinstance(passages, Sequence) and not isinstance(passages, (str, bytes)):
+            for passage in passages:
+                if not isinstance(passage, Mapping):
+                    continue
+                row = dict(passage)
+                row.setdefault("source_path", str((meta or {}).get("source_path") or "").strip())
+                row.setdefault("source_name", str((meta or {}).get("source_name") or "").strip())
+                row.setdefault("evidence_quote", str(passage.get("text") or "").strip())
+                out.append(row)
+            continue
+        row = dict(hit)
+        row.setdefault("source_path", str((meta or {}).get("source_path") or "").strip())
+        row.setdefault("heading_path", str((meta or {}).get("heading_path") or "").strip())
+        out.append(row)
     return out
 
 
@@ -1105,6 +1133,7 @@ def detect_paper_guide_reference_opportunities(
     support_resolution: Sequence[Mapping[str, object]] | None = None,
     support_slots: Sequence[Mapping[str, object]] | None = None,
     cards: Sequence[Mapping[str, object]] | None = None,
+    answer_hits: Sequence[Mapping[str, object]] | None = None,
     max_items: int = 3,
 ) -> list[dict[str, object]]:
     """Find upstream bibliography refs that should surface in ordinary answers.
@@ -1123,6 +1152,7 @@ def detect_paper_guide_reference_opportunities(
         limit = 3
 
     rows: list[tuple[float, dict[str, object]]] = []
+    structured_refs_by_source: dict[str, dict[int, dict[str, object]]] = {}
     resolved_target_refs: set[int] = set()
     if family == "citation_lookup":
         for record in list(support_resolution or []):
@@ -1135,11 +1165,70 @@ def detect_paper_guide_reference_opportunities(
                     continue
                 if ref_num > 0:
                     resolved_target_refs.add(ref_num)
-    for record in _iter_candidate_records(
+    candidate_records = _iter_candidate_records(
         support_resolution=support_resolution,
         support_slots=support_slots,
         cards=cards,
-    ):
+        answer_hits=answer_hits,
+    )
+    if source_path and _UPSTREAM_INTENT_RE.search(str(prompt or "")):
+        # Origin questions need the sentence where the current paper actually
+        # cites the named upstream work. A bounded retrieval bundle may retain
+        # a nearby DPR usage sentence but omit the preceding ``based on DPR
+        # [26]`` sentence. Recover only source-verbatim inline-reference
+        # contexts whose structured bibliography identity matches the prompt.
+        try:
+            targeted_reference_rows = load_paper_guide_reference_index(source_path)
+        except Exception:
+            targeted_reference_rows = []
+        prompt_tokens = _tokens(prompt)
+        prompt_upper = str(prompt or "").upper()
+        targeted_refs: set[int] = set()
+        for ref_row in list(targeted_reference_rows or []):
+            if not isinstance(ref_row, Mapping):
+                continue
+            try:
+                targeted_ref_num = int(ref_row.get("ref_num") or 0)
+            except Exception:
+                targeted_ref_num = 0
+            ref_title = str(ref_row.get("title") or ref_row.get("text") or "").strip()
+            title_tokens = _tokens(ref_title)
+            title_words = [
+                word
+                for word in re.findall(r"[A-Za-z]+", ref_title)
+                if word.lower() not in {"a", "an", "and", "for", "of", "the", "to", "with"}
+            ]
+            acronym_match = any(
+                len(acronym) >= 3
+                and re.search(
+                    rf"(?<![A-Z0-9]){re.escape(acronym)}(?![A-Z0-9])",
+                    prompt_upper,
+                )
+                for prefix_len in range(2, min(6, len(title_words)) + 1)
+                for acronym in ["".join(word[0] for word in title_words[:prefix_len]).upper()]
+            )
+            if targeted_ref_num > 0 and (
+                acronym_match or len(prompt_tokens & title_tokens) >= 2
+            ):
+                targeted_refs.add(targeted_ref_num)
+        if targeted_refs:
+            for ref_num, context in _explicit_ref_contexts_from_text(
+                _source_body_text(source_path),
+                max_contexts=160,
+            ):
+                if int(ref_num) not in targeted_refs:
+                    continue
+                candidate_records.append(
+                    {
+                        "source_path": source_path,
+                        "evidence_quote": context,
+                        "ref_num": int(ref_num),
+                        "candidate_refs": [int(ref_num)],
+                        "context_marker_verified": True,
+                        "claim_type": "prior_work",
+                    }
+                )
+    for record in candidate_records:
         record_source = _source_path_from_record(record, fallback=source_path)
         if not record_source:
             continue
@@ -1164,20 +1253,76 @@ def detect_paper_guide_reference_opportunities(
         sid = _sid_from_record(record, source_path=record_source)
         if not sid:
             continue
+        source_key = _source_key(record_source)
+        if source_key not in structured_refs_by_source:
+            try:
+                structured_rows = load_paper_guide_reference_index(record_source)
+            except Exception:
+                structured_rows = []
+            structured_refs_by_source[source_key] = {
+                int(row.get("ref_num") or 0): dict(row)
+                for row in list(structured_rows or [])
+                if isinstance(row, Mapping) and int(row.get("ref_num") or 0) > 0
+            }
+        structured_refs = structured_refs_by_source.get(source_key, {})
         for ref_num in refs[:3]:
+            ref_row = dict(structured_refs.get(int(ref_num)) or {})
+            ref_title = _compact_text(
+                str(ref_row.get("title") or ref_row.get("text") or ""),
+                max_len=180,
+            )
+            title_tokens = _tokens(ref_title)
+            prompt_tokens = _tokens(prompt)
+            title_overlap = len(prompt_tokens.intersection(title_tokens))
+            title_words = [
+                token
+                for token in re.findall(r"[A-Za-z]+", ref_title)
+                if token.lower() not in {"a", "an", "and", "for", "of", "the", "to", "with"}
+            ]
+            title_acronym = ""
+            for prefix_len in range(2, min(6, len(title_words)) + 1):
+                candidate_acronym = "".join(
+                    word[0] for word in title_words[:prefix_len]
+                ).upper()
+                if re.search(
+                    rf"(?<![A-Za-z0-9]){re.escape(candidate_acronym)}(?![A-Za-z0-9])",
+                    str(prompt or ""),
+                    flags=re.IGNORECASE,
+                ):
+                    title_acronym = candidate_acronym
+                    break
+            acronym_match = bool(title_acronym)
+            opportunity_label = _label_for_opportunity(
+                prompt=prompt,
+                text=text,
+                ref_num=int(ref_num),
+            )
+            if acronym_match:
+                opportunity_label = title_acronym
             rows.append(
                 (
-                    score - (0.05 * len(rows)),
+                    score
+                    + min(12.0, 3.0 * float(title_overlap))
+                    + (18.0 if acronym_match else 0.0)
+                    - (0.05 * len(rows)),
                     {
                         "source_path": record_source,
                         "sid": sid,
                         "ref_num": int(ref_num),
-                        "label": _label_for_opportunity(prompt=prompt, text=text, ref_num=int(ref_num)),
+                        "label": opportunity_label,
                         "heading_path": heading,
                         "evidence_quote": text,
                         "context_marker_verified": True,
                         "why_line": (
                             "The current paper cites this upstream work in the evidence used for the answer."
+                        ),
+                        "ref_title": ref_title,
+                        "ref_authors": _compact_text(
+                            str(ref_row.get("authors") or ""), max_len=160
+                        ),
+                        "ref_year": str(ref_row.get("year") or "").strip(),
+                        "ref_raw": _compact_text(
+                            str(ref_row.get("text") or ""), max_len=360
                         ),
                     },
                 )
@@ -1278,7 +1423,13 @@ def build_reference_opportunities_prompt_block(
         label = _compact_text(str(row.get("label") or f"ref {ref_num}"), max_len=80)
         heading = _compact_text(str(row.get("heading_path") or ""), max_len=120)
         evidence = _compact_text(str(row.get("evidence_quote") or ""), max_len=180)
+        ref_title = _compact_text(str(row.get("ref_title") or ""), max_len=140)
+        ref_authors = _compact_text(str(row.get("ref_authors") or ""), max_len=100)
         parts = [f"label={label}", f"cite_example=[[CITE:{sid}:{ref_num}]]"]
+        if ref_title:
+            parts.append(f"reference_title={ref_title}")
+        if ref_authors:
+            parts.append(f"reference_authors={ref_authors}")
         if heading:
             parts.append(f"heading={heading}")
         if evidence:
@@ -1318,6 +1469,7 @@ def _line_score_for_opportunity(*, line: str, prompt: str, opp: Mapping[str, obj
         return float("-inf")
     label = str(opp.get("label") or "").strip()
     evidence = str(opp.get("evidence_quote") or "").strip()
+    ref_title = str(opp.get("ref_title") or "").strip()
     if not _line_has_grounded_opportunity_context(line=plain, prompt=prompt, opp=opp):
         return float("-inf")
     score = 0.0
@@ -1326,10 +1478,14 @@ def _line_score_for_opportunity(*, line: str, prompt: str, opp: Mapping[str, obj
         score += 8.0
     label_tokens = _tokens(label)
     evidence_tokens = _tokens(evidence)
+    ref_title_tokens = _tokens(ref_title)
     prompt_tokens = _tokens(prompt)
     line_tokens = _tokens(plain)
     meaningful_label = bool(label_tokens and not str(label or "").strip().lower().startswith("ref "))
-    prompt_bound_fallback = _line_can_take_prompt_bound_opportunity(
+    ref_title_matches = bool(
+        ref_title and _loose_ascii_text(ref_title) in _loose_ascii_text(plain)
+    )
+    prompt_bound_fallback = ref_title_matches or _line_can_take_prompt_bound_opportunity(
         line=plain,
         prompt=prompt,
         label=label,
@@ -1342,6 +1498,28 @@ def _line_score_for_opportunity(*, line: str, prompt: str, opp: Mapping[str, obj
         score += min(4.0, 2.0 * float(len(label_tokens.intersection(line_tokens))))
     if evidence_tokens:
         score += min(3.0, 0.8 * float(len(evidence_tokens.intersection(line_tokens))))
+    if ref_title_tokens:
+        # For explicit origin/prior-work questions, prefer the answer sentence
+        # that identifies the cited paper over a generic sentence that merely
+        # mentions the short method acronym. This keeps the structured marker
+        # on the claim that the System-B validator can independently verify.
+        score += min(9.0, 2.5 * float(len(ref_title_tokens.intersection(line_tokens))))
+    prompt_entities = {
+        token
+        for token in prompt_tokens
+        if len(token) >= 5
+    }
+    if prompt_entities:
+        score += min(5.0, 2.5 * float(len(prompt_entities.intersection(line_tokens))))
+    prompt_author_surnames = {
+        surname.lower()
+        for surname in re.findall(
+            r"(?i)\b([A-Z][A-Za-z-]{3,})\s+et\s+al\.?",
+            str(prompt or ""),
+        )
+    }
+    if prompt_author_surnames.intersection(line_tokens):
+        score += 12.0
     if prompt_tokens:
         score += min(3.0, 0.8 * float(len(prompt_tokens.intersection(line_tokens))))
     if _PRIOR_WORK_CUE_RE.search(plain):
@@ -1468,6 +1646,143 @@ def apply_reference_opportunities_to_answer(
     rows = _normalized_opportunities(opportunities, max_items=3)
     if not text or not rows:
         return text, {"mode": "none", "injected_refs": [], "tail_used": False}
+
+    if _UPSTREAM_INTENT_RE.search(str(prompt or "")):
+        lines = text.splitlines()
+        for row in rows:
+            ref_title = _compact_text(str(row.get("ref_title") or ""), max_len=180)
+            ref_surface = " ".join(
+                str(row.get(key) or "").strip()
+                for key in ("ref_authors", "ref_raw")
+            )
+            prompt_author_matches = re.findall(
+                r"(?i)\b([A-Z][A-Za-z-]{3,})\s+et\s+al\.?",
+                str(prompt or ""),
+            )
+            author_display = next(
+                (
+                    surname
+                    for surname in prompt_author_matches
+                    if re.search(rf"(?i)\b{re.escape(surname)}\b", ref_surface)
+                ),
+                "",
+            )
+            if not author_display:
+                first_author = re.split(
+                    r"\s*(?:,|;|\band\b)\s*",
+                    str(row.get("ref_authors") or row.get("ref_raw") or ""),
+                    maxsplit=1,
+                    flags=re.IGNORECASE,
+                )[0]
+                first_author = re.sub(
+                    r"(?i)\s+et\s+al\.?$",
+                    "",
+                    first_author,
+                ).strip()
+                author_tokens = re.findall(
+                    r"[A-Z][A-Za-z-]{2,}",
+                    first_author,
+                )
+                if author_tokens:
+                    author_display = author_tokens[-1]
+            if not ref_title or not author_display:
+                continue
+            ref_year = str(row.get("ref_year") or "").strip()
+            identity_present = bool(
+                re.search(re.escape(ref_title), text, flags=re.IGNORECASE)
+                and re.search(rf"(?i)\b{re.escape(author_display)}\b", text)
+            )
+            if identity_present:
+                marker = _cite_marker_for_opportunity(row)
+                identity_indexes = [
+                    idx
+                    for idx, line in enumerate(lines)
+                    if re.search(re.escape(ref_title), line, flags=re.IGNORECASE)
+                    and re.search(
+                        rf"(?i)\b{re.escape(author_display)}\b",
+                        line,
+                    )
+                ]
+                marker_indexes = [
+                    idx for idx, line in enumerate(lines) if marker in line
+                ]
+                if (
+                    identity_indexes
+                    and marker_indexes
+                    and not any(marker in lines[idx] for idx in identity_indexes)
+                ):
+                    # A generated answer can contain the correct upstream
+                    # identity and the correct structured marker, but attach
+                    # that marker to a nearby implementation detail. Move the
+                    # already-validated marker to the author/title claim so
+                    # the visible System-B card audits the statement it proves.
+                    for idx in marker_indexes:
+                        lines[idx] = re.sub(
+                            rf"\s*{re.escape(marker)}",
+                            "",
+                            lines[idx],
+                        )
+                    target_idx = max(
+                        identity_indexes,
+                        key=lambda idx: (
+                            1 if re.search(r"(?i)upstream\s+paper", lines[idx]) else 0,
+                            _line_score_for_opportunity(
+                                line=lines[idx], prompt=prompt, opp=row
+                            ),
+                        ),
+                    )
+                    lines[target_idx] = _insert_marker_before_terminal_punctuation(
+                        lines[target_idx],
+                        marker,
+                    )
+                    text = "\n".join(lines).strip()
+                continue
+            candidate_indexes = [
+                idx
+                for idx, line in enumerate(lines)
+                if _line_has_grounded_opportunity_context(
+                    line=line,
+                    prompt=prompt,
+                    opp=row,
+                )
+                and (
+                    _PRIOR_WORK_CUE_RE.search(line)
+                    or re.search(r"(?i)upstream\s+paper|prior\s+work", line)
+                )
+            ]
+            if not candidate_indexes:
+                continue
+            target_idx = max(
+                candidate_indexes,
+                key=lambda idx: (
+                    (
+                        2
+                        if re.search(r"(?i)upstream\s+paper", lines[idx])
+                        else 1
+                        if re.search(r"(?i)prior\s+work", lines[idx])
+                        else 0
+                    ),
+                    _line_score_for_opportunity(
+                        line=lines[idx], prompt=prompt, opp=row
+                    ),
+                ),
+            )
+            prefix_match = re.match(
+                r"^(?P<prefix>\s*(?:[-*]\s*)?(?:Upstream\s+paper|Prior\s+work)\s*:)\s*",
+                lines[target_idx],
+                flags=re.IGNORECASE,
+            )
+            identity = f"{ref_title}, by {author_display} et al."
+            if re.fullmatch(r"(?:19|20)\d{2}", ref_year):
+                identity += f" ({ref_year})"
+            lines[target_idx] = (
+                f"{prefix_match.group('prefix')} {identity}"
+                if prefix_match
+                else _insert_marker_before_terminal_punctuation(
+                    lines[target_idx], f"({identity})"
+                )
+            )
+            text = "\n".join(lines).strip()
 
     inline_text, inline_meta = inject_reference_opportunity_citations_inline(
         text,

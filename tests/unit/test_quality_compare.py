@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from time import perf_counter
+
 from kb.converter.quality_compare import (
     compare_markdown_quality,
     render_quality_comparison_report,
@@ -114,3 +116,16 @@ def test_render_quality_comparison_report_contains_key_sections():
     assert "## Key Metrics" in report
     assert "## Regression Flags" in report
     assert "candidate.md" in report
+
+
+def test_compare_markdown_quality_bounds_long_near_identical_document_latency():
+    base = " ".join(f"evidence{index % 997}" for index in range(40_000))
+    candidate = base.replace("evidence500", "repaired evidence500", 1)
+
+    started = perf_counter()
+    comparison = compare_markdown_quality(base, candidate)
+    elapsed = perf_counter() - started
+
+    assert comparison["similarity_basis"] == "word_multiset"
+    assert comparison["similarity_ratio"] > 0.99
+    assert elapsed < 3.0

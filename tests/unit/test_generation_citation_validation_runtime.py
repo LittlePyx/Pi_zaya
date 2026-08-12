@@ -615,3 +615,50 @@ def test_validate_freeform_single_hit_valid():
     assert "[1]" in answer
     assert stats["valid_count"] == 1
     assert stats["kept"] == 1
+
+
+def test_validate_structured_citations_accepts_confident_author_without_year(tmp_path):
+    source_path = r"db\doc\rag.en.md"
+    locked_sid = "s1234abcd"
+    cite_re = re.compile(r"\[\[CITE:([a-z0-9]+):(\d+)\]\]", re.IGNORECASE)
+    ref = {
+        "raw": "[26] Karpukhin et al. Dense Passage Retrieval for Open-Domain Question Answering.",
+        "authors": "Karpukhin V et al",
+        "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+    }
+
+    answer, stats = _validate_structured_citations(
+        "Dense Passage Retrieval was introduced by Karpukhin et al. [[CITE:s1234abcd:26]].",
+        answer_hits=[{"text": "The retriever is based on DPR [26].", "meta": {"source_path": source_path}}],
+        db_dir=tmp_path,
+        locked_source={"sid": locked_sid, "source_path": source_path},
+        paper_guide_mode=True,
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_support_resolution=[],
+        sanitize_structured_cite_tokens=lambda text: text,
+        cite_canon_re=cite_re,
+        cite_source_id=lambda _src: locked_sid,
+        hit_source_path=lambda hit: str((hit.get("meta") or {}).get("source_path") or ""),
+        load_reference_index=lambda _db_dir: {"docs": {"demo": {}}},
+        resolve_reference_entry=lambda _index, src, num, *, source_sha1="": (
+            {"ref": ref} if src == source_path and int(num) == 26 else None
+        ),
+        source_refs_from_index=lambda _index, src, *, source_sha1="": (
+            {26: ref} if src == source_path else {}
+        ),
+        extract_candidate_ref_nums_from_hits=lambda _hits, *, source_path="", max_candidates=48: [],
+        extract_citation_context_hints=lambda _text, *, token_start=0, token_end=0: {
+            "author": "karpukhin",
+            "author_confident": True,
+            "year": "",
+            "doi": "",
+        },
+        has_explicit_reference_conflict=lambda _ref, _hints: False,
+        select_support_slot_for_context=lambda _slots, *, context_text="": None,
+        reference_alignment_score=lambda _ref, _hints: 2.5,
+    )
+
+    assert "[[CITE:s1234abcd:26]]" in answer
+    assert stats["kept"] == 1
+    assert stats["dropped"] == 0

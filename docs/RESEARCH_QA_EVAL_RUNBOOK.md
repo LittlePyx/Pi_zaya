@@ -1028,3 +1028,74 @@ configuration-dependent skips, 262 sanity tests with two skips, the visible
 Agent contract 5/5, Ruff, ESLint, the production build, all quality fixtures,
 frontend smoke 127 applicable tests with two private-auth skips, core citation
 and library regressions 109/109, and public-surface isolation 4/4.
+
+## 2026-08-12 Unseen-Corpus Transfer and Exact-Code Tail Gate
+
+The follow-up registered a separate ten-paper corpus before its first model
+answer. `docs/research_qa_unseen_corpus_v1.json` freezes the PDF hashes, twenty
+questions, expected answer/evidence terms, source pages, document identities,
+citation routes, and card thresholds. The isolated PDF, Markdown, and index
+trees remain outside the repository. This prevents the latency work from being
+accepted only because it overfits the established SPI fixture.
+
+The initial isolated five-question run passed 5/5 at
+`test_results/research_qa_unseen_v1_real5_release/20260812_190007`, but exposed a
+large post-card UI tail:
+
+| Milestone | Initial p50 / p95 / max | Exact-code p50 / p95 / max |
+|---|---:|---:|
+| First visible answer | 5,975 / 7,737 / 7,818 ms | 5,479 / 7,071 / 7,222 ms |
+| Answer complete | 11,002 / 13,138 / 13,481 ms | 9,949 / 12,819 / 13,264 ms |
+| Evidence cards complete | 14,223 / 16,997 / 17,098 ms | 15,246 / 15,701 / 15,774 ms |
+| End-to-end UI ready | 17,751 / 41,345 / 45,792 ms | 16,621 / 29,225 / 30,804 ms |
+| Answer complete to cards | 3,221 / 4,584 / 4,826 ms | 2,150 / 5,184 / 5,297 ms |
+| Cards to UI ready | 3,939 / 26,649 / 31,569 ms | 4,003 / 13,873 / 15,558 ms |
+
+The accepted exact-code run is
+`test_results/research_qa_unseen_v1_real5_exact_code_release/20260812_195052`.
+All five answers and every required answer term, source, page, citation route,
+claim/evidence binding, and card-quality check passed. UI-ready p95 fell 29.3%
+and the maximum fell 32.7%. Evidence-card p50 increased 7.2% and
+answer-to-card p95 increased 13.1%; those real-provider and evidence-processing
+variations remain visible rather than being averaged away. The separate
+twenty-question isolated retrieval and source gates passed 20/20 at
+`test_results/research_qa_unseen_v1_retrieval_exact_code_release/20260812_195244`.
+
+The implementation keeps card display evidence and continuous reader passages
+separate, binds repeated same-paper occurrences with immutable plan identities,
+preserves strict table and equation passages, reports all tied metric extrema,
+and avoids rerunning answer-wide work when a source/ordinal-checked persisted
+packet is reusable. It also prevents generic relation completion from consuming
+quantitative requests before their stricter count/share path. These changes
+remove avoidable work and false reprocessing; they do not reduce the candidate
+source window, evidence length required by a claim, reader locator strictness,
+or any validator threshold.
+
+The unchanged production gates passed against the final exact code:
+
+1. Deterministic full-library retrieval: 29/29 in
+   `test_results/research_qa_retrieval_exact_code_release/20260812_194813`;
+   source grounding: 41/41.
+2. Paid-model smoke: 5/5 in
+   `test_results/research_qa_live_smoke_exact_code_release/20260812_194820`.
+   First-visible p50/p95/max was 2,810/3,190/3,270 ms; answer-complete was
+   3,743/5,157/5,389 ms; cards-complete was 4,581/6,125/6,407 ms; and UI-ready
+   was 4,861/6,423/6,674 ms. Every reference card had minimum quality 1.000.
+3. Backend unit tests: 4,262 passed with 41 configuration-dependent skips;
+   sanity: 262 passed with two skips. Ruff, the visible Agent contract, reviewed
+   replays, comparison/candidate/status/journey checks, and converter 13/13 all
+   passed.
+4. Frontend ESLint and production build passed. Playwright smoke passed 127
+   applicable tests with two private-auth-only skips; core citation/library E2E
+   passed 109/109; public-surface isolation passed 4/4.
+
+Two failed attempts remain intentionally visible. The pre-fix production smoke
+at `test_results/research_qa_live_smoke_current_release/20260812_190414` passed
+only 1/5 and exposed four distinct locator, card-copy, high-risk citation, and
+claim/evidence defects. They were fixed and regression-tested before the final
+5/5 runs. The isolated attempt at
+`test_results/research_qa_unseen_v1_real5_exact_code_release/20260812_195018`
+failed 0/5 at conversation creation because the evaluator was launched without
+the isolated `--source-root`; all five 400 responses occurred before generation.
+The corrected command and its 5/5 report above preserve that configuration
+failure instead of reclassifying it as a product pass.

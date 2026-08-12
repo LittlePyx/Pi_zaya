@@ -36,6 +36,17 @@ _INLINE_MATH_CONNECTOR_BOUNDARY_RE = re.compile(
     r"\$(?P<expr>[^$\n]{1,220}?)\s+(?P<connector>and|or)\s*\$(?P<next>\\?[A-Za-z])",
     re.IGNORECASE,
 )
+_PROSE_CONNECTOR_AS_INLINE_MATH_RE = re.compile(
+    r"(?P<punct>[,;:])\$(?P<connector>and|or)\$(?=(?:\\?[A-Za-z]))",
+    re.IGNORECASE,
+)
+_JOINED_RESULTING_MATH_RE = re.compile(
+    r"\$(?P<lhs>[^$\n]{1,240}?)\s+"
+    r"(?P<cite>\[\s*\d{1,4}(?:\s*[,;\u2013-]\s*\d{1,4})*\s*\])\s*,\s*"
+    r"resulting\s+in\s*(?P<first>\\[A-Za-z]+[^$\n]{1,160}?)\$\s*"
+    r"or\s*\$(?P<second>\\[A-Za-z]+[^$\n]{1,160}?)\$",
+    re.IGNORECASE,
+)
 _BARE_TAGGED_DISPLAY_MATH_RE = re.compile(
     r"(?mi)^(?=\\?(?:widehat|widetilde|underset|mathcal|left|right)\b)"
     r"(?=[^\n]{1,1000}\btag\{\d{1,3}\}\s*$)(?=[^\n]*=)"
@@ -353,7 +364,10 @@ def _restore_inline_math_connector_boundaries(text: str) -> str:
 
     def _repl(match: re.Match) -> str:
         expr = (match.group("expr") or "").rstrip()
-        if not re.search(r"\\[A-Za-z]+|[=<>_^{}]|\[[^\]\n]+\]", expr):
+        # A bracketed citation alone is not mathematical evidence. Treating
+        # ``[11]`` as math here moves a valid closing delimiter across the
+        # citation in ``$x$ [11] or $y$`` and corrupts both formulas.
+        if not re.search(r"\\[A-Za-z]+|[=<>_^{}]", expr):
             return match.group(0)
         connector = (match.group("connector") or "").lower()
         next_token = match.group("next") or ""
@@ -377,6 +391,91 @@ def _remove_stray_citation_dollars(text: str) -> str:
         return f"{match.group(1) or ''} "
 
     return _STRAY_CITATION_DOLLAR_RE.sub(_repl, text)
+
+
+def _repair_inline_math_prose_boundaries(text: str) -> str:
+    """Repair delimiter drops that have a single source-faithful reading.
+
+    This deliberately handles only two high-confidence PDF extraction shapes:
+    a prose connector wrapped as ``$and$``/``$or$``, and a citation plus
+    ``resulting in`` sentence accidentally absorbed into adjacent formulas.
+    Formula bodies and citation text are preserved verbatim.
+    """
+
+    if not text or "$" not in text:
+        return text
+
+    repaired = _PROSE_CONNECTOR_AS_INLINE_MATH_RE.sub(
+        lambda match: f"{match.group('punct')} {match.group('connector').lower()} $",
+        text,
+    )
+
+    def _resulting_repl(match: re.Match) -> str:
+        lhs = (match.group("lhs") or "").strip()
+        first = (match.group("first") or "").strip()
+        second = (match.group("second") or "").strip()
+        if not all(re.search(r"(?:\\[A-Za-z]+|[=<>_^{}])", item) for item in (lhs, first, second)):
+            return match.group(0)
+        return (
+            f"${lhs}$ {match.group('cite')}, resulting in "
+            f"${first}$ or ${second}$"
+        )
+
+    repaired = _JOINED_RESULTING_MATH_RE.sub(_resulting_repl, repaired)
+    # Once the delimiter count is balanced, restore only missing spaces in
+    # the prose segments between complete inline spans. Regex matching from a
+    # closing delimiter to the next opening delimiter would put spaces inside
+    # otherwise valid formulas, so preserve odd (math) segments verbatim.
+    if repaired.count("$") % 2 == 0:
+        parts = repaired.split("$")
+        for index in range(0, len(parts), 2):
+            prose = parts[index]
+            if index > 0 and prose and prose[0].isalnum():
+                prose = " " + prose
+            if index < len(parts) - 1 and prose and prose[-1].isalnum():
+                prose += " "
+            parts[index] = prose
+        repaired = "$".join(parts)
+    return repaired
+
+
+def repair_inline_math_prose_boundaries_document(md: str) -> str:
+    """Apply high-confidence inline-boundary repairs outside protected blocks."""
+
+    text = str(md or "")
+    if "$" not in text:
+        return text
+    out: list[str] = []
+    in_fence = False
+    in_display_math = False
+    in_references = False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if re.match(r"^\s*```", line):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if stripped == "$$":
+            in_display_math = not in_display_math
+            out.append(line)
+            continue
+        if _is_references_heading_line(stripped):
+            in_references = True
+            out.append(line)
+            continue
+        if in_references and _is_post_references_resume_heading_line(stripped):
+            in_references = False
+        if in_fence or in_display_math or in_references:
+            out.append(line)
+            continue
+        repaired = _remove_stray_citation_dollars(line)
+        repaired = _repair_inline_math_prose_boundaries(repaired)
+        repaired = _restore_inline_math_connector_boundaries(repaired)
+        out.append(repaired)
+    fixed = "\n".join(out)
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed
 
 
 def fix_math_markdown(md: str) -> str:
@@ -991,8 +1090,10 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
             continue
 
         t = s
+        had_plain_text_macro = bool(re.search(r"\\(?:text|mathrm|mathbf)\{", t))
         t = _close_unclosed_inline_math_before_sentence(t)
         t = _remove_stray_citation_dollars(t)
+        t = _repair_inline_math_prose_boundaries(t)
         # Some PDFs leak italic/emphasis markers as stray `$` in plain text, e.g.:
         #   $representation$[11, 34]$. Others ...$
         # These are not math; strip dollars when the line looks like prose/citations.
@@ -1038,6 +1139,11 @@ def _cleanup_stray_latex_in_text(md: str) -> str:
         t = re.sub(r"~?\\cite\{([^}]{1,120})\}", _cite_repl, t)
         t = re.sub(r"\$(\[[0-9,\s]+\])\$", r"\1", t)
         t = _wrap_bare_inline_latex_math_in_text(t)
+        if had_plain_text_macro:
+            # Macro braces often contain their own boundary spaces.  Once the
+            # wrapper is removed those spaces become doubled and break exact
+            # phrase retrieval (for example ``1.4  Airy units``).
+            t = re.sub(r"(?<=\S)[ \t]{2,}(?=\S)", " ", t)
         out.append(t)
     return "\n".join(out)
 

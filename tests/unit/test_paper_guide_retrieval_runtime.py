@@ -21,6 +21,149 @@ from kb.paper_guide_retrieval_runtime import (
 from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 
 
+def test_semantic_query_terms_cover_compound_mechanism_and_deployment_facets():
+    restormer = retrieval_runtime._paper_guide_semantic_query_terms(
+        "What does MDTA transpose about self-attention, and what filtering role does GDFN play?"
+    )
+    lora = retrieval_runtime._paper_guide_semantic_query_terms(
+        "What low-rank assumption does LoRA make about the weight update during adaptation?"
+    )
+    deployment = retrieval_runtime._paper_guide_semantic_query_terms(
+        "How does LoRA improve deployment without inference latency?"
+    )
+    injection = retrieval_runtime._paper_guide_semantic_query_terms(
+        "What does LoRA freeze, and what trainable objects does it inject?"
+    )
+    flash_runtime = retrieval_runtime._paper_guide_semantic_query_terms(
+        "比较 FlashAttention 的运行时内存 I/O 优化与 LoRA 的训练参数优化。"
+    )
+
+    assert {"cross-covariance", "channels"}.issubset(restormer)
+    assert {"information", "flow", "useful"}.issubset(restormer)
+    assert {"change", "weights", "intrinsic", "rank"}.issubset(lora)
+    assert {"merge", "trainable", "frozen", "latency"}.issubset(deployment)
+    assert {"freezes", "pre-trained", "injects", "rank-deficiency"}.issubset(injection)
+    assert {"io-aware", "exact", "attention", "hbm", "sram"}.issubset(
+        flash_runtime
+    )
+
+
+def test_semantic_query_terms_bridge_unseen_chinese_question_facets():
+    prompts = {
+        "unet": "U-Net 如何处理图像边界和接触细胞，并区分铺块与损失？",
+        "restormer": "Restormer 为什么适合高分辨率，是否仍建模空间上下文？",
+        "sam": "SAM 的数据引擎有几阶段，SA-1B 的掩码有多少是全自动？",
+        "ddpm": "DDPM 的 L_simple 与变分下界、样本质量和码长有何不同？",
+        "lora": "LoRA 为什么部署时没有额外推理延迟？",
+        "clip": "CLIP 如何用类别名称构造零样本分类器？",
+        "dinov2": "DINOv2 为何从 ViT-g 蒸馏而不是从头训练？",
+    }
+
+    terms = {
+        key: set(retrieval_runtime._paper_guide_semantic_query_terms(prompt))
+        for key, prompt in prompts.items()
+    }
+
+    assert {"overlap-tile", "mirroring", "weighted", "touching"}.issubset(terms["unet"])
+    assert {"linear", "channels", "depth-wise", "local"}.issubset(terms["restormer"])
+    assert {"assisted-manual", "semi-automatic", "11", "99.1"}.issubset(terms["sam"])
+    assert {"l_simple", "unweighted", "epsilon", "codelengths"}.issubset(terms["ddpm"])
+    assert {"merge", "compute", "store", "latency"}.issubset(terms["lora"])
+    assert {"classes", "cosine", "temperature", "softmax"}.issubset(terms["clip"])
+    assert {"distillation", "frozen", "ibot", "ema"}.issubset(terms["dinov2"])
+
+
+def test_semantic_query_terms_cover_unseen_english_compound_questions():
+    rag_variants = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "Compare RAG-Sequence and RAG-Token at the latent-document level."
+        )
+    )
+    rag_dpr = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse Karpukhin's prior work?"
+        )
+    )
+    clip = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "What supervision and batch-level prediction objective does CLIP use at pretraining scale?"
+        )
+    )
+    flash = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "Why is FlashAttention exact and memory-efficient despite recomputation and I/O?"
+        )
+    )
+
+    assert {"same", "different", "document", "token"}.issubset(rag_variants)
+    assert {"retriever", "dpr", "bi-encoder", "karpukhin"}.issubset(rag_dpr)
+    assert {"400", "caption", "pairings", "contrastive"}.issubset(clip)
+    assert {"materialization", "recompute", "hbm", "sram"}.issubset(flash)
+
+    clip_relations = retrieval_runtime._paper_guide_requested_relation_anchors(
+        set(clip)
+    )
+    figure_relations = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Figure 1. CLIP jointly trains an image encoder and a text encoder to "
+        "predict the correct pairings of a batch of image-text examples."
+    )
+    assert "clip_pairing_figure" in clip_relations & figure_relations
+
+
+def test_source_relation_anchors_match_split_sam_and_ddpm_evidence() -> None:
+    sam_counts = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Our dataset SA-1B consists of 11M diverse, high-resolution, licensed "
+        "images and 1.1B high-quality segmentation masks."
+    )
+    ddpm_formula = retrieval_runtime._paper_guide_source_relation_anchors(
+        r"The simplified objective L_{\text{simple}} predicts epsilon from x_t and t."
+    )
+    ddpm_weighting = retrieval_runtime._paper_guide_source_relation_anchors(
+        "The simplified training objective is an unweighted version that discards "
+        "the weighting in the variational bound."
+    )
+
+    assert "sam_dataset_size" in sam_counts
+    assert "sam_dataset_images" in retrieval_runtime._paper_guide_source_relation_anchors(
+        "Images. We licensed a new set of 11M images."
+    )
+    assert "ddpm_simple_objective" in ddpm_formula
+    assert "ddpm_simple_objective" in ddpm_weighting
+    requested = retrieval_runtime._paper_guide_requested_relation_anchors(
+        {"l_simple", "epsilon", "unweighted", "variational"}
+    )
+    assert {
+        "ddpm_epsilon_prediction",
+        "ddpm_unweighted_relation",
+        "ddpm_weighting_difference",
+    }.issubset(requested)
+    weighting_difference = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Since our simplified objective (14) discards the weighting in Eq. (12)."
+    )
+    assert "ddpm_weighting_difference" in weighting_difference
+
+
+def test_source_relation_anchors_match_long_ddpm_objective_block_and_split_rag_blocks() -> None:
+    ddpm = retrieval_runtime._paper_guide_source_relation_anchors(
+        "3.4 Simplified training objective. "
+        + ("The derivation discusses the variational terms and implementation details. " * 8)
+        + "The t > 1 cases correspond to an unweighted version of Eq. (12), which is "
+        "the simplified training objective."
+    )
+    rag_basis = retrieval_runtime._paper_guide_source_relation_anchors(
+        "2.2 Retriever: DPR. The retrieval component is based on DPR [26]."
+    )
+    rag_initialization = retrieval_runtime._paper_guide_source_relation_anchors(
+        "We use a pre-trained bi-encoder from DPR to initialize our retriever and "
+        "to build the document index."
+    )
+
+    assert "ddpm_simple_objective" in ddpm
+    assert "rag_dpr_basis" in rag_basis
+    assert "rag_dpr_usage" not in rag_basis
+    assert "rag_dpr_usage" in rag_initialization
+
+
 def test_targeted_scan_prefers_metric_enumeration_over_numeric_mentions(
     tmp_path: Path,
 ) -> None:

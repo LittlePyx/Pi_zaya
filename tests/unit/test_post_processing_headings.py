@@ -671,3 +671,22 @@ In contrast to conventional multipixel cameras, single-pixel cameras capture ima
     assert "## Abstract" in out
     assert out.index("## Abstract") < out.index("In contrast to conventional multipixel cameras")
     assert out.index("## Abstract") < out.index("## RESULTS")
+
+
+def test_demote_questionnaire_answer_captured_as_long_heading():
+    src = "\n".join(
+        [
+            "# Dataset Card",
+            "## Composition",
+            "## 2. How many instances are there in total (of each type, if appropriate)? There are 11 million images.",
+            "## 3. Is there an erratum? If so, please provide a link or other access point. No.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "## Composition" in out
+    assert "## 2. How many instances" not in out
+    assert "2. How many instances are there in total" in out
+    assert "There are 11 million images." in out
+    assert "## 3. Is there an erratum?" not in out

@@ -43,10 +43,14 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     bad_md = bad_dir / "bad.en.md"
     quality_report = good_dir / "quality_report.md"
     legacy_output = good_dir / "output.md"
+    recovery_dir = good_dir / ".conversion_cache" / "table_recovery"
+    recovery_dir.mkdir(parents=True)
+    recovery_table = recovery_dir / "page_1_original_tables.md"
     good_md.write_text(_good_markdown(), encoding="utf-8")
     bad_md.write_text("# Bad Paper\n\n![missing](assets/missing.png)\n\n\\u951b\n", encoding="utf-8")
     quality_report.write_text("# Markdown Quality Analysis Report\n\nThis is not a paper.", encoding="utf-8")
     legacy_output.write_text("# Legacy output\n\nThis duplicate should not be indexed.", encoding="utf-8")
+    recovery_table.write_text("| broken | archived | table |\n", encoding="utf-8")
 
     proc = subprocess.run(
         [sys.executable, "ingest.py", "--src", str(src), "--db", str(db_dir)],
@@ -62,10 +66,12 @@ def test_ingest_quality_gate_blocks_bad_markdown_before_chunks(tmp_path: Path):
     bad_id = compute_doc_id(bad_md)
     quality_report_id = compute_doc_id(quality_report)
     legacy_output_id = compute_doc_id(legacy_output)
+    recovery_table_id = compute_doc_id(recovery_table)
     assert docs[good_id]["index_status"] == "ready"
     assert docs[bad_id]["index_status"] == "quality_blocked"
     assert quality_report_id not in docs
     assert legacy_output_id not in docs
+    assert recovery_table_id not in docs
     assert doc_chunks_path(db_dir, good_id).exists()
     assert not doc_chunks_path(db_dir, bad_id).exists()
     first_chunk = json.loads(doc_chunks_path(db_dir, good_id).read_text(encoding="utf-8").splitlines()[0])

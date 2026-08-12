@@ -1272,3 +1272,32 @@ def test_citation_card_contract_uses_english_locale_for_system_b_trace_copy() ->
     assert detail["card_reference_label"] == "Upstream reference entry"
     assert detail["system_b_trace_steps"] == ["Answer sentence", "Citation context to check", "Upstream reference"]
     assert "citation context" in detail["system_b_trace_reason"].lower()
+
+
+def test_structured_metric_card_recovers_verified_reader_evidence() -> None:
+    reader_evidence = (
+        "Table 6. Image Denoising Results on SIDD. "
+        "SIDD PSNR: MPRNet = 39.71; Restormer = 40.02; "
+        "Baseline ours = 40.30; NAFNet ours = 40.30."
+    )
+
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "Simple Baselines.pdf",
+            "heading_path": "5 Experiments / 5.2 Applications",
+            "answer_claim": "Baseline and NAFNet tie at the highest SIDD PSNR of 40.30.",
+            "evidence_quote": "",
+            "reader_evidence_quote": reader_evidence,
+            "selection_reason": "structured_table_metric_hit",
+            "strict_locate": True,
+            "page_start": 13,
+            "anchor_kind": "table",
+        },
+        locale="en",
+    )
+
+    assert detail["card_evidence"] == reader_evidence
+    assert "Baseline ours = 40.30" in detail["summary_line"]
+    assert "evidence_quote_filtered" not in detail["card_quality_flags"]
+    assert "missing_evidence_quote" not in detail["card_quality_flags"]

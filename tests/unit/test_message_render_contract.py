@@ -450,6 +450,60 @@ def test_render_payload_rejects_wrong_same_paper_passage_for_compound_claim() ->
     assert not render_payload_is_missing_planned_system_a(repaired, citation_plan=plan)
 
 
+def test_render_payload_requires_each_requested_relation_bundle_passage() -> None:
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": "ddpm.en.md",
+                "heading_path": "3.4 Simplified training objective",
+                "evidence_quote": (
+                    "The simplified training objective is an unweighted version "
+                    "and predicts epsilon with L_simple."
+                ),
+                "evidence_selection_reason": "requested_relation_bundle",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": "ddpm.en.md",
+                "heading_path": "4 Experiments / 4.1 Sample quality",
+                "evidence_quote": (
+                    "The true variational bound yields better codelengths, while "
+                    "the simplified objective gives the best sample quality."
+                ),
+                "evidence_selection_reason": "requested_relation_bundle",
+            },
+        ],
+    }
+    objective = {
+        "citation_route": "system_a",
+        "source_path": "ddpm.en.md",
+        "heading_path": "3.4 Simplified training objective",
+        "evidence_quote": plan["slots"][0]["evidence_quote"],
+        "answer_claim": "L_simple is an unweighted objective that predicts epsilon.",
+    }
+    tradeoff = {
+        "citation_route": "system_a",
+        "source_path": "ddpm.en.md",
+        "heading_path": "4 Experiments / 4.1 Sample quality",
+        "evidence_quote": plan["slots"][1]["evidence_quote"],
+        "answer_claim": (
+            "The true variational bound improves codelengths while the simplified "
+            "objective gives the best sample quality."
+        ),
+    }
+
+    assert render_payload_is_missing_planned_system_a(
+        {"cite_details": [objective]},
+        citation_plan=plan,
+    )
+    assert not render_payload_is_missing_planned_system_a(
+        {"cite_details": [objective, tradeoff]},
+        citation_plan=plan,
+    )
+
+
 def test_render_payload_rejects_multi_paper_cache_with_one_weak_card() -> None:
     plan = {
         "budget": {"system_a": 3, "system_b": 0},

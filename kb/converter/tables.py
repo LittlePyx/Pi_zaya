@@ -183,13 +183,20 @@ def _is_markdown_table_sane(md: str) -> bool:
     return True
 
 
-def _split_md_table_cells(line: str) -> list[str]:
+def split_markdown_table_cells(line: str) -> list[str]:
+    """Split a Markdown table row without treating escaped pipes as columns."""
     text = (line or "").strip()
     if not text.startswith("|"):
         return []
     inner = text.strip("|")
     parts = re.split(r"(?<!\\)\|", inner)
     return [p.strip() for p in parts]
+
+
+# Keep the private name for the table-normalization internals while exposing
+# the exact same parser to diagnostics. Divergent parsers previously made
+# valid math cells such as ``$\|x\|$`` look like extra columns.
+_split_md_table_cells = split_markdown_table_cells
 
 
 def _looks_separator_cell(cell: str) -> bool:
@@ -621,10 +628,62 @@ def _markdown_table_spans(lines: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
+def _reattach_detached_markdown_table_rows(lines: list[str]) -> list[str]:
+    """Repair rows whose leading pipe was detached by PDF layout extraction.
+
+    A recurring source shape is a one-cell placeholder followed by a row such
+    as ``Epochs | 30 | 60 |``.  Only reattach a line when it immediately
+    follows an active Markdown table, ends in a pipe, and has multiple cells.
+    Missing leading cells are restored from the established table width.
+    """
+
+    out: list[str] = []
+    active_width = 0
+    for line in lines:
+        stripped = str(line or "").strip()
+        is_table_line = stripped.startswith("|") and stripped.count("|") >= 2
+        if is_table_line:
+            cells = split_markdown_table_cells(stripped)
+            if cells and any(cell for cell in cells):
+                active_width = max(active_width, len(cells))
+            out.append(line)
+            continue
+
+        detached_cells = (
+            split_markdown_table_cells(f"| {stripped}")
+            if active_width >= 2
+            and stripped.endswith("|")
+            and not stripped.startswith(("#", "-", "*", "!", "<!--", "```"))
+            else []
+        )
+        if len(detached_cells) >= 2 and len(detached_cells) <= active_width:
+            if out:
+                prior_cells = split_markdown_table_cells(out[-1])
+                if prior_cells and not any(prior_cells):
+                    out.pop()
+            padded = ([""] * (active_width - len(detached_cells))) + detached_cells
+            out.append("| " + " | ".join(padded) + " |")
+            continue
+
+        active_width = 0
+        out.append(line)
+    return out
+
+
+def repair_detached_markdown_table_rows_document(md: str) -> str:
+    """Apply only the source-structural detached-row repair to a document."""
+
+    text = str(md or "")
+    fixed = "\n".join(_reattach_detached_markdown_table_rows(text.splitlines()))
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed
+
+
 def _normalize_markdown_table_blocks_document(md: str) -> str:
     text = str(md or "")
     trailing_newline = text.endswith("\n")
-    lines = text.splitlines()
+    lines = repair_detached_markdown_table_rows_document(text).splitlines()
     spans = _markdown_table_spans(lines)
     if not spans:
         return text
@@ -868,6 +927,92 @@ def markdown_table_issue_counts(md: str) -> dict[str, int]:
         "fragmented_column_count": fragmented_column_count,
         "fragmented_duplicate_count": fragmented_duplicate_count,
     }
+
+
+def markdown_table_issue_spans(md: str) -> list[dict[str, int]]:
+    """Return zero-based line spans for tables with lossy row grouping."""
+
+    lines = str(md or "").splitlines()
+    issues: list[dict[str, int]] = []
+    spans = _markdown_table_spans(lines)
+    for span_index, (start, end) in enumerate(spans):
+        rows = [
+            _split_md_table_cells(line)
+            for line in lines[start:end]
+            if not all(_looks_separator_cell(cell) or not cell for cell in _split_md_table_cells(line))
+        ]
+        collapsed = sum(1 for row in rows[1:] if _collapsed_table_row_segment_count(row) >= 2)
+        ambiguous = sum(
+            1
+            for row in rows[1:]
+            if _collapsed_table_row_segment_count(row) < 2 and _ambiguous_table_break_row(row)
+        )
+        if collapsed or ambiguous:
+            issues.append(
+                {
+                    "start": int(start),
+                    "end": int(end),
+                    "collapsed_row_count": int(collapsed),
+                    "ambiguous_break_row_count": int(ambiguous),
+                }
+            )
+
+        # Some PDF layouts split a table header into a one-cell Markdown row,
+        # a detached multi-cell continuation, and then the real table body.
+        # Cell coordinates cannot be inferred safely from that shape.  Mark the
+        # whole fragment for source-page preservation instead of guessing.
+        if end - start != 1 or end >= len(lines):
+            continue
+        detached = str(lines[end] or "").strip()
+        next_span = spans[span_index + 1] if span_index + 1 < len(spans) else None
+        forward_fragment = bool(
+            not detached.startswith(("#", "-", "*", "!", "<!--", "```"))
+            and detached.endswith("|")
+            and detached.count("|") >= 2
+            and next_span is not None
+            and int(next_span[0]) == end + 1
+        )
+        if forward_fragment:
+            issues.append(
+                {
+                    "start": int(start),
+                    "end": int(next_span[1]),
+                    "collapsed_row_count": 0,
+                    "ambiguous_break_row_count": 1,
+                }
+            )
+            continue
+
+        # A lone, closed pipe row beside another table-shaped fragment is an
+        # incomplete table even when a page marker or blank lines split them.
+        # Keep the span narrow; page-aware recovery will preserve each source
+        # page independently.
+        current = str(lines[start] or "").strip()
+        nearby = lines[max(0, start - 5):start] + lines[end:min(len(lines), end + 6)]
+        if current.endswith("|") and any(
+            str(candidate or "").strip().count("|") >= 2
+            for candidate in nearby
+        ):
+            issues.append(
+                {
+                    "start": int(start),
+                    "end": int(end),
+                    "collapsed_row_count": 0,
+                    "ambiguous_break_row_count": 1,
+                }
+            )
+
+    # A fragmented header may overlap an independently-detected damaged body.
+    # Merge overlaps so source recovery never attempts competing replacements.
+    merged: list[dict[str, int]] = []
+    for item in sorted(issues, key=lambda value: (int(value["start"]), int(value["end"]))):
+        if not merged or int(item["start"]) >= int(merged[-1]["end"]):
+            merged.append(dict(item))
+            continue
+        merged[-1]["end"] = max(int(merged[-1]["end"]), int(item["end"]))
+        merged[-1]["collapsed_row_count"] += int(item.get("collapsed_row_count") or 0)
+        merged[-1]["ambiguous_break_row_count"] += int(item.get("ambiguous_break_row_count") or 0)
+    return merged
 
 
 def _extract_tables_by_pdfplumber(pdf_path: Optional[Path], page_index: int) -> list[tuple["fitz.Rect", str]]:

@@ -173,6 +173,16 @@ def _display_math_blocks(md_text: str) -> list[str]:
     return blocks
 
 
+def is_prose_dominant_display_math_block(block: str) -> bool:
+    """Return whether a display block is primarily natural-language prose."""
+
+    prose_probe = re.sub(r"\\[A-Za-z]+\*?", " ", str(block or ""))
+    words = [word.lower() for word in _PROSE_DISPLAY_MATH_WORD_RE.findall(prose_probe)]
+    common_count = sum(1 for word in words if word in _PROSE_DISPLAY_MATH_COMMON_WORDS)
+    alpha_chars = sum(len(word) for word in words)
+    return bool(len(words) >= 8 and common_count >= 3 and alpha_chars >= 40)
+
+
 def _display_math_content_issue_counts(md_text: str) -> tuple[int, int]:
     prose_dominant = 0
     markdown_links = 0
@@ -181,11 +191,7 @@ def _display_math_content_issue_counts(md_text: str) -> tuple[int, int]:
         # Ignore TeX command names and count natural-language words that remain.
         # Requiring both a long phrase and several connective/definition words
         # avoids flagging ordinary equations with descriptive variable names.
-        prose_probe = re.sub(r"\\[A-Za-z]+\*?", " ", block)
-        words = [word.lower() for word in _PROSE_DISPLAY_MATH_WORD_RE.findall(prose_probe)]
-        common_count = sum(1 for word in words if word in _PROSE_DISPLAY_MATH_COMMON_WORDS)
-        alpha_chars = sum(len(word) for word in words)
-        if len(words) >= 8 and common_count >= 3 and alpha_chars >= 40:
+        if is_prose_dominant_display_math_block(block):
             prose_dominant += 1
     return prose_dominant, markdown_links
 

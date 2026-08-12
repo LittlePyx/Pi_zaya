@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import kb.paper_guide_reference_opportunities as reference_opportunities
 from kb.paper_guide_reference_opportunities import (
     apply_reference_opportunities_to_answer,
     append_reference_opportunity_note,
@@ -770,6 +773,94 @@ def test_apply_reference_opportunities_uses_tail_for_lineage_prompt() -> None:
     assert "[[CITE:s1234abcd:50]]" in answer
 
 
+def test_reference_opportunity_prefers_upstream_identity_sentence() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "The retrieval component is based on DPR and uses a pre-trained bi-encoder.\n"
+        "Dense Passage Retrieval was prior work by Karpukhin et al., not an invention of RAG.",
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse the prior "
+            "work by Karpukhin et al.?"
+        ),
+        opportunities=[
+            {
+                "sid": "srag",
+                "ref_num": 26,
+                "label": "DPR",
+                "ref_title": "Dense Passage Retrieval for Open-Domain Question Answering",
+                "evidence_quote": "The retrieval component in RAG is based on DPR [26].",
+            }
+        ],
+    )
+
+    lines = answer.splitlines()
+    assert "[[CITE:srag:26]]" not in lines[0]
+    assert "[[CITE:srag:26]]" in lines[1]
+    assert "Karpukhin" in lines[1]
+    assert meta["injected_refs"] == [26]
+
+
+def test_reference_opportunity_relocates_existing_marker_to_upstream_identity() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "Upstream paper: DPR comes from Karpukhin et al., Dense Passage Retrieval "
+        "for Open-Domain Question Answering.\n"
+        "The DPR retriever was trained on Natural Questions [[CITE:srag:26]].",
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse prior work? "
+            "Identify the upstream paper."
+        ),
+        opportunities=[
+            {
+                "sid": "srag",
+                "ref_num": 26,
+                "label": "DPR",
+                "ref_title": "Dense Passage Retrieval for Open-Domain Question Answering",
+                "ref_authors": "Vladimir Karpukhin et al.",
+                "ref_raw": (
+                    "Vladimir Karpukhin et al. Dense Passage Retrieval for "
+                    "Open-Domain Question Answering."
+                ),
+                "evidence_quote": "The retrieval component is based on DPR [26].",
+            }
+        ],
+    )
+
+    lines = answer.splitlines()
+    assert "[[CITE:srag:26]]" in lines[0]
+    assert "[[CITE:srag:26]]" not in lines[1]
+    assert answer.count("[[CITE:srag:26]]") == 1
+    assert meta["mode"] == "already_present"
+
+
+def test_reference_opportunity_completes_verified_upstream_identity() -> None:
+    answer, meta = apply_reference_opportunities_to_answer(
+        "No, RAG reuses Dense Passage Retrieval (DPR) as prior work.\n"
+        "Upstream paper: DPR is cited as a reference in the RAG paper.",
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse the prior "
+            "work by Karpukhin et al.?"
+        ),
+        opportunities=[
+            {
+                "sid": "srag",
+                "ref_num": 26,
+                "label": "DPR",
+                "ref_title": "Dense Passage Retrieval for Open-Domain Question Answering",
+                "ref_authors": "karpukhin",
+                "ref_year": "2020",
+                "ref_raw": "Vladimir Karpukhin et al. Dense Passage Retrieval for Open-Domain Question Answering.",
+                "evidence_quote": "The retrieval component is based on DPR [26].",
+            }
+        ],
+    )
+
+    upstream = answer.splitlines()[1]
+    assert "Dense Passage Retrieval for Open-Domain Question Answering" in upstream
+    assert "Karpukhin et al" in upstream
+    assert "2020" in upstream
+    assert "[[CITE:srag:26]]" in upstream
+    assert meta["injected_refs"] == [26]
+
+
 def test_apply_reference_opportunities_suppresses_tail_for_broad_synthesis_question() -> None:
     answer, meta = apply_reference_opportunities_to_answer(
         "Deep learning improves image quality, but it can require paired data and heavy compute.",
@@ -946,3 +1037,100 @@ def test_strip_reference_opportunity_note_removes_unvalidated_tail() -> None:
 
     assert "citation trail" not in stripped
     assert stripped == "ADMM is prior optimization machinery."
+
+
+def test_reference_opportunity_detector_expands_bundled_answer_passages() -> None:
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse the prior "
+            "work by Karpukhin et al.?"
+        ),
+        answer="",
+        prompt_family="overview",
+        source_path="db/demo/rag.en.md",
+        support_slots=[
+            {
+                "source_path": "db/demo/rag.en.md",
+                "heading_path": "4 Results",
+                "evidence_quote": "RAG avoids specialized salient span masking [20].",
+            }
+        ],
+        answer_hits=[
+            {
+                "text": "one bundled RAG document",
+                "meta": {
+                    "source_path": "db/demo/rag.en.md",
+                    "same_source_evidence_bundle": True,
+                    "source_passages": [
+                        {
+                            "heading_path": "4 Results",
+                            "text": "RAG avoids specialized salient span masking [20].",
+                        },
+                        {
+                            "heading_path": "2.2 Retriever: DPR",
+                            "text": (
+                                "The retrieval component is based on Dense Passage "
+                                "Retrieval (DPR) [26], and RAG initializes its pre-trained "
+                                "bi-encoder and document index from DPR."
+                            ),
+                        },
+                    ],
+                },
+            }
+        ],
+        max_items=1,
+    )
+
+    assert opportunities
+    assert opportunities[0]["ref_num"] == 26
+    assert "Retriever: DPR" in opportunities[0]["heading_path"]
+
+
+def test_reference_opportunity_detector_recovers_exact_target_context_from_source(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / "rag.en.md"
+    source.write_text(
+        "# RAG\n\n## 2.2 Retriever: DPR\n\n"
+        "The retrieval component is based on DPR [26]. DPR follows a bi-encoder architecture.\n\n"
+        "## 3 Experiments\n\nOpen-domain QA is an important testbed [20].\n\n"
+        "## References\n\n[20] Retrieval-Augmented pretraining.\n"
+        "[26] Dense Passage Retrieval for Open-Domain Question Answering.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        reference_opportunities,
+        "load_paper_guide_reference_index",
+        lambda _source: [
+            {
+                "ref_num": 20,
+                "title": "Retrieval-Augmented Language Model Pre-Training",
+            },
+            {
+                "ref_num": 26,
+                "title": "Dense Passage Retrieval for Open-Domain Question Answering",
+            },
+        ],
+    )
+
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse the prior "
+            "work by Karpukhin et al.?"
+        ),
+        answer="RAG reuses DPR.",
+        prompt_family="overview",
+        source_path=str(source),
+        support_slots=[
+            {
+                "source_path": str(source),
+                "heading_path": "3 Experiments",
+                "evidence_quote": "Open-domain QA is an important testbed [20].",
+            }
+        ],
+        max_items=1,
+    )
+
+    assert opportunities[0]["ref_num"] == 26
+    assert "based on DPR [26]" in opportunities[0]["evidence_quote"]

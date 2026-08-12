@@ -212,7 +212,7 @@ def test_quality_repair_escalates_ambiguous_break_rows_without_flattening(tmp_pa
     repaired = repair_markdown_text(md_path, original)
 
     assert "ambiguous_table_break_rows" in report["repair_plan"]["issue_codes"]
-    assert report["repair_plan"]["action"] == "reconvert"
+    assert report["repair_plan"]["action"] == "autofix"
     assert "A<br>B<br>C" in repaired["repaired_text"]
     assert "30.1<br>31.2" in repaired["repaired_text"]
     assert "ambiguous_table_break_rows" in repaired["remaining_issue_codes"]
@@ -289,6 +289,9 @@ def test_quality_gate_targets_page_with_missing_wrapped_word_prefixes(tmp_path: 
                 "This paper studies robust scientific image reconstruction.",
                 "<!-- kb_page: 2 -->",
                 "## Results",
+                "| Metric | Value |",
+                "| --- | --- |",
+                "| Accuracy | 0.95 |",
                 " ".join(filler),
                 "rithms improve imaging quality with erful processing and have ited stable experimental performance.",
                 "<!-- kb_page: 3 -->",
@@ -317,6 +320,8 @@ def test_quality_gate_targets_page_with_missing_wrapped_word_prefixes(tmp_path: 
     assert "recover_corrupted_source_pages" in assessment["auto_repair"]["applied"]
     repaired = md_path.read_text(encoding="utf-8")
     assert "algorithms improve imaging quality with powerful processing" in repaired
+    assert "| Accuracy | 0.95 |" in repaired
+    assert "<!-- kb_source_recovery: 2 -->" in repaired
     assert "source_page_text_corruption" not in assessment["issue_codes"]
 
 
@@ -397,6 +402,28 @@ def test_quality_gate_repairs_source_proven_interior_prose_omission(tmp_path: Pa
     assert assessment["evidence_unreliable_pages"] == []
     assert "source_page_prose_omission" not in assessment["issue_codes"]
     assert omitted_phrase in md_path.read_text(encoding="utf-8")
+
+
+def test_source_prose_omission_ignores_numbered_reference_blocks():
+    from kb.converter.quality_repair import _source_page_prose_omission_damage
+
+    source_reference = " ".join(
+        [
+            "[98] The World Bank. The world by income and regions, 2022.",
+            "https datatopics worldbank org world development indicators the world by income and region html.",
+            "This bibliographic entry is followed by venue metadata and cited page numbers.",
+        ]
+        * 8
+    )
+    converted_reference = source_reference.replace(
+        "https datatopics worldbank org world development indicators the world by income and region html. ",
+        "",
+    )
+
+    result = _source_page_prose_omission_damage([source_reference], converted_reference)
+
+    assert result["assessed_prose_block_count"] == 0
+    assert result["text_omission"] is False
 
 
 def test_quality_repair_moves_next_page_anchor_before_high_confidence_table(tmp_path: Path):
@@ -984,6 +1011,296 @@ def test_repair_markdown_text_uses_table_only_fallback_for_analyzer_errors(tmp_p
     assert "| PSNR | 1 | 2 | 3 |" in repaired
 
 
+def test_repair_markdown_text_uses_narrow_inline_math_boundary_repair(tmp_path: Path):
+    md_path = tmp_path / "inline-error.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "## Abstract",
+            "This paper evaluates a retrieval model.",
+            "## Method",
+            r"where $d(z)$ is produced by $BERT_{BASE}$ [8],$and$q(x)$a query representation.",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+
+    before = summarize_conversion_quality(md_path, original)
+    assert before.analyzer_error_count == 1
+
+    result = repair_markdown_text(md_path, original, issue_codes=["analyzer_errors"])
+
+    repaired = str(result.get("repaired_text") or "")
+    after = summarize_conversion_quality(md_path, repaired)
+    assert result["changed"] is True
+    assert result["unsafe"] is False
+    assert "repair_inline_math_boundaries" in result["applied"]
+    assert r"[8], and $q(x)$ a query representation." in repaired
+    assert after.analyzer_error_count == 0
+
+
+def test_repair_markdown_text_reattaches_detached_table_row_narrowly(tmp_path: Path):
+    md_path = tmp_path / "detached-table-row.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "## Abstract",
+            "This paper evaluates several model settings.",
+            "| Model | Setting | A | B |",
+            "| --- | --- | --- | --- |",
+            "| **Base** | Batch Size | 16 | 32 |",
+            "|  |",
+            "Epochs | 30 | 60 |",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+
+    before = summarize_conversion_quality(md_path, original)
+    assert before.analyzer_error_count == 1
+
+    result = repair_markdown_text(md_path, original, issue_codes=["analyzer_errors"])
+
+    repaired = str(result.get("repaired_text") or "")
+    after = summarize_conversion_quality(md_path, repaired)
+    assert result["changed"] is True
+    assert result["unsafe"] is False
+    assert "repair_detached_table_rows" in result["applied"]
+    assert "|  | Epochs | 30 | 60 |" in repaired
+    assert after.analyzer_error_count == 0
+
+
+def test_repair_fallback_keeps_safe_analyzer_fix_when_reference_repair_remains(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from kb.converter import quality_repair
+
+    md_path = tmp_path / "partial-safe-repair.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Demo Paper",
+            "## Abstract",
+            "This paper evaluates a retrieval model.",
+            "## Method",
+            r"where $d(z)$ is produced by $BERT_{BASE}$ [8],$and$q(x)$a query representation.",
+            "## References",
+            "[1] Ada Lovelace. First reference. Journal, 2024.",
+            "[3] Grace Hopper. Third reference. Journal, 2026.",
+            "[4] Author Four. Fourth reference. Journal, 2026.",
+            "[5] Author Five. Fifth reference. Journal, 2026.",
+            "[6] Author Six. Sixth reference. Journal, 2026.",
+            "[7] Author Seven. Seventh reference. Journal, 2026.",
+            "[8] Author Eight. Eighth reference. Journal, 2026.",
+            "[9] Author Nine. Ninth reference. Journal, 2026.",
+        ]
+    )
+
+    def partial_backfill(text: str, *_args, **_kwargs):
+        return text + "\n<!-- kb_page: 1 -->\nPartial reference output.", True
+
+    monkeypatch.setattr(quality_repair, "_backfill_references_from_pdf_text", partial_backfill)
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["analyzer_errors", "reference_index_truncated"],
+    )
+
+    assert result["changed"] is True, {
+        key: result.get(key)
+        for key in (
+            "applied",
+            "attempted_applied",
+            "regression_reasons",
+            "remaining_issue_codes",
+            "issue_codes_before",
+            "issue_codes_after",
+        )
+    }
+    assert result["unsafe"] is False
+    assert result["applied"] == ["repair_inline_math_boundaries"]
+    assert "reference_index_truncated" in result["remaining_issue_codes"]
+    assert r"[8], and $q(x)$ a query representation." in result["repaired_text"]
+
+
+def test_repair_recovers_conversion_retry_page_from_pdf_and_keeps_equation_asset(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Retry Paper.pdf"
+    source_text = (
+        "The method computes a normalized query tensor and preserves the exact equation shown in the figure. "
+        "The source page also explains the attention operator, scaling parameter, and output reconstruction. "
+        "These details make the recovered source text long enough to identify the page unambiguously. "
+        "The authors describe the input features, learned projections, local context, global context, channel mixing, "
+        "normalization procedure, residual connection, training objective, evaluation protocol, and implementation details. "
+        "Every statement comes from the same source page so the recovery preserves provenance and does not infer missing claims."
+    )
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(40, 60, 560, 740), source_text, fontsize=11)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "page_1_eq_1.png").write_bytes(b"png")
+    md_path = tmp_path / "Retry Paper.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Retry Paper",
+            "## Abstract",
+            "This paper studies a source-grounded attention method.",
+            "## Method",
+            "The query tensor is R ^ H × ^ W × ^ <!-- kb:conversion_retry kind=math_text page=1 -->",
+            "![Equation](./assets/page_1_eq_1.png)",
+            "<!-- kb:conversion_retry kind=equation page=1 asset=page_1_eq_1.png -->",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["conversion_retry_math_text", "conversion_retry_equation"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = str(result.get("repaired_text") or "")
+    assert result["changed"] is True, {
+        key: result.get(key)
+        for key in ("attempted_applied", "regression_reasons", "remaining_issue_codes")
+    }
+    assert result["unsafe"] is False
+    assert "recover_conversion_retry_pages" in result["applied"]
+    assert "kb:conversion_retry" not in repaired
+    assert "R ^ H" not in repaired
+    assert "![Equation](./assets/page_1_eq_1.png)" in repaired
+    assert "<!-- kb_source_recovery: 1 -->" in repaired
+    assert source_text in repaired
+    assert "conversion_retry_math_text" not in result["remaining_issue_codes"]
+    assert "conversion_retry_equation" not in result["remaining_issue_codes"]
+
+
+def test_quality_repair_preserves_ambiguous_table_as_source_page_evidence(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Ambiguous Table.pdf"
+    source_text = " ".join(
+        [
+            "Table one reports benchmark results for the baseline and proposed methods across several evaluation datasets.",
+            "The original source page preserves every row, column, method name, metric label, score, and comparison marker.",
+            "This source-grounded recovery is intentionally verbose enough to identify the corresponding page text without inference.",
+        ]
+        * 4
+    )
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(40, 60, 560, 740), source_text, fontsize=9)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Ambiguous Table.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Ambiguous Table",
+                "## Abstract",
+                "This paper compares several benchmark methods.",
+                "| Method | Score A | Score B |",
+                "| --- | --- | --- |",
+                "| Baseline<br>Proposed<br>Oracle | 1.0<br>2.0 | 3.0<br>4.0<br>5.0 |",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = repair_markdown_quality(
+        md_path,
+        issue_codes=["ambiguous_table_break_rows"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = md_path.read_text(encoding="utf-8")
+    assert result["changed"] is True, {
+        key: result.get(key)
+        for key in ("attempted_applied", "regression_reasons", "remaining_issue_codes")
+    }
+    assert result["unsafe"] is False
+    assert "recover_ambiguous_table_pages" in result["applied"]
+    assert "kb_table_source_recovery: 1" in repaired
+    assert "page_1_table_recovery.png" in repaired
+    assert (tmp_path / "assets" / "page_1_table_recovery.png").is_file()
+    assert (tmp_path / ".conversion_cache" / "table_recovery" / "page_1_original_tables.md").is_file()
+    assert "The original source page preserves every row, column, method name" in repaired
+    assert "ambiguous_table_break_rows" not in result["remaining_issue_codes"]
+
+
+def test_quality_repair_preserves_fragmented_table_header_as_source_page_evidence(tmp_path: Path):
+    import fitz
+
+    pdf_path = tmp_path / "Fragmented Header.pdf"
+    source_text = " ".join(
+        [
+            "The source table reports trainable parameters and validation accuracy for every adaptation method.",
+            "Its original page preserves the complete header, method names, metrics, and numerical results.",
+            "This text identifies the source page while the rendered image retains authoritative table geometry.",
+        ]
+        * 4
+    )
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(fitz.Rect(40, 60, 560, 740), source_text, fontsize=9)
+    doc.save(str(pdf_path))
+    doc.close()
+
+    md_path = tmp_path / "Fragmented Header.en.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Fragmented Header",
+                "## Abstract",
+                "This paper compares parameter-efficient adaptation methods.",
+                "| Method |",
+                "Trainable Parameters | WikiSQL | MNLI-m |",
+                "| Fine-Tune | 175B | 73.8 | 89.5 |",
+                "| --- | --- | --- | --- |",
+                "| LoRA | 4.7M | 73.4 | 91.7 |",
+                "## References",
+                "[1] Ada Lovelace. Example reference. Journal, 2024.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = repair_markdown_quality(
+        md_path,
+        issue_codes=["analyzer_warnings"],
+        source_pdf_path=pdf_path,
+    )
+
+    repaired = md_path.read_text(encoding="utf-8")
+    assert result["changed"] is True, {
+        key: result.get(key)
+        for key in ("attempted_applied", "regression_reasons", "remaining_issue_codes")
+    }
+    assert result["unsafe"] is False
+    assert "recover_ambiguous_table_pages" in result["applied"]
+    assert "kb_table_source_recovery: 1" in repaired
+    assert "page_1_table_recovery.png" in repaired
+    assert "The source table reports trainable parameters and validation accuracy" in repaired
+    assert "analyzer_warnings" not in result["remaining_issue_codes"]
+
+
 def test_repair_markdown_text_normalizes_heading_level_jumps_narrowly(tmp_path: Path):
     md_path = tmp_path / "heading-jump.en.md"
     original = "\n".join(
@@ -1383,8 +1700,8 @@ def test_conversion_quality_routes_fragmented_variable_definitions_to_reconvert(
 
     report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
 
-    assert "conversion_retry_math_text" in report["repair_plan"]["reconvert_issue_codes"]
-    assert report["recommended_action"] == "reconvert"
+    assert "conversion_retry_math_text" in report["repair_plan"]["autofix_issue_codes"]
+    assert report["recommended_action"] == "autofix"
 
 
 def test_repair_markdown_text_cleans_stray_inline_math_and_keeps_review_headings(tmp_path: Path):
@@ -2455,6 +2772,34 @@ def test_reference_repair_rolls_back_when_blocking_structure_remains(monkeypatch
     )
 
 
+def test_reference_replacement_keeps_page_marker_before_appendix(tmp_path: Path):
+    from kb.converter import quality_repair
+
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Paper",
+            "Body content.",
+            "## References",
+            *[f"[{idx}] Old author {idx}. Journal, 2024." for idx in range(1, 9)],
+            "<!-- kb_page: 2 -->",
+            "## A Implementation Details",
+            "Appendix body must keep its source page anchor.",
+        ]
+    )
+    replacement = "\n".join(
+        [
+            "## References",
+            *[f"[{idx}] Recovered author {idx}. Journal, 2024." for idx in range(1, 9)],
+        ]
+    )
+
+    repaired = quality_repair._replace_references_section(original, replacement)
+
+    assert repaired.index("<!-- kb_page: 2 -->") < repaired.index("## A Implementation Details")
+    assert repaired.count("<!-- kb_page: 2 -->") == 1
+
+
 def test_repair_markdown_text_backfills_two_column_numeric_pdf_references(tmp_path: Path):
     import fitz
 
@@ -2716,6 +3061,59 @@ def test_write_conversion_quality_result_flags_citations_beyond_reference_tail(t
     assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
 
 
+def test_reference_tail_check_ignores_explicit_architecture_parameter_arrays(tmp_path: Path):
+    md_path = tmp_path / "Architecture Arrays.en.md"
+    refs = [
+        f"[{idx}] REF{idx}, A. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 110)
+    ]
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Architecture Arrays",
+                "## Abstract",
+                "Prior work [109] motivates the design.",
+                "The attention heads are [1,2,4,8], and number of channels are [48,96,192,384].",
+                "## References",
+                *refs,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert payload["source_quality"]["reference_index_truncated"] is False
+    assert "reference_index_truncated" not in payload["repair_plan"]["issue_codes"]
+
+
+def test_reference_tail_check_still_flags_genuine_citation_above_tail(tmp_path: Path):
+    md_path = tmp_path / "Genuine Missing Tail.en.md"
+    refs = [
+        f"[{idx}] REF{idx}, A. Complete reference {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 110)
+    ]
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "# Genuine Missing Tail",
+                "## Abstract",
+                "Prior work [110] provides the comparison baseline.",
+                "## References",
+                *refs,
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    payload = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert payload["source_quality"]["reference_index_truncated"] is True
+    assert "reference_index_truncated" in payload["repair_plan"]["issue_codes"]
+
+
 def test_reference_tail_check_compares_max_citation_not_unique_citation_count(tmp_path: Path):
     md_path = tmp_path / "Complete Reference Tail.en.md"
     refs = [
@@ -2919,6 +3317,72 @@ def test_numbered_section_regression_requires_source_review(tmp_path: Path) -> N
     assert report["repair_plan"]["action"] == "review"
 
 
+def test_repair_demotes_only_malformed_duplicate_numbered_formula_heading(tmp_path: Path) -> None:
+    md_path = tmp_path / "Formula Heading.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Formula Heading",
+            "## 1 Introduction",
+            "Introductory prose.",
+            "## 2 Method",
+            "Method prose.",
+            "## 3 Model",
+            "Model prose.",
+            "## 2 #",
+            "$$",
+            r"L_t = \mathbb{E}[\|x-y\|^2]",
+            "$$",
+            "## 4 Experiments",
+            "Experiment prose.",
+        ]
+    )
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["out_of_order_sections"],
+        allow_source_pdf_inference=False,
+    )
+
+    assert result["changed"] is True, result
+    assert result["unsafe"] is False
+    assert "demote_malformed_numbered_headings" in result["applied"]
+    assert "## 2 #" not in result["repaired_text"]
+    assert "## 2 Method" in result["repaired_text"]
+    assert "out_of_order_sections" not in result["remaining_issue_codes"]
+
+
+def test_heading_repair_escapes_literal_source_table_hash_without_flattening_appendix(tmp_path: Path) -> None:
+    md_path = tmp_path / "Recovered Table Heading.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Paper",
+            "## D. Experiment Details",
+            "### D.1. First Experiment",
+            "<!-- kb_source_recovery: 1 -->",
+            "dataset source split images sampled",
+            "# masks sampled",
+            "### D.2. Second Experiment",
+        ]
+    )
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["heading_level_jumps"],
+        allow_source_pdf_inference=False,
+    )
+
+    repaired = str(result["repaired_text"])
+    assert result["changed"] is True
+    assert "normalize_heading_levels" in result["applied"]
+    assert r"\# masks sampled" in repaired
+    assert "### D.2. Second Experiment" in repaired
+    assert "heading_level_jumps" not in result["remaining_issue_codes"]
+
+
 def test_write_conversion_quality_result_records_repair_trace(tmp_path: Path):
     md_path = tmp_path / "paper.en.md"
     md_path.write_text(
@@ -3028,9 +3492,40 @@ def test_conversion_quality_result_routes_retry_markers_and_broken_math_to_recon
 
     assert payload["metrics"]["conversion_retry_kind_counts"] == {"equation": 1, "math_text": 1}
     assert payload["recommended_action"] == "reconvert"
-    assert {
-        "conversion_retry_math_text",
-        "conversion_retry_equation",
-        "display_math_markdown_link",
-    }.issubset(set(payload["repair_plan"]["reconvert_issue_codes"]))
+    assert "display_math_markdown_link" in payload["repair_plan"]["reconvert_issue_codes"]
+    assert {"conversion_retry_math_text", "conversion_retry_equation"}.issubset(
+        set(payload["repair_plan"]["autofix_issue_codes"])
+    )
     assert "prose_dominant_display_math" in payload["repair_plan"]["autofix_issue_codes"]
+
+
+def test_quality_repair_unwraps_prose_math_without_dropping_equation_text(tmp_path: Path):
+    md_path = tmp_path / "mixed-math.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Mixed Math",
+            "## Abstract",
+            "This paper studies a stable mathematical method.",
+            "$$",
+            "This is the projection of the original ray and by substituting this value into the equation "
+            "we determine the transformed direction: \\mathbf{d}' = \\mathbf{o} + t \\mathbf{x}.",
+            "$$",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["prose_dominant_display_math"],
+        allow_source_pdf_inference=False,
+    )
+
+    repaired = str(result["repaired_text"])
+    assert result["changed"] is True
+    assert result["unsafe"] is False
+    assert "unwrap_prose_display_math" in result["applied"]
+    assert "d' = o + t x" in repaired
+    assert "$$" not in repaired
+    assert "prose_dominant_display_math" not in result["remaining_issue_codes"]

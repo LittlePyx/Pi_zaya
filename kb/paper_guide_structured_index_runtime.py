@@ -5,6 +5,8 @@ import re
 from pathlib import Path
 from typing import Any
 
+from kb.citation_meta import extract_year_hint
+
 
 _FIGURE_SCOPE_ALIASES = {
     "main": "main",
@@ -138,4 +140,22 @@ def load_paper_guide_table_index(md_path: Path | str) -> list[dict]:
 
 
 def load_paper_guide_reference_index(md_path: Path | str) -> list[dict]:
-    return _load_paper_guide_index_rows(md_path, file_name="reference_index.json", key="references")
+    rows = _load_paper_guide_index_rows(
+        md_path,
+        file_name="reference_index.json",
+        key="references",
+    )
+    for row in rows:
+        raw = str(row.get("text") or row.get("raw") or "").strip()
+        source_year = extract_year_hint(raw)
+        indexed_year = str(row.get("year") or "").strip()
+        if source_year and source_year != indexed_year:
+            # arXiv identifiers such as ``arXiv:2004.04906`` contain a
+            # year-looking prefix before the actual publication year at the
+            # end of the bibliography entry. The shared citation parser uses
+            # the final year; normalize older persisted structured indices at
+            # read time so validation and cards expose the source-accurate
+            # value without requiring a corpus rebuild.
+            row["year"] = source_year
+            row["year_repaired_from_text"] = True
+    return rows

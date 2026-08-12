@@ -19,6 +19,10 @@ _NON_PAPER_SOURCE_NAMES = {
     "output.pdf",
 }
 
+_NON_PAPER_SOURCE_DIRS = {
+    ".conversion_cache",
+}
+
 
 def is_nonpaper_artifact_source(source_path: str) -> bool:
     raw = str(source_path or "").strip()
@@ -27,6 +31,9 @@ def is_nonpaper_artifact_source(source_path: str) -> bool:
     p = Path(raw)
     low_name = p.name.strip().lower()
     low_stem = p.stem.strip().lower()
+    low_parts = {str(part or "").strip().lower() for part in p.parts}
+    if low_parts & _NON_PAPER_SOURCE_DIRS:
+        return True
     if low_name in _NON_PAPER_SOURCE_NAMES:
         return True
     if low_stem.endswith(".en"):
@@ -34,6 +41,8 @@ def is_nonpaper_artifact_source(source_path: str) -> bool:
     if low_stem in _NON_PAPER_SOURCE_STEMS:
         return True
     if "markdown quality analysis report" in low_name:
+        return True
+    if low_name.startswith("page_") and low_name.endswith("_original_tables.md"):
         return True
     return False
 

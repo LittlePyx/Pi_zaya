@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -675,6 +676,71 @@ def test_system_a_display_registry_collects_all_linked_claims_for_one_card() -> 
     assert any("s²ISM" in claim and "optical sectioning" in claim for claim in claims)
 
 
+def test_system_a_display_registry_keeps_single_source_paragraph_scope_at_end_citation() -> None:
+    markdown = (
+        "GDFN uses a gated mechanism to control information flow and preserve fine details. "
+        "Its expansion ratio is 2.66 "
+        '[1](#cite-gdfn "source: Restormer.pdf").'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-gdfn",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Restormer\Restormer.en.md",
+            "source_name": "Restormer.pdf",
+        }
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(
+        markdown,
+        details,
+    )
+
+    claims = remapped[0]["answer_claims"]
+    assert any(
+        "information flow" in claim
+        and "fine details" in claim
+        and "expansion ratio" in claim
+        for claim in claims
+    )
+
+
+def test_system_a_display_registry_does_not_broaden_mixed_source_paragraph_scope() -> None:
+    markdown = (
+        'Method A reduces memory [1](#cite-a "source: A.pdf"). '
+        'Method B reduces trainable parameters [2](#cite-b "source: B.pdf").'
+    )
+    details = [
+        {
+            "num": 1,
+            "anchor": "cite-a",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\A\A.en.md",
+        },
+        {
+            "num": 2,
+            "anchor": "cite-b",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\B\B.en.md",
+        },
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(
+        markdown,
+        details,
+    )
+
+    assert all(
+        "Method B" not in claim
+        for claim in remapped[0].get("answer_claims") or []
+    )
+    assert all(
+        "Method A" not in claim
+        for claim in remapped[1].get("answer_claims") or []
+    )
+
+
 def test_system_a_display_registry_does_not_alias_system_b_reader_anchor() -> None:
     markdown = (
         'Direct evidence [4](#cite-result "source: Review.pdf | ref 4"); '
@@ -867,6 +933,112 @@ def test_inline_system_a_card_keeps_complete_multi_step_mechanism() -> None:
         section for section in out[0]["card_view"]["sections"] if section["id"] == "evidence"
     )
     assert evidence_section["text"] == quote
+
+
+def test_inline_system_a_unanchored_locator_follows_selected_evidence_page() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = r"F:\db\nerf\nerf.en.md"
+    direct_observation = (
+        "Direct xyz coordinates perform poorly at representing high-frequency variation "
+        "in color and geometry, so NeRF applies positional encoding before the MLP."
+    )
+    later_context = (
+        "Transformers also use a positional encoding, but NeRF maps continuous coordinates "
+        "to help an MLP approximate a higher frequency function."
+    )
+    detail = {
+        "num": 1,
+        "citation_route": "system_a",
+        "source_path": source_path,
+        "source_name": "nerf.pdf",
+        "heading_path": "NeRF / 5.1 Positional encoding",
+        "evidence_quote": later_context,
+        "summary_line": later_context,
+        "raw": later_context,
+        "answer_claim": (
+            "NeRF uses positional encoding because direct xyz inputs represent "
+            "high-frequency color and geometry poorly."
+        ),
+        "page_start": 8,
+    }
+    citation_plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "NeRF / 5.1 Positional encoding",
+                "evidence_quote": later_context,
+                "page_start": 8,
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "NeRF / 5.1 Positional encoding",
+                "evidence_quote": direct_observation,
+                "page_start": 7,
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        [detail],
+        citation_plan,
+        render_locale="en",
+    )[0]
+
+    assert "perform poorly" in refined["evidence_quote"]
+    assert refined["page_start"] == 7
+    assert refined["page_end"] == 7
+
+
+def test_inline_system_a_compacts_positioning_bridge_without_losing_nerf_mechanism() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source_path = r"F:\db\nerf\nerf.en.md"
+    full_evidence = (
+        "## 5.1 Positional encoding\n\n"
+        "We find that directly operating on xyz coordinates causes the network to perform "
+        "poorly at representing high-frequency variation in color and geometry. "
+        "This is consistent with recent work showing that deep networks are biased "
+        "towards learning lower frequency functions. "
+        "They additionally show that mapping the inputs to a higher dimensional space "
+        "using high frequency functions enables better fitting of data that contains "
+        "high frequency variation."
+    )
+    detail = {
+        "num": 1,
+        "citation_route": "system_a",
+        "source_path": source_path,
+        "source_name": "nerf.pdf",
+        "answer_claim": (
+            "Direct xyz inputs poorly represent high-frequency color and geometry, so "
+            "NeRF maps coordinates with high-frequency functions before the MLP."
+        ),
+    }
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": source_path,
+                "heading_path": "5.1 Positional encoding",
+                "page_start": 7,
+                "evidence_quote": full_evidence,
+            }
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        [detail],
+        plan,
+        render_locale="en",
+    )[0]
+
+    evidence = refined["evidence_quote"]
+    assert "high-frequency variation in color and geometry" in evidence
+    assert "using high frequency functions" in evidence
+    assert "biased towards learning lower frequency functions" not in evidence
+    assert len(evidence) <= 520
 
 
 def test_inline_system_a_compound_card_and_reader_locator_ignore_plan_order() -> None:
@@ -3425,8 +3597,12 @@ def test_structured_cite_fallback_uses_local_answer_line_for_system_b_context(mo
     assert detail["citation_context_source"] == "structured_reference_index"
     assert "detector-array reconstruction accuracy" in detail["citation_context"]
     assert "briefly names earlier" not in detail["citation_context"]
-    assert detail["heading_path"].endswith("Benchmark")
-    assert detail["page_start"] == 5
+    assert detail["heading_path"].endswith("References")
+    assert detail["citation_context_heading_path"].endswith("Benchmark")
+    assert detail["citation_context_page_start"] == 5
+    assert detail["card_locator"] == "Benchmark / p. 5"
+    assert "References" not in detail["card_locator"]
+    assert detail["reference_entry_locator"]["heading_path"].endswith("References")
 
 
 def test_structured_cite_fallback_marks_answer_context_only_when_source_context_missing(monkeypatch, tmp_path: Path):
@@ -8223,6 +8399,51 @@ def test_reading_guide_keeps_only_planned_system_b_marker_within_budget():
     assert repaired.count(f"[[CITE:{sid}:50]]") == 1
 
 
+def test_final_citation_cards_drop_unplanned_system_b_fallback_and_link():
+    from api.chat_render import _enforce_citation_plan_cite_detail_budget
+
+    plan = {
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "candidate_refs": [26],
+            }
+        ],
+    }
+    details = [
+        {
+            "num": 1,
+            "anchor": "kb-a-1",
+            "citation_route": "system_a",
+        },
+        {
+            "num": 3,
+            "anchor": "kb-b-3",
+            "citation_route": "system_b",
+            "system_b_trace_complete": False,
+            "system_b_trace_score": 0.16,
+        },
+        {
+            "num": 26,
+            "anchor": "kb-b-26",
+            "citation_route": "system_b",
+            "system_b_trace_complete": True,
+            "system_b_trace_score": 0.72,
+        },
+    ]
+    body = (
+        'Uses an unrelated fallback [3](#kb-b-3 "wrong") and the planned '
+        'DPR source [26](#kb-b-26 "correct").'
+    )
+
+    rendered, kept = _enforce_citation_plan_cite_detail_budget(body, details, plan)
+
+    assert "#kb-b-3" not in rendered
+    assert "#kb-b-26" in rendered
+    assert [item["num"] for item in kept] == [1, 26]
+
+
 def test_reading_guide_keeps_canonical_marker_when_abstract_loses_claim_alignment(tmp_path: Path):
     from api.chat_render import _reading_guide_repair_missing_system_a_citations
 
@@ -10733,6 +10954,144 @@ def test_reading_guide_repair_splits_rich_dl_risk_from_same_source_number():
     assert hits[1]["meta"]["ref_answer_citation_num"] == 2
     assert hits[1]["meta"]["heading_path"] == "6. Challenges and Outlooks"
     assert "limited generalization" in hits[1]["text"]
+
+
+def test_reading_guide_repair_places_rich_dl_risk_marker_on_matching_sentence():
+    from api.chat_render import _reading_guide_repair_dl_spi_benefit_marker
+
+    source_path = "dl-spi-review.en.md"
+    benefit = "Deep learning provides exceptional reconstruction quality and fast reconstruction speed."
+    risk = (
+        "The inherent limitations include reliance on extensive datasets, limited "
+        "interpretability, susceptibility to overfitting, and limited generalization."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "DL-SPI review",
+                "heading_path": "Abstract",
+                "evidence_quote": benefit,
+                "page_start": 1,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "DL-SPI review",
+                "heading_path": "6. Challenges and Outlooks",
+                "evidence_quote": risk,
+                "page_start": 16,
+            },
+        ]
+    }
+    hits = [
+        {
+            "text": benefit,
+            "meta": {"source_path": source_path, "heading_path": "Abstract"},
+        }
+    ]
+    answer = (
+        "Deep learning improves reconstruction quality and speed [1]. "
+        "It relies on extensive training datasets and still has limited generalization. "
+        "Deployment therefore needs validation on each target instrument."
+    )
+
+    repaired = _reading_guide_repair_dl_spi_benefit_marker(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+
+    risk_end = repaired.index("limited generalization")
+    validation_start = repaired.index("Deployment therefore")
+    assert "[2]" in repaired[risk_end:validation_start]
+    assert "[2]" not in repaired[validation_start:]
+    assert hits[1]["meta"]["heading_path"] == "6. Challenges and Outlooks"
+
+
+def test_dl_spi_second_plan_passage_gets_resolvable_answer_number():
+    from api.chat_render import (
+        _augment_hits_with_system_a_plan_slots,
+        _reading_guide_repair_dl_spi_benefit_marker,
+    )
+    from api.reference_rendering import _annotate_inpaper_citations_with_hover_meta
+
+    source_path = "dl-spi-review.en.md"
+    benefit = "Deep learning provides exceptional reconstruction quality and fast reconstruction speed."
+    risk = (
+        "The inherent limitations include reliance on extensive datasets, limited "
+        "interpretability, susceptibility to overfitting, and limited generalization."
+    )
+    plan = {
+        "budget": {"system_a": 2},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "DL-SPI review",
+                "heading_path": "Abstract",
+                "evidence_quote": benefit,
+                "evidence_selection_reason": "single_paper_comparison_facet",
+                "page_start": 1,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "source_name": "DL-SPI review",
+                "heading_path": "6. Challenges and Outlooks",
+                "evidence_quote": risk,
+                "evidence_selection_reason": "single_paper_comparison_facet",
+                "page_start": 16,
+            },
+        ],
+    }
+    answer = (
+        "Deep learning improves reconstruction quality and speed [1]. "
+        "It relies on extensive training datasets and still has limited generalization [1]. "
+        "Validate deployment separately [1]."
+    )
+    hits = _augment_hits_with_system_a_plan_slots(
+        [
+            {
+                "text": benefit,
+                "meta": {
+                    "source_path": source_path,
+                    "ref_answer_citation_num": 1,
+                },
+                "ui_meta": {"source_path": source_path},
+            }
+        ],
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+        answer_text=answer,
+    )
+
+    assert len(hits) == 2
+    assert hits[1]["meta"]["ref_answer_citation_num"] == 2
+    repaired = _reading_guide_repair_dl_spi_benefit_marker(
+        answer,
+        hits,
+        plan,
+        canonical_paths=[source_path],
+    )
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        repaired,
+        hits,
+        canonical_paths=[source_path],
+        citation_plan=plan,
+    )
+
+    assert "limited generalization [2](#kb-cite-" in rendered
+    risk_detail = next(detail for detail in details if int(detail.get("num") or 0) == 2)
+    assert risk_detail["heading_path"].endswith("6. Challenges and Outlooks")
+    assert "limited generalization" in risk_detail["evidence_quote"]
 
 
 def test_reading_guide_repair_combines_adjacent_risks_supported_by_one_evidence_sentence():
@@ -14097,6 +14456,205 @@ def test_answer_aligned_ref_primary_preserves_multi_claim_same_paper_slots():
     assert resolved["slots"] == original["slots"]
 
 
+def test_answer_aligned_ref_primary_preserves_strict_structured_table_bundle():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/Simple-Baselines/Simple-Baselines.en.md"
+    table_evidence = (
+        "MPRNet [37] | MACs(G) 588 | SIDD PSNR 39.71. "
+        "NAFNet | MACs(G) 16 | SIDD PSNR 40.30."
+    )
+    slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Experiments / Table 5",
+        "evidence_quote": table_evidence,
+        "block_id": "blk-table-5",
+        "anchor_id": "tb-00006",
+        "strict_locate": True,
+        "evidence_selection_reason": "structured_table_metric_hit",
+    }
+    original = {"budget": {"system_a": 1}, "slots": [slot]}
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Experiments / Table 5",
+                "snippet": "MPRNet [37]: MACs(G) = 588.",
+                "block_id": "blk-short-card-excerpt",
+                "page_start": 13,
+            }
+        },
+    )
+
+    assert resolved["slots"] == [slot]
+    assert "NAFNet" in resolved["slots"][0]["evidence_quote"]
+    assert "40.30" in resolved["slots"][0]["evidence_quote"]
+
+
+def test_answer_aligned_ref_primary_preserves_complete_source_passage_bundle():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    source_path = "db/SCINeRF/SCINeRF.en.md"
+    complete = (
+        "Y = sum from i=1 to N of Phi_i times X_i plus E. "
+        "Y is the measurement, Phi is the coded aperture, and X is the scene. "
+        "Given a NeRF, rendering is differentiable."
+    )
+    compact = (
+        "Y is the measurement, Phi is the coded aperture, and X is the scene. "
+        "Given a NeRF, rendering is differentiable."
+    )
+    slot = {
+        "preferred_system": "system_a",
+        "source_path": source_path,
+        "heading_path": "Forward model",
+        "evidence_quote": complete,
+        "source_passage_bundle": True,
+    }
+    original = {"budget": {"system_a": 1}, "slots": [slot]}
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": source_path,
+                "heading_path": "Forward model",
+                "snippet": compact,
+                "page_start": 4,
+            }
+        },
+    )
+
+    assert resolved["slots"] == [slot]
+    assert resolved["slots"][0]["evidence_quote"].startswith("Y = sum")
+
+
+def test_answer_aligned_ref_primary_preserves_same_paper_slots_for_public_leaf_path():
+    from api.chat_render import _citation_plan_with_ref_primary
+
+    private_path = r"F:\runtime\md\ddpm\ddpm.en.md"
+    objective = "L_simple is an unweighted objective that predicts epsilon."
+    tradeoff = (
+        "The true variational bound yields better codelengths, while the "
+        "simplified objective gives the best sample quality."
+    )
+    original = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": private_path,
+                "evidence_quote": objective,
+                "evidence_selection_reason": "requested_relation_bundle",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": private_path,
+                "evidence_quote": tradeoff,
+                "evidence_selection_reason": "requested_relation_bundle",
+            },
+        ],
+    }
+
+    resolved = _citation_plan_with_ref_primary(
+        original,
+        {
+            "primary_evidence": {
+                "source_path": "ddpm.en.md",
+                "heading_path": "3.4 Simplified training objective",
+                "snippet": objective,
+            }
+        },
+    )
+
+    assert resolved["slots"] == original["slots"]
+
+
+def test_canonical_answer_recovery_reuses_public_leaf_source_hit() -> None:
+    from api.chat_render import _augment_hits_with_canonical_answer_citations
+
+    source_path = r"F:\runtime\md\ddpm\ddpm.en.md"
+    hit = {
+        "text": "L_simple is an unweighted objective that predicts epsilon.",
+        "meta": {
+            "source_path": "ddpm.en.md",
+            "ref_answer_citation_num": 1,
+        },
+        "ui_meta": {
+            "primary_evidence": {
+                "source_path": "ddpm.en.md",
+                "snippet": "L_simple is an unweighted objective that predicts epsilon.",
+            }
+        },
+    }
+
+    recovered = _augment_hits_with_canonical_answer_citations(
+        [hit],
+        canonical_paths=[source_path],
+        answer_text="L_simple predicts epsilon [1].",
+        canonical_evidence=[
+            {
+                "text": hit["text"],
+                "meta": {"source_path": source_path},
+            }
+        ],
+    )
+
+    assert len(recovered) == 1
+    assert recovered[0]["meta"]["canonical_answer_evidence"] is True
+
+
+def test_canonical_answer_recovery_preserves_distinct_same_source_plan_passages() -> None:
+    from api.chat_render import _augment_hits_with_canonical_answer_citations
+
+    private_path = r"F:\runtime\md\ddpm\ddpm.en.md"
+    base = {
+        "text": "A compact canonical seed.",
+        "meta": {
+            "source_path": "ddpm.en.md",
+            "ref_answer_citation_num": 1,
+        },
+    }
+    objective = {
+        "text": "L_simple is an unweighted objective that predicts epsilon.",
+        "meta": {
+            "source_path": private_path,
+            "heading_path": "3.4 Simplified training objective",
+            "citation_plan_slot": True,
+        },
+    }
+    tradeoff = {
+        "text": "The true variational bound improves codelengths, while L_simple improves sample quality.",
+        "meta": {
+            "source_path": private_path,
+            "heading_path": "4 Experiments / 4.1 Sample quality",
+            "citation_plan_slot": True,
+        },
+    }
+
+    recovered = _augment_hits_with_canonical_answer_citations(
+        [base, objective, tradeoff],
+        canonical_paths=[private_path],
+        answer_text="Objective evidence [1]. Trade-off evidence [1].",
+        canonical_evidence=[
+            {
+                "text": "A compact canonical seed.",
+                "meta": {"source_path": private_path},
+            }
+        ],
+    )
+
+    assert len(recovered) == 3
+    assert not recovered[0]["meta"].get("canonical_answer_evidence")
+    assert {row["meta"]["heading_path"] for row in recovered[1:]} == {
+        "3.4 Simplified training objective",
+        "4 Experiments / 4.1 Sample quality",
+    }
+
+
 def test_prompt_contract_primary_replaces_generic_same_paper_slots():
     from api.chat_render import _citation_plan_with_ref_primary
 
@@ -14318,6 +14876,14 @@ def test_answer_surface_cleanup_preserves_sampling_rate_unit_ratio():
         _cleanup_answer_surface_artifacts("The sampling rate is 1.25 Ms/s.")
         == "The sampling rate is 1.25 Ms/s."
     )
+
+
+def test_answer_surface_cleanup_preserves_legitimate_eg_parenthetical():
+    from api.chat_render import _cleanup_answer_surface_artifacts
+
+    answer = "The evidence omits the exact form (e.g., the BA product or initialization)."
+
+    assert _cleanup_answer_surface_artifacts(answer) == answer
 
 
 def test_page_aligned_slot_survives_prompt_contract_from_different_page():
@@ -17698,3 +18264,451 @@ def test_citation_plan_refiner_keeps_scinerf_synthesis_and_differentiability_bun
     assert "differentiable with respect to NeRF and the poses" in evidence
     assert refined[0]["compound_plan_evidence"] is True
     assert refined[0]["heading_path"].endswith("3. Method")
+
+
+def test_citation_plan_refiner_uses_claim_specific_pages_from_one_bundled_doc() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "restormer.en.md"
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "heading_path": "Conclusion",
+            "page_start": 8,
+            "answer_claim": "MDTA computes cross-covariance across feature channels.",
+        },
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "heading_path": "Conclusion",
+            "page_start": 8,
+            "answer_claim": "GDFN controls information flow to preserve fine details.",
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "Introduction",
+                "page_start": 2,
+                "evidence_quote": (
+                    "MDTA computes cross-covariance across feature channels rather than "
+                    "the spatial dimension."
+                ),
+                "source_passage_bundle": True,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "3.2 GDFN",
+                "page_start": 4,
+                "evidence_quote": (
+                    "## C , GDFN is formulated as:\n\n"
+                    "![Equation](assets/gdfn-equation.png)\n\n"
+                    "Overall, GDFN controls the information flow and lets each level "
+                    "focus on fine details."
+                ),
+                "source_passage_bundle": True,
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    assert [detail["page_start"] for detail in refined] == [2, 4]
+    assert "cross-covariance" in refined[0]["evidence_quote"]
+    assert "information flow" in refined[1]["evidence_quote"]
+
+
+def test_citation_plan_refiner_prefers_scored_bundled_method_over_conclusion() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "restormer.en.md"
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "heading_path": "5 Conclusion",
+            "page_start": 8,
+            "answer_claim": (
+                "MDTA applies attention across channels with linear complexity and "
+                "uses depth-wise convolution for local spatial context."
+            ),
+            "evidence_quote": (
+                "Restormer is computationally efficient for high-resolution images."
+            ),
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "3.1 Multi-Dconv Head Transposed Attention",
+                "page_start": 4,
+                "retrieval_score": 161.0,
+                "source_passage_bundle": True,
+                "evidence_quote": (
+                    "MDTA applies self-attention across channels rather than the spatial "
+                    "dimension, yielding linear complexity, and uses depth-wise "
+                    "convolutions to emphasize local spatial context."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "5 Conclusion",
+                "page_start": 8,
+                "evidence_quote": (
+                    "Restormer handles high-resolution images with linear complexity and "
+                    "retains local spatial context."
+                ),
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    assert refined[0]["page_start"] == 4
+    assert "across channels" in refined[0]["evidence_quote"]
+
+
+def test_citation_plan_refiner_covers_unused_same_source_mechanism_slot() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "restormer.en.md"
+    mdta_claim = "MDTA computes cross-covariance across feature channels."
+    summary_claim = (
+        "In summary, MDTA models channel context while GDFN provides controlled gated "
+        "transformation that regulates information flow across hierarchical levels."
+    )
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 3,
+            "answer_claim": mdta_claim,
+            "evidence_quote": "MDTA performs query-key interaction across channels.",
+        },
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 3,
+            "answer_claim": "MDTA mixes local context before covariance computation.",
+            "evidence_quote": "MDTA mixes local context with depth-wise convolutions.",
+        },
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 3,
+            "answer_claim": summary_claim[:91] + "...",
+            "answer_claims": [summary_claim],
+            "evidence_quote": (
+                "MDTA and GDFN provide complementary controlled feature transformations."
+            ),
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "page_start": 2,
+                "evidence_quote": (
+                    "MDTA computes cross-covariance across feature channels and mixes "
+                    "local context before feature covariance computation."
+                ),
+                "source_passage_bundle": True,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "page_start": 4,
+                "evidence_quote": (
+                    "Overall, the GDFN controls the information flow through hierarchical "
+                    "levels, allowing each level to focus on complementary fine details."
+                ),
+                "source_passage_bundle": True,
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    assert refined[-1]["page_start"] == 4
+    assert "controls the information flow" in refined[-1]["evidence_quote"]
+
+
+def test_citation_plan_refiner_diversifies_aligned_bundle_and_keeps_its_locator() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "clip.en.md"
+    shared_claim = "CLIP predicts the matching caption for each image in the batch."
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 45,
+            "answer_claim": shared_claim,
+        },
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 45,
+            "answer_claim": shared_claim,
+        },
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "Figure 1",
+                "page_start": 2,
+                "block_id": "clip-page-2-figure-1",
+                "source_passage_bundle": True,
+                "retrieval_score": 170.0,
+                "evidence_quote": (
+                    "CLIP predicts which caption goes with which image in a batch."
+                ),
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "Natural Language Supervision",
+                "page_start": 1,
+                "block_id": "clip-page-1-abstract",
+                "source_passage_bundle": True,
+                "retrieval_score": 160.0,
+                "evidence_quote": (
+                    "Natural language supervision predicts the matching caption for "
+                    "each image in a batch of examples."
+                ),
+            },
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    assert {detail["page_start"] for detail in refined} == {1, 2}
+    for detail in refined:
+        if "Natural language supervision" in detail["evidence_quote"]:
+            assert detail["page_start"] == 1
+            assert detail["block_id"] == "clip-page-1-abstract"
+        else:
+            assert "which caption goes with which image" in detail["evidence_quote"]
+            assert detail["page_start"] == 2
+            assert detail["block_id"] == "clip-page-2-figure-1"
+
+
+def test_citation_plan_refiner_uses_exact_budget_identity_for_same_hit_slots() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "ddpm.en.md"
+    evidence_rows = [
+        (
+            "The true variational bound yields better codelengths, while the "
+            "simplified objective gives the best sample quality."
+        ),
+        (
+            "The simplified training objective is an unweighted version of the "
+            "variational bound and predicts epsilon with L_simple."
+        ),
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "page_start": 6,
+                "evidence_quote": evidence_rows[0],
+                "source_passage_bundle": True,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "page_start": 5,
+                "evidence_quote": evidence_rows[1],
+                "source_passage_bundle": True,
+                "compound_same_page_evidence": True,
+            },
+        ]
+    }
+
+    def budget_key(index: int, evidence: str) -> str:
+        normalized_source = source.replace("\\", "/").casefold()
+        normalized_evidence = re.sub(r"\s+", " ", evidence.strip())
+        return "plan:" + hashlib.sha1(
+            f"{index}\n{normalized_source}\n{normalized_evidence}".encode("utf-8")
+        ).hexdigest()
+
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 5,
+            "answer_claim": "真实变分下界改善编码长度，但简化目标提供最佳样本质量。",
+            "citation_budget_key": budget_key(0, evidence_rows[0]),
+        },
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "page_start": 5,
+            "answer_claim": "L_simple is an unweighted objective that predicts epsilon.",
+            "citation_budget_key": budget_key(1, evidence_rows[1]),
+        },
+    ]
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    assert [detail["page_start"] for detail in refined] == [6, 5]
+    assert "better codelengths" in refined[0]["evidence_quote"]
+    assert "unweighted version" in refined[1]["evidence_quote"]
+    assert refined[1]["compound_plan_evidence"] is True
+
+
+def test_citation_plan_refiner_keeps_short_equation_relation_bundle_complete() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "ddpm.en.md"
+    evidence = (
+        "3.4 Simplified training objective The $t > 1$ cases correspond to an "
+        "unweighted version of Eq. $$ L_{\\text{simple}}(\\theta) := "
+        "\\mathbb{E}_{t, \\mathbf{x}_0, \\boldsymbol{\\epsilon}} "
+        "\\left[ \\left\\| \\boldsymbol{\\epsilon} - "
+        "\\boldsymbol{\\epsilon}_\\theta(\\sqrt{\\bar{\\alpha}_t} "
+        "\\mathbf{x} $$"
+    )
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "answer_claim": (
+                "L_simple makes epsilon_theta predict the added epsilon noise and is "
+                "the unweighted objective."
+            ),
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "3.4 Simplified training objective",
+                "page_start": 5,
+                "evidence_quote": evidence,
+                "source_passage_bundle": True,
+                "evidence_selection_reason": "requested_relation_bundle",
+                "retrieval_score": 1100.0,
+            }
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    rendered = refined[0]["evidence_quote"]
+    assert "Simplified training objective" in rendered
+    assert "unweighted version" in rendered
+    assert "boldsymbol{\\epsilon}" in rendered
+
+
+def test_citation_plan_refiner_covers_all_linked_clip_zero_shot_steps() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "clip.en.md"
+    evidence = (
+        "CLIP is pre-trained to predict if an image and a text snippet are paired. "
+        "For each dataset, we use the names of all the classes in the dataset as "
+        "the set of potential text pairings and predict the most probable pair. "
+        "We compute the feature embedding of the image and the feature embedding "
+        "of the possible texts by their respective encoders. The cosine similarity "
+        "is scaled by a temperature parameter and normalized via a softmax."
+    )
+    details = [
+        {
+            "num": 1,
+            "citation_route": "system_a",
+            "source_path": source,
+            "answer_claim": "The image and text feature embeddings use their encoders.",
+            "answer_claims": [
+                "The class names form the candidate texts.",
+                "The image and text feature embeddings use their respective encoders.",
+                "Cosine similarity is temperature-scaled and normalized with softmax.",
+            ],
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "3.1.2 Using CLIP for Zero-Shot Transfer",
+                "page_start": 6,
+                "evidence_quote": evidence,
+                "source_passage_bundle": True,
+                "evidence_selection_reason": "requested_relation_bundle",
+                "retrieval_score": 1050.0,
+            }
+        ]
+    }
+
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        details,
+        plan,
+        render_locale="en",
+    )
+
+    rendered = refined[0]["evidence_quote"]
+    assert "names of all the classes" in rendered
+    assert "respective encoders" in rendered
+    assert "cosine similarity" in rendered.lower()
+    assert "softmax" in rendered.lower()

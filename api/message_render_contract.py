@@ -765,6 +765,33 @@ def render_payload_is_missing_planned_system_a(
         best_overlap, best_slot = ranked_slots[0]
         if best_overlap >= 3 and not _matches_planned_evidence(detail, best_slot):
             return True
+    requested_relation_slots = [
+        slot
+        for slot in system_a_slots
+        if str(
+            slot.get("evidence_selection_reason")
+            or slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
+        == "requested_relation_bundle"
+    ]
+    if len(requested_relation_slots) >= 2:
+        # A requested-relation bundle is not a ranked list of interchangeable
+        # fallbacks.  Each slot answers a different facet explicitly named by
+        # the user (for example DDPM's objective and its quality/codelength
+        # trade-off).  During streaming an early render can contain only the
+        # first facet; treating that packet as complete permanently hides the
+        # later, already-grounded evidence card.  Keep the legacy any-match
+        # behavior for ordinary same-paper fallback plans, but require every
+        # selected relation passage to survive in this explicit contract.
+        if any(
+            not any(
+                _matches_planned_evidence(detail, slot)
+                for detail in system_a_details
+            )
+            for slot in requested_relation_slots
+        ):
+            return True
     if len(slots_by_source) >= 2:
         # A multi-paper route is complete only when every selected paper keeps
         # an answer-relevant passage.  The former any-match check let one good

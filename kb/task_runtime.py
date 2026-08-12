@@ -118,8 +118,10 @@ from kb.generation_state_runtime import (
     _should_run_provenance_async_refine as _state_should_run_provenance_async_refine,
 )
 from kb.paper_guide_answer_selection import (
+    _bundle_answer_hits_by_source as _selection_bundle_answer_hits_by_source,
     _build_answer_hits_for_generation as _selection_build_answer_hits_for_generation,
     _has_anchor_grounded_answer_hits as _selection_has_anchor_grounded_answer_hits,
+    _merge_same_source_answer_hits as _selection_merge_same_source_answer_hits,
     _paper_guide_answer_hit_score as _selection_answer_hit_score,
     _paper_guide_focus_heading as _selection_focus_heading,
     _rescue_multi_source_answer_hits as _selection_rescue_multi_source_answer_hits,
@@ -288,6 +290,7 @@ from kb.paper_guide_retrieval_runtime import (
     _paper_guide_fallback_deepread_hits as _retrieval_fallback_deepread_hits,
     _paper_guide_has_requested_target_hits as _retrieval_has_requested_target_hits,
     _paper_guide_hit_matches_requested_targets as _retrieval_hit_matches_requested_targets,
+    _paper_guide_semantic_query_terms as _retrieval_semantic_query_terms,
     _select_paper_guide_raw_target_hits as _retrieval_select_raw_target_hits,
     _paper_guide_targeted_box_excerpt_hits as _retrieval_targeted_box_excerpt_hits,
     _paper_guide_targeted_source_block_hits as _retrieval_targeted_source_block_hits,
@@ -5450,6 +5453,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         prompt_targeted
                         or citation_lookup_targeted
                         or method_exact_support_targeted
+                        or bool(
+                            _retrieval_semantic_query_terms(
+                                str(prompt or retrieval_prompt or "")
+                            )
+                        )
                         or (len(scoped_hits) < max(10, int(top_k or 4) * 3))
                         or paper_guide_prompt_family in {"method", "figure_walkthrough", "reproduce", "compare", "strength_limits", "equation", "overview"}
                     )
@@ -5469,7 +5477,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                             bound_source_path=paper_guide_bound_source_path,
                             prompt=scan_prompt,
                             db_dir=db_dir,
-                            limit=max(2, min(int(top_k or 4), 3)),
+                            limit=max(2, min(int(top_k or 4), 5)),
                         )
                         for h in list(scan_hits or []):
                             if not isinstance(h, dict):
@@ -6244,6 +6252,22 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         if paper_guide_source_scoped and paper_guide_bound_source_ready:
             heading_hits_for_answer = list(grouped_docs or []) if paper_guide_cross_paper_refs else list(hits or [])
             if not paper_guide_cross_paper_refs:
+                # Grouped documents intentionally keep one representative per
+                # paper for the reference shelf.  A source-scoped answer can
+                # still need several complementary passages from that paper
+                # (for example one architecture block and one training block).
+                # Feed the already-scoped raw candidates to the compact answer
+                # selector; it will rank and cap them at ``answer_hit_limit``.
+                raw_source_hits_for_answer = [
+                    dict(hit)
+                    for hit in list(hits_raw or [])
+                    if isinstance(hit, dict)
+                ]
+                if raw_source_hits_for_answer:
+                    heading_hits_for_answer = [
+                        *raw_source_hits_for_answer,
+                        *heading_hits_for_answer,
+                    ]
                 raw_block_hits_for_answer = [
                     dict(hit)
                     for hit in list(hits_raw or [])
@@ -6253,12 +6277,34 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 if raw_block_hits_for_answer:
                     heading_hits_for_answer = [*raw_block_hits_for_answer, *heading_hits_for_answer]
             grouped_hits_for_answer = list(answer_seed or [])
+            answer_passage_limit = answer_hit_limit
+            if (
+                not paper_guide_cross_paper_refs
+                and paper_guide_prompt_family != "citation_lookup"
+            ):
+                # The generation prompt still receives one bundled DOC for the
+                # bound paper, but selecting three complementary source blocks
+                # first prevents a broad introduction from displacing the
+                # method paragraph needed for a multi-facet question.  This is
+                # deliberately capped: it improves evidence coverage without
+                # turning source-scoped chat into whole-paper stuffing.
+                semantic_passage_cap = (
+                    5
+                    if _retrieval_semantic_query_terms(
+                        str(prompt or retrieval_prompt or "")
+                    )
+                    else 3
+                )
+                answer_passage_limit = max(
+                    answer_hit_limit,
+                    min(semantic_passage_cap, max(1, int(top_k or 1))),
+                )
             raw_target_hits = []
             if not paper_guide_cross_paper_refs:
                 raw_target_hits = _select_paper_guide_raw_target_hits(
                     hits_raw=list(hits_raw or []),
                     prompt=(prompt or retrieval_prompt or ""),
-                    top_n=answer_hit_limit,
+                    top_n=answer_passage_limit,
                 )
             if raw_target_hits:
                 heading_hits_for_answer = raw_target_hits
@@ -6268,8 +6314,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 grouped_docs=grouped_hits_for_answer,
                 heading_hits=heading_hits_for_answer,
                 prompt=prompt,
-                top_n=answer_hit_limit,
+                top_n=answer_passage_limit,
             )
+            if not paper_guide_cross_paper_refs:
+                answer_hits = _selection_merge_same_source_answer_hits(answer_hits)
+                answer_hit_limit = min(answer_hit_limit, max(1, len(answer_hits)))
         else:
             answer_hits = _build_answer_hits_for_generation(
                 grouped_docs=list(answer_seed or []),
@@ -6293,6 +6342,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     selected_research_context_evidence_hits,
                     limit=merged_answer_hit_limit,
                 )
+                answer_hits = _selection_bundle_answer_hits_by_source(answer_hits)
+                answer_hit_limit = max(1, len(answer_hits))
                 _trace_section(
                     "basket_context",
                     {

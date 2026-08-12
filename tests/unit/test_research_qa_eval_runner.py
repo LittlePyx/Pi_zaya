@@ -15,7 +15,9 @@ from tools.research_qa.run_research_qa_eval import (
     _claim_evidence_contract_failures,
     _detail_matches_source_page,
     _generation_should_wait_for_full_refs,
+    _doc_matches_payload,
     _latency_budget_checks,
+    _contains_term,
     _missing_term_groups,
     _refs_payload_is_converged_for_case,
     _refs_payload_is_full,
@@ -33,6 +35,80 @@ from tools.research_qa.run_research_qa_eval import (
     validate_fixture_contracts,
     validate_fixture_sources,
 )
+
+
+def test_contains_term_normalizes_reader_visible_math_and_locator_variants():
+    assert _contains_term(r"The $L_{\text{simple}}$ objective predicts noise.", "L_simple")
+    assert _contains_term("Figure 2. Overlap-tile strategy", "Fig. 2")
+    assert _contains_term("使用所有类别的名称", "类别名称")
+    assert _contains_term("names of all the classes and cosine similarity", "class names")
+
+
+def test_short_document_ids_do_not_match_inside_ordinary_words():
+    fixture = ResearchQaFixture(
+        db_root="db",
+        docs=[
+            {"id": "sam", "dir": "sam", "file": "sam", "shortLabel": "SAM"},
+            {"id": "rag", "dir": "rag", "file": "rag", "shortLabel": "RAG"},
+        ],
+        cases=[],
+        forbidden_phrases=[],
+    )
+
+    assert not _doc_matches_payload(
+        fixture,
+        "sam",
+        {"snippet": "Many annotated samples improve the training procedure."},
+    )
+    assert not _doc_matches_payload(
+        fixture,
+        "rag",
+        {"snippet": "The storage layer contains fragmented records."},
+    )
+    assert _doc_matches_payload(
+        fixture,
+        "sam",
+        {"source_path": "kb-source/0/sam/sam.en.md"},
+    )
+    assert _doc_matches_payload(
+        fixture,
+        "rag",
+        {"title": "RAG: retrieval-augmented generation"},
+    )
+
+
+def test_locate_contract_accepts_named_locator_in_visible_evidence():
+    fixture = ResearchQaFixture(
+        db_root="db",
+        docs=[{"id": "sam", "dir": "sam", "file": "sam", "shortLabel": "SAM"}],
+        cases=[],
+        forbidden_phrases=[],
+    )
+    details = [
+        {
+            "citation_route": "system_a",
+            "source_path": "/kb/sam/sam.en.md",
+            "page_start": 2,
+            "page_end": 2,
+            "heading_path": "1. Introduction",
+            "evidence_quote": (
+                "We refer to this model as the Segment Anything Model. "
+                "It has an image encoder, prompt encoder, and mask decoder."
+            ),
+        }
+    ]
+    contracts = [
+        {
+            "id": "sam-model-locate",
+            "docId": "sam",
+            "route": "system_a",
+            "sourcePage": 2,
+            "locatorTerms": ["Segment Anything Model"],
+            "evidenceTerms": ["image encoder", "mask decoder"],
+        }
+    ]
+
+    assert eval_mod._locate_contract_failures(fixture, details, contracts) == []
 
 
 def test_locale_gate_checks_answer_and_reference_card_setting():
@@ -95,6 +171,56 @@ def test_retrieval_coverage_reports_required_document_ranks(monkeypatch, tmp_pat
     assert summary["ok"] is True, summary
     assert summary["passed"] == 1
     assert summary["cases"][0]["required_ranks"] == {"alpha": 1, "beta": 2}
+
+
+def test_retrieval_coverage_supports_separate_index_and_source_roots(monkeypatch, tmp_path):
+    index_root = tmp_path / "index"
+    source_root = tmp_path / "sources"
+    source_path = source_root / "paper" / "paper.en.md"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("# Paper\n\nGrounded evidence.", encoding="utf-8")
+    fixture = ResearchQaFixture(
+        db_root=str(index_root),
+        docs=[{"id": "paper", "dir": "paper", "file": "paper"}],
+        cases=[
+            {
+                "id": "paper-question",
+                "question": "What evidence does the paper report?",
+                "expected": {"requiredRefDocIds": ["paper"]},
+            }
+        ],
+        forbidden_phrases=[],
+    )
+    monkeypatch.setattr(
+        eval_mod,
+        "load_all_chunks",
+        lambda root: (
+            [{"id": "placeholder", "text": "placeholder", "meta": {}}]
+            if root == index_root
+            else []
+        ),
+    )
+    monkeypatch.setattr(
+        eval_mod,
+        "_search_hits_with_fallback",
+        lambda *_args, **_kwargs: ([{"id": "hit"}], [1.0], _args[0], False, [_args[0]]),
+    )
+    monkeypatch.setattr(
+        eval_mod,
+        "_group_hits_by_doc_for_refs",
+        lambda *_args, **_kwargs: [{"meta": {"source_path": str(source_path)}}],
+    )
+
+    summary = evaluate_retrieval_coverage(
+        fixture,
+        db_root=index_root,
+        source_root=source_root,
+        top_k=1,
+    )
+
+    assert summary["ok"] is True
+    assert summary["source_root"] == str(source_root.resolve())
+    assert summary["cases"][0]["required_ranks"] == {"paper": 1}
 
 
 def test_research_qa_latency_budgets_track_answer_and_async_cards_separately():
@@ -161,6 +287,21 @@ def test_quality_term_matching_treats_s2ism_superscript_as_same_method() -> None
     assert eval_mod._contains_term("s²ISM structured detection", "s2ISM")
     assert eval_mod._contains_term("s2ISM structured detection", "s²ISM")
     assert eval_mod._contains_term("s₂ISM structured detection", "s2ISM")
+
+
+def test_quality_term_matching_normalizes_only_compound_hyphen_orthography() -> None:
+    assert eval_mod._contains_term(
+        "mapping the inputs using high frequency functions",
+        "high-frequency functions",
+    )
+    assert eval_mod._contains_term(
+        "mapping the inputs using high-frequency functions",
+        "high frequency functions",
+    )
+    assert not eval_mod._contains_term(
+        "mapping the inputs using high frequency functions",
+        "low-frequency functions",
+    )
 
 
 def test_refs_payload_full_state_rejects_fast_or_pending_cards():

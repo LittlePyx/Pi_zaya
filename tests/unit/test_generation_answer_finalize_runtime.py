@@ -570,6 +570,240 @@ def test_grounded_system_a_allowlist_excludes_unplanned_retrieval_hits() -> None
     assert finalize_runtime._planned_grounded_system_a_numbers(plan, hits) == {1}
 
 
+def test_lora_freeze_normalizer_keeps_source_level_pretrained_weights_term() -> None:
+    evidence = (
+        "We propose Low-Rank Adaptation, which freezes the pre-trained model weights "
+        "and injects trainable rank decomposition matrices."
+    )
+    answer = (
+        "LoRA freezes the pre-trained model weights and injects trainable low-rank "
+        "decomposition matrices [1]."
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="What does LoRA freeze, and what trainable objects does it inject?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "lora.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "lora.en.md"}}
+        ],
+    )
+
+    assert "pre-trained weights" in normalized
+    assert "original model weight matrices" in normalized
+    assert normalized.count("pre-trained weights") == 1
+
+
+def test_nerf_position_observation_normalizer_keeps_exact_requested_scope() -> None:
+    evidence = (
+        "We found that having the network F_Theta directly operate on xyz theta phi "
+        "input coordinates results in renderings that perform poorly at representing "
+        "high-frequency variation in color and geometry. They additionally show that "
+        "mapping the inputs to a higher dimensional space using high frequency functions "
+        "before passing them to the network enables better fitting of data that contains "
+        "high frequency variation."
+    )
+    raw = (
+        "NeRF uses positional encoding [1].\n\n"
+        "An unrelated ablation claim says it is the largest contributor [1]."
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        raw,
+        prompt=(
+            "NeRF 为什么要对输入坐标做 positional encoding？直接把 xyzθφ 输入 MLP 时，"
+            "论文观察到的表示问题是什么？"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "nerf.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "nerf.en.md"}}
+        ],
+    )
+
+    assert "颜色和几何中的高频变化" in normalized
+    assert "high frequency functions" in normalized
+    assert "largest contributor" not in normalized
+    assert normalized.count("[1]") == 1
+
+    rebound = finalize_runtime._bind_planned_source_citations(
+        normalized,
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "nerf.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "nerf.en.md"}}],
+    )
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        rebound,
+        answer_hits=[{"text": evidence, "meta": {"source_path": "nerf.en.md"}}],
+        allow_citation_repairs=True,
+        prompt=(
+            "NeRF 为什么要对输入坐标做 positional encoding？直接把 xyzθφ 输入 MLP 时，"
+            "论文观察到的表示问题是什么？"
+        ),
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert repaired.count("[1]") == 1
+    assert audit["minimum_ok"] is True
+
+
+def test_planned_binder_cites_each_same_source_module_claim() -> None:
+    source_path = "restormer.en.md"
+    mdta_evidence = (
+        "MDTA applies self-attention across the feature dimension rather than the "
+        "spatial dimension and computes cross-covariance across feature channels."
+    )
+    gdfn_evidence = (
+        "where element-wise multiplication and GELU define the gating operation. "
+        "Overall, the GDFN controls the information flow through the respective "
+        "hierarchical levels, thereby allowing each level to focus on the fine details "
+        "complimentary to the other levels. That is, GDFN offers a distinct role "
+        "compared to MDTA. Since GDFN performs more operations than the regular feed-"
+        "forward network, the expansion ratio is reduced to keep parameters and compute "
+        "burden similar."
+    )
+    plan = {
+        "budget": {"system_a": 2, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "evidence_quote": mdta_evidence,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "evidence_quote": gdfn_evidence,
+            },
+        ],
+    }
+    hits = [{"text": "bundled source", "meta": {"source_path": source_path}}]
+    answer = (
+        "MDTA applies attention across feature channels instead of spatial positions [1].\n\n"
+        "**GDFN:** [1]\n"
+        "GDFN controls information flow through the hierarchical levels, allowing each "
+        "level to focus on fine details complementary to the other levels. Its gating "
+        "role is distinct from MDTA. Because GDFN performs more operations than a regular "
+        "feed-forward network, Restormer reduces the expansion ratio to keep parameters and "
+        "compute burden similar [1]."
+    )
+
+    bound = finalize_runtime._bind_planned_source_citations(
+        answer,
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "fine details complementary to the other levels [1]" in bound
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+    repaired, audit = finalize_runtime.audit_and_repair_claim_evidence(
+        bound,
+        answer_hits=merged,
+        allow_citation_repairs=True,
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "fine details complementary to the other levels [1]" in repaired
+    assert audit["minimum_ok"] is True
+
+
+def test_supported_term_normalizer_keeps_gdfn_gating_in_cited_mechanism() -> None:
+    evidence = (
+        "Overall, the GDFN controls the information flow through the hierarchical "
+        "levels, allowing each level to focus on fine details complementary to others."
+    )
+    answer = (
+        "While MDTA enriches contextual information, GDFN regulates the information "
+        "flow through each hierarchical level and preserves fine details [1]."
+    )
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt=(
+            "In Restormer, what does MDTA transpose and what distinct filtering role "
+            "does GDFN play?"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "restormer.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {"text": evidence, "meta": {"source_path": "restormer.en.md"}}
+        ],
+    )
+
+    assert "GDFN gates and regulates the information flow" in normalized
+    assert normalized.endswith("[1].")
+
+
+def test_preflight_source_slot_resolves_against_final_hit_order() -> None:
+    source_path = "F:/blind/md/sam/sam.en.md"
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [],
+                "source_path": source_path,
+                "evidence_quote": (
+                    "An image encoder computes an image embedding, a prompt encoder embeds "
+                    "prompts, and a mask decoder predicts segmentation masks."
+                ),
+            }
+        ],
+    }
+
+    resolved = finalize_runtime._citation_plan_with_resolved_hit_numbers(
+        plan,
+        answer_hits=[
+            {
+                "text": "SAM source evidence",
+                "meta": {"source_path": "kb-source/0/sam/sam.en.md"},
+            }
+        ],
+    )
+
+    assert resolved["slots"][0]["candidate_hits"] == [1]
+    assert plan["slots"][0]["candidate_hits"] == []
+
+
 def test_pidl_pascal_normalizer_rewrites_only_the_unsupported_disentanglement_tail() -> None:
     source_path = "F:/kb/db/High-resolution single-photon imaging with physics-informed deep learning.en.md"
     evidence = (
@@ -7427,3 +7661,254 @@ def test_normalizer_adds_missing_reported_quantity_from_exact_plan_sentence() ->
     assert "5 μm" in normalized
     assert "[1]" in normalized
     assert repeated == normalized
+
+
+def test_normalizer_adds_two_missing_compact_dataset_quantities() -> None:
+    dataset_evidence = (
+        "Our dataset SA-1B consists of 11M diverse images and 1.1B high-quality "
+        "segmentation masks."
+    )
+    generation_evidence = (
+        "We produced 1.1B masks, 99.1% of which were generated fully automatically."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sam.en.md",
+                "evidence_quote": dataset_evidence,
+                "page_start": 6,
+            },
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "sam.en.md",
+                "evidence_quote": generation_evidence,
+                "page_start": 6,
+            },
+        ]
+    }
+    hits = [
+        {
+            "text": f"{dataset_evidence} {generation_evidence}",
+            "meta": {"source_path": "sam.en.md"},
+        }
+    ]
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "SAM 使用三阶段数据引擎 [1]。",
+        prompt="SA-1B 有多少图像和掩码，其中多少比例是全自动生成的？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+    repeated = finalize_runtime._normalize_citation_plan_supported_terms(
+        normalized,
+        prompt="SA-1B 有多少图像和掩码，其中多少比例是全自动生成的？",
+        citation_plan=plan,
+        answer_hits=hits,
+    )
+
+    assert "11M" in normalized
+    assert "1.1B" in normalized
+    assert "99.1%" in normalized
+    assert normalized.count("原文定量结果：") == 2
+    assert repeated == normalized
+
+
+def test_grounded_fact_completion_keeps_compound_dataset_quantities_in_one_claim() -> None:
+    evidence = (
+        "Our dataset SA-1B consists of 11M diverse images and 1.1B high-quality "
+        "segmentation masks. We produced 1.1B masks, 99.1% of which were "
+        "generated fully automatically."
+    )
+    completed = finalize_runtime._complete_grounded_requested_source_facts(
+        "SAM uses a three-stage data engine [1].",
+        prompt="How many images and masks are in SA-1B and what share was automatic?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "sam.en.md",
+                    "evidence_quote": evidence,
+                    "compound_same_page_evidence": True,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "sam.en.md"}}],
+    )
+
+    quantitative_claim = next(
+        paragraph for paragraph in completed.split("\n\n") if "Reported quantitative result" in paragraph
+    )
+    assert all(value in quantitative_claim for value in ("11M", "1.1B", "99.1%"))
+    assert quantitative_claim.count("[1]") == 1
+
+
+def test_grounded_fact_completion_expands_prompt_acronym_on_independent_cited_claims() -> None:
+    evidence = (
+        "The retrieval component is based on DPR. We use a pre-trained bi-encoder "
+        "from DPR to initialize our retriever and build the document index."
+    )
+    completed = finalize_runtime._complete_grounded_requested_source_facts(
+        "Upstream paper: DPR was introduced by Karpukhin et al.\n"
+        "RAG's retriever uses DPR's pre-trained bi-encoder [1].",
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse prior work? "
+            "Identify Karpukhin and explain its retriever."
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "rag.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "rag.en.md"}}],
+    )
+
+    assert "Dense Passage Retrieval (DPR) was introduced by Karpukhin" in completed
+    assert "retriever uses Dense Passage Retrieval (DPR)'s pre-trained bi-encoder" in completed
+
+
+def test_origin_system_b_marker_moves_from_experiment_to_upstream_identity() -> None:
+    marker = "[[CITE:s20cdc71c:26]]"
+    answer = (
+        "Upstream paper: DPR comes from Karpukhin et al., Dense Passage Retrieval "
+        "for Open-Domain Question Answering.\n\n"
+        f"RAG follows DPR's experimental setup for WebQuestions {marker}."
+    )
+
+    relocated = finalize_runtime._relocate_planned_origin_system_b_markers(
+        answer,
+        citation_plan={
+            "slots": [
+                {
+                    "claim_type": "origin",
+                    "preferred_system": "system_b",
+                    "topic": "DPR",
+                    "sid": "s20cdc71c",
+                    "candidate_refs": [26],
+                }
+            ]
+        },
+    )
+
+    lines = relocated.splitlines()
+    assert marker in lines[0]
+    assert marker not in lines[-1]
+    assert relocated.count(marker) == 1
+
+
+def test_grounded_fact_completion_restores_missing_ddpm_relation_slots() -> None:
+    objective = (
+        "3.4 Simplified training objective. The t > 1 cases correspond to an "
+        "unweighted version of Eq. (12). L_simple predicts epsilon."
+    )
+    tradeoff = (
+        "4 Experiments / 4.1 Sample quality. Training on the true variational "
+        "bound yields better codelengths, but the simplified objective yields "
+        "the best sample quality."
+    )
+    completed = finalize_runtime._complete_grounded_requested_source_facts(
+        "DDPM 的 L_simple 让网络预测 epsilon [1]。\n\n样本质量与码长的权衡。",
+        prompt=(
+            "DDPM 的 L_simple 实际让网络预测什么？它和变分下界的加权有何不同，"
+            "论文报告的样本质量与码长权衡是什么？"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "ddpm.en.md",
+                    "evidence_quote": objective,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "ddpm.en.md",
+                    "evidence_quote": tradeoff,
+                },
+            ]
+        },
+        answer_hits=[{"text": objective, "meta": {"source_path": "ddpm.en.md"}}],
+    )
+
+    assert "unweighted version" in completed
+    assert "true variational bound" in completed
+    assert "better codelengths" in completed
+    assert "best sample quality" in completed
+    assert completed.count("[1]") >= 3
+
+
+def test_exact_source_answer_completes_ddpm_objective_and_tradeoff() -> None:
+    objective = (
+        "3.4 Simplified training objective. The t > 1 cases correspond to an "
+        "unweighted version of Eq. (12). L_simple predicts epsilon."
+    )
+    tradeoff = (
+        "We find that training on the true variational bound yields better "
+        "codelengths, but the simplified objective yields the best sample quality."
+    )
+    completed = finalize_runtime._complete_exact_source_bound_answer_claims(
+        "Provider returned an incomplete outline.",
+        prompt=(
+            "DDPM 的 L_simple 实际让网络预测什么？它和变分下界的加权有何不同，"
+            "论文报告的样本质量与码长权衡是什么？"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "ddpm.en.md",
+                    "evidence_quote": objective,
+                },
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "ddpm.en.md",
+                    "evidence_quote": tradeoff,
+                },
+            ]
+        },
+        answer_hits=[{"text": objective, "meta": {"source_path": "ddpm.en.md"}}],
+    )
+
+    assert "L_{\\text{simple}}" in completed
+    assert "unweighted version" in completed
+    assert "true variational bound" in completed
+    assert "better codelengths" in completed
+    assert "best sample quality" in completed
+    assert completed.count("[1]") == 2
+
+
+def test_grounded_fact_completion_keeps_same_slot_scale_sentences_one_cited_claim() -> None:
+    evidence = (
+        "CLIP was trained on 400 million image-text pairs collected from the internet. "
+        "This scale exceeds earlier natural-language-supervision datasets."
+    )
+    completed = finalize_runtime._complete_grounded_requested_source_facts(
+        "Regarding pretraining data scale, CLIP was trained on 400 million image-text "
+        "pairs collected from the internet [1]. This scale was a key motivation [1].",
+        prompt="What was CLIP's pretraining data scale?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "clip.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[{"text": evidence, "meta": {"source_path": "clip.en.md"}}],
+    )
+
+    assert "internet; This scale was a key motivation [1]." in completed
+    assert completed.count("[1]") == 1

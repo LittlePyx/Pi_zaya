@@ -5250,7 +5250,10 @@ def _annotate_inpaper_citations_with_hover_meta(
             if target_keys & slot_keys:
                 source_matched.append(slot)
         claim_tokens = evidence_alignment_tokens(answer_claim)
-        candidates: list[tuple[tuple[int, int, int, int, int, int, int], dict]] = []
+        claim_quantities = _system_a_fact_quantities(answer_claim)
+        candidates: list[
+            tuple[tuple[int, int, int, int, int, int, int, int, int], dict]
+        ] = []
         seen_slots: set[int] = set()
         # Visible answer numbers can be reassigned after retrieval reranking.
         # When the marker's resolved paper identity is available, ignore raw
@@ -5335,10 +5338,21 @@ def _annotate_inpaper_citations_with_hover_meta(
                     )
                 )
             )
+            evidence_quantities = _system_a_fact_quantities(evidence_text)
+            covered_quantity_count = sum(
+                _quantity_is_covered(quantity, evidence_quantities)
+                for quantity in claim_quantities
+            )
+            all_claim_quantities_covered = int(
+                bool(claim_quantities)
+                and covered_quantity_count == len(claim_quantities)
+            )
             candidates.append(
                 (
                     (
                         quantitative_comparison_fit,
+                        all_claim_quantities_covered,
+                        covered_quantity_count,
                         _ordered_ascii_phrase_score(answer_claim, evidence_text),
                         overlap,
                         overlap_density,
@@ -6031,11 +6045,15 @@ def _annotate_inpaper_citations_with_hover_meta(
                 )
             else:
                 src_name = _display_source_name(sp)
-            plan_slot = _plan_slot_for_system_a(
-                int(n),
-                sp,
-                src_name,
-                answer_claim=answer_claim,
+            plan_slot = (
+                {}
+                if bool(meta_h.get("citation_plan_comparison_rescue"))
+                else _plan_slot_for_system_a(
+                    int(n),
+                    sp,
+                    src_name,
+                    answer_claim=answer_claim,
+                )
             )
             original_primary_evidence = dict(primary_evidence)
             if plan_slot:
@@ -7113,7 +7131,12 @@ def _annotate_inpaper_citations_with_hover_meta(
                         items.append(f"[{int(n)}]")
                     continue
                 occurrence_budget_key = ""
-                if hit_detail and not bool(detail.get("is_inpaper")):
+                if (
+                    hit_detail
+                    and not bool(detail.get("is_inpaper"))
+                    and str(detail.get("selection_reason") or "").strip().lower()
+                    != "comparison_source_block_rescue"
+                ):
                     occurrence_plan_slot = _plan_slot_for_system_a(
                         int(n),
                         str(detail.get("source_path") or ""),

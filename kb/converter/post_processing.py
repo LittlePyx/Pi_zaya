@@ -901,12 +901,19 @@ def _merge_obvious_body_continuation_lines(md: str) -> str:
     heading_re = re.compile(r"^\s*#{1,6}\s+")
     table_re = re.compile(r"^\s*\|")
     ref_entry_re = re.compile(r"^\s*\[\s*\d{1,4}\s*\]\s+")
+    page_marker_re = re.compile(r"^\s*<!--\s*kb_page:\s*\d+\s*-->\s*$", re.IGNORECASE)
 
     def _is_body_line(s: str) -> bool:
         st = (s or "").strip()
         if not st:
             return False
-        if image_re.match(st) or caption_re.match(st) or heading_re.match(st) or table_re.match(st):
+        if (
+            image_re.match(st)
+            or caption_re.match(st)
+            or heading_re.match(st)
+            or table_re.match(st)
+            or page_marker_re.match(st)
+        ):
             return False
         if re.match(r"^\*[^*].*\*$", st):
             return False
@@ -918,10 +925,15 @@ def _merge_obvious_body_continuation_lines(md: str) -> str:
             return False
         return True
 
-    def _looks_incomplete_prefix(s: str) -> bool:
-        st = _normalize_text(s or "").strip()
-        if not _is_body_line(st):
+    def _looks_incomplete_prefix(s: str, *, known_body: bool = False) -> bool:
+        raw = (s or "").rstrip()
+        if not known_body and not _is_body_line(raw):
             return False
+        # Only the tail controls every continuation rule below.  Once the loop
+        # has established that ``merged`` consists solely of body lines,
+        # repeatedly normalizing and reclassifying the growing paragraph makes
+        # the pass quadratic on long papers without changing its decision.
+        st = _normalize_text(raw[-512:]).strip()
         if st.endswith("-"):
             return True
         if st.endswith((".", "!", "?", ":", ";")):
@@ -987,7 +999,10 @@ def _merge_obvious_body_continuation_lines(md: str) -> str:
                 k += 1
             if blank_count > 1 or k >= len(lines) or not _is_body_line(lines[k]):
                 break
-            if not (_looks_incomplete_prefix(merged) or _looks_continuation(lines[k])):
+            if not (
+                _looks_incomplete_prefix(merged, known_body=True)
+                or _looks_continuation(lines[k])
+            ):
                 break
             merged = _join_lines(merged, lines[k])
             j = k + 1
@@ -1006,12 +1021,19 @@ def _repair_sentence_split_by_figure_blocks(md: str) -> str:
     caption_re = re.compile(r"^\s*\*\*(?:Figure|Table)\s+[A-Za-z0-9]+\.\*\*")
     heading_re = re.compile(r"^\s*#{1,6}\s+")
     table_re = re.compile(r"^\s*\|")
+    page_marker_re = re.compile(r"^\s*<!--\s*kb_page:\s*\d+\s*-->\s*$", re.IGNORECASE)
 
     def _is_body_line(s: str) -> bool:
         st = (s or "").strip()
         if not st:
             return False
-        if image_re.match(st) or caption_re.match(st) or heading_re.match(st) or table_re.match(st):
+        if (
+            image_re.match(st)
+            or caption_re.match(st)
+            or heading_re.match(st)
+            or table_re.match(st)
+            or page_marker_re.match(st)
+        ):
             return False
         if re.match(r"^\*[^*].*\*$", st):
             return False
@@ -1118,7 +1140,14 @@ def _looks_like_numbered_formula_fragment(text: str) -> bool:
 
 
 def _looks_like_formulaish_heading_text(text: str) -> bool:
-    t = _normalize_text(text or "").strip()
+    raw = (text or "").strip()
+    # This classifier only decides whether a short line could be a heading.
+    # Vision conversion can emit an entire multi-sentence paragraph on one
+    # line; running heading regexes (especially repeated-number full matches)
+    # over those lines can backtrack for minutes during finalization.
+    if len(raw) > 512:
+        return False
+    t = _normalize_text(raw).strip()
     if not t:
         return False
     # Plot axes and tick labels sometimes arrive as Markdown headings. They
@@ -1189,6 +1218,31 @@ def _demote_formulaish_headings(md: str) -> str:
             out.append(title)
             continue
         out.append(title)
+    return "\n".join(out)
+
+
+def _demote_questionnaire_answer_headings(md: str) -> str:
+    """Restore questionnaire answers captured as long H2 headings.
+
+    Dataset cards sometimes place a numbered question and its answer on the
+    same extracted line.  A long heading containing a completed question plus
+    trailing answer prose is not document structure; removing only the heading
+    prefix preserves every source word and keeps chunking honest.
+    """
+
+    out: list[str] = []
+    for line in str(md or "").splitlines():
+        match = re.match(r"^##\s+((?:\d{1,2}\.)\s+.+)$", line.strip())
+        content = str(match.group(1) or "").strip() if match else ""
+        if (
+            match
+            and "?" in content
+            and not content.endswith("?")
+            and len(content.split()) > 15
+        ):
+            out.append(content)
+        else:
+            out.append(line)
     return "\n".join(out)
 
 
@@ -2922,6 +2976,7 @@ def postprocess_markdown(md: str) -> str:
     md = _insert_missing_introduction_heading(md)
     md = _promote_known_plain_subheadings(md)
     md = _demote_formulaish_headings(md)
+    md = _demote_questionnaire_answer_headings(md)
     md = _enforce_heading_policy(md)
     md = _demote_panel_headings(md)
     md = _rebalance_custom_headings_within_structural_sections(md)

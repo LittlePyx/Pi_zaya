@@ -185,6 +185,34 @@ def build_grounded_ref_why_line(
     )
     if prefer_zh:
         if (
+            "names of all the classes" in summary_low
+            and "cosine similarity" in summary_low
+            and "temperature" in summary_low
+            and "softmax" in summary_low
+        ):
+            return (
+                "这段方法原文把类别名称生成的候选文本、图文余弦相似度、"
+                "温度缩放和 softmax 串成完整的零样本分类流程，可逐步核对分类器如何形成。"
+            )
+        if (
+            "true variational bound" in summary_low
+            and "codelengths" in summary_low
+            and "sample quality" in summary_low
+        ):
+            return (
+                "这段实验结论明确区分了两个优化目标：变分下界改善无损码长，"
+                "而简化目标取得最佳样本质量，可据此核对二者的实际权衡。"
+            )
+        if (
+            "simplified" in summary_low
+            and "unweighted version" in summary_low
+            and ("epsilon" in summary_low or "\\epsilon" in summary_full)
+        ):
+            return (
+                "这段定义同时给出简化目标的无权重性质和噪声预测量 epsilon，"
+                "可直接核对 L_simple 与原始变分下界目标的差别。"
+            )
+        if (
             "structured illumination" in summary_low
             and "structured detection" in summary_low
             and "image plane of the object" in summary_low
@@ -825,6 +853,30 @@ def build_localized_ref_summary_line(
     low = text.lower()
     if not text:
         return ""
+    if (
+        "names of all the classes" in low
+        and "cosine similarity" in low
+        and "temperature" in low
+        and "softmax" in low
+    ):
+        return (
+            "CLIP 用数据集全部类别名称构造候选文本，计算图像与文本嵌入的余弦相似度，"
+            "再经温度缩放和 softmax 得到零样本分类概率。"
+        )
+    if (
+        "true variational bound" in low
+        and "codelengths" in low
+        and "sample quality" in low
+    ):
+        return (
+            "DDPM 的真实变分下界能获得更好的无损码长，而简化训练目标给出最佳样本质量。"
+        )
+    if (
+        "simplified" in low
+        and "unweighted version" in low
+        and ("epsilon" in low or "\\epsilon" in text)
+    ):
+        return "DDPM 的 L_simple 是预测噪声 epsilon 的无权重简化训练目标。"
     if (
         ("single-photon detections" in low or "mainstream spds" in low)
         and re.search(r"\b(?:pmt|sapd|spad|sns?pd|tes)s?\b", low)

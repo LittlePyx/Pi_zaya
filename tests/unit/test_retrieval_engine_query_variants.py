@@ -104,6 +104,65 @@ def test_deterministic_query_variants_cover_both_named_unrolled_networks() -> No
     assert "shrinkage threshold" in joined
 
 
+def test_deterministic_query_variants_split_unmapped_named_methods() -> None:
+    variants = _deterministic_query_variants(
+        "FlashAttention \u548c LoRA \u90fd\u88ab\u79f0\u4e3a\u9ad8\u6548\uff0c\u4f46\u5b83\u4eec\u4f18\u5316\u7684\u5bf9\u8c61\u6709\u4ec0\u4e48\u4e0d\u540c\uff1f"
+    )
+
+    assert variants == ["FlashAttention", "LoRA"]
+
+
+def test_unmapped_named_methods_survive_lossy_translation(monkeypatch) -> None:
+    retriever = BM25Retriever(
+        [
+            {
+                "id": "flashattention",
+                "text": (
+                    "FlashAttention is an IO-aware exact attention algorithm that "
+                    "reduces HBM traffic by tiling computations into SRAM."
+                ),
+                "meta": {"source_path": "library/flashattention.en.md"},
+            },
+            {
+                "id": "lora",
+                "text": (
+                    "LoRA is a low-rank adaptation method that reduces trainable "
+                    "parameters and adds no inference latency after merging."
+                ),
+                "meta": {"source_path": "library/lora.en.md"},
+            },
+            {
+                "id": "distractor",
+                "text": "A generic survey of efficient model training and deployment.",
+                "meta": {"source_path": "library/survey.en.md"},
+            },
+        ]
+    )
+    monkeypatch.setattr(
+        "kb.retrieval_engine._translate_query_for_search",
+        lambda _settings, _query: "LoRA motivation",
+    )
+
+    hits, _scores, _used_query, _used_translation, variants = _search_hits_with_fallback(
+        "FlashAttention \u548c LoRA \u90fd\u88ab\u79f0\u4e3a\u9ad8\u6548\uff0c\u8bf7\u6bd4\u8f83\u5b83\u4eec\u3002",
+        retriever,
+        2,
+        SimpleNamespace(api_key=None, query_expansion_enabled=False),
+        whole_library=True,
+    )
+
+    assert {hit["meta"]["source_path"] for hit in hits[:2]} == {
+        "library/flashattention.en.md",
+        "library/lora.en.md",
+    }
+    assert variants == [
+        "FlashAttention \u548c LoRA \u90fd\u88ab\u79f0\u4e3a\u9ad8\u6548\uff0c\u8bf7\u6bd4\u8f83\u5b83\u4eec\u3002",
+        "LoRA motivation",
+        "FlashAttention",
+        "LoRA",
+    ]
+
+
 def test_deterministic_query_variants_expand_thick_sample_tradeoff_terms() -> None:
     variants = _deterministic_query_variants("s2ISM 这篇说的 trade-off 是什么？为什么厚样本会麻烦？")
     joined = " ".join(variants).lower()

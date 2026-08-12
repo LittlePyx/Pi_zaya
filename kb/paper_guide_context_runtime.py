@@ -458,6 +458,7 @@ def _prepare_paper_guide_prompt_context(
                 source_path=paper_guide_focus_source_path or paper_guide_direct_source_path or paper_guide_bound_source_path,
                 support_slots=paper_guide_support_slots,
                 cards=paper_guide_evidence_cards,
+                answer_hits=answer_hits,
                 max_items=3,
             )
             if paper_guide_reference_opportunities:

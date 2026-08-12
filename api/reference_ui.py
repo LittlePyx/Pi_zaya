@@ -4412,9 +4412,34 @@ def _finalize_polished_ref_card_locale(
             ui["summary_generation"] = "source_grounded"
 
     if why_line and not _ref_copy_matches_target_locale(why_line, target_locale):
-        # Relevance is explanatory UI copy.  A wrong-language fallback is more
-        # confusing than omitting it until a later successful polish.
-        why_line = ""
+        # Relevance is explanatory UI copy. Retry the deterministic,
+        # prompt-aligned builder against the already localized Guide before
+        # suppressing a wrong-language provider fallback. This keeps the card
+        # useful without translating or paraphrasing source evidence.
+        recovered_why = _build_prompt_aligned_ref_why_line_v3(
+            prompt=prompt,
+            display_name=display_name,
+            heading_path=heading_path,
+            summary_line=localized_summary,
+            why_line="",
+        )
+        if (
+            recovered_why
+            and _ref_copy_matches_target_locale(recovered_why, target_locale)
+            and not _looks_generic_ref_why_line(recovered_why)
+            and _ref_copy_similarity_ratio(localized_summary, recovered_why) < 0.94
+        ):
+            why_line = recovered_why
+            ui["why_generation"] = "deterministic_grounded"
+            why_basis = _build_ref_why_basis_meta(
+                prompt=prompt,
+                why_generation="deterministic_grounded",
+                why_line=recovered_why,
+            )
+            ui["why_basis"] = str(why_basis.get("why_basis") or "")
+        else:
+            # A wrong-language fallback is more confusing than omitting it.
+            why_line = ""
 
     if localized_summary and why_line and _ref_copy_similarity_ratio(localized_summary, why_line) >= 0.94:
         recovered = _derive_localized_guide_from_why_line(
@@ -8177,6 +8202,39 @@ def _authoritative_summary_source_block(
     return candidates[0][1]
 
 
+def _dedupe_final_ref_card_copy(
+    *,
+    prompt: str,
+    display_name: str,
+    heading_path: str,
+    summary_line: str,
+    why_line: str,
+    why_generation: str,
+) -> tuple[str, str]:
+    """Keep final Guide and relevance copy distinct after late overrides."""
+
+    if not (
+        summary_line
+        and why_line
+        and _ref_copy_similarity_ratio(summary_line, why_line) >= 0.94
+    ):
+        return why_line, why_generation
+    distinct_why = _build_prompt_aligned_ref_why_line_v3(
+        prompt=prompt,
+        display_name=display_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        why_line="",
+    )
+    if (
+        distinct_why
+        and not _looks_generic_ref_why_line(distinct_why)
+        and _ref_copy_similarity_ratio(summary_line, distinct_why) < 0.94
+    ):
+        return distinct_why, "deterministic_grounded"
+    return "", why_generation
+
+
 def build_hit_ui_meta(
     hit: dict,
     *,
@@ -8756,6 +8814,16 @@ def build_hit_ui_meta(
     if isinstance(reader_open, dict) and primary_evidence:
         reader_open = dict(reader_open)
         reader_open["primaryEvidence"] = dict(primary_evidence)
+    # Late exact-evidence overrides can replace the Guide after the normal
+    # localization/copy pass. Recheck the final pair, not only its earlier seed.
+    why_line, why_generation = _dedupe_final_ref_card_copy(
+        prompt=prompt,
+        display_name=display_name,
+        heading_path=heading_path,
+        summary_line=summary_line,
+        why_line=why_line,
+        why_generation=why_generation,
+    )
     basis_bundle = _build_ref_card_basis_bundle(
         prompt=prompt,
         citation_meta=citation_meta if isinstance(citation_meta, dict) else {},

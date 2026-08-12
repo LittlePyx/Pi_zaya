@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from functools import lru_cache
 from math import log
@@ -9,12 +10,17 @@ from typing import Any, Mapping, Sequence
 from kb.config import CITATION_OFFSET
 from kb.evidence_text import looks_bibliography_entry_context
 from kb.evidence_term_mapping import evidence_alignment_tokens
-from kb.paper_guide_retrieval_runtime import _paper_guide_semantic_query_terms
+from kb.paper_guide_retrieval_runtime import (
+    _paper_guide_requested_relation_anchors,
+    _paper_guide_semantic_query_terms,
+    _paper_guide_source_relation_anchors,
+)
 from kb.reference_query_family import (
     extract_requested_paper_count,
     prompt_requests_answer_audit,
     strip_negated_reference_trail_requests,
 )
+from kb.source_blocks import normalize_match_text
 from kb.table_index import table_chunks_from_markdown
 
 
@@ -2480,10 +2486,52 @@ def _system_b_slots(
     *,
     intent: str,
     max_items: int = 3,
+    prompt: str = "",
 ) -> list[dict[str, Any]]:
     slots: list[dict[str, Any]] = []
     seen: set[tuple[str, int]] = set()
-    for raw0 in list(opportunities or []):
+    prompt_tokens = _ranking_tokens(
+        f"{prompt} {' '.join(_paper_guide_semantic_query_terms(prompt))}"
+    )
+    ranked_opportunities: list[tuple[int, int, int, Mapping[str, Any]]] = []
+    for opportunity_index, raw0 in enumerate(list(opportunities or [])):
+        if not isinstance(raw0, Mapping):
+            continue
+        opportunity_surface = " ".join(
+            str(raw0.get(key) or "").strip()
+            for key in (
+                "label",
+                "topic",
+                "title",
+                "ref_title",
+                "ref_raw",
+                "evidence_quote",
+                "quote",
+                "snippet",
+                "heading_path",
+            )
+            if str(raw0.get(key) or "").strip()
+        )
+        identity_surface = " ".join(
+            str(raw0.get(key) or "").strip()
+            for key in (
+                "label",
+                "topic",
+                "title",
+                "ref_title",
+                "ref_raw",
+            )
+            if str(raw0.get(key) or "").strip()
+        )
+        identity_overlap = len(prompt_tokens & _ranking_tokens(identity_surface))
+        overlap = len(prompt_tokens & _ranking_tokens(opportunity_surface))
+        ranked_opportunities.append(
+            (identity_overlap, overlap, -opportunity_index, raw0)
+        )
+    ranked_opportunities.sort(
+        key=lambda item: (item[0], item[1], item[2]), reverse=True
+    )
+    for _identity_overlap, _overlap, _order, raw0 in ranked_opportunities:
         if not isinstance(raw0, Mapping):
             continue
         raw = dict(raw0)
@@ -2581,6 +2629,71 @@ def _system_a_slots(
             # though the retrieved paragraph contained them verbatim.
             max_len=1400,
         )
+        section_page_start = _nonnegative_int(raw.get("section_page_start"))
+        section_heading_text = _first_text(
+            raw,
+            "section_heading_text",
+            max_len=180,
+        )
+        heading_leaf = str(heading).rsplit(" / ", 1)[-1].strip()
+        heading_question_overlap = len(
+            original_question_terms & _ranking_tokens(heading_leaf)
+        )
+        if (
+            str(raw.get("evidence_selection_reason") or "").strip()
+            == "requested_relation_bundle"
+            and heading_leaf
+            and heading_question_overlap >= 2
+            and normalize_match_text(heading_leaf)
+            not in normalize_match_text(snippet)
+        ):
+            # A requested relation can be named partly by its immutable source
+            # heading (for example, ``Retriever: DPR``) and partly by the body
+            # sentences below it. Preserve that source-verbatim heading in the
+            # evidence bundle instead of asking the renderer to infer it.
+            snippet = f"{heading_leaf}\n{snippet}"[:1400].rstrip()
+        if (
+            source_path
+            and heading
+            and section_page_start <= 0
+            and not (
+                str(raw.get("block_id") or "").strip()
+                or str(raw.get("anchor_id") or "").strip()
+            )
+            and len(
+                original_question_terms
+                & _ranking_tokens(heading_leaf)
+            )
+            >= 2
+        ):
+            normalized_heading = normalize_match_text(heading)
+            section_pages = [
+                int(page_num)
+                for record_heading, _sentence, page_num in _source_sentence_records(
+                    source_path
+                )
+                if int(page_num or 0) > 0
+                and normalize_match_text(record_heading) == normalized_heading
+            ]
+            content_page = _nonnegative_int(raw.get("page_start"))
+            if section_pages and content_page > 0:
+                inferred_section_page = min(section_pages)
+                if inferred_section_page < content_page:
+                    section_page_start = inferred_section_page
+                    section_heading_text = (
+                        section_heading_text
+                        or heading_leaf
+                    )
+        if (
+            section_page_start > 0
+            and section_heading_text
+            and normalize_match_text(section_heading_text)
+            not in normalize_match_text(snippet)
+        ):
+            # The heading and the first equation can straddle adjacent PDF
+            # pages.  Both are immutable source blocks, so keep the concise
+            # heading with the content and expose the truthful section range.
+            snippet = f"{section_heading_text}\n{snippet}"[:1400].rstrip()
         identity = " ".join([source_path, heading, snippet]).lower()
         if (
             focus_multi_source_evidence
@@ -2658,8 +2771,34 @@ def _system_a_slots(
                 if incoming_page_start > 0:
                     existing["page_start"] = incoming_page_start
                     existing["page_end"] = incoming_page_end or incoming_page_start
+            try:
+                incoming_retrieval_score = float(
+                    raw.get("_retrieval_score") or raw.get("retrieval_score") or 0.0
+                )
+            except (TypeError, ValueError):
+                incoming_retrieval_score = 0.0
+            try:
+                existing_retrieval_score = float(
+                    existing.get("retrieval_score")
+                    or existing.get("_retrieval_score")
+                    or 0.0
+                )
+            except (TypeError, ValueError):
+                existing_retrieval_score = 0.0
+            if incoming_retrieval_score > existing_retrieval_score:
+                # An unnumbered support slot can be identical to a later
+                # targeted-scan passage. Preserve the stronger immutable
+                # passage score when those two obligations are deduplicated.
+                existing["retrieval_score"] = incoming_retrieval_score
             return
-        identity = "|".join([source_path.lower(), heading.lower(), snippet[:120].lower(), str(hit_num)])
+        snippet_sig = hashlib.sha1(
+            re.sub(r"\s+", " ", snippet).strip().lower().encode(
+                "utf-8", "ignore"
+            )
+        ).hexdigest()[:16]
+        identity = "|".join(
+            [source_path.lower(), heading.lower(), snippet_sig, str(hit_num)]
+        )
         if not source_path or not snippet or identity in seen:
             return
         seen.add(identity)
@@ -2667,8 +2806,16 @@ def _system_a_slots(
         candidate_hits = [int(hit_num)] if int(hit_num or 0) > 0 else []
         if candidate_hits:
             candidate_alignment_scores[len(slots)] = int(hit_alignment_score or 0)
-        page_start = page_override or _nonnegative_int(raw.get("page_start"))
-        page_end = page_override or _nonnegative_int(raw.get("page_end"), default=page_start)
+        content_page_start = page_override or _nonnegative_int(raw.get("page_start"))
+        page_start = (
+            min(content_page_start, section_page_start)
+            if content_page_start > 0 and section_page_start > 0
+            else content_page_start or section_page_start
+        )
+        page_end = page_override or _nonnegative_int(
+            raw.get("page_end"),
+            default=content_page_start or page_start,
+        )
         slots.append(
             {
                 "claim_type": _first_text(raw, "claim_type", max_len=80) or "paper_evidence",
@@ -2692,6 +2839,11 @@ def _system_a_slots(
                 "page_start": page_start,
                 "page_end": page_end,
                 "strict_locate": bool(raw.get("strict_locate")),
+                "source_passage_bundle": bool(raw.get("source_passage_bundle")),
+                "compound_same_page_evidence": bool(
+                    raw.get("compound_same_page_evidence")
+                ),
+                "retrieval_score": raw.get("_retrieval_score") or raw.get("retrieval_score") or 0.0,
                 "candidate_refs": _positive_ints(raw.get("candidate_refs"), limit=4),
                 "instruction": "Use this for factual claims supported by the retrieved paper text itself.",
             }
@@ -2706,6 +2858,830 @@ def _system_a_slots(
         for raw in list(support_slots or [])
         if isinstance(raw, Mapping)
     ]
+    bundled_passage_slots: list[dict[str, Any]] = []
+    for hit_num, hit0 in enumerate(list(answer_hits or []), start=1):
+        if not isinstance(hit0, Mapping):
+            continue
+        meta = dict(hit0.get("meta") or {}) if isinstance(hit0.get("meta"), Mapping) else {}
+        passages = meta.get("source_passages")
+        if not bool(meta.get("same_source_evidence_bundle")) or not isinstance(passages, list):
+            continue
+        source_path = str(meta.get("source_path") or "").strip()
+        source_name = str(meta.get("source_name") or "").strip()
+        for passage0 in passages:
+            if not isinstance(passage0, Mapping):
+                continue
+            passage = dict(passage0)
+            evidence = str(passage.get("text") or "").strip()
+            if not source_path or not evidence:
+                continue
+            block_id = str(passage.get("block_id") or "").strip()
+            anchor_id = str(passage.get("anchor_id") or "").strip()
+            bundled_passage_slots.append(
+                {
+                    "source_path": source_path,
+                    "source_name": source_name,
+                    "heading_path": str(passage.get("heading_path") or "").strip(),
+                    "evidence_quote": evidence,
+                    "block_id": block_id,
+                    "anchor_id": anchor_id,
+                    "anchor_kind": str(passage.get("anchor_kind") or "").strip(),
+                    "page_start": passage.get("page_start"),
+                    "page_end": passage.get("page_end") or passage.get("page_start"),
+                    "section_page_start": passage.get("section_page_start"),
+                    "section_heading_text": passage.get("section_heading_text"),
+                    "strict_locate": bool(block_id or anchor_id),
+                    "source_passage_bundle": True,
+                    "_candidate_hit_num": hit_num,
+                    "_retrieval_score": passage.get("score") or 0.0,
+                }
+            )
+
+    if bundled_passage_slots:
+        # A bundled answer hit deliberately gives the model one citeable DOC,
+        # while its component SourceBlocks retain distinct page locators. Rank
+        # those blocks together with preflight support so the visible citation
+        # can bind to the exact claim instead of the bundle's first paragraph.
+        combined_slots = [
+            {**dict(raw), "_candidate_hit_num": 0}
+            for raw in ranked_support_slots
+        ] + bundled_passage_slots
+        ranking_candidates = [
+            (
+                candidate_index,
+                {
+                    "text": _first_text(raw, "evidence_quote", "text", max_len=1800),
+                    "meta": {
+                        "source_path": raw.get("source_path"),
+                        "source_name": raw.get("source_name"),
+                        "heading_path": raw.get("heading_path") or raw.get("heading"),
+                        "evidence_quote": _first_text(
+                            raw,
+                            "evidence_quote",
+                            "text",
+                            max_len=1800,
+                        ),
+                    },
+                },
+            )
+            for candidate_index, raw in enumerate(combined_slots, start=1)
+        ]
+        ranked_candidate_indices = [
+            candidate_index
+            for candidate_index, _candidate in _rank_system_a_answer_hits(
+                ranking_candidates,
+                ranking_texts=ranking_texts,
+            )
+        ]
+        ranked_combined_slots = [
+            combined_slots[candidate_index - 1]
+            for candidate_index in ranked_candidate_indices
+            if 1 <= candidate_index <= len(combined_slots)
+        ]
+
+        semantic_query_terms = _paper_guide_semantic_query_terms(original_question)
+        requested_relation_anchors = _paper_guide_requested_relation_anchors(
+            set(semantic_query_terms)
+        )
+        system_a_relation_anchors = {
+            relation
+            for relation in requested_relation_anchors
+            if not relation.endswith("_reference")
+        }
+        if system_a_relation_anchors:
+            # Retrieval bundles are intentionally capped, so a broad Abstract
+            # or appendix can otherwise consume every retained SourceBlock
+            # before a later exact method/count paragraph reaches the citation
+            # planner. Build a small extractive coverage set directly from the
+            # current paper's page-marked sentences. No evidence is synthesized:
+            # every member remains source-verbatim and page-local.
+            relation_bundles: list[dict[str, Any]] = []
+            relation_source_keys: list[tuple[str, str, int]] = []
+            for raw in ranked_combined_slots:
+                relation_source_path = str(raw.get("source_path") or "").strip()
+                relation_source_key = relation_source_path.replace("\\", "/").lower()
+                if not relation_source_path or any(
+                    relation_source_key == existing[1]
+                    for existing in relation_source_keys
+                ):
+                    continue
+                relation_hit_num = int(raw.get("_candidate_hit_num") or 0)
+                relation_source_keys.append(
+                    (relation_source_path, relation_source_key, relation_hit_num)
+                )
+            for relation_source_path, _relation_source_key, relation_hit_num in relation_source_keys:
+                page_rows: dict[
+                    tuple[int, str], list[tuple[str, set[str]]]
+                ] = {}
+                for record_heading, sentence, page_num in _source_sentence_records(
+                    relation_source_path
+                ):
+                    if int(page_num or 0) <= 0 or not str(sentence or "").strip():
+                        continue
+                    if _BIBLIOGRAPHY_HEADING_RE.search(str(record_heading or "")):
+                        continue
+                    sentence_relations = (
+                        _paper_guide_source_relation_anchors(str(sentence or ""))
+                        & system_a_relation_anchors
+                    )
+                    if not sentence_relations:
+                        continue
+                    page_rows.setdefault(
+                        (int(page_num), str(record_heading or "").strip()), []
+                    ).append((str(sentence).strip(), sentence_relations))
+                uncovered_relations = set(system_a_relation_anchors)
+                remaining_pages = list(page_rows.items())
+                while uncovered_relations and remaining_pages:
+                    scored_pages: list[
+                        tuple[int, int, int, int, tuple[int, str], list[tuple[str, set[str]]]]
+                    ] = []
+                    for page_key, rows in remaining_pages:
+                        page_relations = set().union(*(relations for _sentence, relations in rows))
+                        new_relations = page_relations & uncovered_relations
+                        if not new_relations:
+                            continue
+                        page_text = " ".join(sentence for sentence, _relations in rows)
+                        scored_pages.append(
+                            (
+                                len(new_relations),
+                                len(page_relations),
+                                len(original_question_terms & _ranking_tokens(page_text)),
+                                -int(page_key[0]),
+                                page_key,
+                                rows,
+                            )
+                        )
+                    if not scored_pages:
+                        break
+                    _new_count, _all_count, _overlap, _page_order, page_key, rows = max(
+                        scored_pages,
+                        key=lambda item: (item[0], item[1], item[2], item[3]),
+                    )
+                    selected_sentences: list[str] = []
+                    selected_relations: set[str] = set()
+                    page_uncovered = set(uncovered_relations)
+                    remaining_rows = list(rows)
+                    while page_uncovered and remaining_rows:
+                        useful_rows = [
+                            (sentence, sentence_relations)
+                            for sentence, sentence_relations in remaining_rows
+                            if sentence_relations & page_uncovered
+                        ]
+                        if not useful_rows:
+                            break
+                        sentence, sentence_relations = max(
+                            useful_rows,
+                            key=lambda item: (
+                                len(item[1] & page_uncovered),
+                                -len(item[0]),
+                                len(original_question_terms & _ranking_tokens(item[0])),
+                            ),
+                        )
+                        if sentence not in selected_sentences:
+                            selected_sentences.append(sentence)
+                        newly_selected = sentence_relations & page_uncovered
+                        selected_relations.update(newly_selected)
+                        page_uncovered.difference_update(newly_selected)
+                        remaining_rows = [
+                            item for item in remaining_rows if item[0] != sentence
+                        ]
+                    evidence_quote = " ".join(selected_sentences)[:1400].rstrip()
+                    if evidence_quote:
+                        relation_bundles.append(
+                            {
+                                "source_path": relation_source_path,
+                                "heading_path": page_key[1],
+                                "evidence_quote": evidence_quote,
+                                "page_start": page_key[0],
+                                "page_end": page_key[0],
+                                "source_passage_bundle": True,
+                                "compound_same_page_evidence": len(selected_sentences) > 1,
+                                "evidence_selection_reason": "requested_relation_bundle",
+                                "_candidate_hit_num": relation_hit_num,
+                                "_retrieval_score": 1000.0 + 50.0 * len(selected_relations),
+                                "_covered_relation_anchors": sorted(selected_relations),
+                            }
+                        )
+                    uncovered_relations.difference_update(selected_relations)
+                    remaining_pages = [
+                        item for item in remaining_pages if item[0] != page_key
+                    ]
+            covered_system_a_relations = set().union(
+                *(
+                    set(raw.get("_covered_relation_anchors") or [])
+                    for raw in relation_bundles
+                )
+            ) if relation_bundles else set()
+            if (
+                relation_bundles
+                and system_a_relation_anchors.issubset(covered_system_a_relations)
+                and len(relation_bundles) <= max(1, int(max_items))
+            ):
+                for raw in relation_bundles:
+                    add_slot(
+                        raw,
+                        hit_num=int(raw.get("_candidate_hit_num") or 0),
+                    )
+                return slots
+
+        named_acronyms: list[str] = []
+        for token in re.findall(
+            r"(?<![A-Za-z0-9])([A-Z][A-Z0-9+_-]{1,15})(?![A-Za-z0-9])",
+            original_question,
+        ):
+            normalized = str(token or "").upper()
+            if normalized in {"PDF", "DOI", "RGB", "PSNR", "SSIM", "SNR", "CNR"}:
+                continue
+            if normalized not in named_acronyms:
+                named_acronyms.append(normalized)
+        if len(named_acronyms) >= 2:
+            facet_first: list[dict[str, Any]] = []
+            for acronym in named_acronyms:
+                matching = [
+                    raw
+                    for raw in ranked_combined_slots
+                    if re.search(
+                        rf"(?<![A-Z0-9]){re.escape(acronym)}(?![A-Z0-9])",
+                        " ".join(
+                            (
+                                str(raw.get("heading_path") or ""),
+                                str(raw.get("evidence_quote") or ""),
+                            )
+                        ).upper(),
+                    )
+                ]
+                exclusive = []
+                for raw in matching:
+                    surface = " ".join(
+                        (
+                            str(raw.get("heading_path") or ""),
+                            str(raw.get("evidence_quote") or ""),
+                        )
+                    ).upper()
+                    matched_count = sum(
+                        bool(
+                            re.search(
+                                rf"(?<![A-Z0-9]){re.escape(other)}(?![A-Z0-9])",
+                                surface,
+                            )
+                        )
+                        for other in named_acronyms
+                    )
+                    if matched_count == 1:
+                        exclusive.append(raw)
+                chosen = (exclusive or matching)[:1]
+                if chosen and all(chosen[0] is not item for item in facet_first):
+                    facet_first.append(chosen[0])
+            ranked_combined_slots = [
+                *facet_first,
+                *(
+                    raw
+                    for raw in ranked_combined_slots
+                    if all(raw is not chosen for chosen in facet_first)
+                ),
+            ]
+
+        # ``max_items`` is a distinct-card budget. Multiple immutable passages
+        # from one bundled DOC reuse the same answer marker and collapse to one
+        # visible paper card, so first secure source diversity and then retain
+        # only the complementary same-source passages needed by the question.
+        # This lets a comparison cite both a paper's abstract claim and its
+        # deployment mechanism without displacing the other compared paper.
+        primary_by_source: list[dict[str, Any]] = []
+        ordered_source_keys: list[str] = []
+        for raw in ranked_combined_slots:
+            source_key = str(
+                raw.get("source_path") or raw.get("source_name") or ""
+            ).strip().replace("\\", "/").lower()
+            if not source_key or source_key in ordered_source_keys:
+                continue
+            ordered_source_keys.append(source_key)
+            if len(ordered_source_keys) >= max(1, int(max_items)):
+                break
+
+        freeze_injection_request = bool(
+            re.search(r"(?i)\bfreez(?:e|es|ing)\b|\u51bb\u7ed3", original_question)
+            and re.search(r"(?i)\binject(?:s|ed|ing)?\b|\u6ce8\u5165", original_question)
+        )
+        for source_key in ordered_source_keys:
+            source_candidates = [
+                raw
+                for raw in ranked_combined_slots
+                if str(
+                    raw.get("source_path") or raw.get("source_name") or ""
+                ).strip().replace("\\", "/").lower()
+                == source_key
+            ]
+            preferred_candidates: list[dict[str, Any]] = []
+            if freeze_injection_request:
+                preferred_candidates = [
+                    raw
+                    for raw in source_candidates
+                    if re.search(
+                        r"(?i)freezes?\s+the\s+pre[- ]trained\s+model\s+weights",
+                        str(raw.get("evidence_quote") or ""),
+                    )
+                    and re.search(
+                        r"(?i)injects?\s+trainable\s+rank\s+decomposition\s+matrices",
+                        str(raw.get("evidence_quote") or ""),
+                    )
+                ]
+            if not preferred_candidates:
+                scored_candidates: list[
+                    tuple[int, float, int, dict[str, Any]]
+                ] = []
+                for candidate_index, raw in enumerate(source_candidates):
+                    try:
+                        retrieval_score = float(raw.get("_retrieval_score") or 0.0)
+                    except (TypeError, ValueError):
+                        retrieval_score = 0.0
+                    if retrieval_score > 0.0:
+                        candidate_surface = " ".join(
+                            (
+                                str(raw.get("heading_path") or ""),
+                                str(raw.get("evidence_quote") or ""),
+                            )
+                        )
+                        candidate_question_terms = (
+                            original_question_terms
+                            & _ranking_tokens(candidate_surface)
+                        )
+                        discriminative_terms = candidate_question_terms - {
+                            "answering",
+                            "did",
+                            "domain",
+                            "for",
+                            "how",
+                            "open",
+                            "question",
+                            "results",
+                            "the",
+                            "uses",
+                            "work",
+                        }
+                        question_overlap = (
+                            3 * len(discriminative_terms)
+                            + len(candidate_question_terms)
+                        )
+                        scored_candidates.append(
+                            (
+                                question_overlap,
+                                retrieval_score,
+                                -candidate_index,
+                                raw,
+                            )
+                        )
+                if scored_candidates:
+                    preferred_candidates = [max(scored_candidates)[3]]
+            if prefer_source_summary and not preferred_candidates:
+                preferred_candidates = [
+                    raw
+                    for raw in source_candidates
+                    if re.search(
+                        r"(?:^|\s/\s)abstract$",
+                        str(raw.get("heading_path") or "").strip(),
+                        flags=re.IGNORECASE,
+                    )
+                ]
+            if preferred_candidates or source_candidates:
+                primary_by_source.append(
+                    (preferred_candidates or source_candidates)[0]
+                )
+
+        for raw in primary_by_source:
+            add_slot(
+                raw,
+                hit_num=int(raw.get("_candidate_hit_num") or 0),
+            )
+
+        semantic_companion_request = len(semantic_query_terms) >= 6
+        # Multi-facet questions commonly need a mechanism paragraph plus two
+        # independently located facts (for example a method stage, dataset
+        # size, and generation share). Keeping two complementary passages is
+        # still bounded per source while preserving those requested facets.
+        companion_cap_by_source = (
+            (3 if len(semantic_query_terms) >= 12 else 1)
+            if (
+                len(primary_by_source) >= 2
+                or len(named_acronyms) >= 2
+                or semantic_companion_request
+            )
+            else 0
+        )
+        if companion_cap_by_source > 0:
+            for primary in primary_by_source:
+                source_key = str(
+                    primary.get("source_path")
+                    or primary.get("source_name")
+                    or ""
+                ).strip().replace("\\", "/").lower()
+                covered_terms = _ranking_tokens(
+                    _first_text(primary, "evidence_quote", "text", max_len=1800)
+                )
+                companion_rows: list[tuple[float, int, dict[str, Any], set[str]]] = []
+                for rank_index, raw in enumerate(ranked_combined_slots):
+                    if raw is primary:
+                        continue
+                    candidate_source_key = str(
+                        raw.get("source_path")
+                        or raw.get("source_name")
+                        or ""
+                    ).strip().replace("\\", "/").lower()
+                    if candidate_source_key != source_key:
+                        continue
+                    candidate_terms = _ranking_tokens(
+                        _first_text(raw, "evidence_quote", "text", max_len=1800)
+                    )
+                    try:
+                        companion_retrieval_score = float(
+                            raw.get("_retrieval_score")
+                            or raw.get("retrieval_score")
+                            or 0.0
+                        )
+                    except (TypeError, ValueError):
+                        companion_retrieval_score = 0.0
+                    companion_rows.append(
+                        (
+                            companion_retrieval_score,
+                            -rank_index,
+                            raw,
+                            candidate_terms,
+                        )
+                    )
+                remaining_rows = list(companion_rows)
+                selected_companions: list[dict[str, Any]] = []
+                source_question_term_frequency: dict[str, int] = {
+                    term: 0 for term in original_question_terms
+                }
+                ordered_semantic_terms = _paper_guide_semantic_query_terms(
+                    original_question
+                )
+                semantic_term_priority: dict[str, int] = {}
+                for semantic_index, semantic_term in enumerate(
+                    ordered_semantic_terms
+                ):
+                    priority = max(
+                        1,
+                        len(ordered_semantic_terms) - semantic_index,
+                    )
+                    for token in _ranking_tokens(semantic_term):
+                        semantic_term_priority[token] = max(
+                            priority,
+                            semantic_term_priority.get(token, 0),
+                        )
+                for term in original_question_terms & covered_terms:
+                    source_question_term_frequency[term] = 1
+                for _score, _rank, _raw, candidate_terms in companion_rows:
+                    for term in original_question_terms & candidate_terms:
+                        source_question_term_frequency[term] = (
+                            source_question_term_frequency.get(term, 0) + 1
+                        )
+                while remaining_rows and len(selected_companions) < companion_cap_by_source:
+                    scored_rows: list[
+                        tuple[
+                            int,
+                            float,
+                            int,
+                            int,
+                            float,
+                            int,
+                            dict[str, Any],
+                            set[str],
+                        ]
+                    ] = []
+                    for score, rank, raw, candidate_terms in remaining_rows:
+                        new_question_terms = (
+                            original_question_terms & candidate_terms
+                        ) - covered_terms
+                        # A single morphological near-miss (for example
+                        # ``rank-deficient`` versus ``rank-deficiency``) is not
+                        # a distinct requested facet. Requiring two uncovered
+                        # terms keeps genuine mechanism/count/value passages.
+                        exact_new_quantity = any(
+                            re.fullmatch(r"\d+(?:\.\d+)?", term)
+                            for term in new_question_terms
+                        )
+                        if len(new_question_terms) < 2 and not exact_new_quantity:
+                            continue
+                        unique_gain = sum(
+                            source_question_term_frequency.get(term, 0) == 1
+                            for term in new_question_terms
+                        )
+                        rarity_gain = sum(
+                            1.0
+                            / max(
+                                1,
+                                source_question_term_frequency.get(term, 1),
+                            )
+                            ** 2
+                            for term in new_question_terms
+                        )
+                        semantic_priority_gain = sum(
+                            semantic_term_priority.get(term, 0)
+                            for term in new_question_terms
+                        )
+                        scored_rows.append(
+                            (
+                                unique_gain,
+                                rarity_gain,
+                                semantic_priority_gain,
+                                len(new_question_terms),
+                                score,
+                                rank,
+                                raw,
+                                candidate_terms,
+                            )
+                        )
+                    if not scored_rows:
+                        break
+                    (
+                        _unique_gain,
+                        _rarity_gain,
+                        _semantic_priority_gain,
+                        _gain,
+                        _score,
+                        _rank,
+                        selected,
+                        selected_terms,
+                    ) = max(
+                        scored_rows,
+                        key=lambda item: (
+                            item[0],
+                            item[1],
+                            item[2],
+                            item[3],
+                            item[4],
+                            item[5],
+                        ),
+                    )
+                    selected_companions.append(selected)
+                    covered_terms.update(selected_terms)
+                    remaining_rows = [
+                        row for row in remaining_rows if row[2] is not selected
+                    ]
+
+                # Lexical novelty is deliberately conservative, but a passage
+                # can still be the only source block that realizes a requested
+                # method relation (for example CLIP's Figure 1 pairing diagram).
+                # Fill only still-free companion slots, and only from exact
+                # source text carrying an uncovered requested relation anchor.
+                covered_relation_anchors: set[str] = set()
+                for covered_row in (primary, *selected_companions):
+                    covered_relation_anchors.update(
+                        _paper_guide_source_relation_anchors(
+                            " ".join(
+                                (
+                                    str(covered_row.get("heading_path") or ""),
+                                    str(covered_row.get("evidence_quote") or ""),
+                                )
+                            )
+                        )
+                    )
+                while remaining_rows and len(selected_companions) < companion_cap_by_source:
+                    uncovered_relations = (
+                        requested_relation_anchors - covered_relation_anchors
+                    )
+                    if not uncovered_relations:
+                        break
+                    relation_rows: list[
+                        tuple[int, float, int, dict[str, Any], set[str]]
+                    ] = []
+                    for score, rank, raw, _candidate_terms in remaining_rows:
+                        raw_relations = _paper_guide_source_relation_anchors(
+                            " ".join(
+                                (
+                                    str(raw.get("heading_path") or ""),
+                                    str(raw.get("evidence_quote") or ""),
+                                )
+                            )
+                        )
+                        relation_gain = uncovered_relations & raw_relations
+                        if relation_gain:
+                            relation_rows.append(
+                                (len(relation_gain), score, rank, raw, raw_relations)
+                            )
+                    if not relation_rows:
+                        break
+                    _gain, _score, _rank, selected, selected_relations = max(
+                        relation_rows,
+                        key=lambda item: (item[0], item[1], item[2]),
+                    )
+                    selected_companions.append(selected)
+                    covered_relation_anchors.update(selected_relations)
+                    remaining_rows = [
+                        row for row in remaining_rows if row[2] is not selected
+                    ]
+
+                def _same_page_compound(
+                    raw: dict[str, Any],
+                ) -> dict[str, Any]:
+                    try:
+                        raw_page = int(raw.get("page_start") or 0)
+                    except (TypeError, ValueError):
+                        raw_page = 0
+                    if raw_page <= 0:
+                        return raw
+                    raw_terms = _ranking_tokens(
+                        " ".join(
+                            (
+                                str(raw.get("heading_path") or ""),
+                                str(raw.get("evidence_quote") or ""),
+                            )
+                        )
+                    )
+                    raw_relation_anchors = _paper_guide_source_relation_anchors(
+                        " ".join(
+                            (
+                                str(raw.get("heading_path") or ""),
+                                str(raw.get("evidence_quote") or ""),
+                            )
+                        )
+                    )
+                    requested_term_frequency: dict[str, int] = {
+                        term: 0 for term in original_question_terms
+                    }
+                    for frequency_candidate in source_candidates:
+                        frequency_terms = _ranking_tokens(
+                            " ".join(
+                                (
+                                    str(
+                                        frequency_candidate.get("heading_path")
+                                        or ""
+                                    ),
+                                    str(
+                                        frequency_candidate.get("evidence_quote")
+                                        or ""
+                                    ),
+                                )
+                            )
+                        )
+                        for term in original_question_terms & frequency_terms:
+                            requested_term_frequency[term] = (
+                                requested_term_frequency.get(term, 0) + 1
+                            )
+                    compound_rows: list[
+                        tuple[int, int, int, float, int, float, int, dict[str, Any]]
+                    ] = []
+                    for rank_index, candidate in enumerate(source_candidates):
+                        if candidate is raw:
+                            continue
+                        try:
+                            candidate_page = int(candidate.get("page_start") or 0)
+                        except (TypeError, ValueError):
+                            candidate_page = 0
+                        if candidate_page != raw_page:
+                            continue
+                        candidate_terms = _ranking_tokens(
+                            " ".join(
+                                (
+                                    str(candidate.get("heading_path") or ""),
+                                    str(candidate.get("evidence_quote") or ""),
+                                )
+                            )
+                        )
+                        requested_candidate_terms = (
+                            original_question_terms & candidate_terms
+                        )
+                        gained_terms = requested_candidate_terms - raw_terms
+                        candidate_relation_anchors = (
+                            _paper_guide_source_relation_anchors(
+                                " ".join(
+                                    (
+                                        str(candidate.get("heading_path") or ""),
+                                        str(candidate.get("evidence_quote") or ""),
+                                    )
+                                )
+                            )
+                        )
+                        relation_bridge = len(
+                            (
+                                requested_relation_anchors
+                                & candidate_relation_anchors
+                            )
+                            - raw_relation_anchors
+                        )
+                        if (
+                            (not gained_terms or len(requested_candidate_terms) < 2)
+                            and relation_bridge <= 0
+                        ):
+                            continue
+                        numeric_gain = sum(
+                            bool(re.fullmatch(r"\d+(?:\.\d+)?", term))
+                            for term in gained_terms
+                        )
+                        rarity_gain = sum(
+                            1.0
+                            / max(1, requested_term_frequency.get(term, 1)) ** 2
+                            for term in gained_terms
+                        )
+                        unique_gain = sum(
+                            requested_term_frequency.get(term, 0) == 1
+                            for term in gained_terms
+                        )
+                        try:
+                            candidate_score = float(
+                                candidate.get("_retrieval_score")
+                                or candidate.get("retrieval_score")
+                                or 0.0
+                            )
+                        except (TypeError, ValueError):
+                            candidate_score = 0.0
+                        compound_rows.append(
+                            (
+                                numeric_gain,
+                                relation_bridge,
+                                unique_gain,
+                                rarity_gain,
+                                len(gained_terms),
+                                candidate_score,
+                                -rank_index,
+                                candidate,
+                            )
+                        )
+                    if not compound_rows:
+                        return raw
+                    companion = max(compound_rows)[7]
+                    raw_text = str(raw.get("evidence_quote") or "").strip()
+                    companion_text = str(
+                        companion.get("evidence_quote") or ""
+                    ).strip()
+                    if not raw_text or not companion_text:
+                        return raw
+                    # Put the selected obligation first. The card compactor can
+                    # then retain its unique relation/quantity before using the
+                    # companion to complete the same-page claim.
+                    ordered = (raw, companion)
+
+                    def _compact_compound_member(item: Mapping[str, Any]) -> str:
+                        member_text = str(item.get("evidence_quote") or "").strip()
+                        if len(member_text) <= 720:
+                            return member_text
+                        sentences = [
+                            part.strip()
+                            for part in re.split(r"(?<=[.!?])\s+", member_text)
+                            if part.strip()
+                        ]
+                        if len(sentences) <= 1:
+                            return member_text[:720].rsplit(" ", 1)[0].rstrip()
+                        ranked_sentences: list[tuple[int, int, str]] = []
+                        for sentence_index, sentence in enumerate(sentences):
+                            sentence_terms = _ranking_tokens(sentence)
+                            sentence_relations = (
+                                _paper_guide_source_relation_anchors(sentence)
+                            )
+                            sentence_score = len(
+                                original_question_terms & sentence_terms
+                            )
+                            sentence_score += 8 * len(
+                                requested_relation_anchors & sentence_relations
+                            )
+                            sentence_score += 2 * len(re.findall(r"\d", sentence))
+                            ranked_sentences.append(
+                                (sentence_score, -sentence_index, sentence)
+                            )
+                        best_rows = sorted(
+                            ranked_sentences,
+                            key=lambda row: (row[0], row[1]),
+                            reverse=True,
+                        )[:2]
+                        best_rows.sort(key=lambda row: -row[1])
+                        return " ".join(row[2] for row in best_rows)[:720].rstrip()
+
+                    combined_text = "\n\n".join(
+                        _compact_compound_member(item)
+                        for item in ordered
+                        if str(item.get("evidence_quote") or "").strip()
+                    )
+                    if len(combined_text) > 1400:
+                        combined_text = combined_text[:1400].rsplit(" ", 1)[0].rstrip()
+                    merged = dict(raw)
+                    merged["evidence_quote"] = combined_text
+                    # The evidence now spans two immutable blocks on one page.
+                    # Keep the exact page/section but do not pretend either
+                    # individual block alone contains the compound claim.
+                    merged["block_id"] = ""
+                    merged["anchor_id"] = ""
+                    merged["anchor_kind"] = ""
+                    merged["strict_locate"] = False
+                    merged["source_passage_bundle"] = True
+                    merged["compound_same_page_evidence"] = True
+                    merged["evidence_selection_reason"] = (
+                        "same_page_compound_evidence"
+                    )
+                    merged["_retrieval_score"] = max(
+                        float(raw.get("_retrieval_score") or 0.0),
+                        float(companion.get("_retrieval_score") or 0.0),
+                    )
+                    return merged
+
+                for raw in selected_companions:
+                    raw_for_slot = _same_page_compound(raw)
+                    add_slot(
+                        raw_for_slot,
+                        hit_num=int(raw_for_slot.get("_candidate_hit_num") or 0),
+                    )
+        return slots
+
     if len(ranked_support_slots) > 1 and ranking_texts:
         indexed_support = [
             (
@@ -3162,6 +4138,15 @@ _RANKING_STOPWORDS = {
 
 def _ranking_tokens(value: Any) -> set[str]:
     tokens = evidence_alignment_tokens(value, extra_stopwords=_RANKING_STOPWORDS)
+    # Quantitative facets such as 11M, 1.1B, and 99.1% are often the only
+    # distinction between a broad overview paragraph and the requested dataset
+    # statistics.  The lexical tokenizer intentionally drops short numbers, so
+    # preserve exact numeric surfaces for within-paper companion selection.
+    tokens.update(
+        match.group(0).rstrip("%")
+        for match in re.finditer(r"(?<![A-Za-z0-9])\d+(?:\.\d+)?%?", str(value or ""))
+        if len(match.group(0).rstrip("%")) >= 2
+    )
     if tokens.intersection({"review", "survey", "overview"}):
         tokens.update({"principles", "prospects", "foundations", "advances", "challenges"})
     return tokens
@@ -3556,7 +4541,12 @@ def build_citation_plan(
     if requested_system_a > 0:
         budget["system_a"] = max(int(budget.get("system_a") or 0), requested_system_a)
     sys_b = (
-        _system_b_slots(reference_opportunities, intent=intent, max_items=3)
+        _system_b_slots(
+            reference_opportunities,
+            intent=intent,
+            max_items=max(1, int(budget.get("system_b") or 0)),
+            prompt=prompt,
+        )
         if int(budget.get("system_b") or 0) > 0
         else []
     )

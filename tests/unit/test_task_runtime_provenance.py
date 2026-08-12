@@ -55,6 +55,53 @@ def test_resolve_paper_guide_md_path_rejects_direct_md_outside_roots(tmp_path: P
     assert resolved is None
 
 
+def test_resolve_paper_guide_md_path_accepts_exact_docs_index_path(tmp_path: Path):
+    from kb import task_runtime
+
+    md_main = tmp_path / "configured_markdown" / "DemoPaper" / "DemoPaper.en.md"
+    md_main.parent.mkdir(parents=True, exist_ok=True)
+    md_main.write_text("# Demo\n\nIndexed evidence.", encoding="utf-8")
+    db_root = tmp_path / "custom_db"
+    db_root.mkdir(parents=True, exist_ok=True)
+    (db_root / "docs.json").write_text(
+        json.dumps({"doc-1": {"path": str(md_main), "index_status": "ready"}}),
+        encoding="utf-8",
+    )
+
+    resolved = task_runtime._resolve_paper_guide_md_path(
+        str(md_main),
+        md_root=tmp_path / "different_root",
+        db_dir=db_root,
+    )
+
+    assert resolved is not None
+    assert resolved.resolve(strict=False) == md_main.resolve(strict=False)
+
+
+def test_resolve_paper_guide_md_path_rejects_unindexed_sibling_of_indexed_path(tmp_path: Path):
+    from kb import task_runtime
+
+    indexed = tmp_path / "configured_markdown" / "DemoPaper" / "DemoPaper.en.md"
+    unindexed = indexed.with_name("private.md")
+    indexed.parent.mkdir(parents=True, exist_ok=True)
+    indexed.write_text("# Demo\n\nIndexed evidence.", encoding="utf-8")
+    unindexed.write_text("# Private\n\nNot indexed.", encoding="utf-8")
+    db_root = tmp_path / "custom_db"
+    db_root.mkdir(parents=True, exist_ok=True)
+    (db_root / "docs.json").write_text(
+        json.dumps({"doc-1": {"path": str(indexed), "index_status": "ready"}}),
+        encoding="utf-8",
+    )
+
+    resolved = task_runtime._resolve_paper_guide_md_path(
+        str(unindexed),
+        md_root=tmp_path / "different_root",
+        db_dir=db_root,
+    )
+
+    assert resolved is None
+
+
 def test_resolve_paper_guide_md_path_rejects_pdf_outside_pdf_root_sibling_md(tmp_path: Path):
     from kb import task_runtime
 

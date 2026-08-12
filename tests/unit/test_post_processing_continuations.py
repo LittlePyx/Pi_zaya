@@ -1,3 +1,5 @@
+from time import perf_counter
+
 from kb.converter.post_processing import postprocess_markdown
 
 
@@ -68,3 +70,44 @@ VOC2012 [32] datasets) to digitally synthesize a large-scale realistic single-ph
     assert "VOC2007 [31] and *model, a cat toy" not in out
     assert "*model, a cat toy and different printed shapes) using the reported technique.*" in out
     assert "VOC2012 [32] datasets" in out
+
+
+def test_postprocess_preserves_page_marker_after_dangling_connector():
+    src = """<!-- kb_page: 1 -->
+
+The first page happens to end with the
+
+<!-- kb_page: 2 -->
+
+next page starts with lowercase prose.
+"""
+
+    out = postprocess_markdown(src)
+
+    assert "the <!-- kb_page" not in out
+    assert out.count("<!-- kb_page:") == 2
+    assert "<!-- kb_page: 2 -->\n\nnext page" in out
+
+
+def test_postprocess_long_continuation_run_is_linear_enough_for_finalization():
+    lines = ["The long paragraph begins with the"]
+    lines.extend(f"continuation line {index} retains useful evidence." for index in range(4000))
+    src = "\n".join(lines)
+
+    started = perf_counter()
+    out = postprocess_markdown(src)
+    elapsed = perf_counter() - started
+
+    assert "continuation line 3999 retains useful evidence." in out
+    assert elapsed < 3.0
+
+
+def test_postprocess_long_numeric_leading_prose_does_not_stall_heading_check():
+    paragraph = "2024 " + "detailed experimental evidence remains prose. " * 1000
+
+    started = perf_counter()
+    out = postprocess_markdown(paragraph)
+    elapsed = perf_counter() - started
+
+    assert out.startswith("2024 detailed experimental evidence")
+    assert elapsed < 1.0

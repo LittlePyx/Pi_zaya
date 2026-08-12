@@ -596,6 +596,44 @@ def test_final_gate_drops_citation_the_renderer_would_hide() -> None:
     assert meta["dropped_unsupported_unplanned_claims"] == 1
 
 
+def test_final_gate_accepts_later_same_source_plan_quote_for_compound_claim() -> None:
+    first_quote = (
+        "CLIP jointly trains an image encoder and a text encoder to predict the "
+        "correct pairings in a batch."
+    )
+    exact_quote = (
+        "The pre-training task predicts which caption goes with which image on a "
+        "dataset of 400 million image text pairs collected from the internet."
+    )
+    answer = (
+        "CLIP predicts which caption goes with which image using 400 million "
+        "image-text pairs [1]."
+    )
+    hits = [
+        {
+            "text": f"{first_quote}\n{exact_quote}",
+            "meta": {
+                "source_name": "clip.pdf",
+                "heading_path": "Abstract",
+                "page_start": 1,
+                "citation_plan_evidence_quotes": [first_quote, exact_quote],
+            },
+        }
+    ]
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        allowed_citation_numbers={1},
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "400 million" in repaired
+    assert "[1]" in repaired
+    assert meta["renderer_rejected_citations"] == 0
+
+
 def test_repairs_each_uncited_claim_in_a_multi_sentence_line() -> None:
     answer = (
         "该方法使用真实 SPAD 噪声模型指导训练。"

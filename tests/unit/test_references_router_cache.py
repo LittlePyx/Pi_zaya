@@ -844,6 +844,34 @@ def test_answer_citation_evidence_quote_keeps_complete_multi_step_mechanism() ->
     assert all(term in quote for term in ("two steps", "ray tracing", "wave propagation", "distance -z"))
 
 
+def test_answer_citation_table_copy_uses_prompt_metric_and_reports_all_ties() -> None:
+    evidence = (
+        "Table 6. Image Denoising Results on SIDD. "
+        "SIDD PSNR: MPRNet [37] = 39.71; Restormer [39] = 40.02; "
+        "Baseline ours = 40.30; NAFNet ours = 40.30."
+    )
+    prompt = "SIDD 基准测试里 PSNR 最高的模型是谁？如果并列请全部列出。"
+    detail = {
+        "answer_claim": "Table 6",
+        "reader_evidence_quote": evidence,
+        "heading_path": "5 Experiments / 5.2 Applications",
+    }
+
+    quote = references_router._answer_citation_evidence_quote(
+        detail,
+        prompt=prompt,
+    )
+    summary, why = references_router._answer_citation_card_copy(
+        [{**detail, "evidence_quote": quote}],
+        prefer_zh=True,
+        prompt=prompt,
+    )
+
+    assert all(term in quote for term in ("SIDD PSNR", "Baseline ours", "NAFNet ours", "40.30"))
+    assert all(term in summary for term in ("SIDD PSNR", "最高值", "Baseline (ours)", "NAFNet (ours)", "40.30", "并列"))
+    assert why
+
+
 def test_answer_citation_evidence_quote_keeps_real_fdm_parallel_encoding_chain() -> None:
     compact = (
         "Each pixel of the SLM is modulated with either 0 or \\pi phase on p frequencies "

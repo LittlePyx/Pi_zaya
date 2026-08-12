@@ -9,6 +9,7 @@ from kb.converter.structured_index_batch import (
     structured_indices_need_rebuild,
 )
 from kb.converter.structured_indices import STRUCTURED_INDEX_VERSION
+from kb.paper_guide_structured_index_runtime import load_paper_guide_reference_index
 
 
 def _write_current_empty_indices(md_path: Path) -> None:
@@ -95,8 +96,41 @@ def test_structured_index_batch_skips_nonpaper_markdown_artifacts(tmp_path: Path
     md_path.write_text("# Paper\n\nA valid paper source.\n", encoding="utf-8")
     (paper_dir / "quality_report.md").write_text("# Markdown Quality Analysis Report\n", encoding="utf-8")
     (paper_dir / "output.md").write_text("# Legacy duplicate\n", encoding="utf-8")
+    recovery_dir = paper_dir / ".conversion_cache" / "table_recovery"
+    recovery_dir.mkdir(parents=True)
+    (recovery_dir / "page_1_original_tables.md").write_text("| broken | archive |\n", encoding="utf-8")
 
     stats = rebuild_structured_indices_for_root(tmp_path, force=True)
 
     assert stats["scanned"] == 1
     assert stats["rebuilt"] == 1
+
+
+def test_reference_index_loader_repairs_arxiv_prefix_year(tmp_path: Path) -> None:
+    paper_dir = tmp_path / "RAG"
+    assets = paper_dir / "assets"
+    assets.mkdir(parents=True)
+    md_path = paper_dir / "rag.en.md"
+    md_path.write_text("# RAG\n", encoding="utf-8")
+    (assets / "reference_index.json").write_text(
+        json.dumps(
+            {
+                "references": [
+                    {
+                        "ref_num": 26,
+                        "year": "2004",
+                        "text": (
+                            "[26] Vladimir Karpukhin et al. Dense passage retrieval. "
+                            "arXiv preprint arXiv:2004.04906, 2020."
+                        ),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    row = load_paper_guide_reference_index(md_path)[0]
+
+    assert row["year"] == "2020"
+    assert row["year_repaired_from_text"] is True

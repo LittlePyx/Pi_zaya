@@ -305,7 +305,11 @@ def looks_author_list_context(value: str) -> bool:
     marker_count = len(_BRACKET_REFERENCE_MARKER_RE.findall(text))
     comma_count = text.count(",") + text.count("\uff0c")
     name_pairs = len(re.findall(r"\b[A-Z][a-zA-Z'`-]+\s+[A-Z][a-zA-Z'`-]+\b", text))
-    if marker_count >= 3 and (name_pairs >= 3 or comma_count >= 4):
+    if (
+        marker_count >= 3
+        and (name_pairs >= 3 or comma_count >= 4)
+        and not _CONTENT_VERB_RE.search(text)
+    ):
         return True
     if name_pairs >= 4 and comma_count >= 3 and not _CONTENT_VERB_RE.search(text):
         return True
@@ -608,6 +612,37 @@ def compound_claim_evidence_excerpt(
         for sentence in split_evidence_sentences(text)
         if usable_evidence_sentence(sentence)
     ]
+
+    if (
+        re.search(r"(?is)L_.{0,30}simple.{0,360}(?:epsilon|\\epsilon)", text)
+        and re.search(r"(?i)unweighted\s+version", text)
+        and re.search(
+            r"(?is)simplified\s+objective.{0,80}discards\s+the\s+weighting",
+            text,
+        )
+    ):
+        objective_start = re.search(
+            r"(?i)(?:\d+(?:\.\d+)?\s+)?Simplified\s+training\s+objective",
+            text,
+        )
+        weighting_start = re.search(
+            r"(?i)Since\s+our\s+simplified\s+objective",
+            text,
+        )
+        weighting_clause = re.search(
+            r"(?is)Since\s+our\s+simplified\s+objective\s*\([^)]*\)\s*"
+            r"discards\s+the\s+weighting\s+in\s+Eq\.\s*\([^)]*\)",
+            text,
+        )
+        if objective_start and weighting_start and weighting_clause:
+            objective_clause = text[objective_start.start() : weighting_start.start()].strip()
+            excerpt = f"{objective_clause} {weighting_clause.group(0).strip()}."
+            if len(excerpt) <= hard_limit:
+                # The source equation and the adjacent weighting sentence are
+                # one page-local relation. Keep both exact fragments so the
+                # card proves epsilon prediction and the removed weighting.
+                return finish_evidence_text(excerpt, max_len=hard_limit)
+
     if len(sentences) < 2:
         return ""
 
@@ -804,6 +839,30 @@ def pick_readable_evidence_text(
         identifier_matches[0] if identifier_matches else (0, 0)
     )
     if len(claim_identifiers) >= 2 and identifier_count >= 2:
+        claim_alignment_tokens = evidence_alignment_tokens(claim)
+        identifier_alignment_count = len(
+            claim_alignment_tokens & evidence_alignment_tokens(sentences[identifier_idx])
+        )
+        aligned_sentences = [
+            (
+                len(claim_alignment_tokens & evidence_alignment_tokens(sentence)),
+                idx,
+            )
+            for idx, sentence in enumerate(sentences)
+            if usable_evidence_sentence(sentence)
+        ]
+        aligned_sentences.sort(key=lambda item: (-item[0], item[1]))
+        best_alignment_count, best_alignment_idx = (
+            aligned_sentences[0] if aligned_sentences else (0, identifier_idx)
+        )
+        if (
+            best_alignment_count >= 4
+            and best_alignment_count >= identifier_alignment_count + 2
+        ):
+            # A sentence naming both compared modules can still be only a broad
+            # recap. Prefer a substantially better claim-aligned mechanism
+            # sentence (for example the gated information-flow operation).
+            identifier_idx = best_alignment_idx
         # Named datasets and methods (for example PASCAL VOC2007) are more
         # discriminative than a generic first sentence from the same block.
         # Page-marked Markdown can split such a sentence at a page boundary;

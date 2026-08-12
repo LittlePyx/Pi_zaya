@@ -45,6 +45,31 @@ def test_compound_claim_excerpt_keeps_distributed_mechanism_without_filler() -> 
     assert " … " in excerpt
 
 
+def test_compound_claim_excerpt_keeps_ddpm_equation_and_weighting_clause() -> None:
+    evidence = (
+        "3.4 Simplified training objective The $t > 1$ cases correspond to an "
+        "unweighted version of Eq. $$ L_{\\text{simple}}(\\theta) := "
+        "\\mathbb{E}_{t, \\mathbf{x}_0, \\boldsymbol{\\epsilon}} "
+        "[\\boldsymbol{\\epsilon} - \\boldsymbol{\\epsilon}_\\theta] $$ "
+        "Since our simplified objective (14) discards the weighting in Eq. (12), "
+        "it emphasizes different aspects of reconstruction."
+    )
+
+    excerpt = compound_claim_evidence_excerpt(
+        evidence,
+        claim=(
+            "L_simple predicts epsilon with an unweighted simplified objective that "
+            "differs from the variational-bound weighting."
+        ),
+        max_len=520,
+    )
+
+    assert "Simplified training objective" in excerpt
+    assert "unweighted version" in excerpt
+    assert "boldsymbol{\\epsilon}" in excerpt
+    assert "simplified objective (14) discards the weighting in Eq. (12)" in excerpt
+
+
 def test_finish_evidence_text_does_not_treat_decimal_point_as_sentence_end() -> None:
     evidence = (
         "Detector type: InGaAs/InAlAs-SPAD. Performance = 61.2% DE at "
@@ -188,6 +213,27 @@ def test_pick_readable_evidence_text_prefers_named_dataset_fragment_at_page_brea
     assert picked.startswith("With the calibrated physical noise model")
     assert "PASCAL VOC2007" in picked
     assert picked.endswith("...")
+
+
+def test_pick_readable_evidence_prefers_specific_mechanism_over_two_name_recap() -> None:
+    evidence = (
+        "The gated feed-forward network uses element-wise multiplication after GELU. "
+        "Overall, the GDFN controls the information flow through the hierarchical levels, "
+        "allowing each level to focus on complementary fine details. "
+        "That is, GDFN has a distinct role from MDTA. "
+        "Its expansion ratio is reduced to keep the compute burden comparable."
+    )
+
+    picked = pick_readable_evidence_text(
+        evidence,
+        claim=(
+            "GDFN provides a controlled gated transformation that regulates information "
+            "flow across hierarchical levels, unlike MDTA."
+        ),
+    )
+
+    assert "controls the information flow" in picked
+    assert "hierarchical levels" in picked
 
 
 def test_metadata_prefix_strip_preserves_complete_capitalized_evidence_sentence() -> None:

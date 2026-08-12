@@ -501,6 +501,49 @@ def test_origin_question_builds_system_b_first_plan():
     assert "[[CITE:s1234abcd:4]]" in block
 
 
+def test_origin_question_ranks_semantically_matching_system_b_opportunity_first():
+    plan = build_citation_plan(
+        prompt=(
+            "Where did DPR come from? Did RAG reuse Dense Passage Retrieval from "
+            "Karpukhin et al. as prior work?"
+        ),
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": "RAG uses a pre-trained bi-encoder from DPR.",
+                "meta": {"source_path": "rag.en.md", "heading_path": "2.2 Retriever: DPR"},
+            }
+        ],
+        reference_opportunities=[
+            {
+                "sid": "srag",
+                "ref_num": 20,
+                "label": "Salient span masking",
+                "source_path": "rag.en.md",
+                "heading_path": "4 Results",
+                "evidence_quote": "specialized salient span masking pre-training [20]",
+            },
+            {
+                "sid": "srag",
+                "ref_num": 26,
+                "label": (
+                    "Karpukhin et al. Dense Passage Retrieval for Open-Domain "
+                    "Question Answering"
+                ),
+                "source_path": "rag.en.md",
+                "heading_path": "2.2 Retriever: DPR",
+                "evidence_quote": "Dense Passage Retriever (DPR) [26]",
+            },
+        ],
+    )
+
+    system_b = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_b"
+    ]
+    assert len(system_b) == 1
+    assert system_b[0]["candidate_refs"] == [26]
+
+
 def test_lineage_question_builds_grounded_system_b_plan():
     plan = build_citation_plan(
         prompt="SCI 这条线是怎么从光谱成像走到 3D 场景重建的？",
@@ -3517,3 +3560,676 @@ def test_prompt_aligned_source_pins_hsi_fsi_sampling_metric_comparison(tmp_path:
 
     assert slot["evidence_quote"] == exact
     assert "Comparison" in slot["heading_path"]
+
+
+def test_system_a_slots_rank_bundled_passages_by_exact_page_facets() -> None:
+    source = "restormer.en.md"
+    answer_hits = [
+        {
+            "text": "one citeable bundled document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Introduction",
+                        "page_start": 2,
+                        "block_id": "mdta-intro",
+                        "text": (
+                            "MDTA computes cross-covariance across feature channels rather "
+                            "than the spatial dimension."
+                        ),
+                    },
+                    {
+                        "heading_path": "3.2 GDFN",
+                        "page_start": 4,
+                        "block_id": "gdfn-method",
+                        "text": (
+                            "GDFN controls the information flow and lets each level focus "
+                            "on fine details."
+                        ),
+                    },
+                    {
+                        "heading_path": "Conclusion",
+                        "page_start": 8,
+                        "block_id": "conclusion",
+                        "text": "MDTA works across channels and GDFN transforms features.",
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=2,
+        ranking_texts=[
+            "What does MDTA transpose about self-attention, and what filtering role does GDFN play?"
+        ],
+        rank_answer_hits=True,
+    )
+
+    assert [slot["page_start"] for slot in slots] == [2, 4]
+    assert all(slot["candidate_hits"] == [1] for slot in slots)
+    assert all(slot["source_passage_bundle"] is True for slot in slots)
+
+
+def test_system_a_slots_use_retrieval_score_for_semantic_primary() -> None:
+    source = "restormer.en.md"
+    answer_hits = [
+        {
+            "text": "one citeable bundled document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Conclusion",
+                        "page_start": 8,
+                        "block_id": "conclusion",
+                        "score": 140.0,
+                        "text": (
+                            "Restormer is effective for high-resolution image restoration."
+                        ),
+                    },
+                    {
+                        "heading_path": "3.1 Multi-Dconv Head Transposed Attention",
+                        "page_start": 4,
+                        "block_id": "mdta-method",
+                        "score": 161.0,
+                        "text": (
+                            "MDTA applies self-attention across channels rather than the "
+                            "spatial dimension, yielding linear complexity, while depth-wise "
+                            "convolutions emphasize local context before computing covariance."
+                        ),
+                    },
+                    {
+                        "heading_path": "3.2 Gated-Dconv Feed-Forward Network",
+                        "page_start": 5,
+                        "block_id": "gdfn-method",
+                        "score": 150.0,
+                        "text": (
+                            "GDFN uses depth-wise convolution to encode information from "
+                            "spatially neighboring pixel positions and gate useful features."
+                        ),
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=2,
+        ranking_texts=[
+            "Restormer avoids quadratic spatial self-attention at high resolution in what "
+            "exact sense, and how does it still capture local spatial context?"
+        ],
+        rank_answer_hits=True,
+    )
+
+    assert slots[0]["page_start"] == 4
+    assert "linear complexity" in slots[0]["evidence_quote"]
+    assert all(slot["candidate_hits"] == [1] for slot in slots)
+
+
+def test_system_a_slots_keep_complementary_passage_per_source_without_spending_card_budget() -> None:
+    answer_hits = [
+        {
+            "text": "FlashAttention bundled evidence",
+            "meta": {
+                "source_path": "flashattention.en.md",
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "5 Limitations",
+                        "page_start": 10,
+                        "block_id": "flash-limit",
+                        "text": "Each attention variant requires a new CUDA kernel.",
+                    },
+                    {
+                        "heading_path": "Abstract",
+                        "page_start": 1,
+                        "block_id": "flash-abstract",
+                        "text": (
+                            "FlashAttention is IO-aware exact attention that uses tiling "
+                            "to reduce HBM accesses between HBM and SRAM."
+                        ),
+                    },
+                ],
+            },
+        },
+        {
+            "text": "LoRA bundled evidence",
+            "meta": {
+                "source_path": "lora.en.md",
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Abstract",
+                        "page_start": 1,
+                        "block_id": "lora-abstract",
+                        "text": (
+                            "Low-Rank Adaptation freezes pre-trained model weights and "
+                            "injects trainable rank decomposition matrices."
+                        ),
+                    },
+                    {
+                        "heading_path": "1 Introduction",
+                        "page_start": 2,
+                        "block_id": "lora-deploy",
+                        "text": (
+                            "The linear design can merge the trainable matrices with the "
+                            "frozen weights when deployed, introducing no inference latency."
+                        ),
+                    },
+                ],
+            },
+        },
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=2,
+        focus_multi_source_evidence=True,
+        ranking_texts=[
+            "Compare FlashAttention HBM/SRAM runtime I/O with LoRA low-rank trainable "
+            "parameters and merge-at-deployment optimization."
+        ],
+        rank_answer_hits=True,
+        prefer_source_summary=True,
+    )
+
+    assert {
+        str(slot["source_path"]) for slot in slots
+    } == {"flashattention.en.md", "lora.en.md"}
+    assert len({str(slot["source_path"]) for slot in slots}) == 2
+    assert any(slot["page_start"] == 1 and "HBM" in slot["evidence_quote"] for slot in slots)
+    assert any(slot["page_start"] == 2 and "merge" in slot["evidence_quote"] for slot in slots)
+    assert len(slots) > 2
+
+
+def test_system_a_slots_prefer_complete_freeze_injection_abstract_without_irrelevant_companion() -> None:
+    source = "lora.en.md"
+    answer_hits = [
+        {
+            "text": "one bundled LoRA document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "7.2 Optimal rank",
+                        "page_start": 10,
+                        "block_id": "rank-table",
+                        "text": (
+                            "Is the optimal adaptation matrix really rank-deficient, "
+                            "and what rank works in practice?"
+                        ),
+                    },
+                    {
+                        "heading_path": "Abstract",
+                        "page_start": 1,
+                        "block_id": "abstract",
+                        "text": (
+                            "We propose Low-Rank Adaptation, which freezes the pre-trained "
+                            "model weights and injects trainable rank decomposition matrices. "
+                            "We also investigate rank-deficiency in adaptation."
+                        ),
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=3,
+        ranking_texts=[
+            "What does LoRA freeze, what trainable objects does it inject, and what "
+            "low-rank assumption does that make about adaptation?"
+        ],
+        rank_answer_hits=True,
+    )
+
+    assert len(slots) == 1
+    assert slots[0]["page_start"] == 1
+    assert "freezes the pre-trained model weights" in slots[0]["evidence_quote"]
+
+
+def test_system_a_slots_keep_quantitative_companion_for_dataset_counts() -> None:
+    source = "sam.en.md"
+    answer_hits = [
+        {
+            "text": "one bundled SAM document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "1 Introduction",
+                        "page_start": 2,
+                        "score": 154.0,
+                        "text": (
+                            "The data engine has three stages: assisted-manual, "
+                            "semi-automatic, and fully automatic."
+                        ),
+                    },
+                    {
+                        "heading_path": "5 Segment Anything Dataset / Masks",
+                        "page_start": 6,
+                        "score": 151.0,
+                        "text": (
+                            "Our dataset SA-1B consists of 11M diverse images and "
+                            "1.1B high-quality segmentation masks."
+                        ),
+                    },
+                    {
+                        "heading_path": "5 Segment Anything Dataset / Masks",
+                        "page_start": 6,
+                        "score": 147.0,
+                        "text": (
+                            "Our data engine produced 1.1B masks, 99.1% of which were "
+                            "generated fully automatically."
+                        ),
+                    },
+                    {
+                        "heading_path": "7.6 Ablations",
+                        "page_start": 12,
+                        "score": 142.5,
+                        "text": "We ablate stages on 11 images and study training data scaling.",
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=3,
+        ranking_texts=[
+            "SAM 的数据引擎分哪三个阶段？最终 SA-1B 有多少图像和掩码，其中多少比例是全自动生成的？"
+        ],
+        rank_answer_hits=False,
+    )
+
+    assert [slot["page_start"] for slot in slots] == [2, 6, 6]
+    assert "11M diverse images" in slots[1]["evidence_quote"]
+    assert "99.1%" in slots[2]["evidence_quote"]
+
+
+def test_system_a_slots_compound_same_page_dataset_counts_for_one_claim() -> None:
+    source = "sam.en.md"
+    answer_hits = [
+        {
+            "text": "one bundled SAM document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "4 Data Engine",
+                        "page_start": 2,
+                        "block_id": "stages",
+                        "score": 160.0,
+                        "text": (
+                            "The data engine has three stages: assisted-manual, "
+                            "semi-automatic, and fully automatic."
+                        ),
+                    },
+                    {
+                        "heading_path": "5 Dataset",
+                        "page_start": 6,
+                        "block_id": "dataset",
+                        "score": 135.0,
+                        "text": "SA-1B consists of 11M images and 1.1B masks.",
+                    },
+                    {
+                        "heading_path": "5 Dataset",
+                        "page_start": 6,
+                        "block_id": "masks",
+                        "score": 145.0,
+                        "text": "Masks. We produced 1.1B masks, 99.1% fully automatically.",
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=3,
+        ranking_texts=[
+            "What are the three data engine stages, and how many 11M images, "
+            "1.1B masks, and 99.1% fully automatic masks are in SA-1B?"
+        ],
+    )
+
+    compound = next(slot for slot in slots if slot.get("compound_same_page_evidence"))
+    assert compound["page_start"] == 6
+    assert "11M images" in compound["evidence_quote"]
+    assert "1.1B masks" in compound["evidence_quote"]
+    assert "99.1%" in compound["evidence_quote"]
+    assert compound["block_id"] == ""
+    assert compound["strict_locate"] is False
+
+
+def test_system_a_slots_reserve_exact_requested_relation_pages_from_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sam.en.md"
+    source.write_text(
+        "# Segment Anything\n\n"
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "We introduce SAM and a large segmentation dataset.\n\n"
+        "<!-- kb_page: 2 -->\n\n## 1. Introduction\n\n"
+        "Our data engine has three stages: assisted-manual, semi-automatic, "
+        "and fully automatic.\n\n"
+        "<!-- kb_page: 6 -->\n\n## 5. Segment Anything Dataset\n\n"
+        "Our dataset, SA-1B, consists of 11M diverse images and 1.1B high-quality masks. "
+        "Images. We licensed a new set of 11M images. "
+        "Our data engine produced 1.1B masks, 99.1% of which were generated fully automatically.\n",
+        encoding="utf-8",
+    )
+    citation_plan._source_sentence_records_for_signature.cache_clear()
+    citation_plan._source_text_for_signature.cache_clear()
+    answer_hits = [
+        {
+            "text": "one bundled SAM document",
+            "meta": {
+                "source_path": str(source),
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Abstract",
+                        "page_start": 1,
+                        "score": 500.0,
+                        "text": "We introduce SAM and a large segmentation dataset.",
+                    },
+                    {
+                        "heading_path": "Appendix / Dataset Card",
+                        "page_start": 25,
+                        "score": 490.0,
+                        "text": "The appendix documents SA-1B.",
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=3,
+        ranking_texts=[
+            "What are SAM's assisted-manual, semi-automatic and fully automatic "
+            "data engine stages, and how many 11M images, 1.1B masks and 99.1% "
+            "fully automatic masks are in SA-1B?"
+        ],
+    )
+
+    assert {slot["page_start"] for slot in slots} == {2, 6}
+    assert any(
+        "assisted-manual" in slot["evidence_quote"]
+        and "semi-automatic" in slot["evidence_quote"]
+        for slot in slots
+    )
+    dataset = next(slot for slot in slots if slot["page_start"] == 6)
+    assert "11M diverse images" in dataset["evidence_quote"]
+    assert "11M images" in dataset["evidence_quote"]
+    assert "1.1B masks" in dataset["evidence_quote"]
+    assert "99.1%" in dataset["evidence_quote"]
+    assert dataset["evidence_selection_reason"] == "requested_relation_bundle"
+
+
+def test_system_a_slots_join_section_heading_formula_and_unweighted_relation() -> None:
+    source = "ddpm.en.md"
+    answer_hits = [
+        {
+            "text": "one bundled DDPM document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "4.1 Sample quality",
+                        "page_start": 6,
+                        "score": 154.0,
+                        "text": (
+                            "The true variational bound yields better codelengths, "
+                            "but the simplified objective yields the best sample quality."
+                        ),
+                    },
+                    {
+                        "heading_path": "3.4 Simplified training objective",
+                        "section_page_start": 4,
+                        "section_heading_text": "3.4 Simplified training objective",
+                        "page_start": 5,
+                        "block_id": "formula",
+                        "score": 120.0,
+                        "text": r"L_simple(theta) predicts epsilon_theta from epsilon noise.",
+                    },
+                    {
+                        "heading_path": "3.4 Simplified training objective",
+                        "section_page_start": 4,
+                        "section_heading_text": "3.4 Simplified training objective",
+                        "page_start": 5,
+                        "block_id": "unweighted",
+                        "score": 80.0,
+                        "text": "The t > 1 cases correspond to an unweighted version of Eq. (12).",
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=3,
+        ranking_texts=[
+            "How does L_simple predict epsilon noise as an unweighted version of the "
+            "variational bound, and what is the sample-quality/codelength tradeoff?"
+        ],
+    )
+
+    objective = next(slot for slot in slots if "unweighted version" in slot["evidence_quote"])
+    assert objective["page_start"] == 4
+    assert objective["page_end"] == 5
+    assert "Simplified training objective" in objective["evidence_quote"]
+    assert "L_simple" in objective["evidence_quote"]
+    assert "epsilon" in objective["evidence_quote"]
+
+
+def test_system_a_slots_prefer_discriminative_retriever_evidence_over_qa_results(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "rag.en.md"
+    source_path.write_text(
+        "# Retrieval-Augmented Generation\n\n"
+        "<!-- kb_page: 3 -->\n\n## 2.2 Retriever: DPR\n\n"
+        "The retrieval component is based on DPR [26]. "
+        "We use a pre-trained bi-encoder from DPR to initialize our retriever "
+        "and build the document index.\n",
+        encoding="utf-8",
+    )
+    citation_plan._source_sentence_records_for_signature.cache_clear()
+    citation_plan._source_text_for_signature.cache_clear()
+    source = str(source_path)
+    answer_hits = [
+        {
+            "text": "one bundled RAG document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "4 Results / Open-domain Question Answering",
+                        "page_start": 5,
+                        "score": 190.0,
+                        "text": "RAG reports open-domain question answering results.",
+                    },
+                    {
+                        "heading_path": "2.2 Retriever: DPR",
+                        "page_start": 3,
+                        "score": 170.0,
+                        "text": (
+                            "We use a pre-trained bi-encoder from DPR to initialize our "
+                            "retriever and build the document index."
+                        ),
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=2,
+        ranking_texts=[
+            "Did RAG invent Dense Passage Retrieval, or reuse DPR's retriever, "
+            "pre-trained bi-encoder, and document index?"
+        ],
+    )
+
+    assert slots[0]["page_start"] == 3
+    assert "Retriever: DPR" in slots[0]["evidence_quote"]
+    assert "based on DPR" in slots[0]["evidence_quote"]
+    assert "pre-trained bi-encoder" in slots[0]["evidence_quote"]
+
+
+def test_system_a_slots_cover_clip_pairing_figure_relation_without_dropping_scale() -> None:
+    source = "clip.en.md"
+    answer_hits = [
+        {
+            "text": "one bundled CLIP document",
+            "meta": {
+                "source_path": source,
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "2.2 Creating a Sufficiently Large Dataset",
+                        "page_start": 4,
+                        "score": 168.0,
+                        "text": (
+                            "We train an image encoder and a text encoder to maximize "
+                            "the cosine similarity of the correct image-text pairings."
+                        ),
+                    },
+                    {
+                        "heading_path": "Abstract",
+                        "page_start": 1,
+                        "score": 164.0,
+                        "text": (
+                            "We pre-train on 400 million image-text pairs collected "
+                            "from the internet using natural language supervision."
+                        ),
+                    },
+                    {
+                        "heading_path": "Figure 1",
+                        "page_start": 2,
+                        "score": 167.0,
+                        "text": (
+                            "Figure 1. CLIP jointly trains an image encoder and a text "
+                            "encoder to predict the correct pairings of a batch of "
+                            "image-text examples."
+                        ),
+                    },
+                ],
+            },
+        }
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=3,
+        ranking_texts=[
+            "How does CLIP train its image and text encoders to predict correct "
+            "pairings, what does Figure 1 show, and what is the 400 million "
+            "image-text pretraining scale?"
+        ],
+        rank_answer_hits=True,
+    )
+
+    assert any(slot["page_start"] == 1 and "400 million" in slot["evidence_quote"] for slot in slots)
+    assert any(slot["page_start"] == 2 and "Figure 1" in slot["evidence_quote"] for slot in slots)
+
+
+def test_system_b_slots_prioritize_reference_identity_over_broad_context_overlap() -> None:
+    source = "rag.en.md"
+    sid = "s1234abcd"
+    opportunities = [
+        {
+            "source_path": source,
+            "sid": sid,
+            "ref_num": 20,
+            "label": "REALM",
+            "ref_title": "Retrieval-Augmented Language Model Pre-Training",
+            "heading_path": "4 Results",
+            "evidence_quote": (
+                "Open-domain question answering compares retrieval systems and prior "
+                "work [20]."
+            ),
+            "context_marker_verified": True,
+        },
+        {
+            "source_path": source,
+            "sid": sid,
+            "ref_num": 26,
+            "label": "DPR",
+            "ref_title": "Dense Passage Retrieval for Open-Domain Question Answering",
+            "heading_path": "2.2 Retriever: DPR",
+            "evidence_quote": "The retrieval component is based on DPR [26].",
+            "context_marker_verified": True,
+        },
+    ]
+
+    slots = citation_plan._system_b_slots(
+        opportunities,
+        intent="origin_lookup",
+        max_items=1,
+        prompt=(
+            "Did RAG invent Dense Passage Retrieval (DPR), or reuse prior work? "
+            "Identify the upstream paper."
+        ),
+    )
+
+    assert slots[0]["candidate_refs"] == [26]
+
+
+def test_system_a_slot_infers_cross_page_section_range_only_for_unanchored_bundle(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ddpm.en.md"
+    source.write_text(
+        "<!-- kb_page: 4 -->\n\n### 3.4 Simplified training objective\n\n"
+        "The variational bound is ready to optimize.\n\n"
+        "<!-- kb_page: 5 -->\n\nThe t > 1 cases correspond to an unweighted version.\n",
+        encoding="utf-8",
+    )
+
+    slots = _system_a_slots(
+        support_slots=[
+            {
+                "source_path": str(source),
+                "heading_path": "3.4 Simplified training objective",
+                "page_start": 5,
+                "evidence_quote": "The t > 1 cases correspond to an unweighted version.",
+                "source_passage_bundle": True,
+            }
+        ],
+        answer_hits=[],
+        max_items=1,
+        ranking_texts=["What is the simplified training objective?"],
+    )
+
+    assert slots[0]["page_start"] == 4
+    assert slots[0]["page_end"] == 5

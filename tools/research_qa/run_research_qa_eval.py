@@ -725,6 +725,7 @@ def evaluate_retrieval_coverage(
     *,
     cases: list[dict[str, Any]] | None = None,
     db_root: Path | str | None = None,
+    source_root: Path | str | None = None,
     top_k: int = 6,
     max_required_rank: int | None = None,
 ) -> dict[str, Any]:
@@ -742,8 +743,11 @@ def evaluate_retrieval_coverage(
     chunks = load_all_chunks(root)
     retriever = BM25Retriever(chunks)
     settings = SimpleNamespace(api_key=None, query_expansion_enabled=False)
+    expected_source_root = Path(source_root or fixture.db_root or root)
     source_to_doc_id = {
-        _resolved_path_key(source_path_for_doc(fixture, doc_id, db_root=root)): doc_id
+        _resolved_path_key(
+            source_path_for_doc(fixture, doc_id, db_root=expected_source_root)
+        ): doc_id
         for doc_id in fixture.docs_by_id
     }
 
@@ -822,6 +826,7 @@ def evaluate_retrieval_coverage(
         "top_k": int(top_k),
         "max_required_rank": rank_limit,
         "db_root": str(root.resolve()),
+        "source_root": str(expected_source_root.resolve()),
         "chunk_count": len(chunks),
         "cases": rows,
     }
@@ -963,11 +968,18 @@ def _contains_term(haystack: Any, term: str) -> bool:
     # reviewed evidence phrases remain stable across Markdown conversion.
     hay_search = hay.replace("$", "")
     hay_compact = re.sub(r"\s+", "", hay_search)
+    # PDF/Markdown conversion and editorial style vary between spaces and
+    # hyphens in compound technical terms (for example ``high frequency`` vs
+    # ``high-frequency``).  Normalize only whitespace and hyphen glyphs; all
+    # lexical characters still have to match exactly.
+    hay_hyphen_compact = re.sub(r"[\s\-\u00ad\u2010-\u2015]+", "", hay_search)
     for needle in _term_aliases(term):
         needle_norm = _norm(needle).replace("$", "")
         if needle_norm and (
             needle_norm in hay_search
             or re.sub(r"\s+", "", needle_norm) in hay_compact
+            or re.sub(r"[\s\-\u00ad\u2010-\u2015]+", "", needle_norm)
+            in hay_hyphen_compact
         ):
             return True
     return False
@@ -975,6 +987,17 @@ def _contains_term(haystack: Any, term: str) -> bool:
 
 def _term_aliases(term: str) -> list[str]:
     raw = str(term or "").strip()
+    raw_compact = re.sub(r"[\s_$\\{}]+", "", raw).lower()
+    if raw_compact in {"lsimple", "ltextsimple"}:
+        return ["L_simple", "L_{simple}", r"L_{\text{simple}}", r"L_{\\text{simple}}"]
+    figure_match = re.fullmatch(r"(?i)fig(?:ure)?\.?\s*(\d+)", raw)
+    if figure_match:
+        number = figure_match.group(1)
+        return [f"Fig. {number}", f"Fig {number}", f"Figure {number}"]
+    if raw == "类别名称":
+        return ["类别名称", "类别的名称", "class names", "names of all the classes"]
+    if raw.lower() == "class names":
+        return ["class names", "names of all the classes", "names of the classes"]
     if raw.lower() in {"s2ism", "s²ism", "s₂ism"}:
         return ["s2ISM", "s²ISM", "s₂ISM"]
     if raw == "不同层面":
@@ -1121,7 +1144,24 @@ def _doc_match_candidates(fixture: ResearchQaFixture, doc_id: str) -> list[str]:
 
 def _doc_matches_payload(fixture: ResearchQaFixture, doc_id: str, payload: Any) -> bool:
     text = _norm(_payload_text(payload))
-    return any(_contains_term(text, candidate) for candidate in _doc_match_candidates(fixture, doc_id))
+    for candidate in _doc_match_candidates(fixture, doc_id):
+        candidate_norm = _norm(candidate)
+        if not candidate_norm:
+            continue
+        # Short document ids such as SAM and RAG are common substrings of
+        # ordinary prose (for example ``samples`` and ``storage``).  Treat
+        # identifier-shaped aliases as tokens, while retaining substring
+        # matching for full titles and source paths.
+        if re.fullmatch(r"[a-z0-9_.+-]{2,32}", candidate_norm):
+            if re.search(
+                rf"(?<![a-z0-9]){re.escape(candidate_norm)}(?![a-z0-9])",
+                text,
+            ):
+                return True
+            continue
+        if _contains_term(text, candidate_norm):
+            return True
+    return False
 
 
 def _as_list(value: Any) -> list[Any]:
@@ -1707,9 +1747,20 @@ def _locate_contract_failures(
             if not _detail_matches_source_page(detail, source_page):
                 continue
             locator_payload = _detail_locator_payload(detail)
-            if locator_terms and not all(_contains_term(locator_payload, term) for term in locator_terms):
-                continue
             evidence_payload = _detail_evidence_payload(detail)
+            # A locate contract describes a user-visible source location, not
+            # only its heading label. Some papers introduce the named model in
+            # a paragraph under a generic section heading. Keep the exact
+            # page/source requirement, while allowing the locator phrase to be
+            # visible in either the locator or that card's evidence.
+            visible_location_payload = {
+                "locator": locator_payload,
+                "evidence": evidence_payload,
+            }
+            if locator_terms and not all(
+                _contains_term(visible_location_payload, term) for term in locator_terms
+            ):
+                continue
             if evidence_terms and not all(_contains_term(evidence_payload, term) for term in evidence_terms):
                 continue
             if not str(detail.get("source_path") or "").strip():
@@ -2916,8 +2967,8 @@ def main(argv: list[str] | None = None) -> int:
         "--source-root",
         default="",
         help=(
-            "Override fixture dbRoot for live request source paths and response identity mapping. "
-            "Use this when evaluating an isolated corpus copy."
+            "Override fixture dbRoot for Markdown source paths and response identity mapping, "
+            "including --retrieval-only. Use this when the isolated index and source trees differ."
         ),
     )
     parser.add_argument("--timeout-s", type=float, default=180.0, help="HTTP timeout seconds.")
@@ -3013,7 +3064,11 @@ def main(argv: list[str] | None = None) -> int:
             cases=selected_cases,
             forbidden_phrases=fixture.forbidden_phrases,
         )
-        source_errors = validate_fixture_sources(source_fixture, db_root=args.db_root)
+        source_validation_root = args.source_root or args.db_root
+        source_errors = validate_fixture_sources(
+            source_fixture,
+            db_root=source_validation_root,
+        )
         if source_errors:
             for error in source_errors:
                 print(f"[ERROR] {error}", file=sys.stderr)
@@ -3021,7 +3076,7 @@ def main(argv: list[str] | None = None) -> int:
         grounded_count = sum(1 for case in selected_cases if bool(case.get("sourceGrounded")))
         print(
             f"[OK] source grounding: cases={grounded_count} "
-            f"db_root={Path(args.db_root).resolve()}"
+            f"source_root={Path(source_validation_root).resolve()}"
         )
         return 0
 
@@ -3030,6 +3085,7 @@ def main(argv: list[str] | None = None) -> int:
             fixture,
             cases=selected_cases,
             db_root=args.db_root,
+            source_root=(args.source_root or None),
             top_k=max(1, int(args.top_k)),
             max_required_rank=(
                 int(args.max_required_rank)

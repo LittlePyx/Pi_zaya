@@ -123,11 +123,57 @@ def _linked_answer_claims_by_source(markdown: str, rows: list[dict]) -> dict[str
     surface = _ANSWER_CITATION_LINK_RE.sub(_placeholder, str(markdown or ""))
     surface = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", surface)
     surface = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", surface)
+    out: dict[str, list[str]] = {}
+
+    # A citation at the end of a paragraph conventionally supports the whole
+    # paragraph. Preserve that scope only when every citation in the paragraph
+    # resolves to one source; mixed-source comparisons continue to use the
+    # sentence-local path below.
+    for paragraph in re.split(r"\n\s*\n", surface):
+        tokens = [token for token in token_sources if token in paragraph]
+        source_keys = {
+            token_sources[token]
+            for token in tokens
+            if token_sources.get(token)
+        }
+        if not tokens or len(source_keys) != 1:
+            continue
+        last_token = max(tokens, key=paragraph.rfind)
+        token_end = paragraph.rfind(last_token) + len(last_token)
+        suffix = paragraph[token_end:]
+        if not re.fullmatch(
+            r"[\s\]\[(){}*_`.,;:!?\u3002\uff01\uff1f\uff0c\uff1b\uff1a-]*",
+            suffix,
+        ):
+            continue
+        paragraph_claim = paragraph
+        for token in tokens:
+            paragraph_claim = paragraph_claim.replace(token, " ")
+        paragraph_claim = re.sub(
+            r"(?m)^\s*#{1,6}\s+[^\n]*(?:\n+|$)",
+            "",
+            paragraph_claim,
+        )
+        paragraph_claim = re.sub(
+            r"^\s*(?:[-*+]\s+|\d+[.)]\s*)",
+            "",
+            paragraph_claim,
+        )
+        paragraph_claim = re.sub(r"[*_`>#]", " ", paragraph_claim)
+        paragraph_claim = re.sub(r"\s+", " ", paragraph_claim).strip()
+        paragraph_claim = re.sub(
+            r"\s+([,.;:!?\u3002\uff0c\uff1b\uff1a\uff01\uff1f])",
+            r"\1",
+            paragraph_claim,
+        )
+        if 8 <= len(paragraph_claim) <= 900:
+            claims = out.setdefault(next(iter(source_keys)), [])
+            if paragraph_claim not in claims:
+                claims.append(paragraph_claim)
     parts = re.split(
         r"(?<=[。！？!?；;\n])\s*|(?<=\.)\s+(?=(?:\*{1,2})?[A-Z\u4e00-\u9fff])",
         surface,
     )
-    out: dict[str, list[str]] = {}
     for part in parts:
         tokens = [token for token in token_sources if token in part]
         if not tokens:

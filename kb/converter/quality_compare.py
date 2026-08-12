@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import json
 import re
+from collections import Counter
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -240,8 +241,24 @@ def compare_markdown_quality(base_text: str, candidate_text: str) -> dict[str, A
         "analyzer_warnings_increased": bool(candidate.analyzer_warning_count > base.analyzer_warning_count),
     }
 
+    # Character-level SequenceMatcher can become quadratic for long,
+    # near-identical papers.  Similarity is diagnostic only (all acceptance
+    # decisions below use explicit structural/content-loss metrics), so use a
+    # word multiset for large documents: it preserves meaningful edit
+    # sensitivity while bounding final quality-verification latency.
+    similarity_basis = "characters"
+    if max(len(base_text), len(candidate_text)) > 50_000:
+        similarity_basis = "word_multiset"
+        base_words = base_text.split()
+        candidate_words = candidate_text.split()
+        common_word_count = sum((Counter(base_words) & Counter(candidate_words)).values())
+        similarity_ratio = (2 * common_word_count) / max(1, len(base_words) + len(candidate_words))
+    else:
+        similarity_ratio = difflib.SequenceMatcher(None, base_text, candidate_text).ratio()
+
     return {
-        "similarity_ratio": round(difflib.SequenceMatcher(None, base_text, candidate_text).ratio(), 6),
+        "similarity_ratio": round(similarity_ratio, 6),
+        "similarity_basis": similarity_basis,
         "exact_match": bool(base_text == candidate_text),
         "base": asdict(base),
         "candidate": asdict(candidate),

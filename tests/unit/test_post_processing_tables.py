@@ -1,4 +1,5 @@
 from kb.converter.post_processing import postprocess_markdown
+from kb.converter.tables import markdown_table_issue_spans
 
 
 def _table_widths(md: str) -> list[int]:
@@ -27,6 +28,88 @@ def test_postprocess_markdown_normalizes_sparse_multilevel_table_headers():
     assert len(set(widths)) == 1
     assert "|  |  |  | Sampling ratio |" in out
     assert "| **PSNR (dB)** |  | circular | 11.00 | 12.45 |" in out
+
+
+def test_postprocess_markdown_reattaches_detached_rows_with_missing_leading_cell():
+    src = "\n".join(
+        [
+            "| Model | Setting | A | B |",
+            "| --- | --- | --- | --- |",
+            "| **Base** | Batch Size | 16 | 32 |",
+            "|  |",
+            "Epochs | 30 | 60 |",
+            "|  | Learning Rate | 5E-04 | 4E-04 |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "|  | Epochs | 30 | 60 |" in out
+    assert "\nEpochs |" not in out
+    assert "|  |\n" not in out
+
+
+def test_table_issue_spans_include_fragmented_header_and_following_body():
+    src = "\n".join(
+        [
+            "<!-- kb_page: 3 -->",
+            "| Method |",
+            "Trainable Parameters | WikiSQL | MNLI-m |",
+            "| Fine-Tune | 175B | 73.8 | 89.5 |",
+            "| --- | --- | --- | --- |",
+            "| LoRA | 4.7M | 73.4 | 91.7 |",
+        ]
+    )
+
+    assert markdown_table_issue_spans(src) == [
+        {
+            "start": 1,
+            "end": 6,
+            "collapsed_row_count": 0,
+            "ambiguous_break_row_count": 1,
+        }
+    ]
+
+
+def test_table_issue_spans_include_blank_fragmented_header_cell():
+    src = "\n".join(
+        [
+            "<!-- kb_page: 4 -->",
+            "|  |",
+            "of Trainable Parameters = 18M | | | |",
+            "| Weight Type | Wq | Wk | Wv |",
+            "| --- | --- | --- | --- |",
+            "| Rank | 8 | 8 | 8 |",
+        ]
+    )
+
+    assert markdown_table_issue_spans(src)[0]["start"] == 1
+    assert markdown_table_issue_spans(src)[0]["end"] == 6
+
+
+def test_table_issue_spans_include_singleton_across_page_marker():
+    src = "\n".join(
+        [
+            "<!-- kb_page: 18 -->",
+            "|  | mIoU at 1 point | 3 points |  |",
+            "",
+            "<!-- kb_page: 19 -->",
+            "",
+            "mIoU at 1 point | 3 points |",
+            "| group | one point | three points |",
+            "| --- | --- | --- |",
+        ]
+    )
+
+    spans = markdown_table_issue_spans(src)
+
+    assert any(item["start"] == 1 and item["end"] == 2 for item in spans)
+
+
+def test_table_issue_spans_ignore_isolated_equation_pipe_fragment():
+    src = "\n".join(["The objective is", "| y | X", "X", "$$", "sum_t log p", "$$"])
+
+    assert markdown_table_issue_spans(src) == []
 
 
 def test_postprocess_markdown_expands_multicolumn_cells():

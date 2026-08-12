@@ -1845,7 +1845,30 @@ def _resolve_paper_guide_md_path(
     ])
     try:
         if src.is_file() and src.suffix.lower().endswith(".md"):
-            return resolve_existing_file_under_roots(src, md_roots)
+            resolved_direct = resolve_existing_file_under_roots(src, md_roots)
+            if resolved_direct is not None:
+                return resolved_direct
+            # A configured Markdown corpus may be a sibling of the index
+            # directory with an arbitrary name (for example ``md`` rather
+            # than the legacy ``md_output``).  In that layout, ``docs.json``
+            # is the authoritative allow-list: accept only the exact existing
+            # source path recorded by the index.  This retains the outside-
+            # root guard without breaking source scans under path overrides.
+            if db_dir:
+                docs_path = Path(db_dir).expanduser() / "docs.json"
+                try:
+                    docs_payload = json.loads(docs_path.read_text(encoding="utf-8"))
+                except Exception:
+                    docs_payload = {}
+                requested = resolved_path(src)
+                if requested is not None and isinstance(docs_payload, dict):
+                    for raw_doc in docs_payload.values():
+                        if not isinstance(raw_doc, dict):
+                            continue
+                        indexed = resolved_path(raw_doc.get("path"))
+                        if indexed is not None and indexed == requested and indexed.is_file():
+                            return indexed
+            return None
     except Exception:
         pass
 

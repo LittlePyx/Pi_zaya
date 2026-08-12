@@ -470,9 +470,15 @@ def _validate_structured_citations(
         context_line = _citation_context_line(token_start=token_start, token_end=token_end)
         line_index = _citation_line_index(token_start=token_start)
         hints = extract_citation_context_hints(cleaned, token_start=token_start, token_end=token_end)
+        author_only_hint = bool(
+            str(hints.get("author") or "").strip()
+            and bool(hints.get("author_confident"))
+            and not str(hints.get("year") or "").strip()
+        )
         has_strong_hints = bool(
             str(hints.get("doi") or "").strip()
             or (str(hints.get("author") or "").strip() and str(hints.get("year") or "").strip())
+            or author_only_hint
         )
         current_conflict = bool(current_ref and has_explicit_reference_conflict(current_ref, hints))
         local_resolution: dict | None = None
@@ -649,6 +655,14 @@ def _validate_structured_citations(
                 return None
             if str(hints.get("doi") or "").strip():
                 return best_num if best_score >= 6.0 else None
+            if author_only_hint:
+                # "Karpukhin et al." is an explicit bibliographic identity
+                # even without a year. Require the full confident surname
+                # match score and keep the result inside the focused reference
+                # candidates when such a focused list exists.
+                if focused_candidate_nums and best_num not in focused_candidate_nums:
+                    return None
+                return best_num if best_score >= 2.5 else None
             return best_num if best_score >= 3.5 else None
 
         if not candidate_nums:

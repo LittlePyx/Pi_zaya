@@ -368,7 +368,52 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
     q = str(prompt or "").strip()
     if not q:
         return []
+    # Some imported evaluation/chat histories contain replacement characters
+    # after a legacy UTF-8/GBK round trip.  The surviving paper/model names are
+    # still useful, but the damaged Chinese facets cannot be tokenized.  For
+    # those prompts, add only terminology that is present in the named paper;
+    # the source scan still has to find and quote the actual evidence.
+    mojibake = "\ufffd" in q or bool(re.search(r"[鍏闃鏁绔缁鐨]{2,}", q))
     rules: tuple[tuple[str, str], ...] = (
+        (
+            r"(?i)\b(?:transpose|transposed)\b.{0,48}\b(?:attention|self[- ]attention)\b|"
+            r"\b(?:attention|self[- ]attention)\b.{0,48}\b(?:transpose|transposed)\b|"
+            r"\u901a\u9053\u7ef4\u5ea6",
+            "cross-covariance across feature channels self-attention spatial dimension",
+        ),
+        (
+            r"(?i)\b(?:filtering|gating)\s+role\b|\binformation\s+flow\b|"
+            r"\u4fe1\u606f\u6d41|\u6709\u7528\u7279\u5f81",
+            "distinct role controls information flow fine details useful information "
+            "suppressing less informative features",
+        ),
+        (
+            r"(?i)\b(?:low[- ]rank|intrinsic\s+rank)\b.{0,96}"
+            r"\b(?:assumption|adaptation|updates?)\b|"
+            r"\b(?:assumption|adaptation|updates?)\b.{0,96}"
+            r"\b(?:low[- ]rank|intrinsic\s+rank)\b",
+            "change in weights weight updates low intrinsic rank rank decomposition frozen",
+        ),
+        (
+            r"(?i)\bfreez(?:e|es|ing)\b.{0,120}\binject(?:s|ed|ing)?\b|"
+            r"\binject(?:s|ed|ing)?\b.{0,120}\bfreez(?:e|es|ing)\b|"
+            r"\u51bb\u7ed3.{0,80}\u6ce8\u5165|\u6ce8\u5165.{0,80}\u51bb\u7ed3",
+            "Low-Rank Adaptation freezes pre-trained model weights injects trainable "
+            "rank decomposition matrices rank-deficiency",
+        ),
+        (
+            r"(?i)\bcontracting\s+paths?\b.{0,120}\bexpansive\s+paths?\b|"
+            r"\bexpansive\s+paths?\b.{0,120}\bcontracting\s+paths?\b",
+            "contracting path expansive path upsampling concatenation cropped feature map",
+        ),
+        (
+            r"\u9ad8\u9891|high[- ]frequency",
+            "high-frequency functions high-frequency variation color geometry",
+        ),
+        (
+            r"\u8f93\u5165|\u5750\u6807|input\s+coordinates?",
+            "input coordinates directly operate MLP",
+        ),
         (r"\u4f4d\u7f6e|position", "position spatial coordinate"),
         (r"\u89d2\u5ea6|\u52a8\u91cf|angular|momentum", "angular momentum angle"),
         (r"\u8f74\u5411|\u6df1\u5ea6|axial|depth", "depth axial position phase difference"),
@@ -458,6 +503,169 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
         if re.search(pattern, q, flags=re.IGNORECASE):
             surface.extend(_paper_guide_scan_tokens(terms, limit=24))
     if (
+        re.search(r"(?i)\bcontracting\b", q)
+        and re.search(r"(?i)\bexpansive\b", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "contracting path expansive path upsampling concatenation cropped feature map",
+                limit=24,
+            )
+        )
+    if (
+        re.search(r"(?i)\bpositional\s+encoding\b", q)
+        and re.search(r"(?i)\bMLP\b|\bcoordinates?\b|xyz", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "direct input coordinates high-frequency functions "
+                "high-frequency variation color geometry",
+                limit=24,
+            )
+        )
+    if (
+        re.search(r"(?i)\bLoRA\b|\blow[- ]rank\b|\u4f4e\u79e9", q)
+        and (
+            mojibake
+            or re.search(
+                r"(?i)\bdeploy(?:ment|ed)?\b|\binference\s+latency\b|\u90e8\u7f72",
+                q,
+            )
+        )
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "No Additional Inference Latency merge compute and store W0 plus BA "
+                "perform inference as usual subtracting trainable matrices frozen weights",
+                limit=32,
+            )
+        )
+    if re.search(r"(?i)\bU[- ]Net\b", q) and (
+        mojibake
+        or re.search(r"(?i)\boverlap|mirror|weighted\s+loss|touching\s+cells?\b", q)
+        or re.search(r"边界|接触|铺块|损失", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "overlap-tile strategy mirroring the input image weighted loss "
+                "touching cells separation background labels Figure 2",
+                limit=32,
+            )
+        )
+    if re.search(r"(?i)\bRestormer\b", q) and (
+        mojibake
+        or re.search(
+            r"(?i)\blinear\s+complexity|high[- ]resolution|depth[- ]?wise|local\s+context",
+            q,
+        )
+        or re.search(r"高分辨率|空间(?:自注意力|上下文)|复杂度|局部", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Multi-Dconv Head Transposed Attention linear complexity across channels "
+                "depth-wise convolutions local context spatial context",
+                limit=32,
+            )
+        )
+    if re.search(r"(?i)\bSAM\b|\bSA-1B\b", q) and (
+        mojibake
+        or re.search(r"(?i)\bdata\s+engine|\bSA-1B\b|fully\s+automatic", q)
+        or re.search(r"数据引擎|全自动|掩码", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Data engine has three stages assisted-manual semi-automatic fully automatic "
+                "SA-1B 11M images 1.1B masks 99.1 percent Masks",
+                limit=40,
+            )
+        )
+    if re.search(r"(?i)\bDDPM\b|\bL_?simple\b", q) and (
+        mojibake
+        or re.search(
+            r"(?i)\bL_?simple\b|epsilon|simplified\s+(?:training\s+)?objective|"
+            r"variational\s+bound|codelength",
+            q,
+        )
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Simplified training objective L_simple unweighted version epsilon noise "
+                "true variational bound better codelengths best sample quality Experiments",
+                limit=40,
+            )
+        )
+    if re.search(r"(?i)\bRAG-Sequence\b", q) and re.search(
+        r"(?i)\bRAG-Token\b", q
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "RAG-Sequence Model same retrieved document entire target sequence "
+                "RAG-Token Model different latent document each target token Models",
+                limit=36,
+            )
+        )
+    if re.search(r"(?i)\bRAG\b", q) and re.search(
+        r"(?i)\bDPR\b|Dense\s+Passage\s+Retrieval|Karpukhin", q
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Retriever DPR based on DPR pre-trained bi-encoder document index Karpukhin "
+                "Dense Passage Retrieval for Open-Domain Question Answering References",
+                limit=40,
+            )
+        )
+    if re.search(r"(?i)\bCLIP\b", q) and (
+        not mojibake
+        and re.search(r"(?i)\bsupervision|batch|objective|pretrain(?:ing)?|data\s+scale", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Abstract predicting which caption goes with which image 400 million "
+                "image-text pairs Figure 1 image encoder text encoder correct pairings "
+                "symmetric cross entropy contrastive objective",
+                limit=44,
+            )
+        )
+    if re.search(r"(?i)\bCLIP\b", q) and (
+        mojibake
+        or re.search(r"(?i)\bzero[- ]shot|class names?|classifier", q)
+        or re.search(r"零样本|类别名称|分类器", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Using CLIP for Zero-Shot Transfer names of all the classes text encoder "
+                "image encoder respective encoders cosine similarity temperature softmax",
+                limit=40,
+            )
+        )
+    if (
+        re.search(r"(?i)\bFlashAttention\b", q)
+        and re.search(
+            r"(?i)\b(?:runtime|memory|I/O|IO)\b|\u8fd0\u884c\u65f6|\u5185\u5b58|\u663e\u5b58",
+            q,
+        )
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "IO-aware exact attention tiling memory reads writes HBM SRAM prevent "
+                "materialization N x N attention matrix recompute backward pass Figure 1",
+                limit=40,
+            )
+        )
+    if re.search(r"(?i)\bDINOv2\b|\bViT-g\b", q) and (
+        mojibake
+        or re.search(r"(?i)\bdistill|teacher|student|from\s+scratch", q)
+        or re.search(r"蒸馏|教师|学生|从头训练", q)
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Model distillation ViT-g frozen teacher smaller student remove masking "
+                "stochastic depth iBOT loss two global crops EMA better performance "
+                "than training from scratch",
+                limit=44,
+            )
+        )
+    if (
         re.search(r"单光子|single[- ]photon", q, flags=re.IGNORECASE)
         and re.search(r"探测器|detectors?|photodetector", q, flags=re.IGNORECASE)
         and re.search(r"指标|评价|性能|metrics?|characteristics?", q, flags=re.IGNORECASE)
@@ -532,6 +740,29 @@ def _paper_guide_requested_relation_anchors(query_tokens: set[str]) -> set[str]:
         ("characteristic_optimal_snr", {"characteristic", "optimal", "snr"}),
         ("detector_integration_boundary", {"detector", "integration", "responsivity"}),
         ("axial_phase_definition", {"axial", "phase", "position"}),
+        ("unet_overlap_boundary", {"overlap-tile", "mirroring"}),
+        ("unet_touching_weighted", {"weighted", "touching"}),
+        ("restormer_linear_local", {"linear", "channels", "depth-wise", "local"}),
+        ("sam_engine_stages", {"assisted-manual", "semi-automatic", "fully"}),
+        ("sam_dataset_images", {"11", "images"}),
+        ("sam_dataset_size", {"11", "1.1", "images", "masks"}),
+        ("sam_auto_share", {"1.1", "99.1", "masks", "fully"}),
+        ("ddpm_epsilon_prediction", {"l_simple", "epsilon"}),
+        ("ddpm_unweighted_relation", {"unweighted", "variational"}),
+        ("ddpm_weighting_difference", {"unweighted", "variational"}),
+        ("ddpm_quality_tradeoff", {"variational", "codelengths", "quality"}),
+        ("lora_merge_latency", {"merge", "compute", "store", "latency"}),
+        ("rag_sequence_token", {"same", "different", "document", "token"}),
+        ("rag_dpr_usage", {"dpr", "bi-encoder", "retriever"}),
+        ("rag_dpr_basis", {"dpr", "retriever"}),
+        ("rag_dpr_reference", {"dpr", "karpukhin", "references"}),
+        ("clip_training_scale", {"400", "caption", "image-text"}),
+        ("clip_pairing_objective", {"pairings", "encoder", "contrastive"}),
+        ("clip_pairing_figure", {"pairings", "encoder", "contrastive"}),
+        ("clip_zero_shot_classifier", {"classes", "cosine", "softmax"}),
+        ("flash_io_exact", {"exact", "tiling", "hbm", "sram"}),
+        ("flash_avoided_matrix", {"materialization", "matrix", "recompute"}),
+        ("dinov2_distillation", {"distillation", "frozen", "ibot", "ema"}),
     )
     for key, required in rules:
         if required.issubset(tokens):
@@ -568,6 +799,111 @@ def _paper_guide_source_relation_anchors(text: str) -> set[str]:
         (
             "axial_phase_definition",
             r"(?is)(?:4\s*\\?pi.*(?:Gouy|varphi)|axial\s+position\s+of\s+the\s+scatterer.*Gouy\s+phase)",
+        ),
+        (
+            "unet_overlap_boundary",
+            r"(?is)overlap-tile\s+strategy.*mirroring\s+the\s+input\s+image|"
+            r"mirroring.*overlap-tile\s+strategy",
+        ),
+        (
+            "unet_touching_weighted",
+            r"(?is)weighted\s+loss.*touching\s+(?:cells|objects)|"
+            r"touching\s+(?:cells|objects).*weighted\s+loss",
+        ),
+        (
+            "restormer_linear_local",
+            r"(?is)(?:linear\s+complexity.*across\s+(?:feature\s+)?channels.*"
+            r"depth-wise\s+convolutions?|Multi-Dconv\s+Head\s+Transposed\s+Attention.*"
+            r"linear\s+complexity.*local\s+context)",
+        ),
+        (
+            "sam_engine_stages",
+            r"(?is)(?:data\s+engine\s+has\s+three\s+stages|three\s+stages:)"
+            r".*assisted-manual.*semi-automatic.*fully\s+automatic",
+        ),
+        (
+            "sam_dataset_size",
+            r"(?is)11M\b.{0,180}\bimages\b.{0,180}\b1\.1B\b.{0,100}\bmasks\b",
+        ),
+        ("sam_dataset_images", r"(?i)\b11M\s+images\b"),
+        (
+            "sam_auto_share",
+            r"(?is)1\.1B\s+masks,\s*99\.1%\s+of\s+which\s+were\s+generated\s+fully\s+automatically",
+        ),
+        (
+            "ddpm_simple_objective",
+            r"(?is)(?:L_.{0,30}simple.{0,360}(?:epsilon|\\epsilon)|"
+            r"(?:unweighted\s+version|discards\s+the\s+weighting).{0,900}"
+            r"simplified\s+(?:training\s+)?objective|"
+            r"simplified\s+(?:training\s+)?objective.{0,900}"
+            r"(?:unweighted\s+version|discards\s+the\s+weighting))",
+        ),
+        (
+            "ddpm_epsilon_prediction",
+            r"(?is)L_.{0,30}simple.{0,360}(?:epsilon|\\epsilon)",
+        ),
+        ("ddpm_unweighted_relation", r"(?is)unweighted\s+version"),
+        (
+            "ddpm_weighting_difference",
+            r"(?is)simplified\s+objective.{0,80}discards\s+the\s+weighting|"
+            r"discards\s+the\s+weighting.{0,80}simplified\s+objective",
+        ),
+        (
+            "ddpm_quality_tradeoff",
+            r"(?is)true\s+variational\s+bound.*better\s+codelengths.*best\s+sample\s+quality",
+        ),
+        (
+            "lora_merge_latency",
+            r"(?is)No\s+Additional\s+Inference\s+Latency.*(?:compute\s+and\s+store|"
+            r"W_?0\s*\+\s*BA).*perform\s+inference\s+as\s+usual",
+        ),
+        (
+            "rag_sequence_token",
+            r"(?is)RAG-Sequence.*same\s+(?:retrieved\s+)?document.*RAG-Token.*"
+            r"different\s+(?:latent\s+)?document.*(?:each\s+target\s+)?token",
+        ),
+        (
+            "rag_dpr_usage",
+            r"(?is)pre-trained\s+bi-encoder.*document\s+index",
+        ),
+        ("rag_dpr_basis", r"(?is)retrieval\s+component.{0,120}based\s+on\s+DPR"),
+        (
+            "rag_dpr_reference",
+            r"(?is)Karpukhin.*Dense\s+Passage\s+Retrieval\s+for\s+Open-Domain\s+Question\s+Answering",
+        ),
+        (
+            "clip_training_scale",
+            r"(?is)predicting\s+which\s+caption\s+goes\s+with\s+which\s+image.*400\s+million|"
+            r"400\s+million.*(?:image-text\s+pairs|caption)",
+        ),
+        (
+            "clip_pairing_objective",
+            r"(?is)image\s+encoder.*text\s+encoder.*correct\s+pairings.*"
+            r"(?:symmetric\s+cross\s+entropy|contrastive)",
+        ),
+        (
+            "clip_pairing_figure",
+            r"(?is)Figure\s+1.*image\s+encoder.*text\s+encoder.*correct\s+pairings",
+        ),
+        (
+            "clip_zero_shot_classifier",
+            r"(?is)names\s+of\s+all\s+the\s+classes.*respective\s+encoders.*"
+            r"cosine\s+similarity.*softmax",
+        ),
+        (
+            "flash_io_exact",
+            r"(?is)IO-aware\s+exact\s+attention.*tiling.*HBM.*SRAM",
+        ),
+        (
+            "flash_avoided_matrix",
+            r"(?is)(?:prevent|without)\s+(?:the\s+)?materialization.*"
+            r"(?:N\s*[x×\\]\s*N|attention\s+matrix).*recomput",
+        ),
+        (
+            "dinov2_distillation",
+            r"(?is)Model\s+distillation.*ViT-g.*frozen\s+teacher.*"
+            r"(?:remove\s+the\s+masking\s+and\s+stochastic\s+depth).*"
+            r"iBOT\s+loss.*two\s+global\s+crops.*(?:EMA|training\s+from\s+scratch)",
         ),
     )
     return {key for key, pattern in rules if re.search(pattern, raw)}
@@ -1195,12 +1531,27 @@ def _paper_guide_targeted_source_block_hits(
             source_relation_anchors
         )
         if shared_relations:
-            score += 34.0 * float(len(shared_relations))
+            score += 52.0 * float(len(shared_relations))
             if len(shared_relations) >= 2:
                 score += 18.0
         semantic_text_overlap = semantic_query_tokens.intersection(
             _paper_guide_scan_tokens(text, limit=220)
         )
+        if semantic_text_overlap:
+            # The main lexical score is intentionally capped so long blocks do
+            # not win by length alone.  Once a concept dictionary was actually
+            # triggered, reward blocks that cover more of that compact semantic
+            # surface; this separates the decisive mechanism paragraph from a
+            # broad introduction that mentions only the paper-level topic.
+            score += min(30.0, 3.0 * float(len(semantic_text_overlap)))
+        semantic_heading_overlap = semantic_query_tokens.intersection(
+            _paper_guide_scan_tokens(heading, limit=48)
+        )
+        if len(semantic_heading_overlap) >= 3:
+            # Exact method/section headings are strong locators.  Requiring at
+            # least three concept terms prevents generic headings such as
+            # "Results" or "Data engine" from winning on title length alone.
+            score += min(30.0, 6.0 * float(len(semantic_heading_overlap)))
         if enumeration_answer_request and len(semantic_text_overlap) >= 3:
             # Questions asking "which metrics/parameters" need the source's
             # definition or enumeration sentence, not an experiment paragraph

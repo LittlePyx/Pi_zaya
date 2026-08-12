@@ -1087,8 +1087,25 @@ def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     heading = _first_text(rec, "heading_path", "title", max_len=180)
     title = source or heading or _card_label(locale, "title_system_a")
     claim_raw = _first_text(rec, "answer_claim", max_len=420)
-    evidence_raw = _first_text(rec, "evidence_quote", "summary_line", "raw", "cite_fmt", max_len=1400)
-    evidence_raw_for_pack = _first_raw_value(rec, "evidence_quote", "summary_line", "raw", "cite_fmt") or evidence_raw
+    evidence_raw = _first_text(
+        rec,
+        "evidence_quote",
+        "reader_evidence_quote",
+        "citation_plan_reader_evidence_quote",
+        "summary_line",
+        "raw",
+        "cite_fmt",
+        max_len=1400,
+    )
+    evidence_raw_for_pack = _first_raw_value(
+        rec,
+        "evidence_quote",
+        "reader_evidence_quote",
+        "citation_plan_reader_evidence_quote",
+        "summary_line",
+        "raw",
+        "cite_fmt",
+    ) or evidence_raw
     locator = _strip_redundant_locator_prefix(_locator(rec), source=source, title=title)
     if not locator and source:
         locator = f"Document-level match: {source}"
@@ -1269,7 +1286,26 @@ def _compose_system_b(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
     )
     claim_raw = _first_text(rec, "answer_claim", max_len=420)
     context_raw = _first_text(rec, "citation_context", "evidence_quote", "summary_line", max_len=1400)
-    locator = _strip_redundant_locator_prefix(_locator(rec), source=source, title=source) or source
+    reference_locator = _strip_redundant_locator_prefix(
+        _locator(rec),
+        source=source,
+        title=source,
+    ) or source
+    context_locator = _first_text(rec, "citation_context_location_label", max_len=260)
+    if not context_locator:
+        context_heading = _first_text(rec, "citation_context_heading_path", max_len=180)
+        context_page = _page_label(
+            rec.get("citation_context_page_start"),
+            rec.get("citation_context_page_end"),
+        )
+        context_locator = " / ".join(
+            part for part in (context_heading, context_page) if part
+        )
+    locator = _strip_redundant_locator_prefix(
+        context_locator or reference_locator,
+        source=source,
+        title=source,
+    ) or source
     role = _first_text(rec, "upstream_work_role", "why_line", max_len=420)
     relation = _first_text(rec, "user_question_relation", "support_relation", max_len=420)
     pack = build_system_b_evidence_pack(
@@ -1278,7 +1314,13 @@ def _compose_system_b(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any
         citation_context_source=str(rec.get("citation_context_source") or rec.get("evidence_source") or ""),
         source=source,
         title=title,
-        heading=_first_text(rec, "heading_path", "location_label", max_len=180),
+        heading=_first_text(
+            rec,
+            "citation_context_heading_path",
+            "heading_path",
+            "location_label",
+            max_len=180,
+        ),
         location_label=locator,
         raw_reference=raw_reference,
         role_hint=role,

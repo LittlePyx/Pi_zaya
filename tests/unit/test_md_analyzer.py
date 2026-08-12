@@ -32,6 +32,73 @@ def test_md_analyzer_does_not_treat_caption_with_pipe_as_table():
     assert not any(issue.category == "table" for issue in issues)
 
 
+def test_md_analyzer_does_not_count_escaped_math_pipes_as_columns():
+    md = "\n".join(
+        [
+            "# Title",
+            "",
+            "| Method | Norm | Score |",
+            "| --- | --- | --- |",
+            r"| Baseline | $\|\Theta\|$ | 0.91 |",
+        ]
+    )
+
+    issues = MarkdownAnalyzer().analyze(md)
+
+    assert not any(issue.category == "table" and issue.severity == "error" for issue in issues)
+
+
+def test_md_analyzer_does_not_treat_display_math_pipes_as_tables():
+    md = "\n".join(
+        [
+            "# Title",
+            "",
+            "$$",
+            r"|\Theta| = L \times d_{model}",
+            "$$",
+        ]
+    )
+
+    issues = MarkdownAnalyzer().analyze(md)
+
+    assert not any(issue.category == "table" for issue in issues)
+
+
+def test_md_analyzer_does_not_treat_isolated_equation_row_as_table():
+    md = "\n".join(
+        [
+            "# Title",
+            "",
+            "The conditional objective is",
+            "| y | X",
+            "X",
+            "$$",
+            r"\sum_t \log P(y_t \mid x, y_{<t})",
+            "$$",
+        ]
+    )
+
+    issues = MarkdownAnalyzer().analyze(md)
+
+    assert not any(issue.category == "table" for issue in issues)
+
+
+def test_md_analyzer_checks_table_at_end_of_document():
+    md = "\n".join(
+        [
+            "# Title",
+            "",
+            "| Method | Score |",
+            "| --- | --- |",
+            "| Baseline | 0.91 | extra |",
+        ]
+    )
+
+    issues = MarkdownAnalyzer().analyze(md)
+
+    assert any(issue.category == "table" and issue.severity == "error" for issue in issues)
+
+
 def test_md_analyzer_accepts_caption_before_image():
     md = "\n".join(
         [
@@ -48,6 +115,21 @@ def test_md_analyzer_accepts_caption_before_image():
         issue.category == "caption" and "has no nearby caption" in issue.message
         for issue in issues
     )
+
+
+def test_md_analyzer_accepts_source_table_evidence_caption():
+    md = "\n".join(
+        [
+            "# Title",
+            "",
+            "**Table evidence.** Original table preserved from source PDF page 4.",
+            "![Source PDF page 4 containing the recovered table](assets/page_4_table_recovery.png)",
+        ]
+    )
+
+    issues = MarkdownAnalyzer().analyze(md)
+
+    assert not any(issue.category == "caption" for issue in issues)
 
 
 def test_md_analyzer_accepts_caption_after_page_anchor_gap():

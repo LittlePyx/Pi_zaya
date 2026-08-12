@@ -4,7 +4,7 @@ import re
 from typing import Any, Callable, Mapping, MutableMapping
 
 from kb.citation_context import extract_inpaper_reference_context
-from kb.source_blocks import normalize_inline_markdown
+from kb.source_blocks import load_source_blocks, normalize_inline_markdown
 
 
 _STRUCT_CITE_RE = re.compile(
@@ -57,6 +57,18 @@ def extract_structured_cite_answer_context_line(
     line = str(source[left:right] or "")
     rel_start = max(0, start - left)
     rel_end = max(rel_start, end - left)
+    boundary_re = re.compile(r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$))")
+
+    def _is_abbreviation_period(match: re.Match[str]) -> bool:
+        if match.group(0) != ".":
+            return False
+        prefix = line[: match.end()]
+        return bool(
+            re.search(
+                r"(?i)\b(?:et\s+al|e\.g|i\.e|fig|eq|ref|sec|vol|no)\.$",
+                prefix,
+            )
+        )
 
     def _sentence_boundaries() -> tuple[int, int]:
         if re.search(r"(?:定量对比依据|quantitative\s+comparison\s+evidence)", line, flags=re.I):
@@ -64,9 +76,12 @@ def extract_structured_cite_answer_context_line(
         # A semicolon separates independently supportable claim units. Keeping
         # the marker-local unit prevents a citation after the semicolon from
         # appearing to support quantitative assertions made before it.
-        boundary_re = re.compile(r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$))")
         sentence_left = 0
-        previous_matches = list(boundary_re.finditer(line[:rel_start]))
+        previous_matches = [
+            match
+            for match in boundary_re.finditer(line[:rel_start])
+            if not _is_abbreviation_period(match)
+        ]
         marker_follows_boundary = bool(
             previous_matches
             and not line[int(previous_matches[-1].end()) : rel_start].strip()
@@ -85,7 +100,14 @@ def extract_structured_cite_answer_context_line(
             # the unrelated sentence after the marker.
             return sentence_left, rel_end
         sentence_right = len(line)
-        next_match = boundary_re.search(line, rel_end)
+        next_match = next(
+            (
+                match
+                for match in boundary_re.finditer(line, rel_end)
+                if not _is_abbreviation_period(match)
+            ),
+            None,
+        )
         if next_match is not None:
             sentence_right = int(next_match.end())
         return sentence_left, sentence_right
@@ -105,9 +127,11 @@ def extract_structured_cite_answer_context_line(
         if navigation_only:
             delimiter_at = sentence_left - 1
             prefix = line[:delimiter_at]
-            prior_boundaries = list(
-                re.finditer(r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$))", prefix)
-            )
+            prior_boundaries = [
+                match
+                for match in boundary_re.finditer(prefix)
+                if not _is_abbreviation_period(match)
+            ]
             previous_left = int(prior_boundaries[-1].end()) if prior_boundaries else 0
             previous_clause = str(prefix[previous_left:] or "").strip()
 
@@ -203,6 +227,44 @@ def apply_source_context_to_inpaper_detail(
     return True
 
 
+def _reference_entry_locator(source_path: str, ref_num: int) -> dict[str, Any]:
+    """Locate the numbered bibliography entry without losing citing context."""
+
+    try:
+        target = int(ref_num)
+    except (TypeError, ValueError):
+        return {}
+    if target <= 0 or not str(source_path or "").strip():
+        return {}
+    marker = re.compile(rf"(?m)(?:^|\n)\s*\[\s*{target}\s*\]\s+")
+    try:
+        blocks = load_source_blocks(str(source_path or "").strip())
+    except Exception:
+        return {}
+    for raw in list(blocks or []):
+        if not isinstance(raw, Mapping):
+            continue
+        heading = str(raw.get("heading_path") or "").strip()
+        text = str(raw.get("raw_text") or raw.get("text") or "").strip()
+        if "reference" not in heading.casefold() or not marker.search(text):
+            continue
+        try:
+            page_start = int(raw.get("page_start") or 0)
+            page_end = int(raw.get("page_end") or page_start or 0)
+        except (TypeError, ValueError):
+            page_start = 0
+            page_end = 0
+        return {
+            "heading_path": heading,
+            "page_start": page_start,
+            "page_end": page_end or page_start,
+            "block_id": str(raw.get("block_id") or "").strip(),
+            "anchor_id": str(raw.get("anchor_id") or "").strip(),
+            "anchor_kind": str(raw.get("kind") or "paragraph").strip(),
+        }
+    return {}
+
+
 def enrich_inpaper_detail_context(
     detail: MutableMapping[str, Any],
     *,
@@ -236,5 +298,44 @@ def enrich_inpaper_detail_context(
             )
         except Exception:
             source_context = None
-    apply_source_context_to_inpaper_detail(detail, source_context)
+    source_context_applied = apply_source_context_to_inpaper_detail(detail, source_context)
+    if source_context_applied:
+        # System B has two auditable locations: the citing sentence explains
+        # why the upstream work is relevant, while the bibliography entry is
+        # the exact reader destination for its authors/title. Preserve both,
+        # then use the entry as the primary locator shown by the card.
+        for key in (
+            "heading_path",
+            "page_start",
+            "page_end",
+            "block_id",
+            "anchor_id",
+            "anchor_kind",
+            "location_label",
+        ):
+            value = detail.get(key)
+            if value not in (None, "", 0):
+                detail[f"citation_context_{key}"] = value
+    entry_locator = _reference_entry_locator(str(source_path or ""), ref_n)
+    if entry_locator:
+        detail["reference_entry_locator"] = dict(entry_locator)
+        for key, value in entry_locator.items():
+            if value not in (None, "", 0):
+                detail[key] = value
+        heading = str(entry_locator.get("heading_path") or "").strip()
+        page_start = int(entry_locator.get("page_start") or 0)
+        page_end = int(entry_locator.get("page_end") or page_start or 0)
+        location_bits = [heading]
+        if page_start > 0:
+            location_bits.append(
+                f"p. {page_start}"
+                if page_end <= page_start
+                else f"pp. {page_start}-{page_end}"
+            )
+        detail["location_label"] = " · ".join(
+            part for part in location_bits if part
+        )
+        detail["strict_locate"] = bool(
+            entry_locator.get("block_id") or entry_locator.get("anchor_id")
+        )
     return detail

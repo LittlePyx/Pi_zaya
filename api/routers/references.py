@@ -1031,11 +1031,11 @@ def _answer_citation_support_line_is_specific(text: str) -> bool:
     return not looks_generic_ref_why_line(value) and not looks_templated_ref_why_line(value)
 
 
-def _answer_citation_evidence_quote(detail: dict) -> str:
+def _answer_citation_evidence_quote(detail: dict, *, prompt: str = "") -> str:
     """Prefer the sentence in the cited block that best matches the answer claim."""
 
     current = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
-    claim = " ".join(
+    claim_core = " ".join(
         part
         for part in (
             str(detail.get("answer_claim") or "").strip(),
@@ -1043,6 +1043,9 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
             str(detail.get("card_takeaway") or "").strip(),
         )
         if part
+    )
+    claim = " ".join(
+        part for part in (claim_core, str(prompt or "").strip()) if part
     )
     claim_terms = evidence_alignment_tokens(claim)
     if not claim_terms:
@@ -1052,6 +1055,8 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
     seen_candidates: set[str] = set()
     for raw_value in (
         detail.get("citation_plan_evidence_quote"),
+        detail.get("citation_plan_reader_evidence_quote"),
+        detail.get("reader_evidence_quote"),
         detail.get("raw"),
         current,
     ):
@@ -1071,14 +1076,18 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
         )
         compound = compound_claim_evidence_excerpt(
             readable_source,
-            claim=claim,
+            # The user prompt improves candidate ranking, but it is not part
+            # of the cited claim. Mixing a CJK question into an English
+            # compound claim can add an uncovered token and make the compact
+            # multi-step extractor reject an otherwise complete excerpt.
+            claim=claim_core or claim,
             max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
         )
         readable = compound or pick_readable_evidence_text(
             readable_source,
             source=str(detail.get("source_name") or ""),
             title=str(detail.get("title") or detail.get("card_title") or ""),
-            claim=claim,
+            claim=claim_core or claim,
             heading=str(detail.get("heading_path") or detail.get("location_label") or ""),
             # Selection and display must share one budget.  Otherwise the
             # overlay can lose the last step of a compound mechanism before
@@ -1141,6 +1150,96 @@ def _answer_citation_evidence_quote(detail: dict) -> str:
     return current
 
 
+def _answer_citation_metric_extreme_summary(
+    details: list[dict],
+    *,
+    prompt: str,
+    prefer_zh: bool,
+) -> str:
+    """Summarize the requested table extreme from every cited metric value."""
+
+    prompt_text = str(prompt or "")
+    wants_lowest = bool(
+        re.search(
+            r"(?i)\b(?:lowest|minimum|smallest|worst)\b|最低|最小|最差",
+            prompt_text,
+        )
+    )
+    wants_highest = bool(
+        re.search(
+            r"(?i)\b(?:highest|maximum|largest|best|top)\b|最高|最大|最好|最佳|并列",
+            prompt_text,
+        )
+    )
+    if not (wants_lowest or wants_highest):
+        return ""
+    evidence = " ".join(
+        _answer_citation_authoritative_evidence(detail)
+        for detail in details
+        if isinstance(detail, dict)
+    ).strip()
+    if not evidence:
+        return ""
+    metric_match = re.search(
+        r"\b(PSNR|SSIM|LPIPS|FID|FPS)\b",
+        f"{prompt_text} {evidence}",
+        flags=re.I,
+    )
+    if not metric_match:
+        return ""
+    metric = str(metric_match.group(1) or "").upper()
+    metric_sections = list(
+        re.finditer(rf"\b{re.escape(metric)}\b\s*:", evidence, flags=re.I)
+    )
+    metric_surface = evidence[metric_sections[-1].end() :] if metric_sections else evidence
+    values: list[tuple[str, str, float]] = []
+    for name, value in re.findall(
+        r"(?:^|[;,:])\s*([A-Za-z][A-Za-z0-9 +()_-]{0,48}?)\s*=\s*"
+        r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))",
+        metric_surface,
+        flags=re.I,
+    ):
+        clean_name = re.sub(r"\s+ours$", " (ours)", name.strip(), flags=re.I)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if clean_name:
+            values.append((clean_name, value, numeric))
+    if len(values) < 2:
+        return ""
+    target = (
+        min(item[2] for item in values)
+        if wants_lowest
+        else max(item[2] for item in values)
+    )
+    winners = [item for item in values if abs(item[2] - target) <= 1e-12]
+    if not winners:
+        return ""
+    dataset_match = re.search(
+        r"\b(SIDD|GoPro|ImageNet|CIFAR(?:-?10|-?100)?)\b",
+        f"{prompt_text} {evidence}",
+        flags=re.I,
+    )
+    label = " ".join(
+        part
+        for part in (
+            str(dataset_match.group(1) or "") if dataset_match else "",
+            metric,
+        )
+        if part
+    )
+    if prefer_zh:
+        winner_names = "、".join(item[0] for item in winners)
+        extreme = "最低值" if wants_lowest else "最高值"
+        tie = "并列取得" if len(winners) > 1 else "取得"
+        return f"{label} 的{extreme}为 {winners[0][1]}，由 {winner_names} {tie}。"
+    winner_names = ", ".join(item[0] for item in winners)
+    extreme = "minimum" if wants_lowest else "maximum"
+    tie = "jointly achieved by" if len(winners) > 1 else "achieved by"
+    return f"The {label} {extreme} is {winners[0][1]}, {tie} {winner_names}."
+
+
 def _answer_citation_card_copy(
     details: list[dict],
     *,
@@ -1160,6 +1259,25 @@ def _answer_citation_card_copy(
         rows.append((_answer_citation_heading_leaf(detail, prefer_zh=prefer_zh), guide))
         if len(rows) >= 2:
             break
+    metric_summary = _answer_citation_metric_extreme_summary(
+        details,
+        prompt=prompt,
+        prefer_zh=prefer_zh,
+    )
+    if metric_summary:
+        first_detail = next(
+            (detail for detail in details if isinstance(detail, dict)),
+            {},
+        )
+        rows = [
+            (
+                _answer_citation_heading_leaf(
+                    first_detail,
+                    prefer_zh=prefer_zh,
+                ),
+                metric_summary,
+            )
+        ]
     if prefer_zh and len(details) > 1:
         combined_evidence = " ".join(
             _answer_citation_explanatory_evidence(detail)
@@ -2185,7 +2303,10 @@ def _overlay_refs_payload_with_answer_citations(
             display_details: list[dict] = []
             for source_detail in source_details:
                 display_detail = dict(source_detail)
-                aligned_quote = _answer_citation_evidence_quote(display_detail)
+                aligned_quote = _answer_citation_evidence_quote(
+                    display_detail,
+                    prompt=prompt,
+                )
                 if aligned_quote:
                     display_detail["evidence_quote"] = aligned_quote
                     display_detail["summary_line"] = aligned_quote

@@ -10,6 +10,8 @@ from typing import List, Dict, Tuple
 from dataclasses import dataclass
 from pathlib import Path
 
+from .tables import split_markdown_table_cells
+
 
 _IMAGE_MD_RE = re.compile(r'!\[([^\]]*)\]\(([^)]*)\)')
 _CAPTION_PREFIX_RE = re.compile(
@@ -23,6 +25,7 @@ _REFERENCE_HEADING_RE = re.compile(
     r"^(?:References?(?:\s+and\s+Notes)?|Reference\s+List|Bibliography|Literature\s+Cited|Works\s+Cited)$",
     re.IGNORECASE,
 )
+_SOURCE_TABLE_EVIDENCE_RE = re.compile(r"^Table\s+evidence\s*[.:]", re.IGNORECASE)
 
 
 def _strip_caption_markup(text: str) -> str:
@@ -35,7 +38,8 @@ def _strip_caption_markup(text: str) -> str:
 
 
 def _looks_like_caption_line(text: str) -> bool:
-    return bool(_CAPTION_PREFIX_RE.match(_strip_caption_markup(text)))
+    clean = _strip_caption_markup(text)
+    return bool(_CAPTION_PREFIX_RE.match(clean) or _SOURCE_TABLE_EVIDENCE_RE.match(clean))
 
 
 def _is_equation_image(match: re.Match[str]) -> bool:
@@ -260,14 +264,51 @@ class MarkdownAnalyzer:
     def _analyze_tables(self, lines: List[str]) -> None:
         """Analyze table formatting."""
         in_table = False
+        in_formula = False
         table_start = 0
         table_rows = []
+
+        def finish_table() -> None:
+            nonlocal in_table, table_rows
+            if not in_table:
+                return
+            if len(table_rows) < 2:
+                self.issues.append(QualityIssue(
+                    category='table',
+                    severity='warning',
+                    message='Table with less than 2 rows',
+                    line_number=table_start,
+                    suggestion='Verify table is complete'
+                ))
+            else:
+                col_counts = [len(split_markdown_table_cells(row)) for row in table_rows]
+                if len(set(col_counts)) > 1:
+                    self.issues.append(QualityIssue(
+                        category='table',
+                        severity='error',
+                        message=f'Inconsistent column counts: {col_counts}',
+                        line_number=table_start,
+                        suggestion='Fix table alignment'
+                    ))
+            in_table = False
+            table_rows = []
         
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
+            if re.match(r'^\s*\$\$\s*$', line):
+                if in_table:
+                    finish_table()
+                in_formula = not in_formula
+                continue
+            if in_formula:
+                continue
             looks_md_table = (
                 stripped.startswith('|')
                 and stripped.count('|') >= 2
+                and (
+                    stripped.endswith('|')
+                    or (i < len(lines) and str(lines[i] or '').strip().startswith('|'))
+                )
                 and not stripped.startswith('```')
                 and not re.match(r'^\s*\*\*(?:Figure|Table)\s+\w+\.\*\*\s+\|', stripped, re.IGNORECASE)
             )
@@ -279,27 +320,8 @@ class MarkdownAnalyzer:
                 table_rows.append(line)
             else:
                 if in_table:
-                    # End of table
-                    if len(table_rows) < 2:
-                        self.issues.append(QualityIssue(
-                            category='table',
-                            severity='warning',
-                            message='Table with less than 2 rows',
-                            line_number=table_start,
-                            suggestion='Verify table is complete'
-                        ))
-                    else:
-                        # Check column consistency
-                        col_counts = [len(row.split('|')) for row in table_rows]
-                        if len(set(col_counts)) > 1:
-                            self.issues.append(QualityIssue(
-                                category='table',
-                                severity='error',
-                                message=f'Inconsistent column counts: {col_counts}',
-                                line_number=table_start,
-                                suggestion='Fix table alignment'
-                            ))
-                    in_table = False
+                    finish_table()
+        finish_table()
     
     def _analyze_references(self, lines: List[str]) -> None:
         """Analyze references section."""

@@ -136,7 +136,9 @@ def test_structured_system_b_detail_prefers_source_markdown_context(monkeypatch,
     assert detail["evidence_source"] == "source_markdown"
     assert "ADMM-based optimization [4]" in detail["citation_context"]
     assert "Boyd S" not in detail["citation_context"]
-    assert detail["heading_path"].endswith("2. Related Work")
+    assert detail["heading_path"].endswith("References")
+    assert detail["citation_context_heading_path"].endswith("2. Related Work")
+    assert "2. Related Work" in detail["card_locator"]
     assert detail["page_start"] == 3
     assert "answer_context_only" not in detail["card_quality_flags"]
     assert "ADMM-based optimization [4]" in detail["card_evidence"]

@@ -225,6 +225,28 @@ Given $\gamma \in [0,1] and$f_0 \in X$,$h_0 \in U$.
     assert r"$\gamma \in [0,1]$ and $f_0 \in X$, $h_0 \in U$." in out
 
 
+def test_restore_connector_misclassified_as_inline_math():
+    src = r"where $d(z)$ is produced by $BERT_{BASE}$ [8],$and$q(x)$a query based on$BERT_{BASE}$."
+
+    out = postprocess_markdown(src)
+
+    assert r"[8], and $q(x)$ a query based on $BERT_{BASE}$." in out
+    assert out.count("$") % 2 == 0
+
+
+def test_split_resulting_in_prose_out_of_adjacent_formulas():
+    src = (
+        r"For $N$, use $N^{-1/2}$ [11]$ or $N^{-1} \log N [3,17,92], "
+        r"resulting in\Theta(N\sqrt{N})$or$\Theta(N \log N)$ IO complexity."
+    )
+
+    out = postprocess_markdown(src)
+
+    assert r"$N^{-1/2}$ [11] or $N^{-1} \log N$ [3,17,92]" in out
+    assert r"resulting in $\Theta(N\sqrt{N})$ or $\Theta(N \log N)$" in out
+    assert out.count("$") % 2 == 0
+
+
 def test_valid_numeric_interval_does_not_look_like_stray_citation_dollar():
     src = r"""
 $$

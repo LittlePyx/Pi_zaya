@@ -15,6 +15,76 @@ from api.reference_card_quality import (
 from api.reference_card_payload import build_ref_card_ui_payload
 
 
+def test_clip_zero_shot_card_gets_grounded_chinese_guide_and_relevance() -> None:
+    evidence = (
+        "For each dataset, we use the names of all the classes as potential text "
+        "pairings. The cosine similarity is scaled by a temperature parameter and "
+        "normalized into a probability distribution via a softmax."
+    )
+
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "",
+            "why_line": "",
+            "heading_path": "3.1.2. USING CLIP FOR ZERO-SHOT TRANSFER",
+            "primary_evidence": {"snippet": evidence},
+            "source_name": "clip.pdf",
+        }
+    )
+
+    assert all(term in ui["summary_line"] for term in ("类别名称", "余弦相似度", "softmax"))
+    assert all(term in ui["why_line"] for term in ("类别名称", "温度缩放", "零样本"))
+
+
+def test_ddpm_tradeoff_card_gets_grounded_chinese_guide_and_relevance() -> None:
+    evidence = (
+        "The true variational bound yields better codelengths, while the simplified "
+        "objective obtains the best sample quality."
+    )
+
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "",
+            "why_line": "",
+            "heading_path": "4.1 Sample quality",
+            "primary_evidence": {"snippet": evidence},
+            "source_name": "ddpm.pdf",
+        }
+    )
+
+    assert all(term in ui["summary_line"] for term in ("变分下界", "码长", "样本质量"))
+    assert all(term in ui["why_line"] for term in ("变分下界", "简化目标", "权衡"))
+
+
+def test_sam_scale_card_gets_grounded_chinese_guide_and_relevance() -> None:
+    evidence = (
+        "Our data engine produced 1.1B masks, 99.1% of which were generated fully "
+        "automatically. Our dataset, SA-1B, consists of 11M diverse images and "
+        "1.1B high-quality segmentation masks."
+    )
+
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "",
+            "why_line": "",
+            "heading_path": "5. Segment Anything Dataset",
+            "primary_evidence": {"snippet": evidence},
+            "source_name": "sam.pdf",
+        }
+    )
+
+    assert all(term in ui["summary_line"] for term in ("1100 万", "11 亿", "99.1%"))
+    assert all(term in ui["why_line"] for term in ("图像数", "掩码数", "全自动"))
+    assert ui["summary_generation"] == "deterministic_grounded"
+    assert ui["why_generation"] == "deterministic_grounded"
+
+
 def test_sequential_cs_card_gets_grounded_chinese_guide() -> None:
     evidence = (
         "The first stage involves log_2 log n steps and removes zero components. "
@@ -535,6 +605,26 @@ def test_ref_card_copy_suppresses_located_quote_shell_without_grounded_replaceme
     assert ui["why_line"] == ""
     assert ui["why_generation"] == "locale_suppressed"
     assert all(section["id"] != "why" for section in ui["card_view"]["sections"])
+
+
+def test_ref_card_copy_recovers_relevance_from_named_localized_guide_terms():
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "nerf.pdf",
+            "heading_path": "NeRF / 5.1 Positional encoding",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": (
+                "直接回答：NeRF 做 positional encoding 是因为直接输入 MLP 时，"
+                "网络难以表示颜色和几何中的高频变化。"
+            ),
+            "why_line": "This English fallback should be replaced.",
+        }
+    )
+
+    assert all(term in ui["why_line"] for term in ("NeRF", "positional encoding", "MLP"))
+    assert ui["why_generation"] == "deterministic_grounded"
+    assert len(ui["why_line"]) >= 20
 
 
 def test_detector_review_gets_grounded_relevance_when_compacted_abstract_omits_list() -> None:

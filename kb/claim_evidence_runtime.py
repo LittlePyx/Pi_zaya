@@ -1380,17 +1380,13 @@ def _strip_user_visible_rejected_citations(
                         _normalize_multiplier_surface(item)[1]
                         for item in group_evidence_quotes
                     ]
-                evidence_quote = quotes[0]
                 quantity_evidence = (
                     "\n".join(group_evidence_quotes)
                     if group_evidence_quotes
-                    else evidence_quote
+                    else "\n".join(quotes)
                 )
                 binding_claim, _normalized_union, multiplier_covered = (
                     _prepare_quantity_surfaces(segment, quantity_evidence)
-                )
-                _evidence_multiplier_facts, binding_evidence_quote = (
-                    _normalize_multiplier_surface(evidence_quote)
                 )
                 source_name = str(
                     meta.get("source_name")
@@ -1399,22 +1395,45 @@ def _strip_user_visible_rejected_citations(
                     or ""
                 ).strip()
                 if not multiplier_covered:
-                    binding = {
+                    bindings = [{
                         "status": "mismatch",
                         "suppress_link": True,
                         "reason": "The cited evidence has an incompatible multiplier magnitude or direction.",
-                    }
+                    }]
                 else:
-                    binding = assess_system_a_hit_binding(
-                        answer_claim=binding_claim,
-                        hit=hit,
-                        meta=binding_meta,
-                        heading=str(meta.get("heading_path") or meta.get("top_heading") or ""),
-                        evidence_quote=binding_evidence_quote,
-                        source_name=source_name,
-                    )
-                if bool(binding.get("suppress_link")):
+                    bindings = []
+                    for evidence_quote in quotes:
+                        _evidence_multiplier_facts, binding_evidence_quote = (
+                            _normalize_multiplier_surface(evidence_quote)
+                        )
+                        bindings.append(
+                            assess_system_a_hit_binding(
+                                answer_claim=binding_claim,
+                                hit=hit,
+                                meta=binding_meta,
+                                heading=str(
+                                    meta.get("heading_path")
+                                    or meta.get("top_heading")
+                                    or ""
+                                ),
+                                evidence_quote=binding_evidence_quote,
+                                source_name=source_name,
+                            )
+                        )
+                accepted_binding = next(
+                    (
+                        binding
+                        for binding in bindings
+                        if not bool(binding.get("suppress_link"))
+                    ),
+                    None,
+                )
+                if accepted_binding is None:
                     rejected_numbers.append(number)
+                    binding = max(
+                        bindings,
+                        key=lambda item: float(item.get("confidence") or 0.0),
+                    )
                     binding_rows.append(
                         {
                             "citation": number,

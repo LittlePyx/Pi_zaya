@@ -25,6 +25,7 @@ from kb.citation_meta import (
     normalize_title_for_match,
 )
 from kb.store import atomic_write_json, compute_file_sha1
+from kb.source_filters import is_excluded_source_path
 
 
 INDEX_FILE_NAME = "references_index.json"
@@ -200,6 +201,8 @@ def _iter_md_files(
     pool: list[Path] = []
     for p in src.rglob(glob):
         if not _path_is_file(p):
+            continue
+        if is_excluded_source_path(str(p)):
             continue
         parts = [str(x).strip().lower() for x in p.parts]
         if any(part in ex_dirs for part in parts):
