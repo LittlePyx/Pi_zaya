@@ -1,0 +1,369 @@
+{
+  "benchmark": {
+    "id": "unseen_corpus_v2",
+    "frozenImplementationSha": "e8c837044d394106152078b22910539d8f866430",
+    "registeredOn": "2026-08-14",
+    "protocol": "The ten PDF identities, 22 questions, answer terms, evidence terms, source pages, citation routes, and acceptance thresholds were registered before the first model answer. The isolated PDF, Markdown, index, and runtime databases remain outside the repository. Failed attempts remain part of the record and no gate may be weakened after observing an answer.",
+    "corpus": [
+      {"id": "mamba", "arxiv": "2312.00752", "sha256": "ADF70ED1803C85B1899DEC3E21F3AF0B124411439E8654B840EA65F7B9F52B2E"},
+      {"id": "kan", "arxiv": "2404.19756", "sha256": "C04339E34AC3F4A8695A74C59E2A0A4F332CFDCB3831A12696D5192CEC2ED713"},
+      {"id": "bitnet", "arxiv": "2402.17764", "sha256": "BCD625E89F95C39DC9143AF4174978FCF2467EB9659D86F8DA448D7D9366C332"},
+      {"id": "sam2", "arxiv": "2408.00714", "sha256": "664F5C4254DB441569ECFE36A2A2FA91A1ECEC5F4D31B3BCC5D451193EFC2C0D"},
+      {"id": "medsam", "arxiv": "2304.12306", "sha256": "E6682B7314C1ADEBD029CB8CF7B173464AFF99AAA45941E743E5439E537D4010"},
+      {"id": "modernbert", "arxiv": "2412.13663", "sha256": "013E5326FE840B8FE593A5A5BF838CA173672274F597DC6C83BFC2E06E816CE3"},
+      {"id": "deepseek_r1", "arxiv": "2501.12948", "sha256": "B191B0A365A64B4AB2791D117069ED17A2933D03554A662CED58B37DF52018F4"},
+      {"id": "gemma3", "arxiv": "2503.19786", "sha256": "B2793D288D6672F8D6A03F65370BB4A48D607F54937A22FC7D9F727435795305"},
+      {"id": "timesfm", "arxiv": "2310.10688", "sha256": "3969AAE97301F8300DA392A7C5309776D8A12EBFE71F64F22FBC28125BE2E72C"},
+      {"id": "bindgpt", "arxiv": "2406.03686", "sha256": "B2F966BE4489DC8FAA3AC0ECB0374768DD1CE7424EBB5F6A0BC4E31B021DC805"}
+    ]
+  },
+  "dbRoot": "db",
+  "docs": [
+    {"id": "mamba", "title": "Mamba: Linear-Time Sequence Modeling with Selective State Spaces", "dir": "mamba", "file": "mamba", "topic": "selective state space sequence modeling", "shortLabel": "Mamba"},
+    {"id": "kan", "title": "KAN: Kolmogorov-Arnold Networks", "dir": "kan", "file": "kan", "topic": "learnable edge activation networks", "shortLabel": "KAN"},
+    {"id": "bitnet", "title": "The Era of 1-bit LLMs: All Large Language Models are in 1.58 Bits", "dir": "bitnet", "file": "bitnet", "topic": "ternary large language models", "shortLabel": "BitNet b1.58"},
+    {"id": "sam2", "title": "SAM 2: Segment Anything in Images and Videos", "dir": "sam2", "file": "sam2", "topic": "promptable image and video segmentation", "shortLabel": "SAM 2"},
+    {"id": "medsam", "title": "Segment Anything in Medical Images", "dir": "medsam", "file": "medsam", "topic": "medical image segmentation", "shortLabel": "MedSAM"},
+    {"id": "modernbert", "title": "Smarter, Better, Faster, Longer: A Modern Bidirectional Encoder for Fast, Memory Efficient, and Long Context Finetuning and Inference", "dir": "modernbert", "file": "modernbert", "topic": "long-context encoder model", "shortLabel": "ModernBERT"},
+    {"id": "deepseek_r1", "title": "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning", "dir": "deepseek_r1", "file": "deepseek_r1", "topic": "reinforcement-learned reasoning models", "shortLabel": "DeepSeek-R1"},
+    {"id": "gemma3", "title": "Gemma 3 Technical Report", "dir": "gemma3", "file": "gemma3", "topic": "multimodal long-context language models", "shortLabel": "Gemma 3"},
+    {"id": "timesfm", "title": "A Decoder-only Foundation Model for Time-series Forecasting", "dir": "timesfm", "file": "timesfm", "topic": "zero-shot time-series forecasting", "shortLabel": "TimesFM"},
+    {"id": "bindgpt", "title": "BindGPT: A Scalable Framework for 3D Molecular Design via Language Modeling and Reinforcement Learning", "dir": "bindgpt", "file": "bindgpt", "topic": "3D molecular generation", "shortLabel": "BindGPT"}
+  ],
+  "forbiddenPhrases": [
+    "The paper cites",
+    "This hit is directly relevant",
+    "This is stated in",
+    "适合作为定位入口",
+    "直接定义或解释了"
+  ],
+  "splits": {
+    "unseen_corpus_v2": [
+      "mamba-selective-state", "mamba-hardware-scan", "kan-edge-functions", "kan-pruning-boundary",
+      "bitnet-ternary-efficiency", "bitnet-absmean-formula", "sam2-streaming-memory", "sam2-data-engine-scale",
+      "medsam-dataset-scale", "medsam-box-architecture", "modernbert-alternating-attention", "modernbert-flash-upstream",
+      "deepseek-r1-zero-boundary", "deepseek-r1-multistage", "gemma3-local-global-context", "gemma3-vision-tokens",
+      "timesfm-decoder-patches", "timesfm-probabilistic-boundary", "bindgpt-three-roles", "bindgpt-external-rl",
+      "long-context-attention-synthesis", "segmentation-transfer-synthesis"
+    ]
+  },
+  "suites": {
+    "unseen_corpus_acceptance_v2": {
+      "description": "A pre-registered blind-transfer gate over ten newer open-access papers and 22 questions. It preserves strict answer, retrieval, page, evidence, citation-card, route, bilingual, boundary, and latency checks.",
+      "caseIds": [
+        "mamba-selective-state", "mamba-hardware-scan", "kan-edge-functions", "kan-pruning-boundary",
+        "bitnet-ternary-efficiency", "bitnet-absmean-formula", "sam2-streaming-memory", "sam2-data-engine-scale",
+        "medsam-dataset-scale", "medsam-box-architecture", "modernbert-alternating-attention", "modernbert-flash-upstream",
+        "deepseek-r1-zero-boundary", "deepseek-r1-multistage", "gemma3-local-global-context", "gemma3-vision-tokens",
+        "timesfm-decoder-patches", "timesfm-probabilistic-boundary", "bindgpt-three-roles", "bindgpt-external-rl",
+        "long-context-attention-synthesis", "segmentation-transfer-synthesis"
+      ],
+      "minCases": 22,
+      "maxCases": 22,
+      "requireAllDocs": true,
+      "requiredLocales": ["zh", "en"],
+      "requiredCoverage": ["single_paper_mechanism", "formula_reasoning", "figure_architecture", "quantitative_fact", "cross_paper_synthesis", "upstream_reference", "scope_boundary", "exact_location", "system_a", "system_b", "zh_locale", "en_locale"],
+      "coverage": {
+        "single_paper_mechanism": ["mamba-selective-state", "kan-edge-functions", "timesfm-decoder-patches"],
+        "formula_reasoning": ["bitnet-absmean-formula"],
+        "figure_architecture": ["deepseek-r1-multistage", "medsam-box-architecture"],
+        "quantitative_fact": ["sam2-data-engine-scale", "medsam-dataset-scale", "gemma3-vision-tokens"],
+        "cross_paper_synthesis": ["long-context-attention-synthesis", "segmentation-transfer-synthesis"],
+        "upstream_reference": ["modernbert-flash-upstream"],
+        "scope_boundary": ["deepseek-r1-zero-boundary", "timesfm-probabilistic-boundary", "kan-pruning-boundary"],
+        "exact_location": ["modernbert-flash-upstream", "deepseek-r1-multistage", "gemma3-vision-tokens"],
+        "system_a": ["mamba-hardware-scan", "bindgpt-external-rl"],
+        "system_b": ["modernbert-flash-upstream"],
+        "zh_locale": ["mamba-selective-state", "kan-pruning-boundary", "bitnet-absmean-formula", "sam2-data-engine-scale", "medsam-box-architecture", "deepseek-r1-zero-boundary", "gemma3-vision-tokens", "timesfm-probabilistic-boundary", "bindgpt-external-rl", "segmentation-transfer-synthesis"],
+        "en_locale": ["mamba-hardware-scan", "kan-edge-functions", "bitnet-ternary-efficiency", "sam2-streaming-memory", "medsam-dataset-scale", "modernbert-alternating-attention", "modernbert-flash-upstream", "deepseek-r1-multistage", "gemma3-local-global-context", "timesfm-decoder-patches", "bindgpt-three-roles", "long-context-attention-synthesis"]
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "mamba-selective-state", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["mamba"],
+      "question": "Mamba 的 selection mechanism 如何让状态空间模型按当前输入决定记住或忘掉信息？这与以往时不变 SSM 的关键差别是什么？",
+      "acceptance": ["Explain that SSM parameters become input-dependent.", "Connect the change to filtering irrelevant inputs and retaining relevant information."],
+      "expected": {
+        "requiredAnswerTermGroups": [["input-dependent", "输入相关", "依赖输入"], ["SSM parameters", "SSM 参数", "状态空间参数"], ["filter", "过滤"], ["remember", "记住", "保留"]],
+        "requiredRefDocIds": ["mamba"], "requiredCitationDocIds": ["mamba"], "allowedRefDocIds": ["mamba"], "allowedCitationDocIds": ["mamba"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "mamba-selection", "docId": "mamba", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["input-dependent", "输入相关", "依赖输入"], ["filter", "过滤"], ["remember", "记住", "保留"]], "evidenceTerms": ["selection mechanism", "input-dependent", "filter out irrelevant information", "remember relevant information"]}],
+        "requiredLocateContracts": [{"id": "mamba-selection-locate", "docId": "mamba", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Selection Mechanism"], "evidenceTerms": ["Selection Mechanism", "SSM parameters"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "mamba-hardware-scan", "sourceGrounded": true, "evaluationFocus": "scope_boundary", "queryScope": "current_paper", "docIds": ["mamba"],
+      "question": "Why does Mamba use a recurrent scan instead of convolution after making the SSM selective, and what GPU-memory optimization keeps that scan efficient?",
+      "acceptance": ["Explain that input dependence prevents the efficient convolution path.", "Mention avoiding materialization of the expanded state and GPU memory-hierarchy I/O."],
+      "expected": {
+        "requiredAnswerTermGroups": [["scan"], ["convolution"], ["expanded state"], ["GPU memory", "memory hierarchy", "IO access", "I/O"]],
+        "requiredRefDocIds": ["mamba"], "requiredCitationDocIds": ["mamba"], "allowedRefDocIds": ["mamba"], "allowedCitationDocIds": ["mamba"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "mamba-hardware", "docId": "mamba", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["scan"], ["convolution"], ["expanded state"]], "evidenceTerms": ["hardware-aware algorithm", "scan instead of convolution", "expanded state", "GPU memory hierarchy"]}],
+        "requiredLocateContracts": [{"id": "mamba-hardware-locate", "docId": "mamba", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Hardware-aware Algorithm"], "evidenceTerms": ["Hardware-aware Algorithm", "scan"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "kan-edge-functions", "sourceGrounded": true, "evaluationFocus": "paper_summary", "queryScope": "current_paper", "docIds": ["kan"],
+      "question": "Where do KANs place learnable activation functions compared with MLPs, what remains at the nodes, and what replaces each linear weight parameter?",
+      "acceptance": ["Contrast learnable edge functions with fixed node activations.", "State that nodes sum incoming signals and weights become spline-parameterized 1D functions."],
+      "expected": {
+        "requiredAnswerTermGroups": [["edges"], ["nodes"], ["sum", "summing"], ["spline"], ["1D function", "one-dimensional function"]],
+        "requiredRefDocIds": ["kan"], "requiredCitationDocIds": ["kan"], "allowedRefDocIds": ["kan"], "allowedCitationDocIds": ["kan"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "kan-edges", "docId": "kan", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["edges"], ["nodes"], ["spline"]], "evidenceTerms": ["learnable activation functions on edges", "no linear weight matrices", "1D function", "spline"]}],
+        "requiredLocateContracts": [{"id": "kan-intro-locate", "docId": "kan", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Introduction"], "evidenceTerms": ["activation functions on edges", "nodes simply sum"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "kan-pruning-boundary", "sourceGrounded": true, "evaluationFocus": "scope_boundary", "queryScope": "current_paper", "docIds": ["kan"],
+      "question": "KAN 的可解释化流程是直接按边剪枝吗？请说明论文先用什么训练约束，再在哪个粒度执行 pruning。",
+      "acceptance": ["Reject edge-level pruning.", "Describe sparsity regularization followed by node-level pruning."],
+      "expected": {
+        "requiredAnswerTermGroups": [["sparsity regularization", "稀疏正则"], ["pruning", "剪枝"], ["node level", "节点级"], ["not", "不是", "而非"]],
+        "requiredRefDocIds": ["kan"], "requiredCitationDocIds": ["kan"], "allowedRefDocIds": ["kan"], "allowedCitationDocIds": ["kan"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "kan-sparsity", "docId": "kan", "route": "system_a", "sourcePage": 11, "answerTermGroups": [["sparsity regularization", "稀疏正则"]], "evidenceTerms": ["sparsity regularization", "followed by pruning"]},
+          {"id": "kan-node-pruning", "docId": "kan", "route": "system_a", "sourcePage": 12, "answerTermGroups": [["node level", "节点级"], ["not", "不是", "而非"]], "evidenceTerms": ["node level", "rather than on the edge level"]}
+        ],
+        "requiredLocateContracts": [{"id": "kan-pruning-locate", "docId": "kan", "route": "system_a", "sourcePage": 12, "locatorTerms": ["Pruning"], "evidenceTerms": ["Pruning", "smaller subnetwork"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "bitnet-ternary-efficiency", "sourceGrounded": true, "evaluationFocus": "paper_summary", "queryScope": "current_paper", "docIds": ["bitnet"],
+      "question": "Why is BitNet b1.58 called 1.58-bit, and how do its ternary weights change matrix-multiplication cost while preserving the paper's same-scale quality claim?",
+      "acceptance": ["Connect three states to log2(3), approximately 1.58 bits.", "Mention near-elimination of multiplication and matching FP16 from 3B under equal configurations."],
+      "expected": {
+        "requiredAnswerTermGroups": [["-1, 0, 1", "{-1, 0, 1}", "ternary"], ["1.58"], ["multiplication"], ["FP16", "full precision"], ["3B"]],
+        "requiredRefDocIds": ["bitnet"], "requiredCitationDocIds": ["bitnet"], "allowedRefDocIds": ["bitnet"], "allowedCitationDocIds": ["bitnet"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "bitnet-ternary", "docId": "bitnet", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["1.58"], ["multiplication"], ["FP16", "full precision"], ["3B"]], "evidenceTerms": ["{-1, 0, 1}", "1.58 bits", "multiplication operations", "FP16", "3B"]}],
+        "requiredLocateContracts": [{"id": "bitnet-intro-locate", "docId": "bitnet", "route": "system_a", "sourcePage": 2, "locatorTerms": ["BitNet b1.58"], "evidenceTerms": ["ternary", "same configuration"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "bitnet-absmean-formula", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["bitnet"],
+      "question": "请解释 BitNet b1.58 的 absmean 权重量化公式：缩放因子 γ 如何计算，缩放后的权重如何被限制到 {-1,0,+1}？",
+      "acceptance": ["Give gamma as the mean absolute weight.", "Explain scaling, rounding, and clipping to the ternary set."],
+      "expected": {
+        "requiredAnswerTermGroups": [["absmean"], ["average absolute", "mean absolute", "绝对值均值", "平均绝对值"], ["round", "取整", "舍入"], ["clip", "截断", "裁剪"], ["-1, 0, +1", "{-1, 0, +1}", "ternary", "三值"]],
+        "requiredRefDocIds": ["bitnet"], "requiredCitationDocIds": ["bitnet"], "allowedRefDocIds": ["bitnet"], "allowedCitationDocIds": ["bitnet"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "bitnet-absmean", "docId": "bitnet", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["absmean"], ["average absolute", "mean absolute", "绝对值均值", "平均绝对值"], ["round", "取整", "舍入"], ["clip", "截断", "裁剪"]], "evidenceTerms": ["absmean quantization", "average absolute value", "RoundClip", "|Wij|"]}],
+        "requiredLocateContracts": [{"id": "bitnet-formula-locate", "docId": "bitnet", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Quantization Function", "Equation (1)"], "evidenceTerms": ["Quantization Function", "RoundClip"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sam2-streaming-memory", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["sam2"],
+      "question": "How does SAM 2 carry information across video frames for interactive segmentation, and which forms of user prompt can update that process?",
+      "acceptance": ["Describe streaming memory over previous prompts and predictions.", "Name clicks, boxes, or masks as prompts on one or more frames."],
+      "expected": {
+        "requiredAnswerTermGroups": [["streaming memory"], ["previous prompts"], ["predictions"], ["clicks"], ["boxes"], ["masks"]],
+        "requiredRefDocIds": ["sam2"], "requiredCitationDocIds": ["sam2"], "allowedRefDocIds": ["sam2"], "allowedCitationDocIds": ["sam2"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "sam2-memory", "docId": "sam2", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["streaming memory"], ["previous prompts"], ["predictions"]], "evidenceTerms": ["streaming memory", "previous prompts", "predictions", "clicks, boxes, or masks"]}],
+        "requiredLocateContracts": [{"id": "sam2-figure1-locate", "docId": "sam2", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Figure 1"], "evidenceTerms": ["Figure 1", "one or multiple video frames"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "sam2-data-engine-scale", "sourceGrounded": true, "evaluationFocus": "paper_summary", "queryScope": "current_paper", "docIds": ["sam2"],
+      "question": "SAM 2 的数据引擎怎样让模型参与标注闭环？最终 SA-V 有多少视频和 masks，并且相对已有视频分割数据集扩大了多少倍？",
+      "acceptance": ["Describe model-in-the-loop annotation with human annotators.", "Report 50.9K videos, 35.5M masks, and 53x more masks."],
+      "expected": {
+        "requiredAnswerTermGroups": [["model in the loop", "模型参与", "模型在环"], ["annotator", "标注员"], ["50.9K", "50,900"], ["35.5M", "3550 万"], ["53×", "53x", "53 倍"]],
+        "requiredRefDocIds": ["sam2"], "requiredCitationDocIds": ["sam2"], "allowedRefDocIds": ["sam2"], "allowedCitationDocIds": ["sam2"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "sam2-data-scale", "docId": "sam2", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["50.9K", "50,900"], ["35.5M", "3550 万"], ["53×", "53x", "53 倍"]], "evidenceTerms": ["model in the loop", "50.9K videos", "35.5M masks", "53× more masks"]}],
+        "requiredLocateContracts": [{"id": "sam2-data-engine-locate", "docId": "sam2", "route": "system_a", "sourcePage": 2, "locatorTerms": ["data engine", "SA-V"], "evidenceTerms": ["data engine", "SA-V dataset"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "medsam-dataset-scale", "sourceGrounded": true, "evaluationFocus": "paper_summary", "queryScope": "current_paper", "docIds": ["medsam"],
+      "question": "What is the scale and diversity of the dataset used to develop MedSAM, and how broad are its internal and external validation tasks?",
+      "acceptance": ["Report image-mask pairs, modalities, cancer-type coverage, and both validation counts."],
+      "expected": {
+        "requiredAnswerTermGroups": [["1,570,263"], ["10 imaging modalities", "10 modalities"], ["30 cancer types", "over 30", "more than 30"], ["86"], ["60"]],
+        "requiredRefDocIds": ["medsam"], "requiredCitationDocIds": ["medsam"], "allowedRefDocIds": ["medsam"], "allowedCitationDocIds": ["medsam"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "medsam-scale", "docId": "medsam", "route": "system_a", "sourcePage": 1, "answerTermGroups": [["1,570,263"], ["10 imaging modalities", "10 modalities"], ["86"], ["60"]], "evidenceTerms": ["1,570,263 image-mask pairs", "10 imaging modalities", "30 cancer types", "86 internal", "60 external"]}],
+        "requiredLocateContracts": [{"id": "medsam-abstract-locate", "docId": "medsam", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["universal medical image segmentation", "image-mask pairs"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "medsam-box-architecture", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["medsam"],
+      "question": "MedSAM 为什么选择 bounding box 而不是 point prompt？图 2b 中 image encoder、prompt encoder 和 mask decoder 分别承担什么作用？",
+      "acceptance": ["Explain reduced ambiguity and efficient target specification.", "Describe image embedding, positional encoding of boxes, and cross-attention fusion."],
+      "expected": {
+        "requiredAnswerTermGroups": [["bounding box", "边界框"], ["ambiguity", "歧义"], ["image encoder", "图像编码器"], ["prompt encoder", "提示编码器"], ["mask decoder", "掩码解码器"], ["cross-attention", "交叉注意力"]],
+        "requiredRefDocIds": ["medsam"], "requiredCitationDocIds": ["medsam"], "allowedRefDocIds": ["medsam"], "allowedCitationDocIds": ["medsam"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "medsam-architecture", "docId": "medsam", "route": "system_a", "sourcePage": 5, "answerTermGroups": [["image encoder", "图像编码器"], ["prompt encoder", "提示编码器"], ["mask decoder", "掩码解码器"], ["cross-attention", "交叉注意力"]], "evidenceTerms": ["bounding boxes", "image encoder", "prompt encoder", "mask decoder", "cross-attention"]}],
+        "requiredLocateContracts": [{"id": "medsam-figure2b-locate", "docId": "medsam", "route": "system_a", "sourcePage": 5, "locatorTerms": ["Fig. 2b"], "evidenceTerms": ["Fig. 2b", "positional encoding"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "modernbert-alternating-attention", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["modernbert"],
+      "question": "How does ModernBERT alternate global and local attention, including the frequency, local window, and RoPE theta values?",
+      "acceptance": ["State that every third layer is global and the rest are local.", "Give the 128-token window and both theta values."],
+      "expected": {
+        "requiredAnswerTermGroups": [["every third layer", "third layer"], ["128 token", "128-token"], ["160,000", "160000"], ["10,000", "10000"]],
+        "requiredRefDocIds": ["modernbert"], "requiredCitationDocIds": ["modernbert"], "allowedRefDocIds": ["modernbert"], "allowedCitationDocIds": ["modernbert"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "modernbert-attention", "docId": "modernbert", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["every third layer", "third layer"], ["128 token", "128-token"], ["160,000", "160000"], ["10,000", "10000"]], "evidenceTerms": ["every third layer", "global attention", "128 token", "160,000", "10,000"]}],
+        "requiredLocateContracts": [{"id": "modernbert-alternating-locate", "docId": "modernbert", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Alternating Attention"], "evidenceTerms": ["Alternating Attention", "sliding window"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "modernbert-flash-upstream", "sourceGrounded": true, "evaluationFocus": "upstream_reference", "queryScope": "current_paper", "docIds": ["modernbert"],
+      "question": "Did ModernBERT invent FlashAttention-2? Identify the upstream work and explain why ModernBERT uses FlashAttention 3 for global layers but FlashAttention 2 for local layers.",
+      "acceptance": ["Say FlashAttention-2 is prior work by Tri Dao.", "Tie the mixed choice to FlashAttention 3 lacking sliding-window support at the start of the work."],
+      "expected": {
+        "requiredAnswerTermGroups": [["not", "prior work", "did not"], ["Tri Dao"], ["FlashAttention-2"], ["sliding window"], ["global"], ["local"]],
+        "requiredRefDocIds": ["modernbert"], "requiredCitationDocIds": ["modernbert"], "allowedRefDocIds": ["modernbert"], "allowedCitationDocIds": ["modernbert"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 1},
+        "claimEvidenceContracts": [
+          {"id": "modernbert-flash-use", "docId": "modernbert", "route": "system_a", "sourcePage": 3, "answerTermGroups": [["sliding window"], ["global"], ["local"]], "evidenceTerms": ["Flash Attention 3", "sliding window attention", "global attention layers", "Flash Attention 2", "local attention layers"]},
+          {"id": "flash2-upstream", "docId": "modernbert", "route": "system_b", "sourcePage": 10, "answerTermGroups": [["Tri Dao"], ["FlashAttention-2"]], "evidenceTerms": ["Tri Dao", "Flashattention-2", "better parallelism", "work partitioning"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "modernbert-flash-locate", "docId": "modernbert", "route": "system_a", "sourcePage": 3, "locatorTerms": ["Flash Attention"], "evidenceTerms": ["Flash Attention", "ModernBERT uses"]},
+          {"id": "flash2-reference-locate", "docId": "modernbert", "route": "system_b", "sourcePage": 10, "locatorTerms": ["References"], "evidenceTerms": ["Tri Dao", "Flashattention-2"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "minSystemBQualityCount": 1, "maxSystemBCount": 1, "requireSystemB": true, "requiredSystemBTerms": ["Tri Dao", "Flashattention-2"], "requireSystemBTraceComplete": true, "forbidSystemBAnswerContextOnly": true, "forbidSystemBReferenceIndexFallback": true
+      }
+    },
+    {
+      "id": "deepseek-r1-zero-boundary", "sourceGrounded": true, "evaluationFocus": "scope_boundary", "queryScope": "current_paper", "docIds": ["deepseek_r1"],
+      "question": "DeepSeek-R1-Zero 是否使用了监督微调作为起点？它的纯 RL 路线取得了什么能力，又暴露了哪些可读性和适用范围问题？",
+      "acceptance": ["State that R1-Zero uses RL without SFT.", "Mention reasoning gains plus poor readability, language mixing, and limited broader-task performance."],
+      "expected": {
+        "requiredAnswerTermGroups": [["without supervised fine-tuning", "没有监督微调", "不使用 SFT", "纯 RL"], ["reasoning", "推理"], ["readability", "可读性"], ["language mixing", "语言混合"], ["writing", "写作", "open-domain", "开放域"]],
+        "requiredRefDocIds": ["deepseek_r1"], "requiredCitationDocIds": ["deepseek_r1"], "allowedRefDocIds": ["deepseek_r1"], "allowedCitationDocIds": ["deepseek_r1"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "r1-zero-boundary", "docId": "deepseek_r1", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["without supervised fine-tuning", "没有监督微调", "不使用 SFT", "纯 RL"], ["readability", "可读性"], ["language mixing", "语言混合"]], "evidenceTerms": ["without supervised fine-tuning", "poor readability", "language mixing", "writing", "open-domain question answering"]}],
+        "requiredLocateContracts": [{"id": "r1-zero-locate", "docId": "deepseek_r1", "route": "system_a", "sourcePage": 2, "locatorTerms": ["DeepSeek-R1-Zero"], "evidenceTerms": ["DeepSeek-R1-Zero", "reinforcement learning"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "deepseek-r1-multistage", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["deepseek_r1"],
+      "question": "Walk through the multi-stage DeepSeek-R1 pipeline shown in Figure 2, from cold-start data through the final alignment stage. What distinct purpose does each stage serve?",
+      "acceptance": ["Include cold-start data, reasoning RL, rejection-sampling plus SFT with mixed data, and secondary RL.", "Tie the final stage to helpfulness, harmlessness, and refined reasoning."],
+      "expected": {
+        "requiredAnswerTermGroups": [["cold-start"], ["RL", "reinforcement learning"], ["rejection sampling"], ["SFT"], ["helpfulness"], ["harmlessness"]],
+        "requiredRefDocIds": ["deepseek_r1"], "requiredCitationDocIds": ["deepseek_r1"], "allowedRefDocIds": ["deepseek_r1"], "allowedCitationDocIds": ["deepseek_r1"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "r1-multistage", "docId": "deepseek_r1", "route": "system_a", "sourcePage": 6, "answerTermGroups": [["cold-start"], ["rejection sampling"], ["SFT"], ["helpfulness"], ["harmlessness"]], "evidenceTerms": ["cold-start data", "RL training", "rejection sampling", "SFT", "secondary RL stage", "helpfulness", "harmlessness"]}],
+        "requiredLocateContracts": [{"id": "r1-figure2-locate", "docId": "deepseek_r1", "route": "system_a", "sourcePage": 6, "locatorTerms": ["Figure 2", "DeepSeek-R1"], "evidenceTerms": ["Figure 2", "multi-stage pipeline"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "gemma3-local-global-context", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["gemma3"],
+      "question": "How does Gemma 3 arrange local and global attention, and what context-length exception applies to the 1B model?",
+      "acceptance": ["State the 5 local to 1 global pattern beginning with local.", "Give 128K for larger models and 32K for 1B."],
+      "expected": {
+        "requiredAnswerTermGroups": [["5 local", "5:1"], ["global"], ["128K", "128k"], ["32K", "32k"], ["1B"]],
+        "requiredRefDocIds": ["gemma3"], "requiredCitationDocIds": ["gemma3"], "allowedRefDocIds": ["gemma3"], "allowedCitationDocIds": ["gemma3"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "gemma3-attention", "docId": "gemma3", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["5 local", "5:1"], ["global"], ["128K", "128k"], ["32K", "32k"]], "evidenceTerms": ["5 local layers", "global layer", "128K", "1B model", "32K"]}],
+        "requiredLocateContracts": [{"id": "gemma3-context-locate", "docId": "gemma3", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Long context"], "evidenceTerms": ["Long context", "5:1 interleaving"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "gemma3-vision-tokens", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["gemma3"],
+      "question": "Gemma 3 的视觉编码器是否随语言模型一起训练？每张图像如何被压缩为固定 token 数，896 分辨率时具体怎样池化？",
+      "acceptance": ["State that the SigLIP-based vision encoder is frozen.", "Report 256 image tokens and 4x4 average pooling for 896 resolution."],
+      "expected": {
+        "requiredAnswerTermGroups": [["SigLIP"], ["frozen", "冻结"], ["256"], ["4x4", "4×4"], ["average pooling", "平均池化"]],
+        "requiredRefDocIds": ["gemma3"], "requiredCitationDocIds": ["gemma3"], "allowedRefDocIds": ["gemma3"], "allowedCitationDocIds": ["gemma3"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "gemma3-vision", "docId": "gemma3", "route": "system_a", "sourcePage": 8, "answerTermGroups": [["frozen", "冻结"], ["256"], ["4x4", "4×4"], ["average pooling", "平均池化"]], "evidenceTerms": ["SigLIP", "vision encoder is frozen", "256 image tokens", "4x4 average pooling"]}],
+        "requiredLocateContracts": [{"id": "gemma3-vision-locate", "docId": "gemma3", "route": "system_a", "sourcePage": 8, "locatorTerms": ["Vision encoder", "Table 7"], "evidenceTerms": ["Vision encoder", "Table 7", "896"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "timesfm-decoder-patches", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["timesfm"],
+      "question": "How does TimesFM's decoder-only training predict future time-series patches, and why can its output patch be longer than its input patch? Use the paper's 32-to-128 example.",
+      "acceptance": ["Explain next-patch prediction from all past patches.", "Describe the middle ground between tokenwise autoregression and direct full-horizon prediction."],
+      "expected": {
+        "requiredAnswerTermGroups": [["decoder-only"], ["past patches"], ["next patch"], ["32"], ["128"], ["output patch"]],
+        "requiredRefDocIds": ["timesfm"], "requiredCitationDocIds": ["timesfm"], "allowedRefDocIds": ["timesfm"], "allowedCitationDocIds": ["timesfm"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "timesfm-patches", "docId": "timesfm", "route": "system_a", "sourcePage": 3, "answerTermGroups": [["decoder-only"], ["past patches"], ["32"], ["128"]], "evidenceTerms": ["decoder-only mode", "all past patches", "output patches", "input patch length is 32", "output patch length is 128"]}],
+        "requiredLocateContracts": [{"id": "timesfm-patches-locate", "docId": "timesfm", "route": "system_a", "sourcePage": 3, "locatorTerms": ["Decoder-only model", "Longer output patches"], "evidenceTerms": ["Decoder-only model", "Longer output patches"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "timesfm-probabilistic-boundary", "sourceGrounded": true, "evaluationFocus": "scope_boundary", "queryScope": "current_paper", "docIds": ["timesfm"],
+      "question": "TimesFM 本文训练目标是概率预测吗？请区分论文实际采用的 point forecasting loss 与它提出的概率化扩展方式。",
+      "acceptance": ["State that the reported work focuses on point forecasting with MSE.", "Treat multiple quantile-loss heads or distribution logits as proposed extensions, not the primary objective."],
+      "expected": {
+        "requiredAnswerTermGroups": [["point forecasting", "点预测"], ["MSE", "mean squared error", "均方误差"], ["probabilistic", "概率预测"], ["quantile", "分位数"], ["output heads", "输出头"]],
+        "requiredRefDocIds": ["timesfm"], "requiredCitationDocIds": ["timesfm"], "allowedRefDocIds": ["timesfm"], "allowedCitationDocIds": ["timesfm"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "timesfm-loss-boundary", "docId": "timesfm", "route": "system_a", "sourcePage": 4, "answerTermGroups": [["point forecasting", "点预测"], ["MSE", "mean squared error", "均方误差"], ["quantile", "分位数"]], "evidenceTerms": ["point forecasting", "mean squared error", "probabilistic forecasting", "output heads", "quantile loss"]}],
+        "requiredLocateContracts": [{"id": "timesfm-loss-locate", "docId": "timesfm", "route": "system_a", "sourcePage": 4, "locatorTerms": ["Loss Function"], "evidenceTerms": ["Loss Function", "point forecasting"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "bindgpt-three-roles", "sourceGrounded": true, "evaluationFocus": "paper_summary", "queryScope": "current_paper", "docIds": ["bindgpt"],
+      "question": "What three generation roles can the same pretrained BindGPT model serve, and which separate molecular-graph step does its joint graph-and-conformation generation remove?",
+      "acceptance": ["Name the unconditional 3D generator, graph-conditioned conformer generator, and pocket-conditioned generator.", "Mention elimination of extra graph reconstruction."],
+      "expected": {
+        "requiredAnswerTermGroups": [["3D molecular generative model", "3D molecule generator"], ["conformer generator"], ["molecular graph"], ["pocket-conditioned"], ["graph reconstruction"]],
+        "requiredRefDocIds": ["bindgpt"], "requiredCitationDocIds": ["bindgpt"], "allowedRefDocIds": ["bindgpt"], "allowedCitationDocIds": ["bindgpt"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "bindgpt-roles", "docId": "bindgpt", "route": "system_a", "sourcePage": 1, "answerTermGroups": [["conformer generator"], ["molecular graph"], ["pocket-conditioned"]], "evidenceTerms": ["molecular graphs and conformations jointly", "graph reconstruction", "3D molecular generative model", "conformer generator", "pocket-conditioned"]}],
+        "requiredLocateContracts": [{"id": "bindgpt-abstract-locate", "docId": "bindgpt", "route": "system_a", "sourcePage": 1, "locatorTerms": ["Abstract"], "evidenceTerms": ["Abstract", "single pretrained language model"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "bindgpt-external-rl", "sourceGrounded": true, "evaluationFocus": "method_detail", "queryScope": "current_paper", "docIds": ["bindgpt"],
+      "question": "BindGPT 的强化学习微调如何接入外部物理反馈？该反馈来自什么软件，它优化的目标是什么？",
+      "acceptance": ["Identify docking software as the external feedback source.", "Connect RL fine-tuning to finding structures with high protein-binding scores."],
+      "expected": {
+        "requiredAnswerTermGroups": [["reinforcement learning", "强化学习", "RL"], ["docking software", "对接软件"], ["external feedback", "外部反馈"], ["binding scores", "结合分数"], ["protein", "蛋白"]],
+        "requiredRefDocIds": ["bindgpt"], "requiredCitationDocIds": ["bindgpt"], "allowedRefDocIds": ["bindgpt"], "allowedCitationDocIds": ["bindgpt"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+        "claimEvidenceContracts": [{"id": "bindgpt-rl", "docId": "bindgpt", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["docking software", "对接软件"], ["external feedback", "外部反馈"], ["binding scores", "结合分数"]], "evidenceTerms": ["Reinforcement Learning", "external feedback", "docking software", "high binding scores", "protein"]}],
+        "requiredLocateContracts": [{"id": "bindgpt-contributions-locate", "docId": "bindgpt", "route": "system_a", "sourcePage": 2, "locatorTerms": ["main contributions"], "evidenceTerms": ["main contributions", "RL finetuning"]}],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 1, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "long-context-attention-synthesis", "sourceGrounded": true, "evaluationFocus": "multi_paper_synthesis", "queryScope": "selected_context", "docIds": ["modernbert", "gemma3"],
+      "question": "Compare how ModernBERT and Gemma 3 mix local and global attention for long context. Give each paper's exact layer pattern and the local-window detail that is explicitly specified.",
+      "acceptance": ["Keep the two architectures separate.", "Report ModernBERT every-third global plus 128-token local window, and Gemma 3's 5:1 local/global pattern."],
+      "expected": {
+        "requiredAnswerTermGroups": [["ModernBERT"], ["every third layer", "third layer"], ["128 token", "128-token"], ["Gemma 3"], ["5:1", "5 local"]],
+        "requiredRefDocIds": ["modernbert", "gemma3"], "requiredCitationDocIds": ["modernbert", "gemma3"], "allowedRefDocIds": ["modernbert", "gemma3"], "allowedCitationDocIds": ["modernbert", "gemma3"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "modernbert-pattern", "docId": "modernbert", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["every third layer", "third layer"], ["128 token", "128-token"]], "evidenceTerms": ["every third layer", "128 token", "local sliding window"]},
+          {"id": "gemma3-pattern", "docId": "gemma3", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["5:1", "5 local"]], "evidenceTerms": ["5:1 interleaving", "5 local layers", "global layer"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "modernbert-pattern-locate", "docId": "modernbert", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Alternating Attention"], "evidenceTerms": ["Alternating Attention", "global attention"]},
+          {"id": "gemma3-pattern-locate", "docId": "gemma3", "route": "system_a", "sourcePage": 2, "locatorTerms": ["5:1 interleaving"], "evidenceTerms": ["5:1 interleaving", "local/global"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    },
+    {
+      "id": "segmentation-transfer-synthesis", "sourceGrounded": true, "evaluationFocus": "method_comparison", "queryScope": "selected_context", "docIds": ["sam2", "medsam"],
+      "question": "对比 SAM 2 与 MedSAM 的交互式分割适配路径：前者怎样处理视频时间信息和数据闭环，后者怎样把医学目标提示编码进 SAM 架构？不要把二者的训练数据或提示机制混为一谈。",
+      "acceptance": ["Attribute streaming memory and model-in-the-loop video data engine only to SAM 2.", "Attribute bounding-box positional encoding and cross-attention fusion only to MedSAM."],
+      "expected": {
+        "requiredAnswerTermGroups": [["SAM 2"], ["streaming memory", "流式记忆"], ["data engine", "数据引擎"], ["MedSAM"], ["bounding box", "边界框"], ["positional encoding", "位置编码"], ["cross-attention", "交叉注意力"]],
+        "requiredRefDocIds": ["sam2", "medsam"], "requiredCitationDocIds": ["sam2", "medsam"], "allowedRefDocIds": ["sam2", "medsam"], "allowedCitationDocIds": ["sam2", "medsam"], "maxUnexpectedRefDocCount": 0, "maxUnexpectedCitationDocCount": 0, "requiredRouteCounts": {"system_a": 2, "system_b": 0},
+        "claimEvidenceContracts": [
+          {"id": "sam2-transfer", "docId": "sam2", "route": "system_a", "sourcePage": 2, "answerTermGroups": [["streaming memory", "流式记忆"], ["data engine", "数据引擎"]], "evidenceTerms": ["streaming memory", "data engine", "model in the loop"]},
+          {"id": "medsam-transfer", "docId": "medsam", "route": "system_a", "sourcePage": 5, "answerTermGroups": [["bounding box", "边界框"], ["positional encoding", "位置编码"], ["cross-attention", "交叉注意力"]], "evidenceTerms": ["bounding boxes", "positional encoding", "cross-attention"]}
+        ],
+        "requiredLocateContracts": [
+          {"id": "sam2-transfer-locate", "docId": "sam2", "route": "system_a", "sourcePage": 2, "locatorTerms": ["Figure 1"], "evidenceTerms": ["Figure 1", "streaming memory"]},
+          {"id": "medsam-transfer-locate", "docId": "medsam", "route": "system_a", "sourcePage": 5, "locatorTerms": ["Fig. 2b"], "evidenceTerms": ["Fig. 2b", "prompt encoder"]}
+        ],
+        "requireClaimLevelCitations": true, "maxUncitedHighRiskClaims": 0, "requireCitationCardQuality": true, "minSystemAQualityCount": 2, "maxSystemBCount": 0
+      }
+    }
+  ]
+}

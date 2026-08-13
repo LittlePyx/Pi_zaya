@@ -20,6 +20,7 @@ from kb.converter.quality_repair import _source_page_prose_omission_damage
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FIXTURE_PATH = REPO_ROOT / "docs" / "research_qa_unseen_corpus_v1.json"
+FIXTURE_V2_PATH = REPO_ROOT / "docs" / "research_qa_unseen_corpus_v2.json"
 
 
 def test_unseen_corpus_fixture_is_complete_and_pre_registered() -> None:
@@ -42,6 +43,26 @@ def test_unseen_corpus_manifest_has_unique_verified_hashes() -> None:
     assert len({item["id"] for item in manifest}) == 10
     assert len({item["sha256"] for item in manifest}) == 10
     assert all(len(item["sha256"]) == 64 for item in manifest)
+
+
+def test_unseen_corpus_v2_fixture_is_complete_pre_registered_and_disjoint() -> None:
+    fixture = load_fixture(FIXTURE_V2_PATH)
+    manifest = load_corpus_manifest(FIXTURE_V2_PATH)
+    v1_manifest = load_corpus_manifest(FIXTURE_PATH)
+
+    assert len(fixture.docs) == 10
+    assert len(fixture.cases) == 22
+    assert validate_fixture_contracts(fixture) == []
+    coverage = summarize_suite_coverage(fixture, "unseen_corpus_acceptance_v2")
+    assert coverage["case_count"] == 22
+    assert coverage["doc_count"] == 10
+    assert coverage["locales"] == ["en", "zh"]
+    assert all(bool(case.get("sourceGrounded")) for case in fixture.cases)
+    assert len({item["id"] for item in manifest}) == 10
+    assert len({item["sha256"] for item in manifest}) == 10
+    assert {item["arxiv"] for item in manifest}.isdisjoint(
+        {item["arxiv"] for item in v1_manifest}
+    )
 
 
 def test_pdf_verification_rejects_non_pdf_and_hash_mismatch(tmp_path: Path) -> None:
