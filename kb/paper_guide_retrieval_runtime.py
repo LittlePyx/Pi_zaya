@@ -376,6 +376,155 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
     mojibake = "\ufffd" in q or bool(re.search(r"[鍏闃鏁绔缁鐨]{2,}", q))
     rules: tuple[tuple[str, str], ...] = (
         (
+            r"(?i:\bSIDD\b).{0,220}(?:\bPSNR\b|\u6700\u9ad8|\u5e76\u5217|\bbest\b|\bhighest\b)|"
+            r"(?:\bPSNR\b|\u6700\u9ad8|\u5e76\u5217|\bbest\b|\bhighest\b).{0,220}(?i:\bSIDD\b)",
+            "SIDD PSNR highest best tie Table 6 Image Denoising Results "
+            "Method Baseline ours NAFNet ours",
+        ),
+        (
+            r"(?i:\bMamba\b).{0,180}(?:\bscan\b|\bconvolution\b|GPU[- ]memory|"
+            r"hardware[- ]aware)|(?:\bscan\b|\bconvolution\b|GPU[- ]memory|"
+            r"hardware[- ]aware).{0,180}(?i:\bMamba\b)",
+            "hardware-aware algorithm recurrent scan convolution expanded state "
+            "GPU memory hierarchy IO access",
+        ),
+        (
+            r"(?i:\bKANs?\b).{0,180}(?:activation\s+functions?|\bedges?\b|\bnodes?\b|"
+            r"linear\s+weights?|spline)|(?:activation\s+functions?|\bedges?\b|\bnodes?\b|"
+            r"linear\s+weights?|spline).{0,180}(?i:\bKANs?\b)",
+            "learnable activation functions edges nodes simply sum incoming signals "
+            "no linear weight matrices univariate 1D function spline",
+        ),
+        (
+            r"(?i:\bKANs?\b).{0,180}(?:\bprun(?:e|ing)\b|\u526a\u679d)|"
+            r"(?:\bprun(?:e|ing)\b|\u526a\u679d).{0,180}(?i:\bKANs?\b)",
+            "sparsity regularization followed by pruning pruned KANs interpretable "
+            "node level rather than edge level",
+        ),
+        (
+            r"(?i:\bBitNet\b|\bb1\.58\b).{0,220}(?:ternary|1\.58|multiplication|"
+            r"same[- ]scale|full[- ]precision)|(?:ternary|1\.58|multiplication|"
+            r"same[- ]scale|full[- ]precision).{0,220}(?i:\bBitNet\b|\bb1\.58\b)",
+            "ternary weights 1.58 bits integer addition multiplication operations "
+            "full precision same configuration model size training tokens",
+        ),
+        (
+            r"(?i:\bSAM\s*2\b).{0,260}\bSA-V\b|"
+            r"\bSA-V\b.{0,260}(?i:\bSAM\s*2\b)",
+            "SAM 2 SA-V dataset data engine model in the loop annotators videos masks "
+            "more than existing video segmentation dataset",
+        ),
+        (
+            r"(?i:\bMedSAM\b).{0,220}(?:dataset|modalit|cancer|validation)|"
+            r"(?:dataset|modalit|cancer|validation).{0,220}(?i:\bMedSAM\b)",
+            "MedSAM universal medical image segmentation large-scale medical image-mask "
+            "pairs imaging modalities cancer types internal validation tasks external "
+            "validation tasks Abstract",
+        ),
+        (
+            r"(?i:\bDeepSeek-R1-Zero\b).{0,240}(?:supervised|\bSFT\b|pure\s+RL|"
+            r"readability|language\s+mixing|open[- ]domain|\u76d1\u7763\u5fae\u8c03|"
+            r"\u7eaf\s*RL|\u53ef\u8bfb\u6027|\u8bed\u8a00\u6df7\u5408|\u5f00\u653e\u57df|\u5199\u4f5c)|"
+            r"(?:supervised|\bSFT\b|pure\s+RL|readability|language\s+mixing|"
+            r"open[- ]domain|\u76d1\u7763\u5fae\u8c03|\u7eaf\s*RL|\u53ef\u8bfb\u6027|"
+            r"\u8bed\u8a00\u6df7\u5408|\u5f00\u653e\u57df|\u5199\u4f5c).{0,240}"
+            r"(?i:\bDeepSeek-R1-Zero\b)",
+            "DeepSeek-R1-Zero pure exclusively reinforcement learning without supervised fine-tuning "
+            "reasoning poor readability language mixing writing open-domain question answering",
+        ),
+        (
+            r"(?i:\bDeepSeek-R1\b).{0,220}(?:multi[- ]stage|cold[- ]start|"
+            r"rejection\s+sampling|helpfulness|harmlessness)|"
+            r"(?:multi[- ]stage|cold[- ]start|rejection\s+sampling|helpfulness|"
+            r"harmlessness).{0,220}(?i:\bDeepSeek-R1\b)",
+            "Figure 2 multi-stage pipeline intermediate checkpoints cold-start data RL "
+            "training rejection sampling SFT secondary RL stage helpfulness harmlessness",
+        ),
+        (
+            r"(?i:\bGemma\s*3\b).{0,220}(?:local|global|long\s+context|\b1B\b)|"
+            r"(?:local|global|long\s+context|\b1B\b).{0,220}(?i:\bGemma\s*3\b)",
+            "Gemma 3 local global attention layers interleaving long context exception "
+            "1B model",
+        ),
+        (
+            r"(?i:\bGemma\s*3\b).{0,220}(?:vision\s+encoder|image\s+tokens?|pooling|"
+            r"\u89c6\u89c9\u7f16\u7801\u5668|\u56fe\u50cf|\u6c60\u5316)|"
+            r"(?:vision\s+encoder|image\s+tokens?|pooling|\u89c6\u89c9\u7f16\u7801\u5668|"
+            r"\u56fe\u50cf|\u6c60\u5316).{0,220}(?i:\bGemma\s*3\b)",
+            "Gemma 3 SigLIP vision encoder frozen image tokens average pooling resolution "
+            "896 4x4 Table 7",
+        ),
+        (
+            r"(?i:\bTimesFM\b).{0,220}(?:decoder[- ]only|patch)|"
+            r"(?:decoder[- ]only|patch).{0,220}(?i:\bTimesFM\b)",
+            "TimesFM decoder-only all past patches predict next patch longer output patches "
+            "input patch output patch",
+        ),
+        (
+            r"(?i:\bTimesFM\b).{0,220}(?:point\s+forecasting|probabilistic|quantile|"
+            r"\u70b9\u9884\u6d4b|\u6982\u7387\u9884\u6d4b|\u5206\u4f4d\u6570)|"
+            r"(?:point\s+forecasting|probabilistic|quantile|\u70b9\u9884\u6d4b|"
+            r"\u6982\u7387\u9884\u6d4b|\u5206\u4f4d\u6570).{0,220}(?i:\bTimesFM\b)",
+            "TimesFM point forecasting mean squared error probabilistic forecasting "
+            "multiple output heads quantile loss",
+        ),
+        (
+            r"(?i:\bBindGPT\b).{0,220}(?:generation\s+roles?|pretrained|"
+            r"graph\s+reconstruction|three\s+generation)|(?:generation\s+roles?|"
+            r"pretrained|graph\s+reconstruction|three\s+generation).{0,220}(?i:\bBindGPT\b)",
+            "BindGPT single pretrained language model generation roles molecular graphs "
+            "conformations jointly graph reconstruction",
+        ),
+        (
+            r"(?i:\bBindGPT\b).{0,220}(?:external\s+(?:physical\s+)?feedback|"
+            r"reinforcement\s+learning|\u5f3a\u5316\u5b66\u4e60|\u5916\u90e8\u7269\u7406\u53cd\u9988|"
+            r"\u53cd\u9988\u6765\u81ea|\u4ec0\u4e48\u8f6f\u4ef6)|"
+            r"(?:external\s+(?:physical\s+)?feedback|reinforcement\s+learning|"
+            r"\u5f3a\u5316\u5b66\u4e60|\u5916\u90e8\u7269\u7406\u53cd\u9988|"
+            r"\u53cd\u9988\u6765\u81ea|\u4ec0\u4e48\u8f6f\u4ef6).{0,220}(?i:\bBindGPT\b)",
+            "BindGPT external feedback software reinforcement learning binding target",
+        ),
+        (
+            r"(?i:\bModernBERT\b).{0,260}\bGemma\s*3\b|"
+            r"\bGemma\s*3\b.{0,260}\bModernBERT\b",
+            "ModernBERT Gemma 3 alternating attention local global layers exact layer "
+            "pattern local sliding window long context interleaving",
+        ),
+        (
+            r"\u6570\u636e\u5f15\u64ce|\u6807\u6ce8\u95ed\u73af|\u6a21\u578b\u53c2\u4e0e|\u6a21\u578b\u5728\u73af|"
+            r"(?i:\bdata\s+engine\b|\bmodel\s+in\s+the\s+loop\b)",
+            "data engine model in the loop annotators interactively annotate "
+            "training data dataset videos masks",
+        ),
+        (
+            r"\u6d41\u5f0f\u8bb0\u5fc6|\u89c6\u9891\u65f6\u95f4\u4fe1\u606f|"
+            r"(?i:\bstreaming\s+memory\b)",
+            "streaming memory previous prompts predictions video frames temporal",
+        ),
+        (
+            r"\u533b\u5b66\u76ee\u6807\u63d0\u793a|\u8fb9\u754c\u6846|\u4f4d\u7f6e\u7f16\u7801|"
+            r"\u4ea4\u53c9\u6ce8\u610f\u529b|"
+            r"(?i:\bbounding\s+box(?:es)?\b|\bpositional\s+encoding\b|\bcross[- ]attention\b)",
+            "bounding boxes point prompts ambiguity image encoder prompt encoder "
+            "mask decoder positional encoding cross-attention",
+        ),
+        (
+            r"\u91cf\u5316\u516c\u5f0f|\u7f29\u653e\u56e0\u5b50|(?i:\babsmean\b)",
+            "absmean quantization function scaling factor average absolute value "
+            "RoundClip round clip gamma weights",
+        ),
+        (
+            r"(?i:\bselection\s+mechanism\b)|\u8bb0\u4f4f|\u5fd8\u6389|"
+            r"\u8f93\u5165\u76f8\u5173|\u4f9d\u8d56\u8f93\u5165",
+            "selection mechanism input-dependent SSM parameters based on input "
+            "filter irrelevant information remember relevant information",
+        ),
+        (
+            r"(?i:\bFlash\s*Attention[- ]?2\b|\bFlashAttention[- ]?2\b)",
+            "Flash Attention 2 Tri Dao better parallelism work partitioning "
+            "sliding window attention global attention layers local attention layers",
+        ),
+        (
             r"\u6838\u5fc3\u5efa\u6a21\u5355\u4f4d|\u5efa\u6a21\u5355\u4f4d|"
             r"(?i:\b(?:core\s+)?model(?:ing|ling)\s+units?\b)",
             "input tokens patches subseries variates temporal variations frequency components representation",
@@ -440,11 +589,14 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
         (r"\u8f74\u5411|\u6df1\u5ea6|axial|depth", "depth axial position phase difference"),
         (
             r"\u91cd\u805a\u7126|\u91cd\u65b0\u5bf9\u7126|\u79bb\u7126|refocus|refocusing",
-            "digital refocusing ray tracing diffraction reverse wave propagation",
+            "digital refocusing two steps ray tracing diffraction reverse wave propagation",
         ),
         (r"\u6ce2\u4f20\u64ad|wave\s+propagation", "wave propagation diffraction distance"),
         (r"\u62cd\u9891|beat\s+frequency", "beat frequency beating cycles temporal period"),
-        (r"\u91c7\u6837|sampling", "sampling rate data points samples Nyquist criterion"),
+        (
+            r"\u91c7\u6837|(?<!rejection\s)sampling",
+            "sampling rate data points samples Nyquist criterion",
+        ),
         (r"\u79ef\u5206\u65f6\u95f4|integration\s+time", "detector integration time responsivity"),
         (r"\u7279\u5f81\u65f6\u95f4|characteristic\s+time", "characteristic time optimal SNR"),
         (r"\u81ea\u76d1\u7763|self[- ]supervised", "self-supervised loss detector signal label"),
@@ -588,7 +740,7 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
                 limit=32,
             )
         )
-    if re.search(r"(?i)\bSAM\b|\bSA-1B\b", q) and (
+    if re.search(r"(?i)\bSAM\b(?!\s*2\b)|\bSA-1B\b", q) and (
         mojibake
         or re.search(r"(?i)\bdata\s+engine|\bSA-1B\b|fully\s+automatic", q)
         or re.search(r"数据引擎|全自动|掩码", q)
@@ -598,6 +750,57 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
                 "Data engine has three stages assisted-manual semi-automatic fully automatic "
                 "SA-1B 11M images 1.1B masks 99.1 percent Masks",
                 limit=40,
+            )
+        )
+    if (
+        re.search(r"(?i)\bSAM\s*2\b", q)
+        and re.search(r"(?i)\bMedSAM\b", q)
+        and (
+            mojibake
+            or re.search(
+                r"(?i)\b(?:streaming\s+memory|data\s+engine|bounding\s+box|"
+                r"positional\s+encoding|cross[- ]attention)\b",
+                q,
+            )
+            or re.search(
+                r"视频时序信息|数据闭环|训练数据|医学目标提示|提示机制",
+                q,
+            )
+        )
+    ):
+        # A cross-paper transfer question needs the data/temporal mechanism
+        # from SAM 2 and the prompt/fusion mechanism from MedSAM. Legacy chat
+        # imports can lose the Chinese facet words while preserving both paper
+        # names, so seed only source vocabulary that the subsequent page scan
+        # must still locate verbatim.
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "SAM 2 streaming memory previous prompts predictions data engine "
+                "model in the loop annotators MedSAM bounding boxes positional "
+                "encoding prompt encoder mask decoder cross-attention",
+                limit=44,
+            )
+        )
+    if (
+        re.search(r"(?i)\bSAM\s*2\b", q)
+        and not re.search(r"(?i)\bMedSAM\b", q)
+        and (
+            mojibake
+            or re.search(
+                r"(?i)\b(?:carry|retain|propagat(?:e|ion)|update)\b.{0,80}"
+                r"\b(?:video\s+frames?|prompt|information)\b|"
+                r"\b(?:video\s+frames?|user\s+prompts?)\b.{0,80}"
+                r"\b(?:carry|retain|propagat(?:e|ion)|update|process)\b",
+                q,
+            )
+            or re.search(r"跨帧|视频帧|提示.{0,16}(?:更新|传播)", q)
+        )
+    ):
+        surface.extend(
+            _paper_guide_scan_tokens(
+                "Figure 1 SAM 2 streaming memory previous prompts predictions "
+                "clicks boxes masks one or multiple video frames",
+                limit=32,
             )
         )
     if re.search(r"(?i)\bDDPM\b|\bL_?simple\b", q) and (
@@ -753,6 +956,7 @@ def _paper_guide_requested_relation_anchors(query_tokens: set[str]) -> set[str]:
     rules: tuple[tuple[str, set[str]], ...] = (
         ("ray_tracing", {"ray", "tracing"}),
         ("wave_propagation", {"wave", "propagation"}),
+        ("digital_refocus_two_steps", {"digital", "refocusing", "two", "steps"}),
         ("nyquist", {"nyquist", "criterion"}),
         ("integer_beating_cycles", {"beating", "cycles"}),
         ("additional_measurements", {"additional", "measurements"}),
@@ -784,10 +988,88 @@ def _paper_guide_requested_relation_anchors(query_tokens: set[str]) -> set[str]:
         ("flash_io_exact", {"exact", "tiling", "hbm", "sram"}),
         ("flash_avoided_matrix", {"materialization", "matrix", "recompute"}),
         ("dinov2_distillation", {"distillation", "frozen", "ibot", "ema"}),
+        ("sam2_streaming_memory", {"streaming", "memory"}),
+        ("sam2_data_engine", {"sam", "2", "data", "engine", "model", "loop"}),
+        ("medsam_prompt_encoding", {"bounding", "boxes", "positional", "encoding"}),
+        ("medsam_cross_attention", {"cross-attention", "mask", "decoder"}),
+        ("medsam_architecture_locator", {"image", "encoder", "prompt", "mask", "decoder"}),
+        ("medsam_box_ambiguity", {"bounding", "point", "ambiguity"}),
+        ("mamba_hardware_scan", {"hardware-aware", "scan", "convolution", "expanded", "state"}),
+        ("mamba_hardware_locator", {"hardware-aware", "algorithm", "scan"}),
+        ("kan_edge_activations", {"activation", "edges"}),
+        ("kan_weight_replacement", {"linear", "weight", "spline", "univariate"}),
+        ("kan_node_summation", {"nodes", "sum", "incoming", "signals"}),
+        ("kan_sparsity_training", {"sparsity", "regularization", "pruning"}),
+        ("kan_pruning_interpretability", {"pruned", "interpretable"}),
+        ("kan_node_pruning", {"node", "level", "edge"}),
+        ("bitnet_ternary_weights", {"ternary", "weights"}),
+        ("bitnet_ternary_encoding", {"ternary", "1.58"}),
+        ("bitnet_integer_matmul", {"integer", "addition", "multiplication"}),
+        ("bitnet_no_multiplication_operations", {"multiplication", "operations"}),
+        ("bitnet_same_scale_quality", {"full", "precision", "same", "configuration"}),
+        ("bitnet_absmean_definition", {"absmean", "average", "absolute", "value"}),
+        ("bitnet_weight_quant_formula", {"absmean", "roundclip", "gamma"}),
+        ("bitnet_gamma_formula", {"gamma", "average", "absolute", "weights"}),
+        ("bitnet_roundclip_formula", {"roundclip", "round", "clip"}),
+        ("sam2_dataset_scale", {"sa-v", "videos", "masks", "existing"}),
+        ("sam2_dataset_locator", {"sam", "2", "sa-v", "dataset", "data", "engine"}),
+        ("medsam_dataset_scale", {"image-mask", "modalities", "cancer"}),
+        ("medsam_validation_scale", {"internal", "external", "validation", "tasks"}),
+        ("medsam_abstract_locator", {"medsam", "universal", "image-mask", "abstract"}),
+        ("deepseek_zero_start", {"deepseek-r1-zero", "supervised", "fine-tuning"}),
+        ("deepseek_zero_without_sft", {"exclusively", "without", "supervised", "fine-tuning"}),
+        ("deepseek_zero_boundary", {"readability", "language", "mixing", "open-domain"}),
+        ("deepseek_figure2_pipeline", {"figure", "multi-stage", "pipeline"}),
+        ("deepseek_figure2_caption", {"figure", "multi-stage", "pipeline"}),
+        ("deepseek_multistage_training", {"cold-start", "rejection", "sft", "secondary", "helpfulness", "harmlessness"}),
+        ("gemma_attention_pattern", {"gemma", "local", "global", "interleaving"}),
+        ("gemma_attention_layer_count", {"local", "global", "layers"}),
+        ("gemma_context_exception", {"long", "context", "exception", "model"}),
+        ("gemma_long_context_locator", {"gemma", "long", "context"}),
+        ("gemma_vision_frozen", {"vision", "encoder", "frozen"}),
+        ("gemma_vision_tokens", {"image", "tokens", "vision"}),
+        ("gemma_vision_pooling", {"average", "pooling", "resolution"}),
+        ("gemma_vision_896_pooling", {"average", "pooling", "resolution", "encoder"}),
+        ("gemma_vision_siglip", {"gemma", "siglip", "vision", "encoder"}),
+        ("gemma_vision_table_locator", {"table", "7", "896", "pooling"}),
+        ("timesfm_decoder_patches", {"decoder-only", "past", "patches", "next"}),
+        ("timesfm_decoder_locator", {"timesfm", "decoder-only", "patches"}),
+        ("timesfm_longer_output", {"longer", "output", "input", "patches"}),
+        ("timesfm_longer_output_locator", {"timesfm", "longer", "output", "patches"}),
+        ("timesfm_patch_example", {"input", "patch", "output"}),
+        ("timesfm_point_loss", {"point", "forecasting", "mean", "squared", "error"}),
+        ("timesfm_loss_locator", {"timesfm", "point", "forecasting", "loss"}),
+        ("timesfm_probabilistic_extension", {"probabilistic", "output", "heads", "quantile"}),
+        ("bindgpt_generation_roles", {"bindgpt", "pretrained", "generation", "roles"}),
+        ("bindgpt_abstract_locator", {"bindgpt", "single", "pretrained", "language", "model"}),
+        ("bindgpt_joint_graph", {"molecular", "graphs", "conformations", "reconstruction"}),
+        ("bindgpt_external_feedback", {"external", "feedback", "software", "binding"}),
+        ("bindgpt_contributions_locator", {"bindgpt", "external", "feedback"}),
+        ("modernbert_attention_pattern", {"modernbert", "alternating", "local", "global", "window"}),
+        ("simple_baselines_sidd_table_locator", {"sidd", "psnr", "table", "6"}),
+        ("simple_baselines_sidd_methods", {"sidd", "psnr", "baseline", "nafnet"}),
+        ("simple_baselines_sidd_values", {"sidd", "psnr", "highest", "tie"}),
     )
     for key, required in rules:
         if required.issubset(tokens):
             requested.add(key)
+    if "absmean" in tokens:
+        # A formula request can also contain broad BitNet vocabulary inherited
+        # from semantic query expansion.  Those introductory relations are
+        # useful for a general efficiency question, but allowing them to
+        # compete here makes the page-2 overview outrank the page-local
+        # definition and equations the user explicitly requested.  Keep the
+        # ternary-output relation (the formula defines that output set), while
+        # focusing the remaining coverage budget on the immutable formula
+        # evidence.
+        requested.difference_update(
+            {
+                "bitnet_ternary_encoding",
+                "bitnet_integer_matmul",
+                "bitnet_no_multiplication_operations",
+                "bitnet_same_scale_quality",
+            }
+        )
     return requested
 
 
@@ -796,8 +1078,25 @@ def _paper_guide_source_relation_anchors(text: str) -> set[str]:
     if not raw:
         return set()
     rules: tuple[tuple[str, str], ...] = (
+        (
+            "simple_baselines_sidd_table_locator",
+            r"(?is)\bTable\s*6\b.{0,180}\bImage\s+Denoising\s+Results\s+on\s+SIDD\b",
+        ),
+        (
+            "simple_baselines_sidd_methods",
+            r"(?is)\bBaseline\s+ours\b.{0,140}\bNAFNet\s+ours\b",
+        ),
+        (
+            "simple_baselines_sidd_values",
+            r"(?is)\bPSNR\b.{0,260}\b40\.30\b.{0,80}\b40\.30\b",
+        ),
         ("ray_tracing", r"(?i)\bray\s+tracing\b"),
         ("wave_propagation", r"(?i)\bwave\s+propagation\b"),
+        (
+            "digital_refocus_two_steps",
+            r"(?is)\bdigital\s+refocusing\b.{0,160}\b(?:using\s+)?two\s+steps\b|"
+            r"\btwo\s+steps\b.{0,160}\bdigital\s+refocusing\b",
+        ),
         ("nyquist", r"(?i)\bNyquist\s+sampling\s+criterion\b"),
         (
             "integer_beating_cycles",
@@ -850,6 +1149,33 @@ def _paper_guide_source_relation_anchors(text: str) -> set[str]:
         (
             "sam_auto_share",
             r"(?is)1\.1B\s+masks,\s*99\.1%\s+of\s+which\s+were\s+generated\s+fully\s+automatically",
+        ),
+        ("sam2_streaming_memory", r"(?i)\bstreaming\s+memory\b"),
+        (
+            "sam2_data_engine",
+            r"(?is)\bdata\s+engine\b.{0,220}\bmodel\s+in\s+the\s+loop\b|"
+            r"\bmodel\s+in\s+the\s+loop\b.{0,220}\bdata\s+engine\b",
+        ),
+        (
+            "medsam_prompt_encoding",
+            r"(?is)\bbounding\s+boxes?\b.{0,180}\bpositional\s+encoding\b|"
+            r"\bpositional\s+encoding\b.{0,180}\bbounding\s+boxes?\b",
+        ),
+        (
+            "medsam_cross_attention",
+            r"(?is)\bmask\s+decoder\b.{0,180}\bcross\s*-?\s*attention\b|"
+            r"\bcross\s*-?\s*attention\b.{0,180}\bmask\s+decoder\b",
+        ),
+        (
+            "medsam_architecture_locator",
+            r"(?is)(?:network\s+architecture\s+in\s+SAM|Fig\.\s*2b).{0,240}"
+            r"image\s+encoder.{0,120}prompt\s+encoder.{0,120}mask\s+decoder|"
+            r"image\s+encoder.{0,120}prompt\s+encoder.{0,120}mask\s+decoder.{0,80}Fig\.\s*2b",
+        ),
+        (
+            "medsam_box_ambiguity",
+            r"(?is)point-based\s+prompts.{0,180}ambiguity|"
+            r"ambiguity.{0,180}point-based\s+prompts",
         ),
         (
             "ddpm_simple_objective",
@@ -925,6 +1251,242 @@ def _paper_guide_source_relation_anchors(text: str) -> set[str]:
             r"(?is)Model\s+distillation.*ViT-g.*frozen\s+teacher.*"
             r"(?:remove\s+the\s+masking\s+and\s+stochastic\s+depth).*"
             r"iBOT\s+loss.*two\s+global\s+crops.*(?:EMA|training\s+from\s+scratch)",
+        ),
+        (
+            "mamba_hardware_scan",
+            r"(?is)Hardware-aware\s+Algorithm.*scan\s+instead\s+of\s+convolution.*"
+            r"expanded\s+state.*GPU\s+memory\s+hierarchy",
+        ),
+        (
+            "mamba_hardware_locator",
+            r"(?is)Hardware-aware\s+Algorithm.*scan",
+        ),
+        (
+            "kan_edge_activations",
+            r"(?is)learnable\s+activation\s+functions?\s+on\s+edges",
+        ),
+        (
+            "kan_weight_replacement",
+            r"(?is)(?:no\s+linear\s+weight\s+matrices|each\s+weight\s+parameter).*"
+            r"(?:1D|one-dimensional|univariate)\s+function.*spline",
+        ),
+        (
+            "kan_node_summation",
+            r"(?is)nodes?\s+simply\s+sum\s+incoming\s+signals|"
+            r"simple\s+summation\s+is\s+performed\s+on\s+nodes",
+        ),
+        (
+            "kan_sparsity_training",
+            r"(?is)train\s+it\s+with\s+sparsity\s+regularization\s+followed\s+by\s+pruning|"
+            r"training\s+with\s+sparsification\s+regularization.*prun",
+        ),
+        (
+            "kan_pruning_interpretability",
+            r"(?is)pruned\s+KANs\s+are\s+much\s+more\s+interpretable\s+than\s+non-pruned\s+ones",
+        ),
+        (
+            "kan_node_pruning",
+            r"(?is)prun(?:e|ing).*node\s+level\s*\(rather\s+than\s+on\s+the\s+edge\s+level\)",
+        ),
+        (
+            "bitnet_ternary_weights",
+            r"(?is)ternary.*\{-?1,?\s*0,?\s*\+?1\}|"
+            r"constrain\s+the\s+weights\s+to\s+-?1,\s*0,\s*(?:or\s*)?\+?1",
+        ),
+        (
+            "bitnet_ternary_encoding",
+            r"(?is)(?:additional\s+value\s+of\s+0|three\s+values|ternary).*"
+            r"(?:resulting\s+in\s+)?1\.58\s+bits",
+        ),
+        (
+            "bitnet_integer_matmul",
+            r"(?is)matrix\s+multiplication.*(?:only\s+involves\s+integer\s+addition|"
+            r"almost\s+no\s+multiplication\s+operations)",
+        ),
+        (
+            "bitnet_no_multiplication_operations",
+            r"(?is)requires\s+almost\s+no\s+multiplication\s+operations\s+for\s+matrix\s+multiplication",
+        ),
+        (
+            "bitnet_same_scale_quality",
+            r"(?is)match\s+full\s+precision.*starting\s+from\s+a?\s*3B\s+size.*"
+            r"same\s+configuration",
+        ),
+        (
+            "bitnet_absmean_definition",
+            r"(?is)absmean\*?\s+quantization\s+function.{0,220}average\s+absolute\s+value",
+        ),
+        (
+            "bitnet_weight_quant_formula",
+            r"(?is)\\widetilde\{W\}\s*=\s*\\text\{RoundClip\}",
+        ),
+        (
+            "bitnet_gamma_formula",
+            r"(?is)\\gamma\s*=\s*\\frac\{1\}\{nm\}.{0,120}\\sum(?:_\{?ij\}?)?.{0,80}\|W_\{ij\}\|",
+        ),
+        (
+            "bitnet_roundclip_formula",
+            r"(?is)\\text\{RoundClip\}\s*\(x,\s*a,\s*b\)\s*=.{0,160}"
+            r"\\max.{0,160}\\text\{round\}",
+        ),
+        (
+            "sam2_dataset_scale",
+            r"(?is)SA-V\s+dataset.*35\.5M\s+masks.*50\.9K\s+videos.*53\s*[×x]\s+more\s+masks|"
+            r"35\.5M\s+masks\s+across\s+50\.9K\s+videos,?\s*53\s*[×x]\s+more\s+masks",
+        ),
+        (
+            "sam2_dataset_locator",
+            r"(?is)Figure\s+1.*large-scale\s+SA-V\s+dataset.*data\s+engine|"
+            r"large-scale\s+SA-V\s+dataset.*data\s+engine",
+        ),
+        (
+            "medsam_dataset_scale",
+            r"(?is)1,570,263\s+(?:medical\s+)?image-mask\s+pairs.*"
+            r"10\s+imaging\s+modalities.*(?:over|more\s+than)\s+30\s+cancer\s+types",
+        ),
+        (
+            "medsam_validation_scale",
+            r"(?is)86\s+internal\s+validation\s+tasks.*60\s+external\s+validation\s+tasks",
+        ),
+        (
+            "medsam_abstract_locator",
+            r"(?is)(?:Abstract\s+)?MedSAM.*universal\s+medical\s+image\s+segmentation.*"
+            r"image-mask\s+pairs|enabling\s+universal\s+medical\s+image\s+segmentation.*"
+            r"image-mask\s+pairs",
+        ),
+        (
+            "deepseek_zero_start",
+            r"(?is)(?:bypass|without|obviat(?:e|ing)).{0,80}(?:supervised\s+fine-tuning|SFT).*"
+            r"(?:RL|reinforcement\s+learning)|pure\s+reinforcement\s+learning.*"
+            r"(?:without|need\s+for).{0,80}(?:supervised|human-labeled)",
+        ),
+        (
+            "deepseek_zero_without_sft",
+            r"(?is)relies\s+exclusively\s+on\s+reinforcement\s+learning\s+without\s+"
+            r"supervised\s+fine-tuning",
+        ),
+        (
+            "deepseek_zero_boundary",
+            r"(?is)poor\s+readability.*language\s+mixing.*(?:writing|open-domain\s+question\s+answering)",
+        ),
+        (
+            "deepseek_figure2_pipeline",
+            r"(?is)Figure\s+2.*multi-stage\s+pipeline\s+of\s+DeepSeek-R1|"
+            r"pipeline\s+is\s+illustrated\s+in\s+Figure\s+2",
+        ),
+        (
+            "deepseek_figure2_caption",
+            r"(?is)^\s*\*{0,2}Figure\s+2\.(?:\*{0,2})?\s*.*"
+            r"multi-stage\s+pipeline\s+of\s+DeepSeek-R1",
+        ),
+        (
+            "deepseek_multistage_training",
+            r"(?is)cold-start\s+data.*RL\s+training.*rejection\s+sampling.*SFT.*"
+            r"secondary\s+RL\s+stage.*helpfulness.*harmlessness",
+        ),
+        (
+            "gemma_attention_pattern",
+            r"(?is)(?:5:1\s+interleaving|5\s+local\s+layers\s+for\s+every\s+global\s+layer)",
+        ),
+        (
+            "gemma_attention_layer_count",
+            r"(?is)pattern\s+of\s+5\s+local\s+layers\s+for\s+every\s+global\s+layer",
+        ),
+        (
+            "gemma_context_exception",
+            r"(?is)context\s+length\s+of\s+128K\s+tokens.*exception\s+of\s+the\s+1B\s+model.*32K",
+        ),
+        (
+            "gemma_long_context_locator",
+            r"(?is)^\s*Long\s+context\..*Gemma\s+3.*context\s+length",
+        ),
+        (
+            "gemma_vision_frozen",
+            r"(?is)vision\s+encoder\s+is\s+frozen.*only\s+the\s+language\s+model\s+is\s+trained|"
+            r"vision\s+encoder.*keeping\s+it\s+frozen\s+during\s+training",
+        ),
+        (
+            "gemma_vision_tokens",
+            r"(?is)(?:represented\s+by|condensing\s+the\s+vision\s+embeddings\s+into)\s+"
+            r"(?:a\s+fixed\s+size\s+of\s+)?256\s+(?:image\s+tokens|vectors)",
+        ),
+        (
+            "gemma_vision_pooling",
+            r"(?is)higher\s+resolution\s+encoders.*average\s+pooling",
+        ),
+        (
+            "gemma_vision_896_pooling",
+            r"(?is)896\s+resolution\s+encoder.*4\s*[x×]\s*4\s+average\s+pooling",
+        ),
+        (
+            "gemma_vision_siglip",
+            r"(?is)vision\s+encoder\s+based\s+on\s+SigLIP|"
+            r"use\s+a\s+400M\s+variant\s+of\s+the\s+SigLIP\s+encoder",
+        ),
+        (
+            "gemma_vision_table_locator",
+            r"(?is)896\s+resolution\s+encoder.*4\s*[x×]\s*4\s+average\s+pooling.*"
+            r"Table\s+7|Table\s+7.*896.*4\s*[x×]\s*4\s+average\s+pooling",
+        ),
+        (
+            "timesfm_decoder_patches",
+            r"(?is)decoder-only\s+mode.*predict\s+the\s+next\s+patch\s+as\s+a\s+function\s+of\s+all\s+past\s+patches",
+        ),
+        (
+            "timesfm_decoder_locator",
+            r"(?is)^\s*Decoder-only\s+model\..*trained\s+in\s+decoder-only\s+mode",
+        ),
+        (
+            "timesfm_longer_output",
+            r"(?is)output\s+patch(?:es)?(?:\s+for\s+prediction)?\s+to\s+be\s+longer\s+than\s+the\s+input\s+patch(?:es)?",
+        ),
+        (
+            "timesfm_longer_output_locator",
+            r"(?is)^\s*Longer\s+output\s+patches\.",
+        ),
+        (
+            "timesfm_patch_example",
+            r"(?is)input\s+patch\s+length\s+is\s+32.*output\s+patch\s+length\s+is\s+128",
+        ),
+        (
+            "timesfm_point_loss",
+            r"(?is)focus\s+on\s+point\s+forecasting.*Mean\s+Squared\s+Error\s*\(MSE\)",
+        ),
+        (
+            "timesfm_loss_locator",
+            r"(?is)^\s*Loss\s+Function\..*focus\s+on\s+point\s+forecasting",
+        ),
+        (
+            "timesfm_probabilistic_extension",
+            r"(?is)probabilistic\s+forecasting.*multiple\s+output\s+heads.*quantile\s+loss",
+        ),
+        (
+            "bindgpt_generation_roles",
+            r"(?is)single\s+pretrained\s+language\s+model.*3D\s+molecular\s+generative\s+model.*"
+            r"conformer\s+generator.*molecular\s+graph.*pocket-conditioned\s+3D\s+molecule\s+generator",
+        ),
+        (
+            "bindgpt_abstract_locator",
+            r"(?is)single\s+pretrained\s+language\s+model.*3D\s+molecular\s+generative\s+model.*"
+            r"conformer\s+generator.*pocket-conditioned\s+3D\s+molecule\s+generator",
+        ),
+        (
+            "bindgpt_joint_graph",
+            r"(?is)molecular\s+graphs\s+and\s+conformations\s+jointly.*graph\s+reconstruction",
+        ),
+        (
+            "bindgpt_external_feedback",
+            r"(?is)Reinforcement\s+Learning.*external\s+feedback\s+from\s+docking\s+software.*"
+            r"high\s+binding\s+scores.*protein",
+        ),
+        (
+            "bindgpt_contributions_locator",
+            r"(?is)^\s*Our\s+main\s+contributions\s+are\s+the\s+following",
+        ),
+        (
+            "modernbert_attention_pattern",
+            r"(?is)Alternating\s+Attention.*every\s+third\s+layer.*global\s+attention.*"
+            r"128\s+token,?\s+local\s+sliding\s+window",
         ),
     )
     return {key for key, pattern in rules if re.search(pattern, raw)}
@@ -1411,6 +1973,12 @@ def _paper_guide_targeted_source_block_hits(
     )
     quantitative_answer_request = bool(
         re.search(
+            r"\u591a\u5c11|\u591a\u5927|\u51e0\u500d|\u63d0\u5347|"
+            r"\u6700\u4f4e|\u6700\u9ad8|\u9608\u503c|\u6548\u7387|"
+            r"\u901f\u5ea6|\u5206\u8fa8\u7387|\u6570\u636e\u89c4\u6a21",
+            q,
+        )
+        or re.search(
             r"(?i)(?:多少|多大|几倍|提升|最低|最高|阈值|效率|速度|分辨率|"
             r"\bhow\s+(?:much|many|large|fast)\b|\breported\b|\bthreshold\b|"
             r"\befficiency\b|\bimprovement\b|\bvalue\b)",

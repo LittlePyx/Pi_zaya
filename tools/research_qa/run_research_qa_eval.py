@@ -968,6 +968,13 @@ def _contains_term(haystack: Any, term: str) -> bool:
     # reviewed evidence phrases remain stable across Markdown conversion.
     hay_search = hay.replace("$", "")
     hay_compact = re.sub(r"\s+", "", hay_search)
+    # Markdown emphasis and TeX grouping/subscript characters are presentation
+    # syntax rather than evidence characters.  A reviewed term such as
+    # ``absmean quantization`` must therefore match ``*absmean* quantization``;
+    # likewise ``|Wij|`` must match the faithful TeX transcription
+    # ``|W_{ij}|``.  Only markup is removed here, so every lexical character in
+    # the frozen evidence term is still required in the same order.
+    hay_markup_compact = re.sub(r"[\s*_{}\\]+", "", hay_search)
     # PDF/Markdown conversion and editorial style vary between spaces and
     # hyphens in compound technical terms (for example ``high frequency`` vs
     # ``high-frequency``).  Normalize only whitespace and hyphen glyphs; all
@@ -978,6 +985,7 @@ def _contains_term(haystack: Any, term: str) -> bool:
         if needle_norm and (
             needle_norm in hay_search
             or re.sub(r"\s+", "", needle_norm) in hay_compact
+            or re.sub(r"[\s*_{}\\]+", "", needle_norm) in hay_markup_compact
             or re.sub(r"[\s\-\u00ad\u2010-\u2015]+", "", needle_norm)
             in hay_hyphen_compact
         ):
@@ -1208,6 +1216,80 @@ def _assistant_message_by_id(messages_payload: Any, msg_id: Any) -> dict[str, An
         if current_id == target_id:
             return item
     return _latest_assistant_message(messages_payload)
+
+
+def _terminal_message_render_needs_refresh(
+    messages_payload: Any,
+    *,
+    assistant_msg_id: Any,
+    expected: dict[str, Any],
+) -> bool:
+    """Mirror the UI's one-shot postprocess refresh after full refs settle."""
+
+    message = _assistant_message_by_id(messages_payload, assistant_msg_id)
+    if not message:
+        return True
+    meta = message.get("meta") if isinstance(message.get("meta"), dict) else {}
+    contracts = (
+        meta.get("paper_guide_contracts")
+        if isinstance(meta.get("paper_guide_contracts"), dict)
+        else {}
+    )
+    packet = (
+        contracts.get("render_packet")
+        if isinstance(contracts.get("render_packet"), dict)
+        else {}
+    )
+    rendered = str(
+        packet.get("rendered_body")
+        or packet.get("rendered_content")
+        or message.get("rendered_body")
+        or ""
+    ).strip()
+    details = [
+        item
+        for item in _as_list(packet.get("cite_details") or message.get("cite_details"))
+        if isinstance(item, dict)
+    ]
+    if rendered and re.search(
+        r"(?<!\[)\[(?:R)?\d+\](?!\s*\()",
+        rendered,
+        flags=re.IGNORECASE,
+    ):
+        return True
+    required_routes = (
+        expected.get("requiredRouteCounts")
+        if isinstance(expected.get("requiredRouteCounts"), dict)
+        else {}
+    )
+    required_total = max(
+        _expected_int(expected, "minCitationCount"),
+        len(_as_list(expected.get("requiredCitationDocIds"))),
+        sum(
+            max(0, _expected_int(required_routes, route))
+            for route in ("system_a", "system_b")
+        ),
+    )
+    if required_total <= 0:
+        return False
+    anchored_details = [
+        item
+        for item in details
+        if str(item.get("anchor") or "").strip().lstrip("#")
+        and f"#{str(item.get('anchor') or '').strip().lstrip('#')}" in rendered
+    ]
+    if len(anchored_details) < required_total:
+        return True
+    for route in ("system_a", "system_b"):
+        minimum = max(0, _expected_int(required_routes, route))
+        if minimum <= 0:
+            continue
+        actual = sum(
+            1 for item in anchored_details if _citation_route(item) == route
+        )
+        if actual < minimum:
+            return True
+    return False
 
 
 def _answer_text(result: dict[str, Any]) -> str:
@@ -2911,16 +2993,32 @@ def run_case(
     # A references response can persist a refined answer-aligned packet after
     # the parallel message snapshot has already returned. Re-read only in that
     # real race; this is validation consistency, not card-completion latency.
-    if float(refs_result.get("last_completed_ms") or 0.0) > float(messages_completed_ms or 0.0):
+    terminal_render_needs_refresh = _terminal_message_render_needs_refresh(
+        messages,
+        assistant_msg_id=gen.get("assistant_msg_id"),
+        expected=expected,
+    )
+    if (
+        float(refs_result.get("last_completed_ms") or 0.0)
+        > float(messages_completed_ms or 0.0)
+        or terminal_render_needs_refresh
+    ):
         messages = _get_json(
             base_url,
             f"/api/conversations/{parse.quote(conv_id)}/messages?render_packet_only=1",
             _bounded_request_timeout(timeout_s, case_deadline),
         )
-        validation_completed_ms = round(
+        refreshed_messages_completed_ms = round(
             (time.perf_counter() - generation_started) * 1000.0,
             2,
         )
+        validation_completed_ms = refreshed_messages_completed_ms
+        if terminal_render_needs_refresh:
+            # The React client performs the same postprocess hydration when its
+            # first terminal message snapshot races the full refs packet. Count
+            # that retry in user-visible readiness rather than hiding it as
+            # validation-only work.
+            messages_completed_ms = refreshed_messages_completed_ms
     assistant_message = _assistant_message_by_id(messages, gen.get("assistant_msg_id"))
     user_msg_id = gen.get("user_msg_id")
     ui_ready_candidates = [

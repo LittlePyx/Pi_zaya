@@ -35,7 +35,7 @@ REFERENCE_LOOKUP_VERSION = 13
 # Increment this independently of metadata lookup behavior whenever Markdown
 # reference parsing changes. It prevents unchanged documents from reusing refs
 # produced by an older parser.
-REFERENCE_PARSER_VERSION = 3
+REFERENCE_PARSER_VERSION = 4
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
@@ -249,6 +249,166 @@ def _read_text_tail(path: Path, *, max_bytes: int = 1_500_000) -> str:
         return raw.decode("utf-8", errors="ignore")
     except Exception:
         return ""
+
+
+def _extract_author_year_reference_records_from_md(md_text: str) -> list[dict[str, Any]]:
+    """Return internally addressable author-year bibliography entries.
+
+    The source Markdown remains author-year styled.  The sequential number in
+    each returned record is an internal citation-card identity, not text that
+    should be written back into the paper.
+    """
+
+    md = (md_text or "").replace("\r\n", "\n").replace("\r", "\n")
+    lines = md.split("\n")
+    ref_i = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if _REF_HEAD_RE.match(str(line or "").strip())
+        ),
+        None,
+    )
+    if ref_i is None:
+        return []
+
+    current_page = 0
+    for line in lines[: ref_i + 1]:
+        marker = re.match(
+            r"^<!--\s*kb_page:\s*(\d+)\s*-->$",
+            str(line or "").strip(),
+            flags=re.IGNORECASE,
+        )
+        if marker:
+            current_page = int(marker.group(1))
+
+    bounded_tail: list[tuple[int, str]] = []
+    for index, line in enumerate(lines[ref_i + 1 :], start=ref_i + 1):
+        stripped = str(line or "").strip()
+        if re.match(r"^#{1,6}\s+\S+", stripped) and not _REF_HEAD_RE.match(stripped):
+            break
+        bounded_tail.append((index, str(line or "")))
+    if not bounded_tail:
+        return []
+
+    # Import lazily: the converter's structured-index module imports this
+    # module, while this parser reuses the converter's already-tested
+    # author-year line joining logic.
+    from kb.converter.reference_markdown import _format_author_year_references_block
+
+    initial_page = current_page
+    formatted = _format_author_year_references_block(bounded_tail)
+    records: list[dict[str, Any]] = []
+    for item in formatted:
+        text = str(item or "").strip()
+        marker = re.match(
+            r"^<!--\s*kb_page:\s*(\d+)\s*-->$",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if marker:
+            current_page = int(marker.group(1))
+            continue
+        if not text or not _YEAR_ANY_RE.search(text):
+            continue
+        records.append(
+            {
+                "reference_number": len(records) + 1,
+                "reference_text": text,
+                "reference_style": "author_year",
+                "synthetic_reference_number": True,
+                "source_page": int(current_page) if current_page > 0 else 0,
+            }
+        )
+    if len(records) >= 2:
+        return records
+
+    # The converter formatter intentionally demands a strong author-list
+    # prefix. Supplement it for clean single-author entries such as
+    # ``Tri Dao. 2023. ...`` without changing the Markdown representation.
+    def _looks_like_author_year_start(value: str) -> bool:
+        year_match = re.search(r"\b(?:18|19|20)\d{2}[a-z]?\.", value)
+        if year_match is None:
+            return False
+        prefix = value[: year_match.start()].strip(" .;,")
+        if re.search(r"(?i)^(?:preprint|arxiv|corr|proceedings|journal)\b", prefix):
+            return False
+        name_tokens = re.findall(
+            r"(?:^|[\s,])(?:[A-Z]\.|[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'\u2019-]{1,})",
+            prefix,
+        )
+        return len(name_tokens) >= 2
+    fallback: list[dict[str, Any]] = []
+    current_parts: list[str] = []
+    entry_page = initial_page
+    current_page = initial_page
+
+    def _flush_fallback() -> None:
+        nonlocal current_parts
+        entry = re.sub(r"\s+", " ", " ".join(current_parts)).strip()
+        current_parts = []
+        if not entry or not _YEAR_ANY_RE.search(entry):
+            return
+        fallback.append(
+            {
+                "reference_number": len(fallback) + 1,
+                "reference_text": entry,
+                "reference_style": "author_year",
+                "synthetic_reference_number": True,
+                "source_page": int(entry_page) if entry_page > 0 else 0,
+            }
+        )
+
+    for _index, raw_line in bounded_tail:
+        stripped = str(raw_line or "").strip()
+        marker = re.match(
+            r"^<!--\s*kb_page:\s*(\d+)\s*-->$",
+            stripped,
+            flags=re.IGNORECASE,
+        )
+        if marker:
+            _flush_fallback()
+            current_page = int(marker.group(1))
+            continue
+        if not stripped:
+            _flush_fallback()
+            continue
+        if _looks_like_author_year_start(stripped):
+            _flush_fallback()
+            entry_page = current_page
+            current_parts = [stripped]
+        elif current_parts:
+            current_parts.append(stripped)
+    _flush_fallback()
+    return fallback if len(fallback) >= 2 else []
+
+
+def _author_year_entry_identity(text: str) -> dict[str, str]:
+    """Extract conservative local metadata from an author-year entry."""
+
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    year = extract_year_hint(raw)
+    if not raw or not year:
+        return {}
+    year_matches = list(re.finditer(rf"\b{re.escape(year)}[a-z]?\.?(?=\s|$)", raw, re.I))
+    if not year_matches:
+        return {"year": year}
+    year_match = year_matches[-1]
+    prefix = raw[: year_match.start()].strip(" .;,")
+    authors = re.split(r"\.\s+", prefix)[-1].strip(" .;,")
+    suffix = raw[year_match.end() :].lstrip(" .;,")
+    title = re.split(
+        r"\.\s+(?=(?:In\b|Proceedings\b|arXiv\b|CoRR\b|[A-Z][\w& -]{2,80},\s*\d))",
+        suffix,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip(" .;,")
+    out = {"year": year}
+    if len(authors) >= 3 and not re.search(r"(?i)^(?:preprint|arxiv|corr)\b", authors):
+        out["authors"] = authors
+    if len(title) >= 8:
+        out["title"] = title
+    return out
 
 
 def extract_references_map_from_md(md_text: str) -> dict[int, str]:
@@ -500,7 +660,14 @@ def extract_references_map_from_md(md_text: str) -> dict[int, str]:
                 cur_buf.append(s)
 
     _flush()
-    return _cleanup_reference_number_noise(out)
+    cleaned = _cleanup_reference_number_noise(out)
+    if cleaned:
+        return cleaned
+    author_year_records = _extract_author_year_reference_records_from_md(md)
+    return {
+        int(item["reference_number"]): str(item["reference_text"])
+        for item in author_year_records
+    }
 
 
 def _cleanup_reference_number_noise(ref_map: dict[int, str]) -> dict[int, str]:
@@ -639,12 +806,39 @@ def build_reference_catalog_from_md(
     source_sha1: str = "",
 ) -> dict:
     ref_map = extract_references_map_from_md(md_text)
-    return build_reference_catalog_from_ref_map(
+    catalog = build_reference_catalog_from_ref_map(
         ref_map,
         source_path=source_path,
         source_name=source_name,
         source_sha1=source_sha1,
     )
+    author_year_records = _extract_author_year_reference_records_from_md(md_text)
+    author_year_by_number = {
+        int(item.get("reference_number") or 0): dict(item)
+        for item in author_year_records
+        if int(item.get("reference_number") or 0) > 0
+    }
+    if author_year_by_number and len(author_year_by_number) == len(ref_map):
+        for row in list(catalog.get("refs") or []):
+            if not isinstance(row, dict):
+                continue
+            number = int(row.get("reference_number") or 0)
+            source_record = author_year_by_number.get(number)
+            if not source_record:
+                continue
+            row["reference_style"] = "author_year"
+            row["synthetic_reference_number"] = True
+            source_page = int(source_record.get("source_page") or 0)
+            if source_page > 0:
+                row["source_page"] = source_page
+                row["page_start"] = source_page
+                row["page_end"] = source_page
+            identity = _author_year_entry_identity(str(row.get("reference_text") or ""))
+            for key in ("authors", "title", "year"):
+                value = str(identity.get(key) or "").strip()
+                if value:
+                    row[key] = value
+    return catalog
 
 
 def _reference_catalog_path_for_md(md_path: Path | str) -> Path:
@@ -4033,16 +4227,30 @@ def build_reference_index(
                 or (not reference_catalog_to_map(reference_catalog))
                 or (str(sha1 or "").strip() and catalog_sha1 != str(sha1 or "").strip())
             ):
-                reference_catalog = build_reference_catalog_from_ref_map(
-                    ref_map,
+                reference_catalog = build_reference_catalog_from_md(
+                    md_tail,
                     source_path=src_path,
                     source_name=p.name,
                     source_sha1=sha1,
                 )
+                if not reference_catalog_to_map(reference_catalog) and ref_map:
+                    reference_catalog = build_reference_catalog_from_ref_map(
+                        ref_map,
+                        source_path=src_path,
+                        source_name=p.name,
+                        source_sha1=sha1,
+                    )
                 try:
                     _save_json(_reference_catalog_path_for_md(p), reference_catalog)
                 except Exception:
                     pass
+            catalog_refs_by_num = {
+                int(item.get("reference_number") or 0): dict(item)
+                for item in list(reference_catalog.get("refs") or [])
+                if isinstance(item, dict)
+                and str(item.get("reference_number") or "").strip().isdigit()
+                and int(item.get("reference_number") or 0) > 0
+            }
             refs_obj: dict[str, dict] = {}
             unresolved_promising = 0
             sparse_promising = 0
@@ -4194,8 +4402,9 @@ def build_reference_index(
                 raw = str(ref_map.get(n) or "").strip()
                 if not raw:
                     continue
-    
+
                 meta = None
+                catalog_ref = catalog_refs_by_num.get(int(n)) or {}
                 doi_hint = extract_first_doi(raw)
                 promising_ref = bool(is_promising_reference_text(raw))
     
@@ -4247,6 +4456,19 @@ def build_reference_index(
                             ),
                             "match_score": 0.98,
                         }
+
+                if not isinstance(meta, dict) and str(
+                    catalog_ref.get("reference_style") or ""
+                ).strip() == "author_year":
+                    meta = {
+                        "title": str(catalog_ref.get("title") or "").strip(),
+                        "authors": str(catalog_ref.get("authors") or "").strip(),
+                        "venue": str(catalog_ref.get("venue") or "").strip(),
+                        "year": str(catalog_ref.get("year") or "").strip(),
+                        "doi": str(catalog_ref.get("doi") or "").strip(),
+                        "match_method": "author_year_catalog",
+                        "match_score": 0.96,
+                    }
     
                 if not isinstance(meta, dict):
                     crossref_active_now = bool(
@@ -4449,6 +4671,16 @@ def build_reference_index(
                     "parse_confidence": _reference_parse_confidence(raw),
                     "tail_continuity_status": str(reference_catalog.get("tail_continuity_status") or "").strip(),
                 }
+                for field in (
+                    "reference_style",
+                    "synthetic_reference_number",
+                    "source_page",
+                    "page_start",
+                    "page_end",
+                ):
+                    value = catalog_ref.get(field)
+                    if value not in (None, "", 0):
+                        rec[field] = value
                 rec.update(classify_reference_metadata(rec, enable_title_lookup=bool(enable_title_lookup)))
                 refs_obj[str(int(n))] = rec
                 if promising_ref:

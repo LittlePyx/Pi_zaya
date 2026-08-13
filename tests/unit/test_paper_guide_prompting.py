@@ -170,6 +170,25 @@ def test_paper_guide_exact_method_support_requires_a_specific_source_location_re
     ) is True
 
 
+def test_relational_where_and_weight_parameter_do_not_trigger_exact_reproduction() -> None:
+    prompt = (
+        "Where do KANs place learnable activation functions compared with MLPs, "
+        "what remains at the nodes, and what replaces each linear weight parameter?"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "compare"
+    assert _paper_guide_prompt_requests_exact_method_support(prompt) is False
+
+
+def test_kan_pruning_boundary_flow_is_compare_not_reproduction() -> None:
+    prompt = (
+        "KAN 的可解释化流程是直接按边剪枝吗？"
+        "请说明论文先用什么训练约束，再在哪个粒度执行 pruning。"
+    )
+
+    assert _paper_guide_prompt_family(prompt) == "compare"
+
+
 def test_paper_guide_prompt_family_treats_noise_model_contents_as_method_not_compare():
     assert (
         _paper_guide_prompt_family(

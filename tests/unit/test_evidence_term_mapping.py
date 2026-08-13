@@ -1,6 +1,26 @@
 from kb.evidence_term_mapping import evidence_alignment_tokens, method_identity_conflicts
 
 
+def test_kan_pruning_chinese_terms_align_with_exact_english_relation() -> None:
+    answer_tokens = evidence_alignment_tokens(
+        "先以稀疏正则化训练 KAN，再在节点粒度而不是边粒度剪枝，因而更可解释。"
+    )
+    evidence_tokens = evidence_alignment_tokens(
+        "Train a KAN with sparsity regularization followed by pruning. "
+        "The pruned KAN is more interpretable, and pruning is on the node level "
+        "rather than the edge level."
+    )
+
+    assert {
+        "sparsity",
+        "regularization",
+        "pruning",
+        "node",
+        "edge",
+        "interpretable",
+    }.issubset(answer_tokens & evidence_tokens)
+
+
 def test_chinese_3d_video_mechanism_aligns_with_english_source_terms() -> None:
     answer_tokens = evidence_alignment_tokens(
         "四个空间分离的单像素探测器用于光度立体，速度约为 8 帧/秒。"

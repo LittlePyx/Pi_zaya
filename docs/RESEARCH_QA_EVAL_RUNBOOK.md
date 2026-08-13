@@ -1156,3 +1156,83 @@ corpus after measuring the baseline would make the latency and quality
 comparison non-equivalent. They belong in the next separately versioned,
 hash-pinned blind-transfer suite, where failures must remain visible and the
 same answer, evidence, locator, citation-card, and latency gates must apply.
+
+## 2026-08-14 Blind-Transfer Quality and Full-Library Tail Acceptance
+
+The next transfer suite was frozen before implementation work in
+`docs/research_qa_unseen_corpus_v2.json`. It contains 22 questions over newly
+acquired papers and keeps exact document identities, source pages, answer
+terms, evidence terms, citation routes, locator requirements, and card-quality
+thresholds. The fixture was not edited during diagnosis or acceptance. The
+first complete real run remains visible at
+`F:\research-papers\2026\Jan\else\kb_chat_eval\unseen_v2\results\full_22_verified_21\20260814_063829`:
+it passed 18/22 and exposed four real answer/evidence defects. No failed case
+was removed, retried into a pass, or weakened.
+
+The accepted blind-transfer run is
+`F:\research-papers\2026\Jan\else\kb_chat_eval\unseen_v2\results\full_22_release\20260814_070530`.
+It passed 22/22 in one complete run. All required answer terms, evidence terms,
+source identities, pages, citation routes, claim bindings, reader locators,
+and reference-card thresholds passed:
+
+| Milestone | p50 | p95 | max |
+|---|---:|---:|---:|
+| First visible answer | 4,366 ms | 6,125 ms | 6,226 ms |
+| Answer complete | 9,344 ms | 11,579 ms | 13,420 ms |
+| Evidence cards complete | 10,810 ms | 14,117 ms | 17,259 ms |
+| End-to-end UI ready | 11,912 ms | 16,216 ms | 17,259 ms |
+| Final validation | 11,912 ms | 16,277 ms | 18,946 ms |
+| Answer complete to cards | 1,558 ms | 3,836 ms | 4,381 ms |
+| Cards to UI ready | 745 ms | 2,101 ms | 3,721 ms |
+
+The earlier 18/22 run is not treated as a latency-equivalent baseline because
+it did not meet the quality contract. Its UI-ready p50/p95/max was
+12,113/16,285/16,650 ms. The accepted 22/22 run has a slightly higher UI-ready
+maximum and higher answer-to-card timings; those costs remain reported because
+the final code retrieves and binds the missing evidence instead of hiding it.
+The separate unseen source and deterministic retrieval gates passed 22/22; the
+isolated artifacts remain under the same `unseen_v2` evaluation root.
+
+After blind-transfer fixes, the unchanged established corpus was run again in
+full. The accepted exact-code run is
+`F:\research-papers\2026\Jan\else\kb_chat_eval\old_full29_final\20260814_073508`.
+It passed 29/29 in one round, including the exact SIDD Table 6 tie and the QCLFM
+two-step refocusing chain:
+
+| Milestone | p50 | p95 | max | Change from 2026-08-13 accepted run |
+|---|---:|---:|---:|---:|
+| First visible answer | 2,747 ms | 4,728 ms | 5,799 ms | -7.0% / -13.6% / -12.3% |
+| Answer complete | 4,873 ms | 11,013 ms | 11,518 ms | -0.1% / +1.0% / -16.1% |
+| Evidence cards complete | 6,793 ms | 11,397 ms | 13,189 ms | +1.2% / -8.2% / -7.2% |
+| End-to-end UI ready | 7,351 ms | 12,089 ms | 13,189 ms | +6.1% / -5.2% / -10.1% |
+| Final validation | 7,351 ms | 12,089 ms | 13,941 ms | +6.1% / -10.6% / -5.0% |
+
+The median UI-ready time increased by 423 ms and is not concealed. The tail
+objective improved: UI-ready p95 fell 660 ms and max fell 1,489 ms, while
+final-validation p95 fell 1,439 ms and max fell 738 ms. Because these are live
+provider runs, the comparison is evidence of release behavior rather than a
+claim of deterministic model latency. The independent paid-model smoke passed
+5/5 at
+`F:\research-papers\2026\Jan\else\kb_chat_eval\old_live_smoke_verified\20260814_072236`,
+with UI-ready p50/p95/max of 4,353/4,905/4,984 ms. Established deterministic
+retrieval passed 29/29 at
+`F:\research-papers\2026\Jan\else\kb_chat_eval\old_release_retrieval\20260814_071130`;
+source validation remained 41/41 and reviewed grounded replay remained 6/6.
+
+The changes keep the full search scope and strict evidence contract. They add
+source-derived exact relation recovery for structured tables and method chains,
+preserve author-year bibliography entries as addressable references, strengthen
+claim/evidence term normalization and upstream-reference identity, and reuse
+only verified answer-bound evidence when finalizing cards. The SIDD result is
+emitted only after the exact page-local Table 6 cells establish both tied
+methods and 40.30 dB; QCLFM requires the source's digital-refocusing, ray-
+tracing, and wave-propagation chain. No top-k, answer point, evidence length,
+source count, card threshold, or locator strictness was reduced.
+
+Final CI-equivalent local validation passed 4,400 backend unit tests with 41
+configuration-dependent skips, 262 sanity tests with two skips, the visible
+Agent contract 5/5, Ruff, every deterministic quality fixture, the 6/6 grounded
+replay, and the 5/5 reviewed Agent replay. Frontend ESLint and the production
+build passed. Playwright smoke passed 128 applicable tests with two private-
+auth-only skips; core citation/library E2E passed 111/111; and public-surface
+isolation passed 4/4.

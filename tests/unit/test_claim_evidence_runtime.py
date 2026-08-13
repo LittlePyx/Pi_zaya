@@ -34,6 +34,100 @@ def test_display_equation_inherits_adjacent_cited_variable_definition() -> None:
 
     assert audit["uncited_high_risk_claims"] == 0
     assert not audit["unresolved_claims"]
+    assert not audit["unresolved_claims"]
+
+
+def test_display_equation_inherits_adjacent_clickable_source_note() -> None:
+    answer = (
+        "The quantizer is:\n\n"
+        "$$\n"
+        r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}" "\n"
+        "$$\n"
+        "*（式(1) 对应命中的库内文献：`bitnet.pdf`）*\n"
+        "[1](#source)"
+    )
+
+    audit = claim_evidence_audit(answer)
+
+    assert audit["uncited_high_risk_claims"] == 0
+    assert not audit["unresolved_claims"]
+
+
+def test_display_equation_inherits_citation_on_same_source_note_line() -> None:
+    answer = (
+        "The quantizer is:\n\n"
+        "$$\n"
+        r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}" "\n"
+        "$$\n"
+        "*（式(1) 对应命中的库内文献：`bitnet.pdf`）* [1](#source)"
+    )
+
+    audit = claim_evidence_audit(answer)
+
+    assert audit["uncited_high_risk_claims"] == 0
+    assert not audit["unresolved_claims"]
+
+
+def test_display_equation_inherits_citation_from_explicit_intro_line() -> None:
+    answer = (
+        "γ 是权重矩阵所有元素的平均绝对值： [1](#source)\n\n"
+        "$$\n"
+        r"\gamma = \frac{1}{nm} \sum_{ij} |W_{ij}|, \tag{3}" "\n"
+        "$$\n\n"
+        "将原始权重除以 $\\gamma + \\epsilon$，得到缩放后的权重。 "
+        "[1](#source)\n\n"
+        "$$\n"
+        r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}" "\n"
+        "$$"
+    )
+
+    audit = claim_evidence_audit(answer)
+
+    assert audit["uncited_high_risk_claims"] == 0
+    assert not audit["unresolved_claims"]
+
+
+def test_strict_claim_repair_never_inserts_a_citation_inside_display_math() -> None:
+    answer = (
+        "训练中最小化的点预测损失为 [1]：\n\n"
+        "$$\n"
+        r"\text{TrainLoss} = \frac{1}{N} \sum_{j=1}^{N} "
+        r"\text{MSE}\left(\hat{y}_{pj+1:pj+h}, y_{pj+1:pj+h}\right)"
+        "\n$$"
+    )
+    hit = {
+        "text": (
+            "We focus on point forecasting and use a point forecasting loss during "
+            "training like Mean Squared Error (MSE)."
+        )
+    }
+
+    repaired, _meta = audit_and_repair_claim_evidence(
+        answer,
+        [hit],
+        prompt="What loss does TimesFM train with?",
+        allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    math_body = repaired.split("$$", 2)[1]
+    assert "[1]" not in math_body
+    assert r"y_{pj+1:pj+h}\right)" in math_body
+
+
+def test_display_equation_does_not_inherit_unrelated_preceding_citation() -> None:
+    answer = (
+        "This paper also reports an ablation result [1](#source).\n\n"
+        "$$\n"
+        r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}" "\n"
+        "$$"
+    )
+
+    audit = claim_evidence_audit(answer)
+
+    assert audit["uncited_high_risk_claims"] == 1
 
 
 def test_final_gate_restores_complete_iism_depth_phase_relation() -> None:
@@ -2019,3 +2113,53 @@ Informer uses ProbSparse self-attention for long dependencies [3]."""
     assert meta["section_source_rebound_citations"] >= 2
     assert meta["dropped_cross_source_claims"] == 3
     assert meta["minimum_ok"] is True
+
+
+def test_two_paper_comparison_rebinds_named_source_and_drops_mixed_training_claim() -> None:
+    hits = [
+        {
+            "text": (
+                "SAM 2 uses a streaming memory that stores previous prompts and predictions "
+                "across video frames. Its data engine uses the model in the loop."
+            ),
+            "meta": {
+                "source_name": "sam2.pdf",
+                "source_path": "sam2/sam2.en.md",
+                "heading_path": "Figure 1",
+            },
+        },
+        {
+            "text": (
+                "MedSAM follows the SAM architecture. The prompt encoder transforms "
+                "user-drawn bounding boxes via positional encoding, and the mask decoder "
+                "fuses image and prompt features using cross-attention."
+            ),
+            "meta": {
+                "source_name": "medsam.pdf",
+                "source_path": "medsam/medsam.en.md",
+                "heading_path": "Fig. 2b",
+            },
+        },
+    ]
+    answer = """## MedSAM
+
+MedSAM 的提示编码器通过位置编码表示边界框，并以交叉注意力融合图像与提示特征 [1]。
+
+训练时，边界框会转换为二值掩码并与图像拼接作为模型输入 [1]。
+"""
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        prompt="对比 SAM 2 与 MedSAM，不要把二者的训练数据或提示机制混为一谈。",
+        allowed_citation_numbers={1, 2},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    assert "提示编码器通过位置编码" in repaired
+    assert "特征 [2]" in repaired
+    assert "二值掩码" not in repaired
+    assert meta["rebound_citations"] >= 1
+    assert meta["dropped_cross_source_claims"] >= 1

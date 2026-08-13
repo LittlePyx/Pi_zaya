@@ -157,7 +157,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 57
+_RENDER_CACHE_SCHEMA_VERSION = 58
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -2000,12 +2000,29 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 primary_claim = " ".join(aligned_bundle_claims)
         if any(bool(slot.get("compound_same_page_evidence")) for slot in matches):
             def _quantity_labels(value: object) -> set[str]:
+                surface = re.sub(
+                    r"\[(?:[Rr])?\d+(?:\s*[-,]\s*\d+)*\]",
+                    "",
+                    str(value or ""),
+                )
+                surface = re.sub(
+                    r"(?i)(?:§|\b(?:section|sec\.?|figure|fig\.?|table|"
+                    r"eq(?:uation)?\.?|appendix|page|p\.)\s*)\d+(?:\.\d+)?",
+                    "",
+                    surface,
+                )
+                surface = re.sub(
+                    r"\b[A-Z][A-Z0-9-]{1,}\s+\d+(?=\b)",
+                    "",
+                    surface,
+                )
                 return {
                     re.sub(r"\s+", "", match.group(0)).casefold()
                     for match in re.finditer(
-                        r"(?i)(?:\d+(?:\.\d+)?\s*(?:%|million|billion|[MB]\b)|"
-                        r"\d+(?:\.\d+)?[MB]\b)",
-                        str(value or ""),
+                        r"(?i)(?<![A-Za-z0-9])(?:\d{1,3}(?:,\d{3})+|"
+                        r"\d+(?:\.\d+)?)(?:\s*(?:%|million|billion|[KMB]\b|"
+                        r"[x×]\b))?(?![A-Za-z0-9])",
+                        surface,
                     )
                 }
 
@@ -2024,16 +2041,25 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 for value in list(detail.get("answer_claims") or [])
                 if str(value or "").strip()
             ]
-            quantity_complete_claims = [
+            quantity_bearing_claims = [
                 value
                 for value in compound_claims
-                if len(_quantity_labels(value) & plan_quantity_labels) >= 3
+                if _quantity_labels(value) & plan_quantity_labels
             ]
-            if quantity_complete_claims:
+            covered_quantities = set().union(
+                *(
+                    _quantity_labels(value) & plan_quantity_labels
+                    for value in quantity_bearing_claims
+                )
+            ) if quantity_bearing_claims else set()
+            if len(covered_quantities) >= 3:
                 # One same-page card should expose the complete quantitative
                 # obligation even if the display registry also records its
-                # individual clause occurrences.
-                primary_claim = max(quantity_complete_claims, key=len)
+                # individual clause occurrences. Quantities often span two
+                # answer sentences (for example corpus size and task counts),
+                # so refine against their combined obligation instead of only
+                # the single longest sentence.
+                primary_claim = " ".join(dict.fromkeys(quantity_bearing_claims))
         if re.search(r"(?:\.{3}|…)$", primary_claim):
             claim_prefix = re.sub(r"(?:\.{3}|…)$", "", primary_claim).rstrip()
             completed_claims = [
@@ -2159,7 +2185,10 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 if (
                     full_bundle
                     and len(plan_evidence) <= CITATION_CARD_EVIDENCE_MAX_LEN
-                    and full_bundle_overlap > readable_overlap
+                    and (
+                        bool(candidate_slot.get("compound_same_page_evidence"))
+                        or full_bundle_overlap > readable_overlap
+                    )
                 ):
                     candidate_readable = full_bundle
             if exact_budget_bound and not candidate_readable:
@@ -2478,6 +2507,13 @@ def _refine_system_a_cite_evidence_from_citation_plan(
                 )
             )
         )
+        formula_bundle_upgrade = bool(
+            compound
+            and re.search(r"(?i)\bQuantization\s+Function\b", readable)
+            and re.search(r"(?i)\babsmean\b", readable)
+            and re.search(r"(?i)\bRoundClip\b", readable)
+            and re.search(r"\\gamma\s*=", readable)
+        )
         prompt_aligned_locator_upgrade = bool(
             prompt_aligned_page_locator
             and readable
@@ -2488,6 +2524,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
             and not exact_budget_bound
             and not (locator_occurrence_bound and bool(compound))
             and not mechanism_bundle_upgrade
+            and not formula_bundle_upgrade
             and not prompt_aligned_locator_upgrade
             and not selected_bundle_upgrade
             and not diversified_slot_selection
@@ -2518,7 +2555,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         detail["card_evidence"] = readable
         detail["evidence_source"] = "citation_plan_claim_window"
         detail["summary_source"] = "citation_plan_claim_window"
-        if mechanism_bundle_upgrade or bool(
+        if mechanism_bundle_upgrade or formula_bundle_upgrade or bool(
             _slot.get("compound_same_page_evidence")
         ):
             detail["compound_plan_evidence"] = True
@@ -2537,6 +2574,12 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         composed["evidence_quote"] = readable
         composed["raw"] = readable
         composed["card_evidence"] = readable
+        if detail.get("compound_plan_evidence"):
+            # ``compose_citation_card`` has already consumed its private
+            # preservation flag. This refiner then reinstates the verified
+            # compound excerpt, so pass the boundary through the final refresh
+            # as well; otherwise a trailing equation tag is trimmed as prose.
+            composed["_preserve_card_evidence_boundary"] = True
         out.append(refresh_citation_card_contract(composed, locale=render_locale))
     return out
 
@@ -2766,7 +2809,19 @@ def _effective_reference_render_pack(raw_pack: dict | None) -> dict:
         else {}
     )
     rendered_is_authoritative = bool(rendered_debug.get("doc_list_authoritative"))
+    prefer_rendered_plan_hits = bool(
+        pack_debug.get("prefer_rendered_plan_hits")
+        and list(rendered_payload.get("hits") or [])
+    )
     if rendered_is_authoritative:
+        if pack.get("hits") not in (None, "", [], {}):
+            merged["retrieval_hits"] = pack["hits"]
+    elif prefer_rendered_plan_hits:
+        # A completed answer-aligned ref pack is the stable render coordinate
+        # once a citation plan covers the answer.  Keep the much broader raw
+        # generation hits for audit, but do not let them replace the compact
+        # evidence rows and reintroduce weak same-paper alternatives during
+        # citation binding.
         if pack.get("hits") not in (None, "", [], {}):
             merged["retrieval_hits"] = pack["hits"]
     else:
@@ -2965,6 +3020,12 @@ def _authoritative_system_a_plan_covers_answer(
                     str(slot.get("block_id") or slot.get("blockId") or "").strip()
                     or str(slot.get("anchor_id") or slot.get("anchorId") or "").strip()
                 )
+            )
+            or (
+                reason == "requested_relation_bundle"
+                and bool(slot.get("source_passage_bundle"))
+                and has_locator
+                and has_bound_candidate
             )
             or (
                 plan_source == "exact_support_preflight"
@@ -3237,7 +3298,11 @@ _BARE_EMPTY_EXAMPLE_CONNECTOR_RE = re.compile(
 _DUPLICATE_NEIGHBOR_TERM_RE = re.compile(
     r"(?<![A-Za-z0-9\u4e00-\u9fff])"
     r"(?P<term>[A-Za-z][A-Za-z0-9+.-]*(?:\s+[A-Za-z][A-Za-z0-9+.-]*){0,4}|[\u4e00-\u9fff]{2,12})"
-    r"\s*(?:、|，|,|/)\s*(?P=term)(?=\s*(?:[，。,.;；、)）]|$))"
+    # A terminal duplicate is a surface artifact (``method, method.``), but
+    # repetition inside an ordered pattern can be meaningful
+    # (``local, local, global``).  Enumeration delimiters after the second
+    # occurrence therefore disqualify this cleanup.
+    r"\s*(?:、|，|,|/)\s*(?P=term)(?=\s*(?:[。.;；!?！？)）]|$))"
 )
 
 
@@ -5394,6 +5459,15 @@ def _augment_hits_with_system_a_plan_slots(
             or slot.get("evidenceSelectionReason")
             or ""
         ).strip().lower()
+        display_evidence_quote = evidence_quote
+        if (
+            evidence_selection_reason == "requested_relation_bundle"
+            and re.search(r"(?i)(?:^|\s[/·>]\s)abstract$", heading_path)
+            and not re.match(r"(?i)^abstract\b", evidence_quote)
+        ):
+            # The heading is part of the exact locator contract even when the
+            # converter stores it separately from the paragraph.
+            display_evidence_quote = f"Abstract. {evidence_quote}"
         slot_source_key = _reading_slot_source_key(source_path)
         broad_benefit_risk_slot = bool(
             slot_source_key in broad_benefit_risk_source_keys
@@ -5427,6 +5501,12 @@ def _augment_hits_with_system_a_plan_slots(
                 heading_path
                 or int(slot.get("page_start") or slot.get("pageStart") or 0) > 0
             )
+        )
+        requested_relation_bundle_slot = bool(
+            evidence_selection_reason == "requested_relation_bundle"
+            and bool(slot.get("source_passage_bundle"))
+            and int(slot.get("page_start") or slot.get("pageStart") or 0) > 0
+            and bool(list(slot.get("candidate_hits") or []))
         )
         exact_support_plan_slot = bool(
             force_dedicated_plan_hits
@@ -5462,6 +5542,7 @@ def _augment_hits_with_system_a_plan_slots(
             or trusted_prompt_contract_slot
             or prompt_aligned_source_slot
             or generated_exact_plan_slot
+            or requested_relation_bundle_slot
             or structured_table_plan_slot
             or scope_boundary_abstract_slot
         )
@@ -5661,6 +5742,7 @@ def _augment_hits_with_system_a_plan_slots(
                 trusted_prompt_contract_slot
                 or prompt_aligned_source_slot
                 or generated_exact_plan_slot
+                or requested_relation_bundle_slot
                 or exact_support_candidate_slot
                 or multi_claim_candidate_slot
                 or per_entity_author_profile_slot
@@ -5965,13 +6047,13 @@ def _augment_hits_with_system_a_plan_slots(
                         "display_name": source_name or candidate_ui.get("display_name"),
                         "source_path": source_path,
                         "heading_path": heading_path,
-                        "summary_line": evidence_quote,
+                        "summary_line": display_evidence_quote,
                         "primary_evidence": {
                             "source_path": source_path,
                             "source_name": source_name,
                             "heading_path": heading_path,
-                            "snippet": evidence_quote,
-                            "highlight_snippet": evidence_quote,
+                            "snippet": display_evidence_quote,
+                            "highlight_snippet": display_evidence_quote,
                             "selection_reason": str(
                                 slot.get("evidence_selection_reason")
                                 or slot.get("evidenceSelectionReason")
@@ -6011,8 +6093,8 @@ def _augment_hits_with_system_a_plan_slots(
                     )
                     locate_target = {
                         "headingPath": heading_path,
-                        "snippet": evidence_quote,
-                        "highlightSnippet": evidence_quote,
+                        "snippet": display_evidence_quote,
+                        "highlightSnippet": display_evidence_quote,
                         "blockId": block_id,
                         "anchorId": anchor_id,
                         "anchorKind": anchor_kind,
@@ -6041,8 +6123,8 @@ def _augment_hits_with_system_a_plan_slots(
                         "sourcePath": source_path,
                         "sourceName": source_name,
                         "headingPath": heading_path,
-                        "snippet": evidence_quote,
-                        "highlightSnippet": evidence_quote,
+                        "snippet": display_evidence_quote,
+                        "highlightSnippet": display_evidence_quote,
                         "strictLocate": bool(plan_primary_payload.get("strict_locate")),
                         "primaryEvidence": dict(plan_primary_payload),
                         "locateTarget": {
@@ -6121,13 +6203,13 @@ def _augment_hits_with_system_a_plan_slots(
                     "display_name": source_name,
                     "source_path": source_path,
                     "heading_path": heading_path,
-                    "summary_line": evidence_quote,
+                    "summary_line": display_evidence_quote,
                     "primary_evidence": {
                         "source_path": source_path,
                         "source_name": source_name,
                         "heading_path": heading_path,
-                        "snippet": evidence_quote,
-                        "highlight_snippet": evidence_quote,
+                        "snippet": display_evidence_quote,
+                        "highlight_snippet": display_evidence_quote,
                         "selection_reason": str(
                             slot.get("evidence_selection_reason")
                             or slot.get("evidenceSelectionReason")
@@ -12345,6 +12427,15 @@ def _reading_guide_repair_missing_system_a_citations(
                 # marker that the table renderer later strips as invalid.
                 continue
             paragraph_lines = paragraph.splitlines()
+            display_math_lines: set[int] = set()
+            in_display_math = False
+            for paragraph_line_idx, paragraph_line in enumerate(paragraph_lines):
+                if paragraph_line.strip() == "$$":
+                    display_math_lines.add(paragraph_line_idx)
+                    in_display_math = not in_display_math
+                    continue
+                if in_display_math:
+                    display_math_lines.add(paragraph_line_idx)
             line_scores = [
                 (
                     line_idx,
@@ -12352,6 +12443,7 @@ def _reading_guide_repair_missing_system_a_citations(
                 )
                 for line_idx, line in enumerate(paragraph_lines)
                 if line.strip()
+                and line_idx not in display_math_lines
                 and not _reading_claim_is_retrieval_notice(line)
                 and not (
                     re.search(r"(?<![!\\])\[\d{1,5}\](?!\()", line)
@@ -12443,7 +12535,16 @@ def _augment_hits_with_canonical_answer_citations(
         units = [
             part.strip()
             for part in re.split(r"(?<=[.!?。！？;；])\s*|\n+", normalized_answer)
-            if part.strip() and marker in part
+            if part.strip()
+            and marker in part
+            and len(
+                re.sub(
+                    r"[^0-9A-Za-z\u4e00-\u9fff]+",
+                    "",
+                    part.replace(marker, ""),
+                )
+            )
+            >= 4
         ]
         if units:
             return units
@@ -12954,6 +13055,19 @@ def _augment_hits_with_canonical_answer_citations(
                 for token in re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}|\d{2,4}|[\u4e00-\u9fff]{2,8}", claim)
                 if token.lower() not in stop_words
             }
+            # A paper/model name is useful for source routing but does not
+            # distinguish one passage from hundreds of blocks in that paper.
+            # Excluding those identity tokens lets the cheap pass below focus
+            # on the relation actually asserted by the answer (for example
+            # sparsity -> pruning, node rather than edge).
+            source_identity_terms = {
+                token.lower()
+                for token in re.findall(
+                    r"[A-Za-z][A-Za-z0-9-]{2,}",
+                    f"{md_path.stem} {md_path.parent.name}",
+                )
+            }
+            discriminating_terms = claim_terms - source_identity_terms
             claim_low = claim.lower()
             active_requirements = set(_claim_requirement_focuses(claim))
             if requirement_focus:
@@ -12979,12 +13093,47 @@ def _augment_hits_with_canonical_answer_citations(
             claim_requires_sph_mechanism = "sph_mechanism" in active_requirements
             claim_requires_sequential_support = "sequential_support" in active_requirements
             claim_requires_spad_geiger = "spad_geiger" in active_requirements
-            ranked: list[tuple[float, dict, str]] = []
+            raw_candidates: list[tuple[int, dict, str, str]] = []
             for raw_block in list(blocks or []):
                 if not isinstance(raw_block, dict):
                     continue
                 block_text = str(raw_block.get("text") or "").strip()
                 heading_path = str(raw_block.get("heading_path") or "").strip()
+                if not block_text:
+                    continue
+                raw_surface_low = f"{heading_path} {block_text}".lower()
+                raw_overlap = sum(
+                    1
+                    for term in discriminating_terms
+                    if term and term in raw_surface_low
+                )
+                raw_candidates.append(
+                    (raw_overlap, dict(raw_block), block_text, heading_path)
+                )
+
+            max_raw_overlap = max(
+                (item[0] for item in raw_candidates),
+                default=0,
+            )
+            if max_raw_overlap > 0:
+                # Two matching relation terms are a materially stronger
+                # grounding candidate than a block sharing only one generic
+                # word. When just one term is available, retain every match.
+                # If nothing overlaps, keep the legacy full scan for the first
+                # claim so translated/general questions retain coverage.
+                min_raw_overlap = 2 if max_raw_overlap >= 2 else 1
+                raw_candidates = [
+                    item for item in raw_candidates if item[0] >= min_raw_overlap
+                ]
+            elif selected:
+                # A later marker-only or translated summary for the same [n]
+                # adds no source-discriminating signal. The earlier grounded
+                # passage already covers that citation; a second whole-paper
+                # scan could only select a weaker unrelated paragraph.
+                return []
+
+            ranked: list[tuple[float, dict, str]] = []
+            for _raw_overlap, raw_block, block_text, heading_path in raw_candidates:
                 strong_result_surface = bool(
                     re.search(
                         r"lowest\s+LPIPS|real-world degraded scenes|frame rate|generalization ability|"
@@ -12993,7 +13142,7 @@ def _augment_hits_with_canonical_answer_citations(
                         flags=re.I,
                     )
                 )
-                if not block_text or (_looks_low_value_citation_context(block_text) and not strong_result_surface):
+                if _looks_low_value_citation_context(block_text) and not strong_result_surface:
                     continue
                 snippet = _pick_readable_evidence_text(
                     block_text,
@@ -13287,8 +13436,6 @@ def _repair_named_system_b_citation_markers(
     text = str(md or "")
     if not text.strip() or not hits:
         return text, False
-    if "[[CITE:" in text.upper():
-        return text, False
 
     plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
     try:
@@ -13325,6 +13472,11 @@ def _repair_named_system_b_citation_markers(
             source_rows.append((source_path, str((meta or {}).get("source_sha1") or "").strip().lower(), doc))
 
     candidates: list[tuple[int, str, str, str]] = []
+    existing_structured_refs = {
+        (str(match.group(1) or "").strip().lower(), int(match.group(2) or 0))
+        for match in _STRUCT_CITE_RE.finditer(text)
+        if int(match.group(2) or 0) > 0
+    }
     seen_titles: set[str] = set()
     for source_path, _source_sha1, doc in source_rows:
         refs = doc.get("refs")
@@ -13354,6 +13506,8 @@ def _repair_named_system_b_citation_markers(
     for ref_num, sid, title, source_path in candidates:
         if len(insertions) >= budget:
             break
+        if (sid.lower(), int(ref_num)) in existing_structured_refs:
+            continue
         pattern = _named_system_b_title_pattern(title)
         if pattern is None:
             continue
@@ -13367,6 +13521,136 @@ def _repair_named_system_b_citation_markers(
             continue
         used_refs.add(ref_key)
         insertions.append((int(match.end()), f" [[CITE:{sid}:{int(ref_num)}]]"))
+
+    if not insertions and str(plan.get("intent") or "").strip().lower() == "origin_lookup":
+        # A model can state the verified origin correctly while emitting only
+        # the current-paper System-A number. Recover the typed System-B marker
+        # from the plan only when the same-context bibliography link was
+        # preflight-verified and the exact reference still exists in the
+        # current source index. This deliberately does not infer an upstream
+        # paper from a bare ``[n]`` or from answer wording alone.
+        for slot in list(plan.get("slots") or []):
+            if len(insertions) >= budget or not isinstance(slot, dict):
+                break
+            if str(slot.get("preferred_system") or "").strip().lower() != "system_b":
+                continue
+            grounding = (
+                slot.get("grounding_contract")
+                if isinstance(slot.get("grounding_contract"), dict)
+                else {}
+            )
+            if not (
+                bool(grounding.get("same_context_reference"))
+                and bool(grounding.get("context_marker_verified"))
+            ):
+                continue
+            source_path = str(
+                slot.get("source_path") or slot.get("sourcePath") or ""
+            ).strip()
+            if not source_path:
+                continue
+            source_doc = _reference_index_doc_for_source(index_data, source_path)
+            refs = source_doc.get("refs") if isinstance(source_doc, dict) else None
+            if not isinstance(refs, dict):
+                continue
+            planned_markers: list[tuple[str, int, str]] = []
+            for example in list(slot.get("candidate_cite_examples") or []):
+                for marker_match in _STRUCT_CITE_RE.finditer(str(example or "")):
+                    planned_markers.append(
+                        (
+                            str(marker_match.group(1) or "").strip().lower(),
+                            int(marker_match.group(2) or 0),
+                            str(marker_match.group(0) or ""),
+                        )
+                    )
+            if not planned_markers:
+                sid = _source_cite_id(source_path).lower()
+                for raw_num in list(slot.get("candidate_refs") or []):
+                    try:
+                        ref_num = int(raw_num)
+                    except (TypeError, ValueError):
+                        continue
+                    if ref_num > 0:
+                        planned_markers.append(
+                            (sid, ref_num, f"[[CITE:{sid}:{ref_num}]]")
+                        )
+            topic_key = re.sub(
+                r"[^0-9a-z\u4e00-\u9fff]+",
+                "",
+                str(slot.get("topic") or "").lower(),
+            )
+            if len(topic_key) < 4:
+                continue
+            for sid, ref_num, marker in planned_markers:
+                raw_ref = refs.get(str(ref_num)) or refs.get(ref_num)
+                if not isinstance(raw_ref, dict):
+                    continue
+                if sid != _source_cite_id(source_path).lower():
+                    continue
+                reference_surface = " ".join(
+                    str(raw_ref.get(key) or "")
+                    for key in ("authors", "title", "year", "raw")
+                )
+                reference_surface += " " + str(slot.get("evidence_quote") or "")
+                reference_tokens = evidence_alignment_tokens(reference_surface)
+                candidate_text = text
+                existing_match = next(
+                    (
+                        match
+                        for match in _STRUCT_CITE_RE.finditer(text)
+                        if str(match.group(1) or "").strip().lower() == sid
+                        and int(match.group(2) or 0) == int(ref_num)
+                    ),
+                    None,
+                )
+                if existing_match is not None:
+                    # Keep a model-emitted marker on its original claim. The
+                    # System-B card can widen its answer context to an adjacent
+                    # origin sentence, but moving the marker would leave the
+                    # original high-risk bibliography claim visibly uncited.
+                    continue
+                best: tuple[float, int] | None = None
+                for line_match in re.finditer(r"(?m)^[^\n]+", candidate_text):
+                    line = str(line_match.group(0) or "")
+                    if line.lstrip().startswith(("```", "~~~", "<!--")):
+                        continue
+                    for sentence_match in re.finditer(
+                        r"[^.!?。！？]+(?:[.!?。！？]+|$)", line
+                    ):
+                        sentence = str(sentence_match.group(0) or "")
+                        sentence_key = re.sub(
+                            r"[^0-9a-z\u4e00-\u9fff]+", "", sentence.lower()
+                        )
+                        if topic_key not in sentence_key:
+                            continue
+                        strong_origin = bool(
+                            re.search(
+                                r"(?i)(?:did\s+not\s+invent|not\s+(?:invented|created|"
+                                r"original)|introduced|developed|proposed|originat(?:e|ed|es)|"
+                                r"separate\s+work|prior\s+work|上游|前人|提出|开发|发明|原创)",
+                                sentence,
+                            )
+                        )
+                        if not strong_origin:
+                            continue
+                        overlap = len(
+                            evidence_alignment_tokens(sentence) & reference_tokens
+                        )
+                        score = float(10 + overlap)
+                        if re.search(r"(?i)\bby\b|来自|由\s*[^，。；;]+(?:提出|开发)", sentence):
+                            score += 2.0
+                        if re.search(r"(?i)separate\s+work|独立(?:论文|工作)", sentence):
+                            score += 2.0
+                        sentence_end = int(line_match.start()) + int(sentence_match.end())
+                        punct = re.search(r"[.!?。！？]+$", sentence)
+                        insert_at = sentence_end - (len(punct.group(0)) if punct else 0)
+                        candidate = (score, insert_at)
+                        if best is None or candidate > best:
+                            best = candidate
+                if best is None:
+                    continue
+                insertions.append((best[1], f" {marker}"))
+                break
 
     if not insertions:
         return text, False
@@ -14019,6 +14303,32 @@ def _collapse_adjacent_same_citation_links(md: str) -> str:
     return transform_markdown_outside_code(text, _collapse)
 
 
+def _strip_trailing_citation_markers_from_display_math(md: str) -> str:
+    """Keep evidence links outside TeX display blocks.
+
+    A citation repair can inherit the evidence number for an equation and put
+    it immediately before the closing ``$$``.  Markdown renderers then treat
+    the marker as TeX content, so it is neither clickable nor valid math.  The
+    surrounding cited introduction/source note remains the evidence carrier.
+    Only a trailing standalone marker (or its generated anchor link) is
+    removed; bracket notation inside the equation is untouched.
+    """
+
+    def _clean_block(match: re.Match[str]) -> str:
+        body = str(match.group(1) or "")
+        cleaned = re.sub(
+            r"[ \t]+(?:"
+            r"\[\d{1,4}\]\(\#[^\s)]+(?:\s+\"[^\"\r\n]*\")?\)"
+            r"|(?<!\[)\[\d{1,4}\](?!\])"
+            r")\s*$",
+            "",
+            body,
+        )
+        return f"$${cleaned}$$"
+
+    return re.sub(r"\$\$(.*?)\$\$", _clean_block, str(md or ""), flags=re.DOTALL)
+
+
 def _strip_freeform_numeric_citation_markers(
     md: str,
     *,
@@ -14085,7 +14395,7 @@ def _citation_free_answer_body(
                 out.append(line)
                 continue
             stripped = line.strip()
-            if stripped.startswith("*") and stripped.endswith("*") and _EQ_SOURCE_NOTE_RE.search(stripped):
+            if stripped.startswith("*") and _EQ_SOURCE_NOTE_RE.search(stripped):
                 continue
             out.append(line)
         return "".join(out)
@@ -14121,6 +14431,13 @@ def _citation_free_answer_body(
     # otherwise a decoration-only render is rejected and citations fall back
     # to bare numeric markers.
     text = re.sub(r"\s+([)\]）】])", r"\1", text)
+    # Markdown/plain-text normalization also removes padding immediately after
+    # an opening delimiter (``( Dao, 2023 )`` -> ``(Dao, 2023)``).  Treat that
+    # formatting-only change symmetrically with the closing-delimiter cleanup.
+    # Without it, a valid mixed System-A/System-B render is rejected after all
+    # citation cards have been built, leaving the original numeric markers
+    # unresolved even though the answer prose itself is unchanged.
+    text = re.sub(r"([\(\[（【])\s+", r"\1", text)
     return text
 
 
@@ -14879,6 +15196,70 @@ def _render_cache_missing_authoritative_plan_evidence(
         if not matched_detail:
             return True
     return False
+
+
+def _render_cache_missing_authoritative_plan_occurrences(
+    cache: dict | None,
+    citation_plan: dict | None,
+    *,
+    answer_text: str,
+) -> bool:
+    """Reject an early relation-bundle render that linked only some claims.
+
+    Reference finishing can render once while the answer is still backed by a
+    narrow preliminary hit, then persist that packet before the authoritative
+    same-page relation bundle is overlaid.  Source/card identity alone still
+    looks valid in that packet, but later evidence-bearing answer occurrences
+    remain plain ``[n]`` text.  For an all-System-A requested relation bundle,
+    every explicit numeric occurrence is expected to remain a grounded link.
+    """
+
+    if not isinstance(cache, dict) or not isinstance(citation_plan, dict):
+        return False
+    budget = (
+        dict(citation_plan.get("budget") or {})
+        if isinstance(citation_plan.get("budget"), dict)
+        else {}
+    )
+    try:
+        system_b_budget = int(budget.get("system_b") or 0)
+    except (TypeError, ValueError):
+        system_b_budget = 0
+    if system_b_budget > 0:
+        return False
+    authoritative_bundle = any(
+        isinstance(slot, dict)
+        and str(slot.get("preferred_system") or "").strip().lower() != "system_b"
+        and bool(slot.get("source_passage_bundle"))
+        and str(
+            slot.get("evidence_selection_reason")
+            or slot.get("evidenceSelectionReason")
+            or ""
+        ).strip().lower()
+        == "requested_relation_bundle"
+        for slot in list(citation_plan.get("slots") or [])
+    )
+    if not authoritative_bundle:
+        return False
+    expected_occurrences = len(_iter_numeric_citation_numbers(answer_text))
+    if expected_occurrences <= 0:
+        return False
+    render_packet = (
+        cache.get("render_packet")
+        if isinstance(cache.get("render_packet"), dict)
+        else {}
+    )
+    rendered = str(
+        cache.get("rendered_body")
+        or cache.get("rendered_content")
+        or render_packet.get("rendered_body")
+        or render_packet.get("rendered_content")
+        or ""
+    )
+    linked_occurrences = len(
+        re.findall(r"\[\d{1,4}\]\(\#kb-cite-[^\s)]+(?:\s+\"[^\"]*\")?\)", rendered)
+    )
+    return linked_occurrences < expected_occurrences
 
 
 def _extract_render_cache(
@@ -16321,6 +16702,8 @@ def enrich_messages_with_reference_render(
             raw_ref_pack_dict = dict(raw_ref_pack_dict or {})
             pipeline_debug = dict(raw_ref_pack_dict.get("pipeline_debug") or {})
             pipeline_debug["allow_answer_alignment_source_scan"] = False
+            if authoritative_system_a_plan:
+                pipeline_debug["prefer_rendered_plan_hits"] = True
             raw_ref_pack_dict["pipeline_debug"] = pipeline_debug
             if isinstance(raw_ref_pack_dict.get("rendered_payload"), dict):
                 rendered_payload = dict(raw_ref_pack_dict["rendered_payload"])
@@ -16355,6 +16738,11 @@ def enrich_messages_with_reference_render(
             or _render_cache_missing_authoritative_plan_evidence(
                 pre_aligned_cache,
                 message_citation_plan,
+            )
+            or _render_cache_missing_authoritative_plan_occurrences(
+                pre_aligned_cache,
+                message_citation_plan,
+                answer_text=render_source,
             )
         ):
             pre_aligned_cache = None
@@ -16412,6 +16800,11 @@ def enrich_messages_with_reference_render(
             or _render_cache_missing_authoritative_plan_evidence(
                 cached,
                 message_citation_plan,
+            )
+            or _render_cache_missing_authoritative_plan_occurrences(
+                cached,
+                message_citation_plan,
+                answer_text=render_source,
             )
         ):
             cached = None
@@ -16644,6 +17037,9 @@ def enrich_messages_with_reference_render(
                 cite_details,
             )
             rendered_body = _collapse_adjacent_same_citation_links(rendered_body)
+            rendered_body = _strip_trailing_citation_markers_from_display_math(
+                rendered_body
+            )
 
             rendered_full = ""
             if notice and rendered_body:
@@ -16661,10 +17057,17 @@ def enrich_messages_with_reference_render(
                 notice=notice,
                 cite_details=cite_details,
             )
-            if not _rendered_body_preserves_answer_body(
-                answer_body=planned_answer_body,
-                rendered_body=rendered_body_norm,
-                cite_details=cite_details,
+            if (
+                not _rendered_body_preserves_answer_body(
+                    answer_body=planned_answer_body,
+                    rendered_body=rendered_body_norm,
+                    cite_details=cite_details,
+                )
+                or _render_cache_missing_authoritative_plan_occurrences(
+                    {"rendered_body": rendered_body_norm},
+                    citation_plan,
+                    answer_text=planned_answer_body,
+                )
             ):
                 rendered_body, cite_details = _render_original_citation_markers_only(
                     planned_answer_body,
@@ -16704,6 +17107,9 @@ def enrich_messages_with_reference_render(
                     cite_details,
                 )
                 rendered_body = _collapse_adjacent_same_citation_links(rendered_body)
+                rendered_body = _strip_trailing_citation_markers_from_display_math(
+                    rendered_body
+                )
                 rendered_full = (
                     f"{notice}\n\n{rendered_body}"
                     if notice and rendered_body

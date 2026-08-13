@@ -39,6 +39,22 @@ def test_extract_structured_cite_answer_context_stops_before_next_sentence() -> 
     assert "deep learning" not in out
 
 
+def test_extract_context_splits_converter_joined_english_sentences() -> None:
+    text = (
+        "Vision encoder.The encoder is frozen [1].Each image uses 256 tokens [1]."
+    )
+    marker_start = text.index("[1]")
+
+    out = extract_structured_cite_answer_context_line(
+        text,
+        marker_start,
+        marker_start + len("[1]"),
+    )
+
+    assert out == "The encoder is frozen [1]."
+    assert "256" not in out
+
+
 def test_extract_structured_cite_answer_context_keeps_et_al_identity() -> None:
     sid = "abc12345"
     token = f"[[CITE:{sid}:26]]"

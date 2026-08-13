@@ -546,6 +546,104 @@ def test_number_does_not_borrow_count_unit_from_a_later_quantity() -> None:
     assert ("30.5", "db", "psnr") in reversed_quantities
 
 
+def test_model_version_number_does_not_borrow_later_frame_unit() -> None:
+    claim = (
+        "SAM 2 carries information across video frames through a streaming memory "
+        "that stores previous prompts and predictions."
+    )
+    evidence = (
+        "We introduce the Segment Anything Model 2 (SAM 2). SAM 2 is capable of "
+        "interactively segmenting regions on one or multiple video frames by utilizing "
+        "a streaming memory that stores previous prompts and predictions."
+    )
+
+    quantities = evidence_binding._system_a_fact_quantities(claim)
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Abstract / Introduction",
+        evidence_quote=evidence,
+        source_name="sam2.pdf",
+    )
+
+    assert ("2", "frame", "") not in quantities
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+def test_gemma_model_version_and_bare_section_heading_are_not_quantities() -> None:
+    claim = "Gemma 3 uses a frozen vision encoder, and only the language model is trained."
+    source_copy = (
+        "Verified source: 5.5. Vision encoder Impact of image resolution. "
+        "The vision encoder is frozen, and only the language model is trained."
+    )
+
+    assert ("3", "", "") not in evidence_binding._system_a_fact_quantities(claim)
+    assert ("5.5", "", "") not in evidence_binding._system_a_fact_quantities(source_copy)
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": source_copy},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="5.5. Vision encoder",
+        evidence_quote=source_copy,
+        source_name="Gemma 3 Technical Report.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
+@pytest.mark.parametrize(
+    "claim",
+    [
+        'The model propagates the segment as a "masklet" across frames.',
+        (
+            "A single click in a later frame recovers the object, whereas another "
+            "tracker must restart segmentation from scratch with several clicks."
+        ),
+        "A later prompt recovers the object after tracking is lost.",
+        "The tracker must restart segmentation from scratch with several clicks.",
+        (
+            "Two-way transformer blocks update both prompt and frame embeddings for "
+            "ambiguous prompts."
+        ),
+        (
+            "For an ambiguous single-click prompt, the decoder predicts multiple masks "
+            "and propagates the one with the highest predicted IoU."
+        ),
+        "The decoder propagates the mask with the highest predicted IoU.",
+    ],
+)
+def test_sam2_specific_relations_require_explicit_evidence(claim: str) -> None:
+    figure_one_evidence = (
+        "SAM 2 accepts clicks, boxes, or masks on one or multiple video frames by "
+        "utilizing a streaming memory that stores previous prompts and predictions."
+    )
+
+    binding = evidence_binding.assess_system_a_hit_binding(
+        answer_claim=claim,
+        hit={"text": figure_one_evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "prompt_aligned_source_sentence",
+        },
+        heading="Figure 1",
+        evidence_quote=figure_one_evidence,
+        source_name="sam2.pdf",
+    )
+
+    assert binding["status"] == "mismatch"
+    assert binding["suppress_link"] is True
+
+
 def test_adjacent_postfix_metric_remains_attached_to_value() -> None:
     quantities = evidence_binding._system_a_fact_quantities(
         "The reported score is 0.9 SSIM."

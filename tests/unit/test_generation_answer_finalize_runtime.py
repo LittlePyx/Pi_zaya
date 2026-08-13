@@ -5,6 +5,83 @@ import pytest
 import kb.generation_answer_finalize_runtime as finalize_runtime
 
 
+def test_normalizer_replaces_incomplete_sidd_response_only_from_complete_table() -> None:
+    evidence = (
+        "Table 6. Image Denoising Results on SIDD [1] "
+        "Method | Restormer [39] | Baseline ours | NAFNet ours | "
+        "PSNR | 40.02 | 40.30 | 40.30"
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "现有片段不足以判断并列模型。",
+        prompt=(
+            "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR "
+            "最高的模型是谁？如果并列请全部列出。"
+        ),
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "simple-baselines.en.md",
+                    "page_start": 13,
+                    "page_end": 13,
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "simple-baselines.en.md",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+    )
+
+    assert normalized == (
+        "表 6 的 SIDD PSNR 最高值为 40.30 dB，由 Baseline (ours) "
+        "与 NAFNet (ours) 并列取得 [1]。"
+    )
+
+
+def test_normalizer_binds_sidd_models_and_value_to_one_cited_claim() -> None:
+    evidence = (
+        "Table 6. Image Denoising Results on SIDD [1]. SIDD PSNR: "
+        "Restormer [39] = 40.02; Baseline ours = 40.30; NAFNet ours = 40.30"
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "根据 Table 6，最高值为 40.30 dB [1]。\n\n"
+        "- Baseline (ours)\n- NAFNet (ours)",
+        prompt="SIDD 基准测试里 PSNR 最高的模型是谁？如果并列请全部列出。",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "simple-baselines.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "simple-baselines.en.md",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+    )
+
+    assert normalized == (
+        "表 6 的 SIDD PSNR 最高值为 40.30 dB，由 Baseline (ours) "
+        "与 NAFNet (ours) 并列取得 [1]。"
+    )
+
+
 def test_collapse_single_item_numbered_block_after_evidence_pruning() -> None:
     answer = (
         "完整机制还包括：\n"
@@ -1690,6 +1767,47 @@ def test_late_evidence_cards_preserve_two_facets_from_one_paper() -> None:
         "blk_start",
     ]
 
+
+def test_late_evidence_cards_keep_complete_requested_relation_bundle() -> None:
+    source_path = "F:/kb/medsam/medsam.en.md"
+    evidence = (
+        "We follow the network architecture in SAM, including an image encoder, "
+        "a prompt encoder, and a mask decoder (Fig. 2b). The prompt encoder "
+        "transforms user-drawn bounding boxes via positional encoding. Finally, "
+        "the mask decoder fuses image and prompt features using cross-attention."
+    )
+    plan = {
+        "budget": {"system_a": 4, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "evidence_quote": evidence,
+                "evidence_selection_reason": "requested_relation_bundle",
+                "source_passage_bundle": True,
+                "page_start": 5,
+            }
+        ],
+    }
+    refreshed = finalize_runtime._citation_plan_with_late_evidence_cards(
+        plan,
+        evidence_cards=[
+            {
+                "source_path": source_path,
+                "evidence_quote": "A broad neighboring scanner passage about medical images.",
+                "block_id": "blk_broad",
+            }
+        ],
+        support_slots=[],
+        answer_hits=[{"text": evidence, "meta": {"source_path": source_path}}],
+        prompt=(
+            "MedSAM 为什么选择 bounding box？图 2b 中 image encoder、prompt encoder "
+            "和 mask decoder 分别承担什么作用？"
+        ),
+    )
+
+    assert refreshed == plan
 
 def test_bind_resolved_support_source_citations_keeps_translated_explanations() -> None:
     source_path = "F:/kb/learned-primal-dual/paper.en.md"
@@ -7868,6 +7986,413 @@ def test_grounded_fact_completion_keeps_compound_dataset_quantities_in_one_claim
     )
     assert all(value in quantitative_claim for value in ("11M", "1.1B", "99.1%"))
     assert quantitative_claim.count("[1]") == 1
+
+
+def test_normalizer_restores_mamba_input_dependent_source_term() -> None:
+    evidence = (
+        "We design a simple selection mechanism by parameterizing the SSM parameters "
+        "based on the input. This allows the model to filter out irrelevant information "
+        "and remember relevant information indefinitely."
+    )
+    answer = (
+        "Mamba \u8ba9 SSM \u53c2\u6570\u6210\u4e3a\u8f93\u5165\u7684\u51fd\u6570\uff0c\u4ece\u800c\u8fc7\u6ee4\u65e0\u5173\u4fe1\u606f\u5e76\u8bb0\u4f4f\u76f8\u5173\u4fe1\u606f [1]\u3002"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "mamba.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Mamba selection mechanism \u5982\u4f55\u6539\u53d8 SSM\uff1f",
+        citation_plan=plan,
+        answer_hits=[{"text": evidence, "meta": {"source_path": "mamba.en.md"}}],
+    )
+
+    assert "\u8f93\u5165\u76f8\u5173\uff08input-dependent\uff09\u7684\u51fd\u6570" in normalized
+    assert normalized.count("input-dependent") == 1
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "Mamba \u8ba9 SSM \u53c2\u6570\u968f\u8f93\u5165\u53d8\u5316\uff0c\u4ece\u800c\u8fc7\u6ee4\u65e0\u5173\u4fe1\u606f\u5e76\u8bb0\u4f4f\u76f8\u5173\u4fe1\u606f [1]\u3002",
+        "Mamba \u6309\u5f53\u524d\u8f93\u5165\u52a8\u6001\u51b3\u5b9a\u4fdd\u7559\u6216\u4e22\u5f03\u4fe1\u606f [1]\u3002",
+    ],
+)
+def test_normalizer_names_input_dependent_mamba_paraphrases(answer: str) -> None:
+    evidence = (
+        "We design a selection mechanism by parameterizing the SSM parameters "
+        "based on the input. This allows the model to filter out irrelevant "
+        "information and remember relevant information indefinitely."
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "mamba.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Mamba selection mechanism \u5982\u4f55\u6539\u53d8 SSM\uff1f",
+        citation_plan=plan,
+        answer_hits=[{"text": evidence, "meta": {"source_path": "mamba.en.md"}}],
+    )
+
+    assert "input-dependent" in normalized
+
+
+def test_normalizer_names_cited_mamba_input_dependency_when_term_exists_elsewhere() -> None:
+    evidence = (
+        "We design a selection mechanism by parameterizing the SSM parameters "
+        "based on the input. This allows the model to filter out irrelevant "
+        "information and remember relevant information indefinitely."
+    )
+    answer = (
+        "核心：Mamba 让 SSM 参数变成输入依赖的 [1]。\n\n"
+        "- 具体做法是让参数成为输入相关（input-dependent）的函数。"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "mamba.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Mamba selection mechanism 如何改变 SSM？",
+        citation_plan=plan,
+        answer_hits=[{"text": evidence, "meta": {"source_path": "mamba.en.md"}}],
+    )
+
+    first_paragraph = normalized.split("\n\n", 1)[0]
+    assert "输入相关（input-dependent）的 [1]" in first_paragraph
+
+
+def test_normalizer_cites_complete_mamba_selection_paraphrase() -> None:
+    evidence = (
+        "We design a selection mechanism by parameterizing the SSM parameters "
+        "based on the input. This allows the model to filter out irrelevant "
+        "information and remember relevant information indefinitely."
+    )
+    answer = (
+        "Mamba 的 selection mechanism 让参数成为输入相关（input-dependent）的函数。\n\n"
+        "这让模型能 input-dependent 地过滤无关信息、长期记住相关信息。"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "mamba.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Mamba selection mechanism 如何改变 SSM？",
+        citation_plan=plan,
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "mamba.en.md", "ref_answer_citation_num": 1},
+            }
+        ],
+    )
+
+    assert "过滤无关信息、长期记住相关信息 [1]。" in normalized
+
+
+def test_normalizer_uses_absmean_average_absolute_terminology() -> None:
+    evidence = (
+        "We adopt an absmean quantization function. It scales the weight matrix by its "
+        "average absolute value and then applies RoundClip to {-1, 0, +1}."
+    )
+    answer = (
+        "absmean \u5148\u8ba1\u7b97\u6743\u91cd\u77e9\u9635\u6240\u6709\u5143\u7d20\u7edd\u5bf9\u503c\u7684\u5e73\u5747\u503c\uff0c"
+        "\u518d\u7528 RoundClip \u91cf\u5316 [1]\u3002"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "bitnet.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="\u8bf7\u89e3\u91ca BitNet b1.58 \u7684 absmean \u91cf\u5316\u516c\u5f0f",
+        citation_plan=plan,
+        answer_hits=[{"text": evidence, "meta": {"source_path": "bitnet.en.md"}}],
+    )
+
+    assert "\u5e73\u5747\u7edd\u5bf9\u503c\uff08average absolute value\uff09" in normalized
+    assert "\u7edd\u5bf9\u503c\u7684\u5e73\u5747\u503c" not in normalized
+    assert normalized.startswith("absmean (average absolute value)")
+    normalized_again = finalize_runtime._normalize_citation_plan_supported_terms(
+        normalized,
+        prompt="\u8bf7\u89e3\u91ca BitNet b1.58 \u7684 absmean \u91cf\u5316\u516c\u5f0f",
+        citation_plan=plan,
+        answer_hits=[{"text": evidence, "meta": {"source_path": "bitnet.en.md"}}],
+    )
+    assert normalized_again.count("absmean (average absolute value)") == 1
+
+
+def test_normalizer_cites_exact_absmean_formulas_outside_display_math() -> None:
+    evidence = (
+        "We adopt an absmean quantization function with average absolute value. "
+        r"$$ \widetilde{W}=\text{RoundClip}(W/(\gamma+\epsilon),-1,1) $$ "
+        r"$$ \gamma=\frac{1}{nm}\sum_{ij}|W_{ij}| $$"
+    )
+    answer = (
+        "缩放因子 $\\gamma$ 是平均绝对值：\n\n"
+        "$$\n"
+        r"\gamma=\frac{1}{nm}\sum_{ij}|W_{ij}|" "\n"
+        "$$\n\n"
+        "其中 RoundClip 定义为：\n\n"
+        "$$\n"
+        r"\text{RoundClip}(x,a,b)=\max(a,\min(b,\text{round}(x)))" "\n"
+        "$$"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "bitnet.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="请解释 BitNet b1.58 的 absmean 量化公式",
+        citation_plan=plan,
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "bitnet.en.md", "ref_answer_citation_num": 1},
+            }
+        ],
+    )
+
+    assert "平均绝对值： [1]\n\n$$" in normalized
+    assert "RoundClip 定义为： [1]\n\n$$" in normalized
+    assert r"\sum_{ij}|W_{ij}| [1]" not in normalized
+
+
+def test_normalizer_cites_timesfm_display_loss_outside_math() -> None:
+    evidence = (
+        "In this work, we focus on point forecasting and use Mean Squared Error (MSE). "
+        "Probabilistic forecasting can use multiple output heads minimizing quantile loss."
+    )
+    answer = (
+        "TimesFM uses MSE for point forecasting [1].\n\n"
+        "The training loss is:\n\n"
+        "$$\n"
+        r"\text{TrainLoss}=\frac{1}{N}\sum_j\text{MSE}(\hat y_j,y_j)" "\n"
+        "$$"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "timesfm.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="How does TimesFM distinguish point and probabilistic forecasting?",
+        citation_plan=plan,
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "timesfm.en.md", "ref_answer_citation_num": 1},
+            }
+        ],
+    )
+
+    assert "The training loss is: [1]\n\n$$" in normalized
+    assert r"\text{MSE}(\hat y_j,y_j) [1]" not in normalized
+
+
+def test_normalizer_binds_bindgpt_feedback_and_binding_goal_in_one_claim() -> None:
+    evidence = (
+        "We finetune BindGPT with external feedback from docking software. We show that "
+        "the model can find structures with high binding scores for any given protein."
+    )
+    answer = (
+        "BindGPT 通过对接软件（docking software）提供的外部反馈（external feedback）进行强化学习 [1]。\n\n"
+        "目标是为给定蛋白质找到高结合分数结构。"
+    )
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": "bindgpt.en.md",
+                "evidence_quote": evidence,
+            }
+        ]
+    }
+
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="BindGPT RL 的 external feedback 来自哪里，目标是什么？",
+        citation_plan=plan,
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {"source_path": "bindgpt.en.md", "ref_answer_citation_num": 1},
+            }
+        ],
+    )
+
+    first_claim = normalized.split("\n\n", 1)[0]
+    assert all(
+        term in first_claim
+        for term in ("docking software", "external feedback", "high binding scores", "给定蛋白质")
+    )
+    assert first_claim.count("[1]") == 1
+
+
+def test_normalizer_restores_modernbert_exact_attention_pattern_in_synthesis() -> None:
+    evidence = (
+        "In ModernBERT, every third layer employs global attention with a RoPE theta "
+        "of 160,000 and the remaining layers use a 128 token, local sliding window "
+        "attention with a RoPE theta of 10,000."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "ModernBERT alternates global and local attention [1]. Gemma 3 uses a 5:1 pattern [2].",
+        prompt="Compare the exact local/global attention patterns in ModernBERT and Gemma 3.",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "modernbert.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "modernbert.en.md",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+    )
+
+    assert "every third layer" in normalized
+    assert "128 token, local sliding window" in normalized
+    assert "[1]" in normalized
+    assert "### ModernBERT source evidence" in normalized
+
+
+def test_normalizer_restores_modernbert_rope_values_for_single_paper_question() -> None:
+    evidence = (
+        "In ModernBERT, every third layer employs global attention with a RoPE theta "
+        "of 160,000 and the remaining layers use a 128 token, local sliding window "
+        "attention with a RoPE theta of 10,000."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        "ModernBERT uses global attention every third layer and a 128-token local window [1].",
+        prompt="What exact alternating-attention pattern does ModernBERT use?",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "modernbert.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "modernbert.en.md",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+    )
+
+    assert "160,000" in normalized
+    assert "10,000" in normalized
+    assert "every third layer" in normalized
+    assert "128 token, local sliding window" in normalized
+
+
+def test_normalizer_cites_deepseek_cold_start_sentence_from_compound_plan() -> None:
+    evidence = (
+        "In the initial stage, we collect thousands of cold-start data. "
+        "RL training is then applied for language consistency. Subsequently, "
+        "we apply rejection sampling and SFT. A secondary RL stage enhances "
+        "helpfulness and harmlessness."
+    )
+    answer = (
+        "In the initial stage, we collect thousands of cold-start data. "
+        "RL training is then applied for language consistency [1]. Subsequently, "
+        "we apply rejection sampling and SFT [1]. A secondary RL stage enhances "
+        "helpfulness and harmlessness [1]."
+    )
+    normalized = finalize_runtime._normalize_citation_plan_supported_terms(
+        answer,
+        prompt="Walk through the multi-stage DeepSeek-R1 pipeline shown in Figure 2.",
+        citation_plan={
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": "deepseek-r1.en.md",
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        answer_hits=[
+            {
+                "text": evidence,
+                "meta": {
+                    "source_path": "deepseek-r1.en.md",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+    )
+
+    assert "cold-start data [1]." in normalized
 
 
 def test_grounded_fact_completion_expands_prompt_acronym_on_independent_cited_claims() -> None:

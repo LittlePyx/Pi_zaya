@@ -1,12 +1,46 @@
 from __future__ import annotations
 
 from kb.evidence_text import (
+    clean_display_text,
     compound_claim_evidence_excerpt,
     finish_evidence_text,
     looks_low_value_citation_context,
     pick_readable_evidence_text,
     strip_evidence_metadata_prefix,
 )
+
+
+def test_clean_display_text_preserves_tex_absolute_value_bars() -> None:
+    evidence = r"\gamma = \frac{1}{nm} \sum_{ij} |W_{ij}|. \tag{3}"
+
+    assert clean_display_text(evidence) == evidence
+
+
+def test_compound_claim_excerpt_keeps_complete_absmean_derivation() -> None:
+    evidence = (
+        "2 BitNet b1.58 is based on the BitNet architecture. "
+        "Quantization Function. To constrain the weights to -1, 0, or +1, we adopt an "
+        "absmean quantization function. It first scales the weight matrix by its average "
+        "absolute value, and then rounds each value to the nearest integer among {-1, 0, +1}: "
+        r"\widetilde{W} = \text{RoundClip}\!\left(\frac{W}{\gamma + \epsilon}, -1, 1\right), \tag{1} "
+        r"\text{RoundClip}(x, a, b) = \max(a, \min(b, \text{round}(x))), \tag{2} "
+        r"\gamma = \frac{1}{nm} \sum_{ij} |W_{ij}|. \tag{3} "
+        "The activation quantizer is described next."
+    )
+
+    excerpt = compound_claim_evidence_excerpt(
+        evidence,
+        claim="Explain the absmean ternary quantization and RoundClip gamma formula.",
+        max_len=520,
+    )
+
+    assert excerpt.startswith("Quantization Function")
+    assert "BitNet architecture" not in excerpt
+    assert all(
+        term in excerpt
+        for term in ("absmean", "average absolute value", "RoundClip", r"|W_{ij}|", r"\tag{3}")
+    )
+    assert len(excerpt) <= 520
 
 
 def test_compound_claim_excerpt_keeps_distributed_mechanism_without_filler() -> None:

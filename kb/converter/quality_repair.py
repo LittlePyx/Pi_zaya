@@ -250,7 +250,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 13
+CONVERSION_QUALITY_RULES_VERSION = 14
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -400,6 +400,7 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
             "repair_detached_table_rows",
             "repair_inline_math_boundaries",
             "normalize_markdown_tables",
+            "demote_malformed_numbered_headings",
             "postprocess_markdown",
             "balance_display_math",
             "figure_metadata_captions",
@@ -424,7 +425,7 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "autofix",
         "scope": "markdown",
         "reason": "Multiple logical data rows were packed into cells with literal HTML break markers.",
-        "strategies": ["normalize_markdown_tables", "recover_ambiguous_table_pages"],
+        "strategies": ["recover_ambiguous_table_pages", "normalize_markdown_tables"],
     },
     "ambiguous_table_break_rows": {
         "label": "Preserve ambiguous tables as source PDF page evidence",
@@ -611,7 +612,7 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "action": "review",
         "scope": "document",
         "reason": "A later numbered section appears before an earlier one, which can indicate cross-page text displacement.",
-        "strategies": ["demote_malformed_numbered_headings"],
+        "strategies": ["restore_numbered_headings_from_pdf", "demote_malformed_numbered_headings"],
     },
 }
 
@@ -1141,9 +1142,7 @@ def _issue_codes_from_metrics(metrics: dict[str, Any]) -> list[str]:
     if int(metrics.get("heading_level_jump_count") or 0) > 0:
         out.append("heading_level_jumps")
     ambiguous_break_rows = int(metrics.get("ambiguous_table_break_row_count") or 0)
-    if int(metrics.get("collapsed_table_row_count") or 0) > 0 or (
-        int(metrics.get("table_literal_break_count") or 0) > 0 and ambiguous_break_rows <= 0
-    ):
+    if int(metrics.get("collapsed_table_row_count") or 0) > 0:
         out.append("collapsed_table_rows")
     if ambiguous_break_rows > 0:
         out.append("ambiguous_table_break_rows")
@@ -1315,7 +1314,7 @@ def _out_of_order_numbered_sections_likely(text: str) -> bool:
 
 
 def _demote_malformed_numbered_formula_headings(md: str) -> tuple[str, bool]:
-    """Demote only duplicated ``## N #`` artifacts next to display math."""
+    """Demote source artifacts that unmistakably contain equation syntax."""
 
     text = str(md or "")
     lines = text.splitlines()
@@ -1325,6 +1324,24 @@ def _demote_malformed_numbered_formula_headings(md: str) -> tuple[str, bool]:
     for index, line in enumerate(lines):
         match = re.match(r"^##\s+(\d{1,2})\s+#+\s*$", line.strip())
         if not match:
+            formula_heading = re.match(r"^##\s+(\d{1,2})\s+(.+?)\s*$", line.strip())
+            if formula_heading:
+                formula_title = str(formula_heading.group(2) or "").strip()
+                next_nonempty = next(
+                    (
+                        str(candidate or "").strip()
+                        for candidate in lines[index + 1 : index + 5]
+                        if str(candidate or "").strip()
+                    ),
+                    "",
+                )
+                if (
+                    re.search(r"\b(?:[A-Za-z]*loss|mse|mae)\s*=", formula_title, re.IGNORECASE)
+                    and next_nonempty == "$$"
+                ):
+                    out.append(formula_title)
+                    changed = True
+                    continue
             structural = re.match(r"^##\s+(\d{1,2})(?:\.\d+)*[.)]?\s+\S", line.strip())
             if structural:
                 highest = max(highest, int(structural.group(1)))
@@ -1340,6 +1357,217 @@ def _demote_malformed_numbered_formula_headings(md: str) -> tuple[str, bool]:
             continue
         out.append(line)
     fixed = "\n".join(out)
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed, changed and fixed != text
+
+
+def _numbered_heading_title_key(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold()
+    normalized = re.sub(r"[`*_{}\[\]()]", " ", normalized)
+    return re.sub(r"[^0-9a-z]+", "", normalized)
+
+
+def _restore_numbered_headings_from_pdf_text(
+    md_text: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    """Restore subsection numbers only when the same PDF page proves them.
+
+    Vision conversion can drop the leading parent section in a two-column
+    heading (``2.3`` becomes ``3``), which then resembles displaced content.
+    Title equality, page-marker equality, and a unique source match make this
+    repair deterministic; ambiguous or top-level-only headings are untouched.
+    """
+
+    text = str(md_text or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if fitz is None or pdf_path is None or not pdf_path.is_file():
+        return text, False
+
+    source_by_page: dict[int, dict[str, list[str]]] = {}
+    source_heading_re = re.compile(
+        r"^\s*(\d{1,2}(?:\.\d+)+)\.?\s+(.{3,180}?)\s*$"
+    )
+    try:
+        doc = fitz.open(str(pdf_path))
+        try:
+            for page_index in range(int(doc.page_count)):
+                candidates: dict[str, list[str]] = {}
+                for raw_line in str(doc.load_page(page_index).get_text("text") or "").splitlines():
+                    match = source_heading_re.match(raw_line)
+                    if not match:
+                        continue
+                    number = str(match.group(1) or "").strip(".")
+                    title_key = _numbered_heading_title_key(match.group(2))
+                    if len(title_key) < 8:
+                        continue
+                    candidates.setdefault(title_key, []).append(number)
+                if candidates:
+                    source_by_page[page_index + 1] = candidates
+        finally:
+            doc.close()
+    except Exception:
+        return text, False
+
+    heading_re = re.compile(
+        r"^(#{2,6})\s+(\d{1,2}(?:\.\d+)*)\.?\s+(.+?)\s*$"
+    )
+    current_page = 0
+    changed = False
+    out: list[str] = []
+    for line in text.splitlines():
+        marker = PAGE_MARKER_RE.fullmatch(str(line or "").strip())
+        if marker:
+            current_page = int(marker.group(1))
+            out.append(line)
+            continue
+        match = heading_re.match(str(line or ""))
+        if not match or current_page <= 0:
+            out.append(line)
+            continue
+        title = str(match.group(3) or "").strip()
+        title_key = _numbered_heading_title_key(title)
+        source_numbers = source_by_page.get(current_page, {}).get(title_key, [])
+        if len(source_numbers) != 1:
+            out.append(line)
+            continue
+        source_number = source_numbers[0]
+        source_depth = len(source_number.split("."))
+        desired_marks = "#" * min(6, source_depth + 1)
+        repaired = f"{desired_marks} {source_number}. {title}"
+        out.append(repaired)
+        changed = changed or repaired != line
+    fixed = "\n".join(out)
+    if text.endswith("\n"):
+        fixed += "\n"
+    return fixed, changed and fixed != text
+
+
+def _demote_source_proven_nonheading_numbered_headings(
+    md_text: str,
+    md_path: Path,
+    source_pdf_path: Path | str | None = None,
+) -> tuple[str, bool]:
+    """Demote out-of-sequence H2 artifacts only when PDF typography proves it.
+
+    Vision conversion occasionally promotes a footnote, equation label, or
+    table cell such as ``4 As detailed ...`` to a top-level section.  Sequence
+    order alone is not sufficient evidence because a converted page can itself
+    be displaced.  This repair therefore also requires an exact same-page text
+    match whose font is materially smaller than the document's real H2 text.
+    """
+
+    text = str(md_text or "")
+    pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
+    if fitz is None or pdf_path is None or not pdf_path.is_file():
+        return text, False
+
+    lines = text.splitlines()
+    current_page = 0
+    candidates: list[dict[str, Any]] = []
+    heading_re = re.compile(r"^##\s+(\d{1,4})[.)]?\s+(.+?)\s*$")
+    for line_index, line in enumerate(lines):
+        stripped = str(line or "").strip()
+        marker = PAGE_MARKER_RE.fullmatch(stripped)
+        if marker:
+            current_page = int(marker.group(1))
+            continue
+        if REFERENCES_HEADING_RE.match(stripped):
+            break
+        match = heading_re.match(stripped)
+        if not match or current_page <= 0:
+            continue
+        title = str(match.group(2) or "").strip()
+        title_key = _numbered_heading_title_key(title)
+        if len(title_key) < 3:
+            continue
+        candidates.append(
+            {
+                "line_index": line_index,
+                "page": current_page,
+                "number": int(match.group(1)),
+                "title": title,
+                "title_key": title_key,
+            }
+        )
+    if len(candidates) < 3:
+        return text, False
+
+    numbers = [int(item["number"]) for item in candidates]
+    violating_indices: set[int] = set()
+    violating_indices.update(
+        index for index, number in enumerate(numbers) if number > 12
+    )
+    highest = numbers[0]
+    for index, number in enumerate(numbers[1:], start=1):
+        if number < highest:
+            violating_indices.add(index)
+        highest = max(highest, number)
+    lowest = numbers[-1]
+    for index in range(len(numbers) - 2, -1, -1):
+        number = numbers[index]
+        if number > lowest:
+            violating_indices.add(index)
+        lowest = min(lowest, number)
+    if not violating_indices:
+        return text, False
+
+    def _matching_line_size(page: Any, title_key: str) -> float:
+        best = 0.0
+        try:
+            blocks = list((page.get_text("dict") or {}).get("blocks") or [])
+        except Exception:
+            return 0.0
+        for block in blocks:
+            for source_line in list(block.get("lines") or []):
+                spans = list(source_line.get("spans") or [])
+                source_text = "".join(str(span.get("text") or "") for span in spans).strip()
+                source_match = re.match(r"^\s*\d{1,4}[.)]?\s*(.+?)\s*$", source_text)
+                source_title = source_match.group(1) if source_match else source_text
+                source_key = _numbered_heading_title_key(source_title)
+                shared = min(len(source_key), len(title_key))
+                if shared < 5:
+                    continue
+                if not (source_key.startswith(title_key[:shared]) or title_key.startswith(source_key[:shared])):
+                    continue
+                best = max(best, max((float(span.get("size") or 0.0) for span in spans), default=0.0))
+        return best
+
+    matched_sizes: list[float] = []
+    try:
+        doc = fitz.open(str(pdf_path))
+        try:
+            for item in candidates:
+                page_no = int(item["page"])
+                if not 1 <= page_no <= int(doc.page_count):
+                    item["source_font_size"] = 0.0
+                    continue
+                size = _matching_line_size(doc.load_page(page_no - 1), str(item["title_key"]))
+                item["source_font_size"] = size
+                if size > 0:
+                    matched_sizes.append(size)
+        finally:
+            doc.close()
+    except Exception:
+        return text, False
+    if not matched_sizes:
+        return text, False
+
+    reference_size = max(matched_sizes)
+    if reference_size < 7.0:
+        return text, False
+    changed = False
+    for index in sorted(violating_indices):
+        item = candidates[index]
+        source_size = float(item.get("source_font_size") or 0.0)
+        if source_size <= 0 or source_size > reference_size - 1.25:
+            continue
+        line_index = int(item["line_index"])
+        lines[line_index] = re.sub(r"^##\s+", "", lines[line_index], count=1)
+        changed = True
+    fixed = "\n".join(lines)
     if text.endswith("\n"):
         fixed += "\n"
     return fixed, changed and fixed != text
@@ -3965,6 +4193,21 @@ def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_
         required = max(2, int((pdf_page_count - 1) * 0.45))
         if matched_later < required:
             return text, False
+    page_alignment = _page_alignment_quality(
+        _metric_view(md_path, text),
+        _pdf_source_stats(pdf_path),
+        text,
+    )
+    anchor_alignment = _source_page_anchor_alignment_quality(text, pdf_path)
+    if not any(
+        int(page_alignment.get(key) or 0) > 0
+        for key in (
+            "missing_pdf_page_marker_count",
+            "duplicate_pdf_page_marker_count",
+            "out_of_range_page_marker_count",
+        )
+    ) and int(anchor_alignment.get("source_page_anchor_issue_count") or 0) <= 0:
+        return text, False
 
     # Text alignment cannot place an image-only page. Converter-owned asset names
     # retain the physical PDF page number, so use the first page asset as a safe
@@ -3982,6 +4225,12 @@ def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_
             ):
                 offsets[page_no] = _line_start_for_offset(markerless, int(match.start()))
 
+    existing_pages = {
+        int(match.group(1))
+        for match in PAGE_MARKER_RE.finditer(text)
+        if 1 <= int(match.group(1)) <= pdf_page_count
+    }
+
     cleaned_offsets: dict[int, int] = {}
     last_offset = -1
     for page_no, offset in sorted(offsets.items(), key=lambda item: (int(item[0]), int(item[1]))):
@@ -3994,6 +4243,10 @@ def _realign_page_markers_from_pdf_text(md_text: str, md_path: Path, source_pdf_
         cleaned_offsets[page] = pos
         last_offset = pos
     if len(cleaned_offsets) <= 1:
+        return text, False
+    if pdf_page_count > 0 and len(existing_pages) == pdf_page_count and existing_pages.difference(cleaned_offsets):
+        # Re-alignment may move a proven page anchor, but it must never erase
+        # one merely because that page lacks a distinctive text n-gram.
         return text, False
 
     fixed = markerless
@@ -4072,7 +4325,9 @@ def _pdf_page_has_references_heading_text(text: str) -> bool:
 
 
 PDF_REFERENCE_START_LINE_RE = re.compile(r"^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s+\S")
-PDF_REFERENCE_STANDALONE_NUMBER_RE = re.compile(r"^\s*\[?(\d{1,4})\]?[.)]\s*$")
+PDF_REFERENCE_STANDALONE_NUMBER_RE = re.compile(
+    r"^\s*(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s*$"
+)
 
 
 def _pdf_page_reference_start_numbers(text: str) -> list[int]:
@@ -4088,9 +4343,10 @@ def _pdf_page_reference_start_numbers(text: str) -> list[int]:
                 numbers.append(int(match.group(1) or match.group(2)))
             continue
         standalone = PDF_REFERENCE_STANDALONE_NUMBER_RE.match(line)
-        if standalone and _is_plausible_reference_number(standalone.group(1)):
+        standalone_number = (standalone.group(1) or standalone.group(2)) if standalone else None
+        if standalone_number and _is_plausible_reference_number(standalone_number):
             if _pdf_reference_window_has_signal(lines, idx):
-                numbers.append(int(standalone.group(1)))
+                numbers.append(int(standalone_number))
     return numbers
 
 
@@ -4133,7 +4389,11 @@ def _trim_pdf_page_text_to_first_reference(text: str) -> str:
         line = str(raw_line or "").strip()
         match = PDF_REFERENCE_START_LINE_RE.match(line)
         standalone = PDF_REFERENCE_STANDALONE_NUMBER_RE.match(line)
-        raw_num = (match.group(1) or match.group(2)) if match else (standalone.group(1) if standalone else None)
+        raw_num = (
+            (match.group(1) or match.group(2))
+            if match
+            else ((standalone.group(1) or standalone.group(2)) if standalone else None)
+        )
         if raw_num and _is_plausible_reference_number(raw_num) and _pdf_reference_window_has_signal(lines, idx):
             candidates.append((idx, int(raw_num)))
     chain = consecutive_reference_chain_positions([number for _, number in candidates])
@@ -4310,11 +4570,55 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
     if not pdf_path:
         return text, False
     coverage = _source_page_coverage_quality(text, pdf_path)
+    page_alignment = _page_alignment_quality(
+        _metric_view(md_path, text),
+        _pdf_source_stats(pdf_path),
+        text,
+    )
+    anchor_alignment = _source_page_anchor_alignment_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
         for item in list(coverage.get("missing_source_pages") or [])
         if int(item.get("page") or 0) > 0
     ]
+    pages.extend(
+        int(page_no)
+        for page_no in list(page_alignment.get("missing_pdf_page_markers") or [])
+        if int(page_no or 0) > 0
+    )
+    pages.extend(
+        int(item.get("page") or 0)
+        for item in list(anchor_alignment.get("source_page_anchor_issues") or [])
+        if isinstance(item, dict)
+        and str(item.get("reason") or "") == "page_anchor_segment_low_source_overlap"
+        and float(item.get("segment_coverage") or 0.0) < 0.20
+        and int(item.get("page") or 0) > 0
+    )
+    existing_marker_pages = {
+        int(match.group(1))
+        for match in PAGE_MARKER_RE.finditer(text)
+        if int(match.group(1)) > 0
+    }
+    if pages and existing_marker_pages and fitz is not None:
+        try:
+            doc = fitz.open(str(pdf_path))
+            try:
+                first_marker = min(existing_marker_pages)
+                pages = [
+                    page_no
+                    for page_no in pages
+                    if not (
+                        page_no < first_marker
+                        and 1 <= page_no <= len(doc)
+                        and _pdf_page_looks_like_download_landing_page(
+                            str(doc.load_page(page_no - 1).get_text("text") or "")
+                        )
+                    )
+                ]
+            finally:
+                doc.close()
+        except Exception:
+            pass
     if not pages:
         return text, False
     fixed = text
@@ -4344,6 +4648,11 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
             # PDF text inside the same page segment. Inserting another full page
             # block used to duplicate the page marker and could move the source
             # recovery past the next page, creating an alignment regression.
+            references_tail = ""
+            references_match = re.search(r"(?mi)^#{1,6}\s+References\s*$", current_body)
+            if references_match:
+                references_tail = current_body[references_match.start() :].strip()
+                current_body = current_body[: references_match.start()].strip()
             replacement = "\n\n".join(
                 part
                 for part in (
@@ -4351,13 +4660,21 @@ def _recover_missing_source_pages_from_pdf_text(md_text: str, md_path: Path, sou
                     current_body,
                     f"<!-- kb_source_recovery: {page_no} -->",
                     fallback_body,
+                    references_tail,
                 )
                 if part
             ).strip() + "\n\n"
             fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
             continue
         pos = _insertion_offset_for_missing_page(fixed, page_no)
-        insert = fallback.strip() + "\n\n"
+        fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
+        insert = "\n\n".join(
+            (
+                f"<!-- kb_page: {page_no} -->",
+                f"<!-- kb_source_recovery: {page_no} -->",
+                fallback_body,
+            )
+        ).strip() + "\n\n"
         if pos > 0 and not fixed[:pos].endswith("\n\n"):
             insert = "\n" + insert
         fixed = fixed[:pos] + insert + fixed[pos:]
@@ -4547,16 +4864,50 @@ def _recover_corrupted_source_pages_from_pdf_text(
         current_segment = fixed[marker_start:segment_end]
         current_body = PAGE_MARKER_RE.sub("", current_segment, count=1).strip()
         fallback_body = PAGE_MARKER_RE.sub("", fallback, count=1).strip()
+        prefix_lines = fixed[:marker_start].splitlines()
+        within_references = False
+        for prefix_line in reversed(prefix_lines):
+            stripped = str(prefix_line or "").strip()
+            if not stripped:
+                continue
+            if REFERENCES_HEADING_RE.match(stripped):
+                within_references = True
+                break
+            if re.match(r"^#{1,6}\s+\S", stripped):
+                break
+        has_structured_evidence = bool(
+            re.search(r"(?m)^\s*!\[[^\]]*]\([^)]+\)\s*$", current_body)
+            or re.search(r"(?m)^\s*\|.+\|\s*$", current_body)
+            or re.search(r"(?m)^\s*\$\$\s*$", current_body)
+        )
         # Retain page-local visual and structured evidence, then append a clean
         # source-text recovery. Replacing the whole segment fixed OCR prose but
         # could drop valid Markdown tables and cause the transactional quality
         # gate to reject an otherwise source-accurate repair.
-        replacement_parts = [
-            f"<!-- kb_page: {page_no} -->",
-            current_body,
-            f"<!-- kb_source_recovery: {page_no} -->",
-            fallback_body,
-        ]
+        if within_references and not has_structured_evidence:
+            # Dense reference pages are prose-only and especially vulnerable
+            # to column interleaving. Appending the fallback duplicates and
+            # reorders bibliography entries during reference post-processing;
+            # a source-text replacement is both safer and idempotent here.
+            replacement_parts = [
+                f"<!-- kb_page: {page_no} -->",
+                f"<!-- kb_source_recovery: {page_no} -->",
+                fallback_body,
+            ]
+        else:
+            prior_recovery = re.search(
+                rf"<!--\s*kb_source_recovery:\s*{int(page_no)}\s*-->",
+                current_body,
+                flags=re.IGNORECASE,
+            )
+            if prior_recovery:
+                current_body = current_body[: prior_recovery.start()].rstrip()
+            replacement_parts = [
+                f"<!-- kb_page: {page_no} -->",
+                current_body,
+                f"<!-- kb_source_recovery: {page_no} -->",
+                fallback_body,
+            ]
         replacement = "\n\n".join(part for part in replacement_parts if part).strip() + "\n\n"
         fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
     return fixed, fixed != text
@@ -4824,7 +5175,16 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
             try:
                 page = doc.load_page(page_index)
                 plain_text = str(page.get_text("text") or "")
-                page_text = reference_ordered_page_text(page, fallback_text=plain_text).strip()
+                ordered_text = reference_ordered_page_text(page, fallback_text=plain_text).strip()
+                plain_numbers = _pdf_page_reference_start_numbers(plain_text)
+                ordered_numbers = _pdf_page_reference_start_numbers(ordered_text)
+                plain_chain = consecutive_reference_chain_positions(plain_numbers)
+                ordered_chain = consecutive_reference_chain_positions(ordered_numbers)
+                page_text = (
+                    plain_text.strip()
+                    if len(plain_chain) > len(ordered_chain)
+                    else ordered_text
+                )
             except Exception:
                 page_text = ""
             if not page_text:
@@ -4832,11 +5192,18 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
             has_heading = _pdf_page_has_references_heading_text(page_text)
             has_reference_block = _pdf_page_has_reference_block_text(page_text)
             if not in_references:
-                if not has_reference_block:
+                if not has_heading and not has_reference_block:
                     continue
                 in_references = True
                 if not has_heading:
                     page_text = _trim_pdf_page_text_to_first_reference(page_text)
+                else:
+                    heading_match = re.search(
+                        r"(?mi)^\s*(?:references?|bibliography|references?\s+and\s+links|literature\s+cited)\s*$",
+                        page_text,
+                    )
+                    if heading_match:
+                        page_text = page_text[heading_match.start() :]
             elif not has_heading and not has_reference_block:
                 break
             page_text = _drop_pdf_reference_running_lines(page_text)
@@ -5007,7 +5374,17 @@ def _replace_references_section(md: str, references_md: str) -> str:
                 non_ref_start = idx
             non_ref_run += 1
             if non_ref_run >= 8 and non_ref_start >= 0:
-                tail_idx = include_preceding_page_marker(non_ref_start)
+                explicit_resume = next(
+                    (
+                        probe
+                        for probe in range(non_ref_start, len(lines))
+                        if _is_post_references_resume_heading_line(str(lines[probe] or "").strip())
+                    ),
+                    -1,
+                )
+                tail_idx = include_preceding_page_marker(
+                    explicit_resume if explicit_resume >= 0 else non_ref_start
+                )
                 break
     tail_lines = lines[tail_idx:] if tail_idx < len(lines) else []
     if tail_lines and _post_reference_tail_should_precede_references(tail_lines):
@@ -5150,7 +5527,10 @@ def _post_reference_body_heading_line(line: str) -> bool:
 
 def _post_reference_tail_should_precede_references(lines: list[str]) -> bool:
     sample = "\n".join(str(line or "") for line in list(lines or [])[:30])
-    if re.search(r"\b(?:supplementary|supplemental|appendix|appendices)\b", sample, re.IGNORECASE):
+    if re.search(r"\b(?:supplementary|supplemental|appendix|appendices)\b", sample, re.IGNORECASE) or re.search(
+        r"(?mi)^\s*#{1,6}\s+[A-Z]\.?\s*$",
+        sample,
+    ):
         return False
     return bool(
         re.search(
@@ -5200,6 +5580,7 @@ def repair_markdown_text(
 ) -> dict[str, Any]:
     path = Path(md_path).expanduser()
     before_text = str(md_text or "")
+    had_source_recovery = "<!-- kb_source_recovery:" in before_text
     before_metrics = _metric_view(path, before_text)
     source_repairs_enabled = bool(source_pdf_path) or bool(allow_source_pdf_inference)
     before_source_quality = _source_quality_view(
@@ -5232,6 +5613,15 @@ def repair_markdown_text(
             text, changed = _repair_inline_math_boundaries_only(text)
             if changed:
                 applied.append("repair_inline_math_boundaries")
+
+        if source_repairs_enabled and "pdf_reference_backfill" in active_strategy_names:
+            # Rebuild the bibliography before page-anchor repair. A complete
+            # source-backed reference block often restores its own missing page
+            # markers; doing this later can duplicate a provisional page
+            # recovery and create an artificial marker gap.
+            text, changed = _backfill_references_from_pdf_text(text, path, source_pdf_path)
+            if changed:
+                applied.append("pdf_reference_backfill")
 
         if "normalize_detached_accents" in active_strategy_names:
             normalized = normalize_detached_accents(text)
@@ -5315,9 +5705,21 @@ def repair_markdown_text(
             if changed:
                 applied.append("normalize_heading_levels")
 
-        if "demote_malformed_numbered_headings" in active_strategy_names:
-            text, changed = _demote_malformed_numbered_formula_headings(text)
+        if source_repairs_enabled and "restore_numbered_headings_from_pdf" in active_strategy_names:
+            text, changed = _restore_numbered_headings_from_pdf_text(text, path, source_pdf_path)
             if changed:
+                applied.append("restore_numbered_headings_from_pdf")
+
+        if "demote_malformed_numbered_headings" in active_strategy_names:
+            source_changed = False
+            if source_repairs_enabled:
+                text, source_changed = _demote_source_proven_nonheading_numbered_headings(
+                    text,
+                    path,
+                    source_pdf_path,
+                )
+            text, changed = _demote_malformed_numbered_formula_headings(text)
+            if source_changed or changed:
                 applied.append("demote_malformed_numbered_headings")
 
         if source_repairs_enabled and "recover_missing_source_pages" in active_strategy_names:
@@ -5330,7 +5732,9 @@ def repair_markdown_text(
             if changed:
                 applied.append("recover_source_prose_omissions")
 
-        if source_repairs_enabled and "recover_corrupted_source_pages" in active_strategy_names:
+        if source_repairs_enabled and (
+            "recover_corrupted_source_pages" in active_strategy_names or had_source_recovery
+        ):
             text, changed = _recover_corrupted_source_pages_from_pdf_text(text, path, source_pdf_path)
             if changed:
                 applied.append("recover_corrupted_source_pages")
@@ -5340,16 +5744,25 @@ def repair_markdown_text(
             if changed:
                 applied.append("recover_conversion_retry_pages")
 
-        if source_repairs_enabled and "pdf_reference_backfill" in active_strategy_names:
-            text, changed = _backfill_references_from_pdf_text(text, path, source_pdf_path)
-            if changed:
-                applied.append("pdf_reference_backfill")
-
         if "postprocess_markdown" in active_strategy_names:
             postprocessed = postprocess_markdown(text)
             if postprocessed != text:
                 text = postprocessed
                 applied.append("postprocess_markdown")
+
+        if source_repairs_enabled and (
+            "recover_corrupted_source_pages" in active_strategy_names
+            or "postprocess_markdown" in active_strategy_names
+            or had_source_recovery
+        ):
+            # Reference formatting may deliberately rebuild an unnumbered
+            # bibliography and thereby discard a source-text recovery made
+            # earlier in this transaction. Post-processing can also expose a
+            # previously latent page-level corruption. Re-run the source-
+            # proven repair after it; healthy pages are a no-op.
+            text, changed = _recover_corrupted_source_pages_from_pdf_text(text, path, source_pdf_path)
+            if changed and "recover_corrupted_source_pages" not in applied:
+                applied.append("recover_corrupted_source_pages")
 
         if "promote_collapsed_review_headings" in active_strategy_names:
             text, changed = _promote_collapsed_review_headings(text)
@@ -5467,8 +5880,23 @@ def repair_markdown_text(
                 )
             elif label == "normalize_heading_levels":
                 candidate, changed = _normalize_heading_level_jumps(fallback_text)
+            elif source_repairs_enabled and label == "restore_numbered_headings_from_pdf":
+                candidate, changed = _restore_numbered_headings_from_pdf_text(
+                    fallback_text,
+                    path,
+                    source_pdf_path,
+                )
             elif label == "demote_malformed_numbered_headings":
-                candidate, changed = _demote_malformed_numbered_formula_headings(fallback_text)
+                candidate = fallback_text
+                source_changed = False
+                if source_repairs_enabled:
+                    candidate, source_changed = _demote_source_proven_nonheading_numbered_headings(
+                        candidate,
+                        path,
+                        source_pdf_path,
+                    )
+                candidate, formula_changed = _demote_malformed_numbered_formula_headings(candidate)
+                changed = source_changed or formula_changed
             elif label == "promote_collapsed_review_headings":
                 candidate, changed = _promote_collapsed_review_headings(fallback_text)
             elif source_repairs_enabled and label == "recover_missing_source_pages":
@@ -5503,6 +5931,12 @@ def repair_markdown_text(
                 # merge, not loss of any non-empty cell.
                 had_only_structural_table_drop = bool(step_reasons) and set(step_reasons) == {"tables_dropped"}
                 step_reasons = [reason for reason in step_reasons if reason != "tables_dropped"]
+            if label == "recover_missing_source_pages" and "kb_source_recovery" in candidate:
+                # An authoritative page-text recovery can legitimately expose
+                # long raw source lines that the Markdown analyzer warns about.
+                # The page-level source gate below still has to confirm that
+                # the target alignment/missing-page issue was resolved.
+                step_reasons = [reason for reason in step_reasons if reason != "analyzer_warnings_increased"]
             if (
                 label == "unwrap_prose_display_math"
                 and "prose_dominant_display_math" not in _issue_codes_from_metrics(_metric_view(path, candidate))

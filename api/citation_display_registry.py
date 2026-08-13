@@ -129,7 +129,8 @@ def _linked_answer_claims_by_source(markdown: str, rows: list[dict]) -> dict[str
     # paragraph. Preserve that scope only when every citation in the paragraph
     # resolves to one source; mixed-source comparisons continue to use the
     # sentence-local path below.
-    for paragraph in re.split(r"\n\s*\n", surface):
+    paragraphs = re.split(r"\n\s*\n", surface)
+    for paragraph_index, paragraph in enumerate(paragraphs):
         tokens = [token for token in token_sources if token in paragraph]
         source_keys = {
             token_sources[token]
@@ -166,10 +167,65 @@ def _linked_answer_claims_by_source(markdown: str, rows: list[dict]) -> dict[str
             r"\1",
             paragraph_claim,
         )
-        if 8 <= len(paragraph_claim) <= 900:
+        if 8 <= len(paragraph_claim) <= 1400:
             claims = out.setdefault(next(iter(source_keys)), [])
             if paragraph_claim not in claims:
                 claims.append(paragraph_claim)
+            if (
+                paragraph_index > 0
+                and re.search(r"\\tag\{\d{1,4}\}", paragraph)
+                and re.search(
+                    r"(?i)(?:式\s*[（(]?\s*\d+\s*[）)]?.{0,100}文献|"
+                    r"equation\s*\(?\s*\d+\s*\)?.{0,100}(?:source|paper))",
+                    paragraph,
+                )
+            ):
+                introduction = paragraphs[paragraph_index - 1].strip()
+                introduction_tokens = [
+                    token for token in token_sources if token in introduction
+                ]
+                introduction_plain = re.sub(r"[*_`>#]", " ", introduction)
+                introduction_plain = re.sub(
+                    r"(?m)^\s*(?:[-*+]\s+|\d+[.)、]\s*)",
+                    "",
+                    introduction_plain,
+                )
+                introduction_plain = re.sub(r"\s+", " ", introduction_plain).strip()
+                if (
+                    not introduction_tokens
+                    and 8 <= len(introduction_plain) <= 500
+                    and re.search(
+                        r"(?i)(?:[:：]\s*$|(?:公式|计算|定义|缩放因子|"
+                        r"平均绝对值|绝对值均值)|"
+                        r"(?:formula|equation|defined|calculated|average\s+absolute))",
+                        introduction_plain,
+                    )
+                    and introduction_plain not in claims
+                ):
+                    claims.append(introduction_plain)
+            # A short paragraph beginning with an explicit explanatory bridge
+            # ("that is" / "即" / "in other words") is semantically part of
+            # the cited formula or statement immediately above it. Keep that
+            # continuation in the source's answer-claim set so a formula link
+            # covers its faithful prose expansion without adding a citation
+            # inside TeX or broadening across unrelated paragraphs.
+            if paragraph_index + 1 < len(paragraphs):
+                continuation = paragraphs[paragraph_index + 1].strip()
+                continuation_tokens = [
+                    token for token in token_sources if token in continuation
+                ]
+                if (
+                    not continuation_tokens
+                    and re.match(
+                        r"(?i)^(?:即|也就是|也即|换言之|"
+                        r"that\s+is\b|in\s+other\s+words\b)",
+                        continuation,
+                    )
+                ):
+                    continuation_claim = re.sub(r"[*_`>#]", " ", continuation)
+                    continuation_claim = re.sub(r"\s+", " ", continuation_claim).strip()
+                    if 8 <= len(continuation_claim) <= 500 and continuation_claim not in claims:
+                        claims.append(continuation_claim)
     parts = re.split(
         r"(?<=[。！？!?；;\n])\s*|(?<=\.)\s+(?=(?:\*{1,2})?[A-Z\u4e00-\u9fff])",
         surface,

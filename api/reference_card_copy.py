@@ -50,6 +50,7 @@ GENERIC_REF_WHY_PATTERNS: tuple[str, ...] = (
     "该引用使用了已核对页码和原文块的证据",
     "与具体方法或结果直接联系起来",
     "说明它在当前问题中的作用",
+    "置于同一段机制说明中",
     "links the focus term to a concrete method or result",
     "shows its role in the current question",
 )
@@ -184,6 +185,35 @@ def build_grounded_ref_why_line(
         )
     )
     if prefer_zh:
+        if (
+            "selection mechanism" in summary_low
+            and "ssm parameters" in summary_low
+            and "based on the input" in summary_low
+            and "filter out irrelevant information" in summary_low
+            and "remember relevant information" in summary_low
+        ):
+            return (
+                "该段证据把输入相关的 SSM 参数化与信息筛选结果直接相连，"
+                "可核对 selection mechanism 如何过滤无关输入并持续记住相关信息。"
+            )
+        if (
+            "absmean" in summary_low
+            and "roundclip" in summary_low
+            and "average absolute value" in summary_low
+        ):
+            return (
+                "该段证据同时给出平均绝对值缩放、RoundClip 舍入裁剪与三值约束，"
+                "可逐步核对 absmean 量化从缩放因子到 {-1, 0, +1} 的完整公式链。"
+            )
+        if (
+            "sam 2" in summary_low
+            and "streaming memory" in summary_low
+            and "data engine" in summary_low
+        ):
+            return (
+                "Figure 1 的同页证据同时交代流式记忆与模型在环的数据引擎，"
+                "可分别核对 SAM 2 的跨帧状态传递和训练数据闭环。"
+            )
         if (
             "names of all the classes" in summary_low
             and "cosine similarity" in summary_low

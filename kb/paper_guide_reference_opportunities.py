@@ -120,7 +120,7 @@ _LABEL_EXPANSIONS = {
 }
 _UPSTREAM_INTENT_RE = re.compile(
     r"(?i)\b(?:origin|source|prior|previous|existing|earlier|classic|baseline|"
-    r"reference|citation|cite|cited|invented|new|original|background|comes?\s+from|"
+    r"reference|citation|cite|cited|invent(?:ed)?|upstream|new|original|background|comes?\s+from|"
     r"builds?\s+on|based\s+on|inspired\s+by)\b|"
     r"(?:\u6765\u6e90|\u51fa\u5904|\u6e90\u5934|\u4e4b\u524d|\u4ee5\u524d|\u5df2\u6709|"
     r"\u73b0\u6210|\u7ecf\u5178|\u80cc\u666f|\u81ea\u5df1|\u53d1\u660e|\u539f\u521b|"
@@ -342,6 +342,82 @@ def _explicit_ref_contexts_from_text(text: str, *, max_contexts: int = 12) -> li
                 continue
             seen.add(key)
             out.append((n, context))
+            if len(out) >= max(1, int(max_contexts)):
+                return out
+    return out
+
+
+_AUTHOR_YEAR_CITATION_RE = re.compile(
+    r"(?:\(\s*|;\s*)(?P<surname>[A-Z][A-Za-z'\u2019-]{2,})"
+    r"(?:\s+et\s+al\.)?\s*,\s*(?P<year>(?:19|20)\d{2})",
+    re.IGNORECASE,
+)
+
+
+def _author_year_ref_contexts_from_text(
+    text: str,
+    *,
+    reference_rows: Sequence[Mapping[str, object]],
+    target_refs: set[int],
+    max_contexts: int = 12,
+) -> list[tuple[int, str]]:
+    """Resolve verified ``(Surname, year)`` body markers to structured refs."""
+
+    source = str(text or "")
+    if not source.strip() or not target_refs:
+        return []
+    candidates: list[tuple[int, str, str]] = []
+    for row in list(reference_rows or []):
+        if not isinstance(row, Mapping):
+            continue
+        try:
+            ref_num = int(row.get("ref_num") or 0)
+        except Exception:
+            ref_num = 0
+        if ref_num not in target_refs:
+            continue
+        raw = str(row.get("text") or row.get("raw") or "").strip()
+        year = str(row.get("year") or "").strip()
+        if raw and year:
+            candidates.append((ref_num, year, raw))
+
+    out: list[tuple[int, str]] = []
+    seen: set[tuple[int, str]] = set()
+    for marker in _AUTHOR_YEAR_CITATION_RE.finditer(source):
+        surname = str(marker.group("surname") or "").strip()
+        year = str(marker.group("year") or "").strip()
+        if not surname or not year:
+            continue
+        left = max(
+            source.rfind("\n", 0, marker.start()),
+            source.rfind(".", 0, marker.start()),
+            source.rfind(";", 0, marker.start()),
+        )
+        right_candidates = [
+            index
+            for index in (
+                source.find("\n", marker.end()),
+                source.find(".", marker.end()),
+                source.find(";", marker.end()),
+            )
+            if index >= 0
+        ]
+        right = min(right_candidates) + 1 if right_candidates else min(len(source), marker.end() + 260)
+        context = _compact_text(source[left + 1 : right], max_len=520)
+        if len(context) < 12:
+            continue
+        for ref_num, ref_year, raw in candidates:
+            if ref_year != year or not re.search(
+                rf"(?<![A-Za-z]){re.escape(surname)}(?![A-Za-z])",
+                raw,
+                flags=re.IGNORECASE,
+            ):
+                continue
+            key = (ref_num, context.lower())
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((ref_num, context))
             if len(out) >= max(1, int(max_contexts)):
                 return out
     return out
@@ -1183,6 +1259,28 @@ def detect_paper_guide_reference_opportunities(
             targeted_reference_rows = []
         prompt_tokens = _tokens(prompt)
         prompt_upper = str(prompt or "").upper()
+        prompt_labels = _candidate_labels_from_text(
+            prompt=str(prompt or ""), answer="", max_labels=12
+        )
+        specific_prompt_labels = [
+            label
+            for label in prompt_labels
+            if len(label) >= 4 and re.search(r"[-\d]", label)
+        ]
+        specifically_matched_refs = {
+            int(ref_row.get("ref_num") or 0)
+            for ref_row in list(targeted_reference_rows or [])
+            if isinstance(ref_row, Mapping)
+            and str(ref_row.get("ref_num") or "").strip().isdigit()
+            and int(ref_row.get("ref_num") or 0) > 0
+            and any(
+                _label_matches_surface(
+                    label,
+                    str(ref_row.get("title") or ref_row.get("text") or ""),
+                )
+                for label in specific_prompt_labels
+            )
+        }
         targeted_refs: set[int] = set()
         for ref_row in list(targeted_reference_rows or []):
             if not isinstance(ref_row, Mapping):
@@ -1207,7 +1305,10 @@ def detect_paper_guide_reference_opportunities(
                 for prefix_len in range(2, min(6, len(title_words)) + 1)
                 for acronym in ["".join(word[0] for word in title_words[:prefix_len]).upper()]
             )
-            if targeted_ref_num > 0 and (
+            if targeted_ref_num > 0 and specifically_matched_refs:
+                if targeted_ref_num in specifically_matched_refs:
+                    targeted_refs.add(targeted_ref_num)
+            elif targeted_ref_num > 0 and (
                 acronym_match or len(prompt_tokens & title_tokens) >= 2
             ):
                 targeted_refs.add(targeted_ref_num)
@@ -1228,12 +1329,40 @@ def detect_paper_guide_reference_opportunities(
                         "claim_type": "prior_work",
                     }
                 )
+            for ref_num, context in _author_year_ref_contexts_from_text(
+                _source_body_text(source_path),
+                reference_rows=[
+                    row
+                    for row in list(targeted_reference_rows or [])
+                    if isinstance(row, Mapping)
+                ],
+                target_refs=targeted_refs,
+                max_contexts=160,
+            ):
+                candidate_records.append(
+                    {
+                        "source_path": source_path,
+                        "evidence_quote": context,
+                        "ref_num": int(ref_num),
+                        "candidate_refs": [int(ref_num)],
+                        "context_marker_verified": True,
+                        "author_year_marker_verified": True,
+                        "claim_type": "prior_work",
+                    }
+                )
     for record in candidate_records:
         record_source = _source_path_from_record(record, fallback=source_path)
         if not record_source:
             continue
         text = _text_from_record(record)
         refs = _explicit_ref_nums_from_record(record, text=text)
+        if (
+            not refs
+            and record.get("context_marker_verified") is True
+            and record.get("author_year_marker_verified") is True
+        ):
+            for key in ("ref_num", "reference_number"):
+                _append_ref_num(refs, record.get(key))
         refs = _prioritize_explicit_refs_for_prompt(prompt=prompt, text=text, refs=refs)
         if resolved_target_refs:
             refs = [ref_num for ref_num in refs if ref_num in resolved_target_refs]
@@ -1297,6 +1426,16 @@ def detect_paper_guide_reference_opportunities(
                 text=text,
                 ref_num=int(ref_num),
             )
+            matched_specific_label = next(
+                (
+                    label
+                    for label in sorted(specific_prompt_labels, key=len, reverse=True)
+                    if _label_matches_surface(label, ref_title)
+                ),
+                "",
+            )
+            if matched_specific_label:
+                opportunity_label = matched_specific_label
             if acronym_match:
                 opportunity_label = title_acronym
             rows.append(
@@ -1321,6 +1460,10 @@ def detect_paper_guide_reference_opportunities(
                             str(ref_row.get("authors") or ""), max_len=160
                         ),
                         "ref_year": str(ref_row.get("year") or "").strip(),
+                        "reference_style": str(ref_row.get("reference_style") or "").strip(),
+                        "reference_source_page": int(
+                            ref_row.get("source_page") or ref_row.get("page_start") or 0
+                        ),
                         "ref_raw": _compact_text(
                             str(ref_row.get("text") or ""), max_len=360
                         ),

@@ -21,6 +21,60 @@ from kb.paper_guide_retrieval_runtime import (
 from tests._paper_guide_fixtures import build_paper_guide_runtime_fixture
 
 
+def test_refocus_terms_require_the_two_step_boundary_sentence() -> None:
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "这个 quantum correlation light-field microscope 是怎么把离焦样品重新对焦的？"
+        )
+    )
+    requested = retrieval_runtime._paper_guide_requested_relation_anchors(terms)
+
+    assert {
+        "digital_refocus_two_steps",
+        "ray_tracing",
+        "wave_propagation",
+    }.issubset(requested)
+    assert "digital_refocus_two_steps" in (
+        retrieval_runtime._paper_guide_source_relation_anchors(
+            "The operation for digital refocusing of an out-of-focus sample can be achieved using two steps."
+        )
+    )
+
+
+def test_semantic_query_terms_request_complete_sidd_winner_table_relations() -> None:
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR "
+            "最高的模型是谁？如果并列请全部列出。"
+        )
+    )
+    requested = retrieval_runtime._paper_guide_requested_relation_anchors(terms)
+
+    assert {
+        "simple_baselines_sidd_table_locator",
+        "simple_baselines_sidd_methods",
+        "simple_baselines_sidd_values",
+    }.issubset(requested)
+
+
+def test_source_relation_anchors_recognize_complete_sidd_table_rows() -> None:
+    assert "simple_baselines_sidd_table_locator" in (
+        retrieval_runtime._paper_guide_source_relation_anchors(
+            "Table 6. Image Denoising Results on SIDD [1]"
+        )
+    )
+    assert "simple_baselines_sidd_methods" in (
+        retrieval_runtime._paper_guide_source_relation_anchors(
+            "Method | Restormer [39] | Baseline ours | NAFNet ours"
+        )
+    )
+    assert "simple_baselines_sidd_values" in (
+        retrieval_runtime._paper_guide_source_relation_anchors(
+            "PSNR | 40.02 | 40.30 | 40.30"
+        )
+    )
+
+
 def test_semantic_query_terms_cover_compound_mechanism_and_deployment_facets():
     restormer = retrieval_runtime._paper_guide_semantic_query_terms(
         "What does MDTA transpose about self-attention, and what filtering role does GDFN play?"
@@ -59,6 +113,41 @@ def test_semantic_query_terms_cover_cross_paper_time_series_facets():
     assert {"dependencies", "self-attention", "autocorrelation", "decomposition"}.issubset(terms)
     assert {"experiments", "forecasting", "imputation", "classification"}.issubset(terms)
     assert {"limitations", "constraints", "drawbacks", "future"}.issubset(terms)
+
+
+def test_semantic_query_terms_cover_sam2_medsam_transfer_facets():
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "对比 SAM 2 和 MedSAM：不要把视频时序信息、数据闭环与医学目标提示机制混为一谈。"
+        )
+    )
+
+    assert {"streaming", "memory", "data", "engine", "model", "loop"}.issubset(terms)
+    assert {"bounding", "boxes", "positional", "encoding", "cross-attention"}.issubset(
+        terms
+    )
+    assert {
+        "sam2_streaming_memory",
+        "sam2_data_engine",
+        "medsam_prompt_encoding",
+        "medsam_cross_attention",
+    }.issubset(retrieval_runtime._paper_guide_requested_relation_anchors(terms))
+
+
+def test_semantic_query_terms_cover_sam2_video_prompt_propagation():
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "How does SAM 2 carry information across video frames, and which forms "
+            "of user prompt can update that process?"
+        )
+    )
+
+    assert {"figure", "streaming", "memory", "previous", "prompts", "predictions"}.issubset(
+        terms
+    )
+    assert "sam2_streaming_memory" in (
+        retrieval_runtime._paper_guide_requested_relation_anchors(terms)
+    )
 
 
 def test_semantic_query_terms_bridge_unseen_chinese_question_facets():
@@ -121,6 +210,251 @@ def test_semantic_query_terms_cover_unseen_english_compound_questions():
         "predict the correct pairings of a batch of image-text examples."
     )
     assert "clip_pairing_figure" in clip_relations & figure_relations
+
+
+def test_semantic_query_terms_cover_unseen_v2_evidence_facets():
+    data_engine = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "SAM 2 的数据引擎和模型参与标注闭环如何工作？"
+        )
+    )
+    segmentation = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "比较流式记忆、医学目标的边界框、位置编码和交叉注意力。"
+        )
+    )
+    quantization = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "BitNet 的 absmean 量化公式和缩放因子是什么？"
+        )
+    )
+    upstream = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "Did ModernBERT invent FlashAttention-2, or use upstream work?"
+        )
+    )
+
+    assert {"data", "engine", "model", "loop", "annotators", "masks", "videos"}.issubset(
+        data_engine
+    )
+    assert {"streaming", "memory", "positional", "encoding", "cross-attention"}.issubset(
+        segmentation
+    )
+    assert {"absmean", "quantization", "roundclip", "gamma"}.issubset(quantization)
+    assert {"dao", "sliding", "parallelism"}.issubset(upstream)
+
+
+def test_semantic_query_terms_cover_source_bound_architecture_and_training_facets():
+    prompts = {
+        "mamba": (
+            "Why does Mamba use a recurrent scan instead of convolution, and which "
+            "GPU-memory optimization keeps it efficient?"
+        ),
+        "kan": (
+            "Where do KANs put activation functions, what do nodes do, and what "
+            "replaces each linear weight?"
+        ),
+        "deepseek": (
+            "DeepSeek-R1-Zero 是否使用监督微调？纯 RL 有哪些可读性和语言混合问题？"
+        ),
+        "gemma": (
+            "Gemma 3 的视觉编码器是否冻结？图像 token 在高分辨率下怎样池化？"
+        ),
+        "timesfm": (
+            "TimesFM 的点预测损失与概率预测的分位数输出头有什么区别？"
+        ),
+        "bindgpt": (
+            "BindGPT 的强化学习怎样接入外部物理反馈，该反馈来自什么软件？"
+        ),
+    }
+    relations = {
+        key: retrieval_runtime._paper_guide_requested_relation_anchors(
+            set(retrieval_runtime._paper_guide_semantic_query_terms(prompt))
+        )
+        for key, prompt in prompts.items()
+    }
+
+    assert {"mamba_hardware_scan", "mamba_hardware_locator"}.issubset(
+        relations["mamba"]
+    )
+    assert {
+        "kan_edge_activations",
+        "kan_node_summation",
+        "kan_weight_replacement",
+    }.issubset(relations["kan"])
+    assert {"deepseek_zero_start", "deepseek_zero_boundary"}.issubset(
+        relations["deepseek"]
+    )
+    assert {
+        "gemma_vision_frozen",
+        "gemma_vision_tokens",
+        "gemma_vision_896_pooling",
+        "gemma_vision_siglip",
+        "gemma_vision_table_locator",
+    }.issubset(relations["gemma"])
+    assert {"timesfm_point_loss", "timesfm_probabilistic_extension"}.issubset(
+        relations["timesfm"]
+    )
+    assert "bindgpt_external_feedback" in relations["bindgpt"]
+
+
+def test_source_relation_anchors_require_exact_source_phrases_for_new_facets():
+    anchors = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Hardware-aware Algorithm. We compute recurrently with a scan instead of "
+        "convolution, without materializing the expanded state across the GPU memory "
+        "hierarchy."
+    ) | retrieval_runtime._paper_guide_source_relation_anchors(
+        "Loss Function. We focus on point forecasting and use Mean Squared Error "
+        "(MSE). For probabilistic forecasting, multiple output heads can each minimize "
+        "a separate quantile loss."
+    )
+
+    assert "mamba_hardware_scan" in anchors
+    assert "mamba_hardware_locator" in anchors
+    assert "timesfm_point_loss" in anchors
+    assert "timesfm_loss_locator" in anchors
+    assert "timesfm_probabilistic_extension" in anchors
+
+
+def test_kan_pruning_relation_keeps_the_interpretability_claim_in_its_source_bundle():
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "KAN 的可解释化流程是直接按边剪枝吗？先用什么约束，再在哪个粒度 pruning？"
+        )
+    )
+    requested = retrieval_runtime._paper_guide_requested_relation_anchors(terms)
+    source = retrieval_runtime._paper_guide_source_relation_anchors(
+        "We will show that these pruned KANs are much more interpretable than "
+        "non-pruned ones."
+    )
+
+    assert "kan_pruning_interpretability" in requested
+    assert "kan_pruning_interpretability" in source
+
+
+def test_deepseek_zero_relation_keeps_the_explicit_without_sft_sentence() -> None:
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "DeepSeek-R1-Zero 是否没有使用监督微调，而是纯 RL？"
+        )
+    )
+    requested = retrieval_runtime._paper_guide_requested_relation_anchors(terms)
+    source = retrieval_runtime._paper_guide_source_relation_anchors(
+        "DeepSeek-R1-Zero relies exclusively on reinforcement learning without "
+        "supervised fine-tuning."
+    )
+
+    assert "deepseek_zero_without_sft" in requested
+    assert "deepseek_zero_without_sft" in source
+
+
+def test_source_relation_anchors_cover_unseen_v2_named_locator_passages() -> None:
+    sam2 = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Figure 1. SAM 2 is trained on our large-scale SA-V dataset collected "
+        "through our data engine."
+    )
+    medsam = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Abstract. Here we present MedSAM, enabling universal medical image "
+        "segmentation. The model uses 1,570,263 image-mask pairs."
+    )
+    deepseek = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Figure 2. The multi-stage pipeline of DeepSeek-R1. Dev1, Dev2, and Dev3 "
+        "represent intermediate checkpoints within this pipeline."
+    )
+    gemma = retrieval_runtime._paper_guide_source_relation_anchors(
+        "We use a vision encoder based on SigLIP. The 896 resolution encoder has "
+        "a 4x4 average pooling on its output. As shown in Table 7, higher resolution "
+        "encoders perform better."
+    )
+
+    assert "sam2_dataset_locator" in sam2
+    assert "medsam_abstract_locator" in medsam
+    assert "deepseek_figure2_caption" in deepseek
+    assert {"gemma_vision_siglip", "gemma_vision_table_locator"}.issubset(gemma)
+
+
+def test_source_relation_anchors_cover_unseen_v2_formula_and_architecture_passages() -> None:
+    bitnet = retrieval_runtime._paper_guide_source_relation_anchors(
+        "We adopt an absmean quantization function. It first scales the weight "
+        "matrix by its average absolute value. "
+        r"\widetilde{W}=\text{RoundClip}(W/(\gamma+\epsilon),-1,1). "
+        r"\text{RoundClip}(x,a,b)=\max(a,\min(b,\text{round}(x))). "
+        r"\gamma=\frac{1}{nm}\sum_{ij}|W_{ij}|."
+    )
+    medsam = retrieval_runtime._paper_guide_source_relation_anchors(
+        "Point-based prompts can introduce ambiguity. We follow the network "
+        "architecture in SAM, including an image encoder, a prompt encoder, "
+        "and a mask decoder (Fig. 2b)."
+    )
+    gemma = retrieval_runtime._paper_guide_source_relation_anchors(
+        "attention, with a pattern of 5 local layers for every global layer."
+    )
+
+    assert {
+        "bitnet_absmean_definition",
+        "bitnet_weight_quant_formula",
+        "bitnet_gamma_formula",
+        "bitnet_roundclip_formula",
+    }.issubset(bitnet)
+    assert "medsam_architecture_locator" in medsam
+    assert "medsam_box_ambiguity" in medsam
+    assert "gemma_attention_layer_count" in gemma
+
+
+def test_semantic_query_terms_request_unseen_v2_formula_and_locator_relations() -> None:
+    bitnet_terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "请解释 BitNet b1.58 的 absmean 权重量化公式：缩放因子 gamma 如何计算，"
+            "缩放后的权重如何通过 RoundClip 舍入和裁剪？"
+        )
+    )
+    bindgpt_terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "Which three generation roles can the single pretrained language model in BindGPT serve?"
+        )
+    )
+
+    bitnet_relations = retrieval_runtime._paper_guide_requested_relation_anchors(bitnet_terms)
+    assert {
+        "bitnet_absmean_definition",
+        "bitnet_weight_quant_formula",
+        "bitnet_gamma_formula",
+        "bitnet_roundclip_formula",
+    }.issubset(bitnet_relations)
+    assert "bitnet_ternary_weights" in bitnet_relations
+    assert "bitnet_integer_matmul" not in bitnet_relations
+    assert "bindgpt_abstract_locator" in retrieval_runtime._paper_guide_requested_relation_anchors(
+        bindgpt_terms
+    )
+
+
+def test_semantic_query_terms_request_unseen_v2_named_locators() -> None:
+    prompts = {
+        "sam2": "How does the SAM 2 SA-V data engine work and how large is the dataset?",
+        "medsam": "How large is the MedSAM dataset and how many validation tasks are used?",
+        "deepseek": "Walk through the multi-stage DeepSeek-R1 pipeline shown in Figure 2.",
+    }
+    relations = {
+        name: retrieval_runtime._paper_guide_requested_relation_anchors(
+            set(retrieval_runtime._paper_guide_semantic_query_terms(prompt))
+        )
+        for name, prompt in prompts.items()
+    }
+
+    assert "sam2_dataset_locator" in relations["sam2"]
+    assert "medsam_abstract_locator" in relations["medsam"]
+    assert "deepseek_figure2_caption" in relations["deepseek"]
+
+
+def test_sam2_data_engine_does_not_inherit_sa1b_statistics() -> None:
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "SAM 2 的数据引擎怎样让模型参与标注闭环？最终 SA-V 有多少视频和 masks？"
+        )
+    )
+
+    assert {"data", "engine", "loop", "annotators", "videos", "masks"} <= terms
+    assert terms.isdisjoint({"sa-1b", "11", "1.1", "99.1"})
 
 
 def test_source_relation_anchors_match_split_sam_and_ddpm_evidence() -> None:

@@ -1074,12 +1074,40 @@ def _compose_system_b_trace(
 
 def _locator(rec: Mapping[str, Any]) -> str:
     loc = _first_text(rec, "location_label", max_len=260)
-    if loc:
-        return loc
-    heading = _first_text(rec, "heading_path", max_len=180)
-    page = _page_label(rec.get("page_start"), rec.get("page_end"))
-    kind = _anchor_kind_label(str(rec.get("anchor_kind") or ""))
-    return " · ".join(part for part in (heading, page, kind) if part)
+    if not loc:
+        heading = _first_text(rec, "heading_path", max_len=180)
+        page = _page_label(rec.get("page_start"), rec.get("page_end"))
+        kind = _anchor_kind_label(str(rec.get("anchor_kind") or ""))
+        loc = " · ".join(part for part in (heading, page, kind) if part)
+
+    evidence = _first_raw_value(
+        rec,
+        "evidence_quote",
+        "reader_evidence_quote",
+        "citation_plan_reader_evidence_quote",
+        "summary_line",
+        "raw",
+    )
+    equation_numbers = list(
+        dict.fromkeys(
+            match.group(1)
+            for match in re.finditer(
+                r"\\tag\s*\{\s*(\d{1,4})\s*\}",
+                str(evidence or ""),
+            )
+        )
+    )[:4]
+    equation_labels = [
+        f"Equation ({number})"
+        for number in equation_numbers
+        if f"Equation ({number})".casefold() not in loc.casefold()
+    ]
+    if equation_labels:
+        # Equation tags are visible source locators, not generated metadata.
+        # Keep them with the page/section so a formula card can be audited down
+        # to the exact numbered expressions it displays.
+        loc = " · ".join([loc, *equation_labels]) if loc else " · ".join(equation_labels)
+    return loc
 
 
 def _compose_system_a(rec: dict[str, Any], *, locale: str = "") -> dict[str, Any]:

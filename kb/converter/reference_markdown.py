@@ -27,7 +27,9 @@ _POST_REFERENCE_BODY_SECTION_RE = re.compile(
     r"conclusions?|appendix|supplementary|supplemental)\b\s*[:.]?\s*$",
     re.IGNORECASE,
 )
-_STANDALONE_REF_NUMBER_RE = re.compile(r"^\[?(\d{1,4})\]?[.)]\s*$")
+_STANDALONE_REF_NUMBER_RE = re.compile(
+    r"^(?:\[\s*(\d{1,4})\s*\]|(\d{1,4})[.)])\s*$"
+)
 _INLINE_REF_START_RE = re.compile(r"^(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+(.+)$")
 _MID_REF_START_RE = re.compile(r"(?<!\S)(?:\[(\d{1,4})\]|(\d{1,4})[.)])\s+([A-Z][^.]{10,})")
 _AUTHOR_YEAR_RE = re.compile(r"\b(?:18|19|20)\d{2}[a-z]?\.\s+\S")
@@ -477,7 +479,12 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
             continue
 
         standalone_match = _STANDALONE_REF_NUMBER_RE.match(stripped)
-        if standalone_match and _is_plausible_reference_number(standalone_match.group(1)):
+        standalone_number = (
+            (standalone_match.group(1) or standalone_match.group(2))
+            if standalone_match
+            else None
+        )
+        if standalone_number and _is_plausible_reference_number(standalone_number):
             if current_ref:
                 ref_text = _join_reference_fragments(current_ref)
                 if ref_text:
@@ -488,7 +495,7 @@ def format_references_block(ref_lines: list[tuple[int, str]]) -> list[str]:
                 current_ref = []
                 current_ref_number = None
 
-            current_ref_number = int(standalone_match.group(1))
+            current_ref_number = int(standalone_number)
             continue
 
         ref_match = _INLINE_REF_START_RE.match(stripped)

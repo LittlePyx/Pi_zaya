@@ -18,7 +18,7 @@ from kb.reference_index import (
 from kb.source_blocks import build_source_blocks, doc_id_for_path, normalize_inline_markdown
 from kb.table_index import build_table_index_payload
 
-STRUCTURED_INDEX_VERSION = 7
+STRUCTURED_INDEX_VERSION = 8
 _INDEX_VERSION = STRUCTURED_INDEX_VERSION
 _EQUATION_CONTEXT_KINDS = {"paragraph", "list_item", "blockquote", "table"}
 _REFERENCE_HEADING_RE = re.compile(
@@ -962,9 +962,13 @@ def _build_reference_index_payload(
         if "crossref_ok" in meta:
             rec["crossref_ok"] = bool(meta.get("crossref_ok"))
         source_location = source_location_map.get(int(ref_num)) or {}
-        for field in ("source_page", "page_start", "source_block_id"):
-            value = source_location.get(field)
+        for field in ("source_page", "page_start", "page_end", "source_block_id"):
+            value = source_location.get(field, meta.get(field))
             if value not in (None, "", 0):
+                rec[field] = value
+        for field in ("reference_style", "synthetic_reference_number"):
+            value = meta.get(field)
+            if value not in (None, ""):
                 rec[field] = value
         mentions = [dict(item) for item in mention_map.get(int(ref_num), []) if isinstance(item, dict)]
         if mentions:

@@ -43,11 +43,13 @@ _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN = re.compile(
 )
 _PAPER_GUIDE_REPRO_PROMPT_RE = re.compile(
     r"(\breproduc(?:e|ibility)\b|\breplicate\b|\bimplement\b|\bsetup\b|\bhardware\b|\bacquisition\b|"
-    r"\bparameter\b|\bprotocol\b|\bmaterials and methods\b|复现|搭建|硬件|采集|参数|流程|方法细节)",
+    r"\bparameters?\s+(?:settings?|values?|configuration)\b|\bprotocol\b|"
+    r"\bmaterials and methods\b|复现|搭建|硬件|采集|参数(?:设置|取值|配置)|流程|方法细节)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN = re.compile(
-    r"(\u590d\u73b0|\u642d\u5efa|\u786c\u4ef6|\u91c7\u96c6|\u53c2\u6570|\u6d41\u7a0b|\u65b9\u6cd5\u7ec6\u8282)",
+    r"(\u590d\u73b0|\u642d\u5efa|\u786c\u4ef6|\u91c7\u96c6|"
+    r"\u53c2\u6570(?:\u8bbe\u7f6e|\u53d6\u503c|\u914d\u7f6e)|\u6d41\u7a0b|\u65b9\u6cd5\u7ec6\u8282)",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_STRENGTH_PROMPT_RE = re.compile(
@@ -527,12 +529,25 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         or _PAPER_GUIDE_COMPARE_PROMPT_RE_CLEAN.search(q)
         or intent == "compare"
     )
+    relation_boundary_request = bool(
+        re.search(
+            r"(?i)(?:\brather\s+than\b|\bnot\b.{0,36}\bbut\b|"
+            r"\b(?:edge|node)[- ]level\b|不是|而非|并非|"
+            r"先.{0,36}再|(?:哪个|什么)粒度|(?:边|节点)级)",
+            q,
+        )
+    )
     # A comparison that also asks for formulas is still primarily a
     # comparison; otherwise one formula can eclipse the other requested side.
     if equation_request and comparison_request:
         return "compare"
     if equation_request:
         return "equation"
+    # Questions about an explicit relation/boundary can contain the generic
+    # word “流程”, but they ask what the paper did and did not do rather than
+    # for a reproducibility protocol.
+    if relation_boundary_request:
+        return "compare"
     if _PAPER_GUIDE_REPRO_PROMPT_RE.search(q) or _PAPER_GUIDE_REPRO_PROMPT_RE_CLEAN.search(q) or intent == "experiment":
         return "reproduce"
     # Author-profile questions often ask for clickable "evidence".  That word
@@ -589,7 +604,8 @@ def _paper_guide_prompt_requests_exact_method_support(prompt: str) -> bool:
     return bool(
         re.search(
             r"(?i)\b(?:"
-            r"where\b|where in the pipeline|point me to|exact supporting part|"
+            r"where\s+(?:in\s+the\s+(?:paper|source|method|pipeline)|is\s+the\s+method\s+described)|"
+            r"point me to|exact supporting part|"
             r"exact supporting sentence(?:s)?|exact sentence|exact method paragraph|which part of the paper|"
             r"applied back|re-applied|shift vectors|original iism dataset|"
             r"implementation details?|training details?|network training|optimizer|learning rate|batch size|"

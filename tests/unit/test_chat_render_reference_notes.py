@@ -18,6 +18,8 @@ from api.chat_render import (
     _normalize_chat_markdown_for_display,
     _normalize_double_numeric_citation_markers,
     _normalize_equation_source_notes,
+    _rendered_body_preserves_answer_body,
+    _strip_trailing_citation_markers_from_display_math,
     _strip_freeform_numeric_citation_markers,
     enrich_messages_with_reference_render,
 )
@@ -67,6 +69,21 @@ def test_double_numeric_citations_never_render_as_empty_brackets() -> None:
     assert _normalize_double_numeric_citation_markers("A [[4]], B [[5；2]].") == "A [4], B [5；2]."
     stripped = _strip_freeform_numeric_citation_markers("A [[4]], B [[]], C [].")
     assert stripped == "A, B [[]], C []."
+
+
+def test_trailing_display_math_citation_is_removed_without_touching_brackets() -> None:
+    rendered = (
+        "The point loss is supported [1](#kb-cite-loss).\n\n"
+        "$$\n"
+        r"L = \operatorname{MSE}(y[2], \hat{y}) [2]"
+        "\n$$"
+    )
+
+    cleaned = _strip_trailing_citation_markers_from_display_math(rendered)
+
+    assert "[1](#kb-cite-loss)" in cleaned
+    assert "y[2]" in cleaned
+    assert r"\hat{y}) [2]" not in cleaned
 
 
 def test_signed_bpsk_values_do_not_consume_the_real_source_citation(
@@ -706,6 +723,112 @@ def test_system_a_display_registry_keeps_single_source_paragraph_scope_at_end_ci
     )
 
 
+def test_system_a_display_registry_keeps_explicit_formula_explanation_scope() -> None:
+    markdown = (
+        "$$\\gamma = \\frac{1}{nm} \\sum_{ij}|W_{ij}|, \\tag{3}$$ "
+        '[4](#cite-bitnet "source: BitNet.pdf").\n\n'
+        "即权重矩阵所有元素绝对值之和除以元素总数，也就是平均绝对值。"
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-bitnet",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\BitNet\BitNet.en.md",
+            "source_name": "BitNet.pdf",
+        }
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(
+        markdown,
+        details,
+    )
+
+    claims = remapped[0]["answer_claims"]
+    assert any("平均绝对值" in claim for claim in claims)
+
+
+def test_system_a_display_registry_keeps_formula_intro_before_source_note() -> None:
+    markdown = (
+        "缩放因子 $\\gamma$ 是权重矩阵所有元素的平均绝对值：\n\n"
+        "$$\n"
+        r"\gamma = \frac{1}{nm} \sum_{ij}|W_{ij}|, \tag{3}" "\n"
+        "$$\n"
+        "*（式(3) 对应命中的库内文献：`BitNet.pdf`）* "
+        '[4](#cite-bitnet "source: BitNet.pdf")'
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-bitnet",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\BitNet\BitNet.en.md",
+        }
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(
+        markdown,
+        details,
+    )
+
+    claims = remapped[0]["answer_claims"]
+    assert any("缩放因子" in claim and "平均绝对值" in claim for claim in claims)
+
+
+def test_system_a_display_registry_does_not_broaden_unrelated_formula_intro() -> None:
+    markdown = (
+        "A different paper reports an unrelated benchmark.\n\n"
+        "$$\n"
+        r"\gamma = \frac{1}{nm} \sum_{ij}|W_{ij}|, \tag{3}" "\n"
+        "$$\n"
+        "*Equation (3) source paper: `BitNet.pdf`* "
+        '[4](#cite-bitnet "source: BitNet.pdf")'
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-bitnet",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\BitNet\BitNet.en.md",
+        }
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(
+        markdown,
+        details,
+    )
+
+    assert all(
+        "unrelated benchmark" not in claim
+        for claim in remapped[0].get("answer_claims") or []
+    )
+
+
+def test_system_a_display_registry_does_not_broaden_plain_following_paragraph() -> None:
+    markdown = (
+        'The source defines the formula [4](#cite-formula "source: Formula.pdf").\n\n'
+        "A different uncited paper reports an unrelated benchmark."
+    )
+    details = [
+        {
+            "num": 4,
+            "anchor": "cite-formula",
+            "citation_route": "system_a",
+            "source_path": r"F:\db\Formula\Formula.en.md",
+        }
+    ]
+
+    _rendered, remapped, _registry = remap_system_a_citations_for_display(
+        markdown,
+        details,
+    )
+
+    assert all(
+        "unrelated benchmark" not in claim
+        for claim in remapped[0].get("answer_claims") or []
+    )
+
+
 def test_system_a_display_registry_does_not_broaden_mixed_source_paragraph_scope() -> None:
     markdown = (
         'Method A reduces memory [1](#cite-a "source: A.pdf"). '
@@ -1294,6 +1417,48 @@ def test_final_display_cleanup_removes_empty_citation_wrappers_but_keeps_task_bo
     assert _citation_free_answer_body(value) == _citation_free_answer_body(out)
 
 
+def test_render_preservation_allows_markdown_parenthetical_space_cleanup() -> None:
+    raw = (
+        "ModernBERT uses Flash Attention 2 ( Dao, 2023 ) for local layers [1] "
+        "[[CITE:modernbert:16]]."
+    )
+    rendered = (
+        "ModernBERT uses Flash Attention 2 (Dao, 2023) for local layers "
+        '[1](#kb-cite-a-1 "source passage") '
+        '[16](#kb-cite-b-16 "upstream reference").'
+    )
+
+    assert _rendered_body_preserves_answer_body(
+        answer_body=raw,
+        rendered_body=rendered,
+        cite_details=[
+            {"num": 1, "citation_route": "system_a"},
+            {"num": 16, "citation_route": "system_b"},
+        ],
+    )
+
+
+def test_render_preservation_allows_cited_equation_source_note() -> None:
+    raw = (
+        "$$\n"
+        r"\gamma = \frac{1}{nm}\sum_{ij}|W_{ij}|, \tag{3} [1]" "\n"
+        "$$"
+    )
+    rendered = (
+        "$$\n"
+        r"\gamma = \frac{1}{nm}\sum_{ij}|W_{ij}|, \tag{3}" "\n"
+        "$$\n"
+        "*（式(3) 对应命中的库内文献：`bitnet.pdf`）* "
+        '[1](#kb-cite-bitnet-1 "source: bitnet.pdf")'
+    )
+
+    assert _rendered_body_preserves_answer_body(
+        answer_body=raw,
+        rendered_body=rendered,
+        cite_details=[{"num": 1, "citation_route": "system_a"}],
+    )
+
+
 def test_legacy_canonical_citations_recover_the_actual_answer_sources(tmp_path: Path) -> None:
     paths = []
     for idx in range(1, 6):
@@ -1649,6 +1814,35 @@ def test_authoritative_system_a_plan_covers_each_visible_answer_citation() -> No
         )
         is True
     )
+
+
+def test_requested_relation_bundle_covers_repeated_answer_citations() -> None:
+    from api import chat_render
+
+    source = "sam2.en.md"
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source,
+                "heading_path": "Abstract / Introduction",
+                "page_start": 2,
+                "source_passage_bundle": True,
+                "evidence_quote": (
+                    "The model works with annotators in the loop and the final "
+                    "dataset contains 35.5M masks across 50.9K videos."
+                ),
+                "evidence_selection_reason": "requested_relation_bundle",
+            }
+        ]
+    }
+
+    assert chat_render._authoritative_system_a_plan_covers_answer(
+        plan,
+        answer_text="The loop uses annotators [1]. The dataset scale is reported [1].",
+        canonical_paths=[source],
+    ) is True
     assert (
         chat_render._authoritative_system_a_plan_covers_answer(
             plan,
@@ -3225,6 +3419,72 @@ def test_named_upstream_title_is_linked_from_current_reference_index(monkeypatch
     assert details[0]["is_inpaper"] is True
     assert details[0]["doi"] == "10.1364/oe.458742"
     assert "frequency-division multiplexed illumination" in details[0]["title"]
+
+
+def test_verified_origin_plan_repairs_missing_system_b_marker_on_best_claim(monkeypatch):
+    from api import chat_render
+
+    source_path = r"db\modernbert\modernbert.en.md"
+    sid = chat_render._source_cite_id(source_path)
+    monkeypatch.setattr(
+        chat_render,
+        "_load_reference_index_cached",
+        lambda: {
+            "docs": {
+                chat_render._render_norm_source_key(source_path): {
+                    "path": source_path,
+                    "refs": {
+                        "16": {
+                            "authors": "Tri Dao",
+                            "year": "2023",
+                            "title": (
+                                "Flashattention-2: Faster attention with better "
+                                "parallelism and work partitioning"
+                            ),
+                            "raw": "Dao T. Flashattention-2. 2023.",
+                        }
+                    },
+                }
+            }
+        },
+    )
+    answer = (
+        "No, ModernBERT did not invent FlashAttention-2. "
+        "FlashAttention-2 was introduced by Tri Dao in a separate work [1].\n\n"
+        "ModernBERT uses Flash Attention 2 for local layers [1]."
+    )
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "topic": "FlashAttention-2",
+                "source_path": source_path,
+                "candidate_refs": [16],
+                "candidate_cite_examples": [f"[[CITE:{sid}:16]]"],
+                "evidence_quote": "Flash Attention 2 (Dao, 2023)",
+                "grounding_contract": {
+                    "same_context_reference": True,
+                    "context_marker_verified": True,
+                },
+            }
+        ],
+    }
+
+    repaired, linked = chat_render._repair_named_system_b_citation_markers(
+        answer,
+        [{"text": "Flash Attention 2 (Dao, 2023)", "meta": {"source_path": source_path}}],
+        plan,
+    )
+
+    assert linked is True
+    assert repaired.count(f"[[CITE:{sid}:16]]") == 1
+    assert (
+        f"introduced by Tri Dao in a separate work [1] [[CITE:{sid}:16]]."
+        in repaired
+    )
+    assert f"did not invent FlashAttention-2 [[CITE:{sid}:16]]" not in repaired
 
 
 def test_named_upstream_title_repair_does_not_link_short_venue_mentions(monkeypatch):
@@ -6670,6 +6930,40 @@ def test_effective_reference_pack_keeps_raw_hit_order_and_exposes_enriched_hits(
 
     assert effective["hits"][0]["text"] == "raw generation hit"
     assert effective["enriched_hits"][0]["text"] == "enriched reference hit"
+
+
+def test_effective_reference_pack_prefers_completed_hits_for_authoritative_plan():
+    from api.chat_render import _effective_reference_render_pack
+
+    pack = {
+        "hits": [
+            {
+                "text": "broad generation hit with several unrelated passages",
+                "meta": {"source_path": "paper.md"},
+            }
+        ],
+        "pipeline_debug": {"prefer_rendered_plan_hits": True},
+        "rendered_payload": {
+            "hits": [
+                {
+                    "text": "exact relation evidence",
+                    "meta": {"source_path": "paper.md"},
+                    "ui_meta": {
+                        "primary_evidence": {
+                            "snippet": "exact relation evidence",
+                            "selection_reason": "answer_citation_grounded",
+                        }
+                    },
+                }
+            ]
+        },
+    }
+
+    effective = _effective_reference_render_pack(pack)
+
+    assert effective["hits"][0]["text"] == "exact relation evidence"
+    assert effective["retrieval_hits"][0]["text"].startswith("broad generation hit")
+    assert "enriched_hits" not in effective
 
 
 def test_effective_reference_pack_prefers_authoritative_doc_list_hits():
@@ -14655,6 +14949,116 @@ def test_canonical_answer_recovery_preserves_distinct_same_source_plan_passages(
     }
 
 
+def test_page_local_requested_relation_bundle_rebinds_reserved_hit_authoritatively() -> None:
+    from api.chat_render import _augment_hits_with_system_a_plan_slots
+
+    source_path = "db/medsam/medsam.en.md"
+    complete = (
+        "The model uses 1,570,263 image-mask pairs across 10 imaging modalities. "
+        "We evaluate 86 internal and 60 external validation tasks."
+    )
+    hits = [
+        {
+            "text": "External validation data are held out.",
+            "meta": {
+                "source_path": source_path,
+                "ref_answer_citation_num": 1,
+            },
+            "ui_meta": {
+                "primary_evidence": {
+                    "source_path": source_path,
+                    "snippet": "External validation data are held out.",
+                }
+            },
+        }
+    ]
+    plan = {
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "candidate_hits": [1],
+                "source_path": source_path,
+                "heading_path": "Abstract",
+                "page_start": 1,
+                "page_end": 1,
+                "evidence_quote": complete,
+                "source_passage_bundle": True,
+                "evidence_selection_reason": "requested_relation_bundle",
+            }
+        ]
+    }
+
+    rebound = _augment_hits_with_system_a_plan_slots(
+        hits,
+        plan,
+        reserved_count=1,
+        canonical_paths=[source_path],
+        answer_text="MedSAM uses 1,570,263 pairs and has 60 external tasks [1].",
+    )
+
+    assert len(rebound) == 1
+    assert rebound[0]["text"] == complete
+    assert rebound[0]["meta"]["citation_plan_evidence_authoritative"] is True
+    assert rebound[0]["ui_meta"]["primary_evidence"]["snippet"] == f"Abstract. {complete}"
+
+
+def test_legacy_canonical_scan_prefilters_irrelevant_blocks_without_losing_exact_relation(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    from api import chat_render
+
+    source = tmp_path / "kan.en.md"
+    source.write_text("# KAN\n", encoding="utf-8")
+    exact = (
+        "After training with sparsity regularization, pruning is performed "
+        "at the node level rather than the edge level."
+    )
+    blocks = [
+        {
+            "text": f"KAN background discussion number {idx}.",
+            "heading_path": "Background",
+            "block_id": f"blk-{idx}",
+        }
+        for idx in range(240)
+    ]
+    blocks.append(
+        {
+            "text": exact,
+            "heading_path": "Interpretability / Pruning",
+            "block_id": "blk-exact",
+        }
+    )
+    monkeypatch.setattr(
+        chat_render.task_runtime,
+        "load_source_blocks",
+        lambda *_args, **_kwargs: blocks,
+    )
+    original_picker = chat_render._pick_readable_evidence_text
+    calls = 0
+
+    def counted_picker(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original_picker(*args, **kwargs)
+
+    monkeypatch.setattr(chat_render, "_pick_readable_evidence_text", counted_picker)
+
+    repaired = _augment_hits_with_canonical_answer_citations(
+        [],
+        canonical_paths=[str(source)],
+        answer_text=(
+            "KAN uses sparsity regularization before pruning at node level, "
+            "not edge level [1]."
+        ),
+    )
+
+    assert len(repaired) == 1
+    assert repaired[0]["meta"]["block_id"] == "blk-exact"
+    assert repaired[0]["text"] == exact
+    assert calls < 10
+
+
 def test_prompt_contract_primary_replaces_generic_same_paper_slots():
     from api.chat_render import _citation_plan_with_ref_primary
 
@@ -14884,6 +15288,20 @@ def test_answer_surface_cleanup_preserves_legitimate_eg_parenthetical():
     answer = "The evidence omits the exact form (e.g., the BA product or initialization)."
 
     assert _cleanup_answer_surface_artifacts(answer) == answer
+
+
+def test_answer_surface_cleanup_preserves_repeated_attention_sequence():
+    from api.chat_render import _cleanup_answer_surface_artifacts
+
+    answer = "The repeating layer pattern is local, local, global."
+
+    assert _cleanup_answer_surface_artifacts(answer) == answer
+
+
+def test_answer_surface_cleanup_removes_only_terminal_neighbor_duplicate():
+    from api.chat_render import _cleanup_answer_surface_artifacts
+
+    assert _cleanup_answer_surface_artifacts("The method is local, local.") == "The method is local."
 
 
 def test_page_aligned_slot_survives_prompt_contract_from_different_page():
@@ -18340,6 +18758,57 @@ def test_citation_plan_refiner_keeps_scinerf_synthesis_and_differentiability_bun
     assert refined[0]["heading_path"].endswith("3. Method")
 
 
+def test_citation_plan_refiner_keeps_absmean_formula_bundle_and_tags() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "bitnet.en.md"
+    evidence = (
+        "Quantization Function. We adopt an absmean quantization function and scale by "
+        "the average absolute value. "
+        r"\widetilde{W}=\text{RoundClip}(W/(\gamma+\epsilon),-1,1), \tag{1} "
+        r"\text{RoundClip}(x,a,b)=\max(a,\min(b,\text{round}(x))), \tag{2} "
+        r"\gamma=\frac{1}{nm}\sum_{ij}|W_{ij}|. \tag{3}"
+    )
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        [
+            {
+                "num": 1,
+                "citation_route": "system_a",
+                "source_path": source,
+                "source_name": "bitnet.pdf",
+                "heading_path": "2 BitNet b1.58",
+                "page_start": 2,
+                "answer_claim": "absmean uses average absolute value before RoundClip.",
+                "answer_claims": [
+                    "absmean uses average absolute value.",
+                    "RoundClip rounds and clips the scaled weights.",
+                ],
+            }
+        ],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source,
+                    "source_name": "bitnet.pdf",
+                    "heading_path": "2 BitNet b1.58",
+                    "page_start": 2,
+                    "source_passage_bundle": True,
+                    "retrieval_score": 100.0,
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        render_locale="en",
+    )
+
+    assert refined[0]["compound_plan_evidence"] is True
+    assert r"\tag{3}" in refined[0]["card_evidence"]
+    assert r"|W_{ij}|" in refined[0]["card_evidence"]
+    assert "Equation (1)" in refined[0]["card_locator"]
+
+
 def test_citation_plan_refiner_uses_claim_specific_pages_from_one_bundled_doc() -> None:
     from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
 
@@ -18681,6 +19150,142 @@ def test_citation_plan_refiner_uses_exact_budget_identity_for_same_hit_slots() -
     assert "better codelengths" in refined[0]["evidence_quote"]
     assert "unweighted version" in refined[1]["evidence_quote"]
     assert refined[1]["compound_plan_evidence"] is True
+
+
+def test_citation_plan_refiner_keeps_full_same_page_relation_bundle() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "gemma3.en.md"
+    evidence = (
+        "Vision encoder. We use a vision encoder based on SigLIP. The vision "
+        "encoder is frozen, and only the language model is trained. Each image "
+        "is represented by 256 image tokens. Higher resolution encoders use "
+        "average pooling. The 896 resolution encoder uses 4x4 average pooling. "
+        "As shown in Table 7, higher resolution encoders perform better."
+    )
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        [
+            {
+                "num": 1,
+                "citation_route": "system_a",
+                "source_path": source,
+                "page_start": 8,
+                "answer_claim": "The vision encoder is frozen and emits 256 image tokens.",
+                "evidence_quote": "The vision encoder is frozen and emits 256 image tokens.",
+            }
+        ],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source,
+                    "page_start": 8,
+                    "source_passage_bundle": True,
+                    "compound_same_page_evidence": True,
+                    "retrieval_score": 1200.0,
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        render_locale="en",
+    )
+
+    assert "SigLIP" in refined[0]["evidence_quote"]
+    assert "4x4 average pooling" in refined[0]["evidence_quote"]
+    assert "Table 7" in refined[0]["evidence_quote"]
+    assert refined[0]["compound_plan_evidence"] is True
+
+
+def test_citation_plan_refiner_keeps_quantities_split_across_answer_claims() -> None:
+    from api.chat_render import _refine_system_a_cite_evidence_from_citation_plan
+
+    source = "medsam.en.md"
+    evidence = (
+        "We curate a large-scale dataset with 1,570,263 image-mask pairs "
+        "covering 10 imaging modalities and more than 30 cancer types. "
+        "We evaluate MedSAM on 86 internal segmentation tasks and 60 external "
+        "segmentation tasks to assess its generalization ability."
+    )
+    refined = _refine_system_a_cite_evidence_from_citation_plan(
+        [
+            {
+                "num": 1,
+                "citation_route": "system_a",
+                "source_path": source,
+                "page_start": 1,
+                "answer_claim": "The corpus contains 1,570,263 image-mask pairs.",
+                "answer_claims": [
+                    "The corpus contains 1,570,263 image-mask pairs across 10 modalities and more than 30 cancer types.",
+                    "Evaluation covers 86 internal tasks and 60 external tasks.",
+                ],
+            }
+        ],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source,
+                    "page_start": 1,
+                    "source_passage_bundle": True,
+                    "compound_same_page_evidence": True,
+                    "selection_reason": "requested_relation_bundle",
+                    "retrieval_score": 1200.0,
+                    "evidence_quote": evidence,
+                }
+            ]
+        },
+        render_locale="en",
+    )
+
+    excerpt = refined[0]["evidence_quote"]
+    for quantity in ("1,570,263", "10", "30", "86", "60"):
+        assert quantity in excerpt
+    assert refined[0]["compound_plan_evidence"] is True
+
+
+def test_early_relation_bundle_cache_missing_one_occurrence_is_rejected() -> None:
+    from api.chat_render import _render_cache_missing_authoritative_plan_occurrences
+
+    answer = (
+        "The model works with annotators [1].\n\n"
+        "The dataset contains 35.5M masks [1].\n\n"
+        "Source: the model is used in the loop [1]."
+    )
+    rendered = answer.replace(
+        " [1].",
+        ' [1](#kb-cite-source-1 "source: paper.pdf | ref 1").',
+        2,
+    )
+    plan = {
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "selection_reason": "requested_relation_bundle",
+                "evidence_selection_reason": "requested_relation_bundle",
+                "source_passage_bundle": True,
+                "evidence_quote": "The model works with annotators and produces 35.5M masks.",
+            }
+        ],
+    }
+
+    assert _render_cache_missing_authoritative_plan_occurrences(
+        {"rendered_body": rendered},
+        plan,
+        answer_text=answer,
+    ) is True
+    assert _render_cache_missing_authoritative_plan_occurrences(
+        {
+            "rendered_body": rendered.replace(
+                "loop [1].",
+                'loop [1](#kb-cite-source-1 "source: paper.pdf | ref 1").',
+            )
+        },
+        plan,
+        answer_text=answer,
+    ) is False
 
 
 def test_citation_plan_refiner_keeps_short_equation_relation_bundle_complete() -> None:

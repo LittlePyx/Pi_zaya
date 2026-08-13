@@ -190,6 +190,31 @@ def test_quality_repair_detects_and_repairs_collapsed_duplicate_tables(tmp_path:
     assert result["repaired_text"].count("GAP-TV") == 1
 
 
+def test_multiline_content_in_one_table_cell_is_not_a_collapsed_row(tmp_path: Path) -> None:
+    md_path = tmp_path / "multiline-cell.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Multiline Cell",
+            "## Abstract",
+            "A stable abstract.",
+            "## Results",
+            "| Prompt | Response |",
+            "| --- | --- |",
+            "| Solve the equation | First step<br>Second step<br>Final answer |",
+            "## References",
+            "[1] Ada Lovelace. Example reference. Journal, 2024.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    report = write_conversion_quality_result(md_path, allow_source_pdf_inference=False)
+
+    assert report["repair_plan"]["metrics"]["table_literal_break_count"] == 2
+    assert report["repair_plan"]["metrics"]["collapsed_table_row_count"] == 0
+    assert "collapsed_table_rows" not in report["repair_plan"]["issue_codes"]
+
+
 def test_quality_repair_escalates_ambiguous_break_rows_without_flattening(tmp_path: Path):
     md_path = tmp_path / "ambiguous-table.en.md"
     original = "\n".join(
@@ -323,6 +348,128 @@ def test_quality_gate_targets_page_with_missing_wrapped_word_prefixes(tmp_path: 
     assert "| Accuracy | 0.95 |" in repaired
     assert "<!-- kb_source_recovery: 2 -->" in repaired
     assert "source_page_text_corruption" not in assessment["issue_codes"]
+
+
+def test_source_recovery_replaces_corrupted_reference_page_without_duplication(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from kb.converter import quality_repair
+
+    pdf_path = tmp_path / "reference-columns.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nfixture")
+    md_path = tmp_path / "reference-columns.en.md"
+    damaged = "A damaged reference column. " * 10
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Reference Columns",
+            "## Abstract",
+            "This paper studies stable bibliography conversion.",
+            "## References",
+            "<!-- kb_page: 2 -->",
+            damaged,
+            damaged,
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    monkeypatch.setattr(
+        quality_repair,
+        "_source_page_coverage_quality",
+        lambda *_args, **_kwargs: {"source_page_text_corruption_pages": [{"page": 2}]},
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_pdf_page_fallback_markdown",
+        lambda *_args, **_kwargs: (
+            "<!-- kb_page: 2 -->\n\n"
+            "Advanced scientific algorithms support powerful generators and exhibited results."
+        ),
+    )
+
+    repaired, changed = quality_repair._recover_corrupted_source_pages_from_pdf_text(
+        original,
+        md_path,
+        pdf_path,
+    )
+    repaired_again, changed_again = quality_repair._recover_corrupted_source_pages_from_pdf_text(
+        repaired,
+        md_path,
+        pdf_path,
+    )
+
+    assert changed is True
+    assert changed_again is False
+    assert repaired_again == repaired
+    assert "A damaged reference column" not in repaired
+    assert "algorithms support powerful generators and exhibited results" in repaired
+    assert "<!-- kb_source_recovery: 2 -->" in repaired
+
+
+def test_postprocess_rechecks_source_recovery_even_without_active_corruption_issue(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from kb.converter import quality_repair
+
+    pdf_path = tmp_path / "recovered-reference.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nfixture")
+    md_path = tmp_path / "recovered-reference.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Reference Recovery",
+            "## Abstract",
+            "Stable abstract prose.",
+            "## References",
+            "<!-- kb_page: 2 -->",
+            "<!-- kb_source_recovery: 2 -->",
+            "Advanced scientific algorithms support powerful generators and exhibited results.",
+        ]
+    )
+
+    monkeypatch.setattr(
+        quality_repair,
+        "_source_page_coverage_quality",
+        lambda text, *_args, **_kwargs: {
+            "source_page_text_corruption_pages": (
+                [] if "<!-- kb_source_recovery: 2 -->" in text else [{"page": 2}]
+            )
+        },
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_pdf_page_fallback_markdown",
+        lambda *_args, **_kwargs: (
+            "<!-- kb_page: 2 -->\n\n"
+            "Advanced scientific algorithms support powerful generators and exhibited results."
+        ),
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "postprocess_markdown",
+        lambda text: text.replace("# Reference Recovery", "# Reference recovery").replace(
+            "<!-- kb_source_recovery: 2 -->\n"
+            "Advanced scientific algorithms support powerful generators and exhibited results.",
+            "A damaged reference column.",
+        ),
+    )
+
+    result = quality_repair.repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["analyzer_errors"],
+        source_pdf_path=pdf_path,
+        allow_source_pdf_inference=False,
+    )
+
+    repaired = str(result["repaired_text"])
+    assert result["changed"] is True, result
+    assert "# Reference recovery" in repaired
+    assert "A damaged reference column" not in repaired
+    assert "<!-- kb_source_recovery: 2 -->" in repaired
+    assert repaired.count("algorithms support powerful generators") == 1
 
 
 def test_quality_gate_repairs_source_proven_interior_prose_omission(tmp_path: Path):
@@ -576,7 +723,7 @@ def test_write_conversion_quality_result_accepts_author_year_references(tmp_path
     payload = write_conversion_quality_result(md_path)
 
     assert payload["metrics"]["reference_line_count"] == 3
-    assert payload["metrics"]["extracted_reference_count"] == 0
+    assert payload["metrics"]["extracted_reference_count"] == 3
     assert "missing_references" not in payload["repair_plan"]["issue_codes"]
     assert payload["needs_reconvert"] is False
 
@@ -2694,6 +2841,113 @@ def test_repair_markdown_text_backfills_references_without_pdf_heading(tmp_path:
     assert "Supplementary Materials" not in repaired
 
 
+def test_pdf_reference_backfill_accepts_bracket_numbers_on_standalone_lines(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    import fitz
+
+    from kb.converter import quality_repair
+
+    pdf_path = tmp_path / "Standalone Bracket References.pdf"
+    doc = fitz.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        fitz.Rect(40, 60, 560, 760),
+        "\n".join(
+            [
+                "REFERENCES",
+                *[
+                    line
+                    for idx in range(1, 7)
+                    for line in (
+                        f"[{idx}]",
+                        f"Author {idx}, Coauthor {idx}. Recovered work {idx}. Journal, 20{idx:02d}.",
+                    )
+                ],
+            ]
+        ),
+        fontsize=10,
+    )
+    doc.save(str(pdf_path))
+    doc.close()
+
+    monkeypatch.setattr(
+        quality_repair,
+        "reference_ordered_page_text",
+        lambda *_args, **_kwargs: "REFERENCES\n[1]\nDamaged column ordering without a reference chain.",
+    )
+
+    recovered, count = quality_repair._extract_pdf_reference_markdown(pdf_path)
+
+    assert count == 6
+    assert "[1] Author 1" in recovered
+    assert "[6] Author 6" in recovered
+
+
+def test_missing_page_recovery_uses_marker_and_low_overlap_source_evidence(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from kb.converter import quality_repair
+
+    pdf_path = tmp_path / "source-pages.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nfixture")
+    md_path = tmp_path / "source-pages.en.md"
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 8 -->\nStable page eight prose.",
+            "<!-- kb_page: 9 -->\nTruncated page nine prose.\n\n## References",
+            "<!-- kb_page: 10 -->\n[1] Stable reference.",
+            "<!-- kb_page: 22 -->\n[112] Stable reference.",
+            "<!-- kb_page: 24 -->\n## A Appendix",
+        ]
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_source_page_coverage_quality",
+        lambda *_args, **_kwargs: {"missing_source_pages": []},
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_page_alignment_quality",
+        lambda *_args, **_kwargs: {"missing_pdf_page_markers": [23]},
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_source_page_anchor_alignment_quality",
+        lambda *_args, **_kwargs: {
+            "source_page_anchor_issues": [
+                {
+                    "page": 9,
+                    "reason": "page_anchor_segment_low_source_overlap",
+                    "segment_coverage": 0.01,
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_pdf_page_fallback_markdown",
+        lambda _pdf, page_no: (
+            f"<!-- kb_page: {page_no} -->\n\nAuthoritative source page {page_no} prose."
+        ),
+    )
+
+    repaired, changed = quality_repair._recover_missing_source_pages_from_pdf_text(
+        original,
+        md_path,
+        pdf_path,
+    )
+
+    assert changed is True
+    assert repaired.count("<!-- kb_page: 9 -->") == 1
+    assert repaired.count("<!-- kb_page: 23 -->") == 1
+    assert repaired.index("Authoritative source page 9 prose.") < repaired.index("## References")
+    assert repaired.index("<!-- kb_page: 22 -->") < repaired.index("<!-- kb_page: 23 -->")
+    assert repaired.index("<!-- kb_page: 23 -->") < repaired.index("<!-- kb_page: 24 -->")
+
+
 def test_cache_reference_backfill_replaces_unheaded_raw_run_before_biographies(tmp_path: Path):
     from kb.converter import quality_repair
 
@@ -3317,6 +3571,103 @@ def test_numbered_section_regression_requires_source_review(tmp_path: Path) -> N
     assert report["repair_plan"]["action"] == "review"
 
 
+def test_source_backed_repair_restores_dropped_parent_section_numbers(tmp_path: Path) -> None:
+    fitz = __import__("fitz")
+    pdf_path = tmp_path / "Dropped Parent Number.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text(
+        (72, 72),
+        "2.3. Quantization Aware Training\n"
+        "Stable source prose for the subsection.\n"
+        "2.4. Compute Infrastructure\n"
+        "More stable source prose.\n"
+        "3. Instruction-Tuning",
+    )
+    pdf.save(str(pdf_path))
+    pdf.close()
+
+    md_path = tmp_path / "Dropped Parent Number.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Paper",
+            "## 2. Model Architecture",
+            "Architecture prose.",
+            "## 3. Quantization Aware Training",
+            "Stable source prose for the subsection.",
+            "## 4. Compute Infrastructure",
+            "More stable source prose.",
+            "## 3. Instruction-Tuning",
+            "Post-training prose.",
+        ]
+    )
+    md_path.write_text(original, encoding="utf-8")
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["out_of_order_sections"],
+        source_pdf_path=pdf_path,
+        allow_source_pdf_inference=False,
+    )
+
+    assert result["changed"] is True, result
+    assert result["unsafe"] is False
+    assert "restore_numbered_headings_from_pdf" in result["applied"]
+    assert "### 2.3. Quantization Aware Training" in result["repaired_text"]
+    assert "### 2.4. Compute Infrastructure" in result["repaired_text"]
+    assert "## 3. Instruction-Tuning" in result["repaired_text"]
+    assert "out_of_order_sections" not in result["remaining_issue_codes"]
+
+
+def test_source_backed_repair_demotes_small_font_numbered_footnote_heading(tmp_path: Path) -> None:
+    fitz = __import__("fitz")
+    pdf_path = tmp_path / "Promoted Footnote.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page()
+    page.insert_text((72, 72), "1 Introduction", fontsize=14)
+    page.insert_text((72, 105), "2 Methods", fontsize=14)
+    page.insert_text((72, 138), "4 As detailed in the supplementary presentation.", fontsize=9)
+    page.insert_text((72, 171), "3 Results", fontsize=14)
+    page.insert_text((72, 204), "4 Conclusion", fontsize=14)
+    pdf.save(str(pdf_path))
+    pdf.close()
+
+    md_path = tmp_path / "Promoted Footnote.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Paper",
+            "## 1 Introduction",
+            "Introductory prose.",
+            "## 2 Methods",
+            "Method prose.",
+            "## 4 As detailed in the supplementary presentation.",
+            "## 3 Results",
+            "Result prose.",
+            "## 4 Conclusion",
+        ]
+    )
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["out_of_order_sections"],
+        source_pdf_path=pdf_path,
+        allow_source_pdf_inference=False,
+    )
+
+    repaired = str(result["repaired_text"])
+    assert result["changed"] is True, result
+    assert result["unsafe"] is False
+    assert "## 4 As detailed" not in repaired
+    assert "4 As detailed in the supplementary presentation." in repaired
+    assert "## 3 Results" in repaired
+    assert "## 4 Conclusion" in repaired
+    assert "out_of_order_sections" not in result["remaining_issue_codes"]
+
+
 def test_repair_demotes_only_malformed_duplicate_numbered_formula_heading(tmp_path: Path) -> None:
     md_path = tmp_path / "Formula Heading.en.md"
     original = "\n".join(
@@ -3350,6 +3701,41 @@ def test_repair_demotes_only_malformed_duplicate_numbered_formula_heading(tmp_pa
     assert "demote_malformed_numbered_headings" in result["applied"]
     assert "## 2 #" not in result["repaired_text"]
     assert "## 2 Method" in result["repaired_text"]
+    assert "out_of_order_sections" not in result["remaining_issue_codes"]
+
+
+def test_repair_demotes_numbered_loss_equation_heading(tmp_path: Path) -> None:
+    md_path = tmp_path / "Loss Equation Heading.en.md"
+    original = "\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "# Forecasting Paper",
+            "## 1 Introduction",
+            "Introductory prose.",
+            "## 4 Model Architecture",
+            "Loss Function. We minimize the following objective.",
+            "## 1 TrainLoss= N",
+            "$$",
+            r"j = 1 MSE(\hat{y}, y).",
+            "$$",
+            "## 5 Pretraining Details",
+            "Training prose.",
+        ]
+    )
+
+    result = repair_markdown_text(
+        md_path,
+        original,
+        issue_codes=["analyzer_errors", "out_of_order_sections"],
+        allow_source_pdf_inference=False,
+    )
+
+    repaired = str(result["repaired_text"])
+    assert result["changed"] is True, result
+    assert result["unsafe"] is False
+    assert "## 1 TrainLoss= N" not in repaired
+    assert "TrainLoss= N" in repaired
+    assert "## 5 Pretraining Details" in repaired
     assert "out_of_order_sections" not in result["remaining_issue_codes"]
 
 

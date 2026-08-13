@@ -196,6 +196,58 @@ def test_detect_text_reference_opportunities_for_normal_question(monkeypatch) ->
     assert opportunities[0]["ref_num"] == 4
 
 
+def test_detect_reference_opportunity_resolves_verified_author_year_marker(
+    tmp_path, monkeypatch
+) -> None:
+    from kb import paper_guide_reference_opportunities as mod
+
+    source = tmp_path / "modernbert.en.md"
+    source.write_text(
+        "# ModernBERT\n\n<!-- kb_page: 3 -->\n\n## Efficiency Improvements\n\n"
+        "Flash Attention 3 did not include sliding window attention. ModernBERT uses "
+        "Flash Attention 3 for global layers and Flash Attention 2 ( Dao , 2023 ) "
+        "for local layers.\n\n<!-- kb_page: 10 -->\n\n## References\n\n"
+        "Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism "
+        "and work partitioning. In ICLR.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "load_paper_guide_reference_index",
+        lambda _source_path: [
+            {
+                "ref_num": 16,
+                "title": "Flashattention-2: Faster attention with better parallelism and work partitioning",
+                "authors": "Tri Dao",
+                "year": "2023",
+                "text": (
+                    "Tri Dao. 2023. Flashattention-2: Faster attention with better "
+                    "parallelism and work partitioning. In ICLR."
+                ),
+                "reference_style": "author_year",
+                "source_page": 10,
+            }
+        ],
+    )
+
+    opportunities = detect_paper_guide_reference_opportunities(
+        prompt=(
+            "Did ModernBERT invent FlashAttention-2? Identify the upstream work and "
+            "explain its use for local layers."
+        ),
+        answer="ModernBERT uses upstream FlashAttention-2 by Tri Dao.",
+        prompt_family="overview",
+        source_path=str(source),
+    )
+
+    assert len(opportunities) == 1
+    assert opportunities[0]["ref_num"] == 16
+    assert opportunities[0]["context_marker_verified"] is True
+    assert opportunities[0]["reference_style"] == "author_year"
+    assert opportunities[0]["reference_source_page"] == 10
+    assert "Dao , 2023" in opportunities[0]["evidence_quote"]
+
+
 def test_detect_text_reference_opportunities_does_not_reresolve_structured_rows(monkeypatch) -> None:
     from kb import paper_guide_reference_opportunities as mod
 

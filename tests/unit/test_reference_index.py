@@ -686,6 +686,66 @@ def test_build_reference_catalog_from_md_marks_gapped_tail_and_confidence():
     assert float(rows[0].get("parse_confidence") or 0.0) >= 0.70
 
 
+def test_author_year_references_get_internal_ids_without_rewriting_source_style():
+    md_text = (
+        "# Demo\n\n<!-- kb_page: 10 -->\n\n## References\n\n"
+        "Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism "
+        "and work partitioning. In ICLR.\n"
+        "<!-- kb_page: 11 -->\n"
+        "Tri Dao, Dan Fu, Stefano Ermon, Atri Rudra, and Christopher Re. 2022. "
+        "Flashattention: Fast and memory-efficient exact attention with io-awareness. NeurIPS.\n"
+    )
+
+    ref_map = ref_index.extract_references_map_from_md(md_text)
+    catalog = ref_index.build_reference_catalog_from_md(md_text, source_name="demo.en.md")
+
+    assert sorted(ref_map) == [1, 2]
+    assert not ref_map[1].startswith("[1]")
+    rows = list(catalog.get("refs") or [])
+    assert rows[0]["reference_style"] == "author_year"
+    assert rows[0]["synthetic_reference_number"] is True
+    assert rows[0]["source_page"] == 10
+    assert rows[0]["title"].startswith("Flashattention-2")
+    assert rows[1]["source_page"] == 11
+
+
+def test_reference_index_keeps_author_year_identity_and_reference_page(tmp_path, monkeypatch):
+    src_root = tmp_path / "md"
+    db_dir = tmp_path / "db"
+    paper_dir = src_root / "modernbert"
+    paper_dir.mkdir(parents=True)
+    md_path = paper_dir / "modernbert.en.md"
+    md_path.write_text(
+        "# ModernBERT\n\n<!-- kb_page: 3 -->\n\n"
+        "ModernBERT uses Flash Attention 2 (Dao, 2023) for local attention.\n\n"
+        "<!-- kb_page: 10 -->\n\n## References\n\n"
+        "Tri Dao. 2023. Flashattention-2: Faster attention with better parallelism "
+        "and work partitioning. In ICLR.\n"
+        "Jane Smith and John Doe. 2024. A second complete reference. In Testing.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **_kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *args, **kwargs: [md_path])
+
+    ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=False,
+        enable_title_lookup=False,
+        crossref_time_budget_s=0,
+    )
+    payload = json.loads((db_dir / "references_index.json").read_text(encoding="utf-8"))
+    doc = next(iter(payload["docs"].values()))
+    target = doc["refs"]["1"]
+
+    assert target["title"].startswith("Flashattention-2")
+    assert target["authors"] == "Tri Dao"
+    assert target["year"] == "2023"
+    assert target["reference_style"] == "author_year"
+    assert target["source_page"] == 10
+    assert target["match_method"] == "author_year_catalog"
+
+
 def test_build_reference_index_persists_reference_catalog_and_quality_fields(tmp_path, monkeypatch):
     src_root = tmp_path / "src"
     db_dir = tmp_path / "db"

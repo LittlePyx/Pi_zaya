@@ -13,6 +13,97 @@ from kb.citation_plan import (
 )
 
 
+def test_requested_relation_bundle_keeps_qclfm_two_step_boundary_and_actions(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "qclfm.en.md"
+    source.write_text(
+        "<!-- kb_page: 2 -->\n\n## A. Concept\n\n"
+        "The operation for digital refocusing of a sample placed out of focus by a distance z "
+        "can be achieved using two steps. First, the photon trajectory is reconstructed through "
+        "a ray tracing operation. For microscopic samples, diffraction effects must be taken into "
+        "account. Thus, the second step reverses diffraction by applying a wave propagation of "
+        "distance -z to bring the sample back into focus.\n",
+        encoding="utf-8",
+    )
+    plan = build_citation_plan(
+        prompt=(
+            "这个 quantum correlation light-field microscope 是怎么把离焦样品重新对焦的？"
+        ),
+        answer_hits=[
+            {
+                "text": "A broad QCLFM concept passage.",
+                "meta": {
+                    "source_path": str(source),
+                    "heading_path": "A. Concept",
+                    "same_source_evidence_bundle": True,
+                    "source_passages": [
+                        {
+                            "heading_path": "A. Concept",
+                            "page_start": 2,
+                            "text": "A broad QCLFM concept passage.",
+                        }
+                    ],
+                },
+            }
+        ],
+    )
+    slots = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+
+    assert len(slots) == 1
+    assert slots[0]["page_start"] == slots[0]["page_end"] == 2
+    assert "digital refocusing" in slots[0]["evidence_quote"]
+    assert "two steps" in slots[0]["evidence_quote"]
+    assert "ray tracing" in slots[0]["evidence_quote"]
+    assert "wave propagation" in slots[0]["evidence_quote"]
+    assert slots[0]["evidence_selection_reason"] == "requested_relation_bundle"
+
+
+def test_requested_relation_bundle_keeps_complete_sidd_winner_table_on_one_page(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "simple-baselines.en.md"
+    source.write_text(
+        "<!-- kb_page: 2 -->\n\n## Introduction\n\n"
+        "The proposed methods achieve 40.30 dB PSNR on SIDD.\n\n"
+        "<!-- kb_page: 13 -->\n\n## 5 Experiments / 5.2 Applications\n\n"
+        "**Table 6.** Image Denoising Results on SIDD [1]\n\n"
+        "| Method | Restormer [39] | Baseline ours | NAFNet ours |\n"
+        "| --- | --- | --- | --- |\n"
+        "| PSNR | 40.02 | 40.30 | 40.30 |\n",
+        encoding="utf-8",
+    )
+    plan = build_citation_plan(
+        prompt=(
+            "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR "
+            "最高的模型是谁？如果并列请全部列出。"
+        ),
+        answer_hits=[
+            {
+                "text": "The proposed methods achieve 40.30 dB PSNR on SIDD.",
+                "meta": {
+                    "source_path": str(source),
+                    "heading_path": "Introduction",
+                    "page_start": 2,
+                },
+            }
+        ],
+    )
+    slots = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+
+    assert len(slots) == 1
+    assert slots[0]["page_start"] == slots[0]["page_end"] == 13
+    assert "Table 6" in slots[0]["evidence_quote"]
+    assert "Baseline ours" in slots[0]["evidence_quote"]
+    assert "NAFNet ours" in slots[0]["evidence_quote"]
+    assert slots[0]["evidence_quote"].count("40.30") == 2
+    assert slots[0]["evidence_selection_reason"] == "requested_relation_bundle"
+
+
 def test_source_sentence_records_cache_reuses_and_invalidates_file_versions(
     tmp_path: Path,
 ) -> None:
@@ -40,6 +131,69 @@ def test_source_sentence_records_cache_reuses_and_invalidates_file_versions(
 
     assert refreshed != first
     assert any(page == 7 and "Second, longer" in text for _heading, text, page in refreshed)
+
+
+def test_source_sentence_records_preserve_figure_abbreviation_locator(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "medsam.en.md"
+    source.write_text(
+        "<!-- kb_page: 5 -->\n\n## Results\n\n"
+        "We follow the network architecture in SAM, including an image encoder, "
+        "a prompt encoder, and a mask decoder (Fig. 2b). The image encoder maps "
+        "the input image into an embedding space.\n",
+        encoding="utf-8",
+    )
+
+    records = citation_plan._source_sentence_records(str(source))
+
+    assert any("mask decoder (Fig. 2b)." in sentence for _heading, sentence, _page in records)
+    assert not any(sentence.endswith("(Fig.") for _heading, sentence, _page in records)
+
+
+def test_prompt_alignment_tokenizes_each_source_record_once(monkeypatch, tmp_path: Path) -> None:
+    source = tmp_path / "large-paper.en.md"
+    paragraphs = [
+        (
+            f"Evidence paragraph {index} explains alpha beta gamma delta epsilon "
+            f"mechanism {index} with an explicit, complete supporting sentence."
+        )
+        for index in range(180)
+    ]
+    source.write_text(
+        "# Paper\n\n<!-- kb_page: 2 -->\n\n## Method\n\n" + "\n\n".join(paragraphs),
+        encoding="utf-8",
+    )
+    citation_plan._source_sentence_records_for_signature.cache_clear()
+    citation_plan._source_sentence_ranking_tokens_for_signature.cache_clear()
+    original_ranking_tokens = citation_plan._ranking_tokens
+    calls = 0
+
+    def counted_ranking_tokens(value):
+        nonlocal calls
+        calls += 1
+        return original_ranking_tokens(value)
+
+    monkeypatch.setattr(citation_plan, "_ranking_tokens", counted_ranking_tokens)
+    raw = {
+        "source_path": str(source),
+        "evidence_quote": paragraphs[0],
+        "heading_path": "Paper / Method",
+        "page_start": 2,
+        "block_id": "method-0",
+    }
+    query = "alpha beta gamma delta epsilon mechanism evidence supporting sentence"
+
+    citation_plan._prompt_aligned_source_slot(raw, ranking_texts=[query])
+    records = citation_plan._source_sentence_records(str(source))
+    calls_after_first = calls
+    citation_plan._prompt_aligned_source_slot(raw, ranking_texts=[query])
+    repeated_calls = calls - calls_after_first
+
+    # First use is linear in the source-record count; repeated slots reuse all
+    # record features and tokenize only their small query/current surfaces.
+    assert calls_after_first <= len(records) + 20
+    assert repeated_calls <= 12
 
 
 def test_system_a_slot_keeps_complete_targeted_source_block_over_card_excerpt(
@@ -3675,6 +3829,243 @@ def test_prompt_aligned_source_bundles_requested_table_rows_with_trailing_metric
     assert "Time CPU/GPU = 1.375s/0.047s" in slot["evidence_quote"]
     assert "FPS CPU/GPU = 0.73/21.3" in slot["evidence_quote"]
     assert slot["selection_reason"] == "prompt_aligned_table_rows"
+
+
+def test_prompt_aligned_source_replaces_precise_anchor_missing_absmean_formula(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "bitnet.md"
+    source.write_text(
+        "# BitNet\n\n<!-- kb_page: 2 -->\n\n## Quantization\n\n"
+        "The absmean quantization function scales weights by their average absolute "
+        "value gamma before RoundClip maps them to {-1, 0, +1}.\n\n"
+        "<!-- kb_page: 6 -->\n\n## Results\n\n"
+        "The model obtains strong language modeling accuracy and efficiency.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "BitNet / Results",
+            "evidence_quote": "The model obtains strong language modeling accuracy and efficiency.",
+            "block_id": "wrong-page-six",
+            "page_start": 6,
+        },
+        ranking_texts=["What is the absmean quantization formula and scaling factor gamma?"],
+    )
+
+    assert "absmean quantization" in slot["evidence_quote"]
+    assert "RoundClip" in slot["evidence_quote"]
+    assert slot["page_start"] == 2
+    assert slot["block_id"] == ""
+
+
+def test_prompt_aligned_source_replaces_precise_anchor_missing_dataset_scale(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "sam2.md"
+    source.write_text(
+        "# SAM 2\n\n<!-- kb_page: 2 -->\n\n## Data Engine\n\n"
+        "Our model-in-the-loop data engine let annotators create 35.5M masks for "
+        "50.9K videos, 53x more masks than existing video segmentation datasets.\n\n"
+        "<!-- kb_page: 22 -->\n\n## Ablations\n\n"
+        "A later phase improved quality relative to an earlier annotation phase.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "SAM 2 / Ablations",
+            "evidence_quote": "A later phase improved quality relative to an earlier annotation phase.",
+            "anchor_id": "wrong-page-twenty-two",
+            "page_start": 22,
+        },
+        ranking_texts=["How large is the SAM 2 data engine dataset in videos and masks?"],
+    )
+
+    assert "35.5M masks" in slot["evidence_quote"]
+    assert "50.9K videos" in slot["evidence_quote"]
+    assert slot["page_start"] == 2
+
+
+def test_prompt_aligned_source_prefers_requested_medical_prompt_mechanism_over_abstract(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "medsam.md"
+    source.write_text(
+        "# MedSAM\n\n<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "MedSAM adapts a foundation model for universal medical image segmentation.\n\n"
+        "<!-- kb_page: 5 -->\n\n## Method\n\n"
+        "For a medical target, the bounding box is encoded with positional encoding, "
+        "and the mask decoder uses cross-attention to combine prompt and image embeddings.\n\n"
+        "<!-- kb_page: 12 -->\n\n## Training\n\n"
+        "We trained the model on a large collection of medical images.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "MedSAM / Training",
+            "evidence_quote": "We trained the model on a large collection of medical images.",
+            "block_id": "wrong-training-block",
+            "page_start": 12,
+        },
+        ranking_texts=[
+            "Compare MedSAM medical target bounding boxes, positional encoding, and cross-attention."
+        ],
+        prefer_source_summary=True,
+    )
+
+    assert "positional encoding" in slot["evidence_quote"]
+    assert "cross-attention" in slot["evidence_quote"]
+    assert slot["page_start"] == 5
+
+
+def test_sam2_medsam_transfer_plan_builds_two_page_local_relation_bundles(
+    tmp_path: Path,
+) -> None:
+    sam2 = tmp_path / "sam2.en.md"
+    medsam = tmp_path / "medsam.en.md"
+    sam2.write_text(
+        "# SAM 2\n\n<!-- kb_page: 2 -->\n\n## Figure 1\n\n"
+        "**Figure 1.** SAM 2 uses a streaming memory that stores previous prompts "
+        "and predictions.\n\n"
+        "SAM 2 uses a streaming memory that stores previous prompts and predictions.\n\n"
+        "We employ a data engine to generate training data using our model in the "
+        "loop with annotators.\n\n"
+        "<!-- kb_page: 5 -->\n\n## Figure 3\n\n"
+        "Frames cross-attend to memories from previous frames.\n",
+        encoding="utf-8",
+    )
+    medsam.write_text(
+        "# MedSAM\n\n<!-- kb_page: 5 -->\n\n## Fig. 2b\n\n"
+        "Point-based prompts can introduce ambiguity. "
+        "The prompt encoder transforms user-drawn bounding boxes using positional "
+        "encoding. The mask decoder fuses image and prompt features using "
+        "cross-attention (Fig. 2b).\n\n"
+        "<!-- kb_page: 12 -->\n\n## Training\n\nTraining uses medical images.\n",
+        encoding="utf-8",
+    )
+    answer_hits = [
+        {
+            "text": "SAM 2 bundled evidence",
+            "meta": {
+                "source_path": str(sam2),
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Figure 3",
+                        "page_start": 5,
+                        "score": 100.0,
+                        "text": "Frames cross-attend to memories from previous frames.",
+                    }
+                ],
+            },
+        },
+        {
+            "text": "MedSAM bundled evidence",
+            "meta": {
+                "source_path": str(medsam),
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Training",
+                        "page_start": 12,
+                        "score": 100.0,
+                        "text": "Training uses medical images.",
+                    }
+                ],
+            },
+        },
+    ]
+
+    plan = build_citation_plan(
+        prompt=(
+            "Compare SAM 2 streaming memory and model-in-the-loop data engine "
+            "with MedSAM bounding-box positional encoding and cross-attention."
+        ),
+        answer_hits=answer_hits,
+    )
+    slots = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+
+    assert len(slots) == 2
+    sam_slot = next(
+        slot for slot in slots if Path(slot["source_path"]).name == "sam2.en.md"
+    )
+    med_slot = next(
+        slot for slot in slots if Path(slot["source_path"]).name == "medsam.en.md"
+    )
+    assert sam_slot["page_start"] == sam_slot["page_end"] == 2
+    assert "Figure 1" in sam_slot["heading_path"]
+    assert "streaming memory" in sam_slot["evidence_quote"]
+    assert "Figure 1" in sam_slot["evidence_quote"]
+    assert "data engine" in sam_slot["evidence_quote"]
+    assert "model in the loop" in sam_slot["evidence_quote"]
+    assert med_slot["page_start"] == med_slot["page_end"] == 5
+    assert "Fig. 2b" in med_slot["heading_path"]
+    assert "bounding boxes" in med_slot["evidence_quote"]
+    assert "positional encoding" in med_slot["evidence_quote"]
+    assert "cross-attention" in med_slot["evidence_quote"]
+    assert all(slot["evidence_selection_reason"] == "requested_relation_bundle" for slot in slots)
+
+
+def test_requested_relation_bundle_coalesces_figure_and_pipeline_prose_on_same_page(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "reasoning-model.md"
+    source.write_text(
+        "<!-- kb_page: 6 -->\n\n"
+        "**Figure 2.** The multi-stage pipeline of DeepSeek-R1.\n\n"
+        "## 3. DeepSeek-R1\n\n"
+        "The pipeline is illustrated in Figure 2.\n\n"
+        "In the initial stage, we collect cold-start data. RL training is then "
+        "applied for language consistency. Subsequently, we apply rejection "
+        "sampling and SFT. A secondary RL stage improves helpfulness and "
+        "harmlessness.\n",
+        encoding="utf-8",
+    )
+    answer_hits = [
+        {
+            "text": "pipeline source",
+            "meta": {
+                "source_path": str(source),
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "Figure 2",
+                        "page_start": 6,
+                        "score": 10.0,
+                        "text": "The multi-stage pipeline of DeepSeek-R1.",
+                    }
+                ],
+            },
+        }
+    ]
+
+    plan = build_citation_plan(
+        prompt=(
+            "Walk through the multi-stage DeepSeek-R1 pipeline shown in Figure 2, "
+            "from cold-start data through rejection sampling, SFT, and the final "
+            "helpfulness and harmlessness alignment stage."
+        ),
+        answer_hits=answer_hits,
+    )
+    slots = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+
+    assert len(slots) == 1
+    assert slots[0]["page_start"] == slots[0]["page_end"] == 6
+    assert "Figure 2" in slots[0]["evidence_quote"]
+    assert "cold-start data" in slots[0]["evidence_quote"]
+    assert "rejection sampling" in slots[0]["evidence_quote"]
+    assert "helpfulness" in slots[0]["evidence_quote"]
+    assert slots[0]["compound_same_page_evidence"] is True
 
 
 def test_foveated_intent_promotes_exact_sciadv_source_into_system_a_top_three(

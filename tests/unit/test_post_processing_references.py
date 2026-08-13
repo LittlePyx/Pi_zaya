@@ -1,6 +1,7 @@
 import re
 
 from kb.converter.post_processing import postprocess_markdown
+from kb.converter.post_references import _is_post_references_resume_heading_line
 from kb.converter.reference_markdown import normalize_references_page_text
 
 
@@ -14,6 +15,10 @@ def _refs_tail(md: str) -> str:
     if ref_i < 0:
         return ""
     return "\n".join(lines[ref_i + 1 :]).strip()
+
+
+def test_bare_letter_heading_resumes_appendix_after_references() -> None:
+    assert _is_post_references_resume_heading_line("## A") is True
 
 
 def test_normalize_references_page_text_drops_body_before_references_heading():

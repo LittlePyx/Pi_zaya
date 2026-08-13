@@ -57,7 +57,9 @@ def extract_structured_cite_answer_context_line(
     line = str(source[left:right] or "")
     rel_start = max(0, start - left)
     rel_end = max(rel_start, end - left)
-    boundary_re = re.compile(r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$))")
+    boundary_re = re.compile(
+        r"(?:[;；。！？!?]|(?<!\d)\.(?=\s|$|[A-Z\u4e00-\u9fff]))"
+    )
 
     def _is_abbreviation_period(match: re.Match[str]) -> bool:
         if match.group(0) != ".":

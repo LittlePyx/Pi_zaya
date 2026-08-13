@@ -85,6 +85,59 @@ def test_sam_scale_card_gets_grounded_chinese_guide_and_relevance() -> None:
     assert ui["why_generation"] == "deterministic_grounded"
 
 
+def test_unseen_v2_relation_cards_get_specific_grounded_chinese_copy() -> None:
+    cases = [
+        (
+            "sam2.pdf",
+            "We employ a data engine using our model in the loop. The SA-V dataset "
+            "contains 35.5M masks across 50.9K videos.",
+            ("模型在环", "SA-V", "数据量"),
+        ),
+        (
+            "gemma3.pdf",
+            "The vision encoder is frozen. Each image is represented by 256 image "
+            "tokens, and higher resolution encoders use average pooling.",
+            ("冻结", "256", "平均池化"),
+        ),
+        (
+            "bindgpt.pdf",
+            "Reinforcement Learning uses external feedback from docking software to "
+            "find structures with high binding scores for any given protein.",
+            ("对接软件", "蛋白质", "优化目标"),
+        ),
+        (
+            "timesfm.pdf",
+            "We focus on point forecasting with Mean Squared Error. Probabilistic "
+            "forecasting can use multiple output heads with quantile loss.",
+            ("点预测", "MSE", "概率化扩展"),
+        ),
+        (
+            "kan.pdf",
+            "Start from a large enough KAN and train it with sparsity regularization "
+            "followed by pruning. We sparsify KANs on the node level rather than "
+            "the edge level.",
+            ("sparsity regularization", "node", "edge"),
+        ),
+    ]
+
+    for source_name, evidence, why_terms in cases:
+        ui = _repair_ref_card_copy_locale(
+            {
+                "render_locale": "zh",
+                "summary_kind": "guide",
+                "summary_line": "",
+                "why_line": "",
+                "source_name": source_name,
+                "primary_evidence": {"snippet": evidence},
+            }
+        )
+
+        assert len(ui["summary_line"]) >= 12
+        assert all(term in ui["why_line"] for term in why_terms)
+        assert "置于同一段机制说明中" not in ui["why_line"]
+        assert ui["why_generation"] == "deterministic_grounded"
+
+
 def test_sequential_cs_card_gets_grounded_chinese_guide() -> None:
     evidence = (
         "The first stage involves log_2 log n steps and removes zero components. "
@@ -142,6 +195,31 @@ def test_qclfm_short_evidence_seed_gets_grounded_card_copy() -> None:
     assert "QCLFM" in ui["summary_line"]
     assert "位置—角度/动量关联" in ui["summary_line"]
     assert "双分辨率机制" in ui["why_line"]
+
+
+def test_qclfm_refocus_card_explains_the_specific_two_step_chain() -> None:
+    evidence = (
+        "The operation for digital refocusing can be achieved using two steps. "
+        "First, ray tracing reconstructs the photon trajectory. The second step "
+        "reverses diffraction by applying wave propagation of distance -z."
+    )
+    ui = _repair_ref_card_copy_locale(
+        {
+            "render_locale": "zh",
+            "summary_kind": "guide",
+            "summary_line": "Concept 同时说明 digital refocusing、ray tracing 和 wave propagation。",
+            "why_line": "本节把这些概念置于同一段机制说明中，便于核对它们之间的关系。",
+            "display_name": "arXiv-Quantum correlation light-field microscope",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert all(
+        term in ui["why_line"]
+        for term in ("两步", "ray tracing", "wave propagation")
+    )
+    assert "置于同一段机制说明中" not in ui["why_line"]
+    assert ui["why_generation"] == "deterministic_grounded"
 
 
 def test_three_d_video_daq_block_gets_grounded_relevance_copy() -> None:
@@ -555,6 +633,126 @@ def test_ref_card_locale_contract_keeps_spi_guide_and_relevance_complementary() 
     assert all(term in ui["why_line"] for term in ("DMD", "照明侧", "探测侧", "像面"))
     assert ui["why_line"] != ui["summary_line"]
     assert ui["why_generation"] == "deterministic_grounded"
+
+
+def test_ref_card_locale_contract_keeps_medsam_guide_and_relevance_complementary() -> None:
+    evidence = (
+        "This stands in contrast to point-based prompts. Drawing a bounding box is efficient. "
+        "The prompt encoder transforms the user-drawn bounding boxes into feature "
+        "representations via positional encoding. Finally, the mask decoder fuses the image "
+        "embedding and prompt features using cross - attention."
+    )
+    duplicate = (
+        "本节把“MedSAM”、“a foundation model”、“for promptable medical”置于同一段机制说明中，"
+        "便于核对这些概念之间的关系与作用边界。"
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "medsam.pdf",
+            "heading_path": "Results / MedSAM: a foundation model for promptable medical image segmentation",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": evidence,
+            "why_line": duplicate,
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert all(term in ui["summary_line"] for term in ("边界框", "位置编码", "交叉注意力"))
+    assert all(term in ui["why_line"] for term in ("边界框", "位置编码", "交叉注意力"))
+    assert ui["summary_line"] != ui["why_line"]
+    assert ref_card_hit_quality({"ui_meta": ui})["ok"] is True
+
+
+def test_ref_card_locale_contract_handles_truncated_medsam_architecture_excerpt() -> None:
+    evidence = (
+        "MedSAM: a foundation model for promptable medical image segmentation. "
+        "This stands in contrast to point-based prompts, which can introduce ambiguity, "
+        "particularly when proximate structures resemble each other. We follow the network "
+        "architecture in SAM, including an image encoder, a prompt encoder, and a mask decoder."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "medsam.pdf",
+            "heading_path": "Results / MedSAM architecture",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "MedSAM 沿用 SAM 的三个组件，并指出点提示可能产生歧义。",
+            "why_line": "本节把“MedSAM”、“SAM”置于同一段机制说明中。",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert all(term in ui["why_line"] for term in ("点提示歧义", "图像编码器", "提示编码器", "掩码解码器"))
+    assert ref_card_hit_quality({"ui_meta": ui})["ok"] is True
+
+
+def test_ref_card_locale_contract_explains_deepseek_zero_training_boundary() -> None:
+    evidence = (
+        "DeepSeek-R1-Zero relies exclusively on reinforcement learning without supervised "
+        "fine-tuning. Although DeepSeek-R1-Zero demonstrates excellent reasoning, it faces "
+        "poor readability and language mixing."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "deepseek-r1.pdf",
+            "heading_path": "Abstract",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": "DeepSeek-R1-Zero 以纯强化学习启动，但存在可读性与语言混杂问题。",
+            "why_line": "",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert all(term in ui["why_line"] for term in ("纯强化学习", "可读性", "语言混杂"))
+    assert len(ui["why_line"]) >= 12
+    assert ref_card_hit_quality({"ui_meta": ui})["ok"] is True
+
+
+def test_ref_card_locale_contract_replaces_generic_mechanism_copy_with_source_relation() -> None:
+    cases = [
+        (
+            "mamba.pdf",
+            "Mamba 的 selection mechanism 让 SSM 参数随输入变化。",
+            "We design a selection mechanism by parameterizing the SSM parameters based on "
+            "the input. This allows the model to filter out irrelevant information and "
+            "remember relevant information indefinitely.",
+            ("SSM", "过滤", "记住"),
+        ),
+        (
+            "bitnet.pdf",
+            "BitNet b1.58 的 absmean 量化把权重限制到 {-1, 0, +1}。",
+            "The absmean quantization function scales the weight matrix by its average "
+            "absolute value and applies RoundClip to obtain -1, 0, or +1.",
+            ("absmean", "RoundClip", "三值"),
+        ),
+        (
+            "sam2.pdf",
+            "SAM 2 以流式记忆处理跨帧信息，并由数据引擎形成标注闭环。",
+            "Figure 1. SAM 2 uses a streaming memory for previous prompts and predictions. "
+            "Its data engine uses the model in the loop with annotators.",
+            ("Figure 1", "流式记忆", "数据引擎"),
+        ),
+    ]
+    generic = "本节把“Method”、“mechanism”置于同一段机制说明中，便于核对这些概念之间的关系与作用边界。"
+
+    for display_name, summary, evidence, required_terms in cases:
+        ui = attach_ref_card_polish_contract(
+            {
+                "display_name": display_name,
+                "heading_path": "Method",
+                "summary_kind": "guide",
+                "render_locale": "zh",
+                "summary_line": summary,
+                "why_line": generic,
+                "primary_evidence": {"snippet": evidence},
+            }
+        )
+
+        assert all(term in ui["why_line"] for term in required_terms)
+        assert ui["summary_line"] != ui["why_line"]
+        assert ref_card_hit_quality({"ui_meta": ui})["ok"] is True
 
 
 def test_ref_card_locale_contract_explains_perovskite_scope_boundary() -> None:

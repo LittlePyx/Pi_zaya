@@ -24,6 +24,7 @@ from tools.research_qa.run_research_qa_eval import (
     _refs_payload_is_terminal_for_case,
     _ref_hit_locale_failures,
     _timing_summary,
+    _terminal_message_render_needs_refresh,
     evaluate_retrieval_coverage,
     evaluate_replay_rows,
     load_fixture,
@@ -35,6 +36,62 @@ from tools.research_qa.run_research_qa_eval import (
     validate_fixture_contracts,
     validate_fixture_sources,
 )
+
+
+def test_terminal_message_render_refresh_detects_full_refs_race() -> None:
+    expected = {
+        "requiredCitationDocIds": ["gemma3"],
+        "requiredRouteCounts": {"system_a": 1, "system_b": 0},
+    }
+    stale = [
+        {
+            "id": 9,
+            "role": "assistant",
+            "content": "Gemma 3 freezes the vision encoder [1].",
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "rendered_body": "Gemma 3 freezes the vision encoder [1].",
+                        "cite_details": [],
+                    }
+                }
+            },
+        }
+    ]
+    ready = [
+        {
+            "id": 9,
+            "role": "assistant",
+            "content": "Gemma 3 freezes the vision encoder [1].",
+            "meta": {
+                "paper_guide_contracts": {
+                    "render_packet": {
+                        "rendered_body": (
+                            "Gemma 3 freezes the vision encoder "
+                            "[1](#kb-cite-gemma)."
+                        ),
+                        "cite_details": [
+                            {
+                                "anchor": "kb-cite-gemma",
+                                "citation_route": "system_a",
+                            }
+                        ],
+                    }
+                }
+            },
+        }
+    ]
+
+    assert _terminal_message_render_needs_refresh(
+        stale,
+        assistant_msg_id=9,
+        expected=expected,
+    ) is True
+    assert _terminal_message_render_needs_refresh(
+        ready,
+        assistant_msg_id=9,
+        expected=expected,
+    ) is False
 
 
 def test_contains_term_normalizes_reader_visible_math_and_locator_variants():
@@ -739,6 +796,41 @@ def test_source_grounded_contract_ignores_inline_math_delimiters(tmp_path):
                             "docId": "paper",
                             "sourcePage": 2,
                             "evidenceTerms": ["p frequencies simultaneously"],
+                        }
+                    ],
+                    "requiredLocateContracts": [],
+                },
+            }
+        ],
+        forbidden_phrases=[],
+    )
+
+    assert validate_fixture_sources(fixture, db_root=tmp_path) == []
+
+
+def test_source_grounded_contract_ignores_markdown_and_tex_presentation_markup(tmp_path):
+    source_dir = tmp_path / "paper"
+    source_dir.mkdir()
+    (source_dir / "paper.en.md").write_text(
+        "<!-- kb_page: 2 -->\n"
+        "We adopt an *absmean* quantization function with "
+        "$\\gamma = \\frac{1}{nm} \\sum_{ij} |W_{ij}|$.\n",
+        encoding="utf-8",
+    )
+    fixture = ResearchQaFixture(
+        db_root=str(tmp_path),
+        docs=[{"id": "paper", "dir": "paper", "file": "paper"}],
+        cases=[
+            {
+                "id": "grounded-markup",
+                "sourceGrounded": True,
+                "expected": {
+                    "claimEvidenceContracts": [
+                        {
+                            "id": "claim",
+                            "docId": "paper",
+                            "sourcePage": 2,
+                            "evidenceTerms": ["absmean quantization", "|Wij|"],
                         }
                     ],
                     "requiredLocateContracts": [],

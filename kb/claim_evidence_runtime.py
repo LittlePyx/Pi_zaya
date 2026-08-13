@@ -26,7 +26,13 @@ _HEADING_RE = re.compile(r"^\s*#{1,6}\s+")
 # Markdown quotes are evidence excerpts, not answer claims.  Excluding them
 # prevents the claim repair pass from appending a System-A marker to text that
 # is already displayed as the supporting source quotation.
-_TABLE_OR_CODE_RE = re.compile(r"^\s*(?:\||>|```|~~~|<!--)")
+_TABLE_OR_CODE_RE = re.compile(
+    r"^\s*(?:\||>|```|~~~|<!--|"
+    # A display-math payload is an atomic answer unit.  Line-oriented claim
+    # repair must never append a citation inside TeX or delete only one side
+    # of an equation; the surrounding prose carries the clickable marker.
+    r"\\(?:text|frac|sum|prod|int|begin|end|left|right|hat|bar|mathbf|mathrm)\b)"
+)
 _LIST_PREFIX_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)、]\s*)")
 _NUMBER_RE = re.compile(
     r"(?<![A-Za-z])\d+(?:\.\d+)?(?:\s*(?:%|dB|nm|μm|um|mm|cm|Hz|kHz|MHz|GHz|fps|帧/秒|帧|倍))?",
@@ -40,7 +46,10 @@ _RISK_RE = re.compile(
     r"\b(?:show(?:s|ed)?|demonstrat(?:e|es|ed)|achiev(?:e|es|ed)|improv(?:e|es|ed)|reduc(?:e|es|ed)|"
     r"outperform(?:s|ed)?|caus(?:e|es|ed)|use(?:s|d)?|employ(?:s|ed)?|introduc(?:e|es|ed)|"
     r"include(?:s|d)?|model(?:s|ed)?|train(?:s|ed)?|validat(?:e|es|ed)|report(?:s|ed)?|"
-    r"enable(?:s|d)?|solve(?:s|d)?|trade[- ]?off|limitation|does\s+not|not\s+validated|lack(?:s|ed)?)\b)",
+            r"enable(?:s|d)?|allow(?:s|ed)?|solve(?:s|d)?|propagat(?:e|es|ed|ing)|"
+            r"predict(?:s|ed|ing)?|store(?:s|d|ing)?|accept(?:s|ed|ing)?|"
+            r"follow(?:s|ed|ing)?|update(?:s|d|ing)?|recover(?:s|ed|ing)?|restart(?:s|ed|ing)?|"
+            r"trade[- ]?off|limitation|does\s+not|not\s+validated|lack(?:s|ed)?)\b)",
     flags=re.IGNORECASE,
 )
 _OPTIMIZATION_DETAIL_RE = re.compile(
@@ -345,6 +354,12 @@ def _claim_units(answer: str) -> list[str]:
             line_index += 1
             continue
         if not in_fence and stripped == "$$":
+            previous_index = line_index - 1
+            while previous_index >= 0 and not lines[previous_index].strip():
+                previous_index -= 1
+            previous_surface = (
+                lines[previous_index].strip() if previous_index >= 0 else ""
+            )
             math_lines: list[str] = []
             line_index += 1
             while line_index < len(lines) and lines[line_index].strip() != "$$":
@@ -363,6 +378,43 @@ def _claim_units(answer: str) -> list[str]:
             while next_index < len(lines) and not lines[next_index].strip():
                 next_index += 1
             next_surface = lines[next_index].strip() if next_index < len(lines) else ""
+            equation_source_note = bool(
+                re.search(
+                    r"(?i)(?:\u5f0f\s*[（(]?\d+|equation\s*[（(]?\d+)"
+                    r".{0,100}(?:\u6587\u732e|\u6765\u6e90|source|paper)",
+                    next_surface,
+                )
+            )
+            equation_source_note = equation_source_note or bool(
+                re.search(
+                    r"(?i)(?:\u5f0f\s*[\(\uff08]?\s*\d+\s*[\)\uff09]?|"
+                    r"equation\s*\(?\s*\d+\s*\)?)"
+                    r".{0,140}(?:\u6587\u732e|\u6765\u6e90|source|paper)",
+                    next_surface,
+                )
+            )
+            if equation_source_note and not _CITATION_RE.search(next_surface):
+                marker_index = next_index + 1
+                while marker_index < len(lines) and not lines[marker_index].strip():
+                    marker_index += 1
+                marker_surface = (
+                    lines[marker_index].strip() if marker_index < len(lines) else ""
+                )
+                if _CITATION_RE.search(marker_surface):
+                    # Reuse the existing adjacent-definition path below. The
+                    # ``where`` prefix is internal to auditing; neither the
+                    # answer nor the visible source note is rewritten.
+                    next_surface = f"where {next_surface} {marker_surface}"
+            if (
+                equation_source_note
+                and _CITATION_RE.search(next_surface)
+                and not next_surface.lower().startswith("where ")
+            ):
+                # A generated equation-source note can keep its clickable
+                # marker on the same line. Prefix it only in the internal audit
+                # surface so the display equation inherits that marker through
+                # the existing adjacent-definition path.
+                next_surface = f"where {next_surface}"
             if (
                 math_surface
                 and re.match(r"^(?:其中|式中|where\b|with\b)", next_surface, flags=re.IGNORECASE)
@@ -370,6 +422,23 @@ def _claim_units(answer: str) -> list[str]:
             ):
                 adjacent_markers = " ".join(_CITATION_RE.findall(next_surface))
                 math_surface = f"{math_surface} {adjacent_markers}".strip()
+            if (
+                math_surface
+                and not _CITATION_RE.search(math_surface)
+                and _CITATION_RE.search(previous_surface)
+                and re.search(
+                    r"(?i)(?:[:：]\s*|(?:公式|计算|定义|缩放|量化|表示|写为|"
+                    r"得到|除以|等于|为|其中(?:.{0,20}定义)?|式中)|(?:formula|equation|defined|calculated|"
+                    r"given\s+by|written\s+as|quantiz|scal(?:e|ed|ing)|divide[sd]?\s+by))",
+                    _CITATION_RE.sub(" ", previous_surface),
+                )
+            ):
+                # A citation on the immediately preceding prose can explicitly
+                # introduce the display formula that follows.  Preserve that
+                # conventional citation scope in the audit instead of forcing
+                # a link inside TeX (which breaks Markdown math rendering).
+                preceding_markers = " ".join(_CITATION_RE.findall(previous_surface))
+                math_surface = f"{math_surface} {preceding_markers}".strip()
             if len(math_surface) >= 10:
                 units.append(math_surface)
             continue
@@ -762,15 +831,28 @@ def _mentioned_source_hit_indexes(
 
 
 def _explicit_per_source_evidence_request(prompt: str, *, source_count: int) -> bool:
-    return bool(
-        int(source_count or 0) >= 4
+    count = int(source_count or 0)
+    surface = str(prompt or "")
+    explicit_each = bool(
+        count >= 4
         and re.search(
             r"(?:\u6bcf(?:\u4e00)?(?:\u7bc7|\u4e2a)(?:\u8bba\u6587|\u6587\u732e)?|"
             r"\u9010\u7bc7|each\s+paper|per[-\s]+paper)",
-            str(prompt or ""),
+            surface,
             flags=re.IGNORECASE,
         )
     )
+    explicit_comparison = bool(
+        count >= 2
+        and re.search(
+            r"(?:对比|比较|区别|差异|不要.{0,24}混|"
+            r"\bcompare\b|\bcontrast\b|\bdiffer(?:ence|ent)\b|"
+            r"\bdo\s+not\s+(?:mix|conflate)\b)",
+            surface,
+            flags=re.IGNORECASE,
+        )
+    )
+    return bool(explicit_each or explicit_comparison)
 
 
 def _strict_section_factual_candidate(segment: str) -> bool:
@@ -1179,6 +1261,16 @@ def _support_score(
         (
             re.compile(r"正交(?:的|组合)|\borthogonal(?:ly)?(?: combin| design| dimension)", re.I),
             re.compile(r"正交(?:的|组合)|\borthogonal(?:ly)?(?: combin| design| dimension)", re.I),
+        ),
+        (
+            re.compile(
+                r"(?:二值掩码|binary\s+masks?).{0,48}(?:拼接|连接|作为.{0,12}输入|concatenat|input)",
+                re.I,
+            ),
+            re.compile(
+                r"(?:二值掩码|binary\s+masks?).{0,48}(?:拼接|连接|作为.{0,12}输入|concatenat|input)",
+                re.I,
+            ),
         ),
     )
     explicit_relation_requirements = (

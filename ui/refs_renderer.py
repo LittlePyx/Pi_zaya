@@ -5075,7 +5075,7 @@ def _system_b_reference_index_fallback_is_grounded(detail: dict) -> bool:
 
 
 def _relocate_trailing_display_math_citations(md: str) -> str:
-    """Move answer citations out of tagged display math so they can be linked."""
+    """Move unambiguous trailing answer citations out of display math."""
 
     text = str(md or "")
     if "$$" not in text or "[" not in text:
@@ -5086,8 +5086,9 @@ def _relocate_trailing_display_math_citations(md: str) -> str:
     pending: list[str] = []
     math_open_index = -1
     trailing_re = re.compile(
-        r"^(?P<equation>.*(?:\\tag\{[^}\n]+\}|\\end\{(?:aligned|gathered|split|equation\*?)\})"
-        r"\s*[,.]?)\s+(?P<markers>(?:\[\d{1,5}\]\s*)+)$"
+        r"^(?P<equation>.*(?:(?:\\tag\{[^}\n]+\}|"
+        r"\\end\{(?:aligned|gathered|split|equation\*?)\})\s*[,.]?|[,.;]))"
+        r"\s+(?P<markers>(?:\[\d{1,5}\]\s*)+)$"
     )
     for line in lines:
         if line.strip() == "$$":
@@ -5197,10 +5198,14 @@ def _annotate_inpaper_citations_with_hover_meta(
     visible_system_a_evidence_keys: set[str] = set()
     plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
     plan_system_a_slots: list[dict] = []
+    plan_system_b_slots: list[dict] = []
     for plan_slot_index, slot in enumerate(list(plan.get("slots") or [])):
         if not isinstance(slot, dict):
             continue
         if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
+            slot_copy = dict(slot)
+            slot_copy["_citation_plan_slot_index"] = int(plan_slot_index)
+            plan_system_b_slots.append(slot_copy)
             continue
         slot_copy = dict(slot)
         # Keep an internal stable identity for budget accounting. Separate
@@ -5209,6 +5214,30 @@ def _annotate_inpaper_citations_with_hover_meta(
         # share one System-A budget entry.
         slot_copy["_citation_plan_slot_index"] = int(plan_slot_index)
         plan_system_a_slots.append(slot_copy)
+
+    def _plan_slot_for_system_b(sid: str, n: int, source_path: str) -> dict:
+        source_sid = _source_cite_id(source_path).lower()
+        if not source_sid or source_sid != str(sid or "").strip().lower():
+            return {}
+        for slot in plan_system_b_slots:
+            slot_source = str(
+                slot.get("source_path") or slot.get("sourcePath") or ""
+            ).strip()
+            if slot_source and _source_cite_id(slot_source).lower() != source_sid:
+                continue
+            candidate_refs: set[int] = set()
+            for raw_num in list(slot.get("candidate_refs") or []):
+                try:
+                    candidate_refs.add(int(raw_num))
+                except (TypeError, ValueError):
+                    continue
+            for example in list(slot.get("candidate_cite_examples") or []):
+                for match in _STRUCT_CITE_RE.finditer(str(example or "")):
+                    if str(match.group(1) or "").strip().lower() == source_sid:
+                        candidate_refs.add(int(match.group(2) or 0))
+            if int(n) in candidate_refs:
+                return slot
+        return {}
 
     def _plan_source_key(value: object) -> str:
         name = str(value or "").replace("\\", "/").rsplit("/", 1)[-1].lower()
@@ -5897,6 +5926,85 @@ def _annotate_inpaper_citations_with_hover_meta(
             detail["routing_reason"] = "structured_cite"
             detail["routing_confidence"] = 0.9
             _enrich_system_b_detail_from_answer_context(detail, token_start=int(pos), token_end=token_end)
+            plan_slot = _plan_slot_for_system_b(sid, int(n), sp)
+            plan_grounding = (
+                plan_slot.get("grounding_contract")
+                if isinstance(plan_slot.get("grounding_contract"), dict)
+                else {}
+            )
+            if plan_slot and bool(plan_grounding.get("same_context_reference")) and bool(
+                plan_grounding.get("context_marker_verified")
+            ):
+                plan_context = re.sub(
+                    r"\s+",
+                    " ",
+                    str(
+                        plan_slot.get("evidence_quote")
+                        or plan_slot.get("evidenceQuote")
+                        or ""
+                    ).strip(),
+                )
+                if plan_context:
+                    detail["citation_context"] = plan_context[:520]
+                    detail["citation_context_source"] = "citation_plan_same_context"
+                    detail["evidence_quote"] = plan_context[:520]
+                    detail["evidence_source"] = "citation_plan_same_context"
+                    detail["citation_plan_evidence_quote"] = plan_context[:520]
+                    detail["summary_line"] = plan_context[:360]
+                    detail["summary_source"] = "citation_plan_same_context"
+                topic_key = re.sub(
+                    r"[^0-9a-z\u4e00-\u9fff]+",
+                    "",
+                    str(plan_slot.get("topic") or "").lower(),
+                )
+                answer_paragraph = normalize_inline_markdown(
+                    _STRUCT_CITE_RE.sub("", str(seg or ""))
+                )
+                answer_sentences = [
+                    str(match.group(0) or "").strip()
+                    for match in re.finditer(
+                        r"[^.!?。！？]+(?:[.!?。！？]+|$)", answer_paragraph
+                    )
+                    if str(match.group(0) or "").strip()
+                ]
+                authors = evidence_alignment_tokens(str(ref.get("authors") or ""))
+                current_claim_key = re.sub(
+                    r"[^0-9a-z\u4e00-\u9fff]+",
+                    "",
+                    str(detail.get("answer_claim") or "").lower(),
+                )
+                related_sentences: list[str] = []
+                for sentence in answer_sentences:
+                    sentence_key = re.sub(
+                        r"[^0-9a-z\u4e00-\u9fff]+", "", sentence.lower()
+                    )
+                    sentence_tokens = evidence_alignment_tokens(sentence)
+                    if (
+                        topic_key
+                        and topic_key in sentence_key
+                        or authors
+                        and sentence_tokens.intersection(authors)
+                        or current_claim_key
+                        and (
+                            current_claim_key in sentence_key
+                            or sentence_key in current_claim_key
+                        )
+                    ):
+                        related_sentences.append(sentence)
+                widened_claim = " ".join(related_sentences[:3]).strip()
+                if widened_claim:
+                    detail["answer_claim"] = widened_claim[:420]
+                reference_page = int(plan_slot.get("reference_source_page") or 0)
+                reference_locator = f"References / [{int(n)}]"
+                if reference_page > 0:
+                    reference_locator += f" / p. {reference_page}"
+                    detail["page_start"] = reference_page
+                    detail["page_end"] = reference_page
+                detail["heading_path"] = "References"
+                detail["location_label"] = reference_locator
+                detail["citation_context_location_label"] = reference_locator
+                detail["routing_reason"] = "citation_plan_same_context"
+                detail["routing_confidence"] = 0.98
             if not _claim_citation_budget(detail):
                 return ""
             title_attr = _citation_hover_title(src_name, int(n), ref)
@@ -6811,6 +6919,42 @@ def _annotate_inpaper_citations_with_hover_meta(
                 evidence_quote=evidence_quote,
                 source_name=src_name,
             )
+            equation_source_note = re.search(
+                r"(?i)(?:\u5f0f\s*\(?\s*(\d+)\s*\)?|"
+                r"equation\s*\(?\s*(\d+)\s*\)?)"
+                r".{0,140}(?:\u6587\u732e|\u6765\u6e90|source|paper)",
+                answer_claim,
+            )
+            equation_tag = next(
+                (
+                    str(group or "").strip()
+                    for group in equation_source_note.groups()
+                    if str(group or "").strip()
+                ),
+                "",
+            ) if equation_source_note else ""
+            if (
+                bool(binding.get("suppress_link"))
+                and equation_tag
+                and re.search(
+                    rf"\\tag\{{\s*{re.escape(equation_tag)}\s*\}}",
+                    str(evidence_quote or snippet or ""),
+                )
+            ):
+                # This note is generated only after the equation matcher has
+                # mapped a displayed tag to the selected source hit. Bind its
+                # outside-the-math marker to that verified equation instead of
+                # rejecting the short locator sentence as a generic claim.
+                binding = {
+                    "status": "grounded",
+                    "confidence": 1.0,
+                    "suppress_link": False,
+                    "reason": (
+                        f"Displayed Equation ({equation_tag}) was matched to the "
+                        "same tagged equation in the selected source evidence."
+                    ),
+                    "overlap_terms": [f"Equation ({equation_tag})"],
+                }
             if (not heading) and _looks_front_matter_evidence_ui(evidence_quote):
                 return {
                     "_suppress_link": True,
@@ -7483,12 +7627,22 @@ def _best_eq_source_for_tag(
     if best_i > 0 and best_score >= 0.72:
         return best_i, best_label
 
-    # Fallback: if only one source, assume it's from there.
-    if len(hits or []) == 1:
-        meta0 = (hits[0] or {}).get("meta", {}) or {}
-        src0 = str(meta0.get("source_path") or "").strip()
-        if src0:
-            return 1, _display_source_name(src0)
+    # Multiple retrieval rows can still represent one unambiguous paper. This
+    # is common when one display block contains two tagged equations while the
+    # source index stores each equation in a separate hit. Fall back only when
+    # every usable hit has exactly the same source identity.
+    source_rows: list[tuple[int, str]] = []
+    source_keys: set[str] = set()
+    for index, hit in enumerate(hits or [], start=1):
+        meta = (hit or {}).get("meta", {}) or {}
+        source_path = str(meta.get("source_path") or "").strip()
+        if not source_path:
+            continue
+        source_rows.append((index, source_path))
+        source_keys.add(source_path.replace("\\", "/").casefold())
+    if len(source_keys) == 1 and source_rows:
+        index, source_path = source_rows[0]
+        return index, _display_source_name(source_path)
     return None
 
 
@@ -7539,12 +7693,20 @@ def _annotate_equation_tags_with_sources(md: str, hits: list[dict]) -> str:
             j += 1
         # Annotate under it
         tag_n, inner = block_by_start[i]
+        source_marker = ""
         picked = _best_eq_source_for_tag(inner, tag_n, hits or [])
         if picked:
             _ref_rank, label = picked
             safe_label = str(label or "").strip()
             if safe_label:
-                out.append(f"*（式({int(tag_n)}) 对应命中的库内文献：`{safe_label}`）*")
+                source_marker = f"[{int(_ref_rank)}]"
+                # Keep the marker outside display math and on the same semantic
+                # line as the verified equation-source note. The citation
+                # renderer can then bind it without leaving an isolated token.
+                out.append(
+                    f"*（式({int(tag_n)}) 对应命中的库内文献：`{safe_label}`）* "
+                    f"{source_marker}"
+                )
         out.append("")
         i = j + 1
 

@@ -37,6 +37,8 @@ def _is_post_references_resume_heading_line(text: str) -> bool:
     # Markdown headings: any explicit appendix/supplementary heading should end refs mode.
     if re.match(r"^#{1,6}\s+", st):
         title = re.sub(r"^#{1,6}\s+", "", st).strip()
+        if re.fullmatch(r"[A-Z]\.?", title):
+            return True
         if re.match(
             r"^(?:appendix|appendices|supplementary(?:\s+material)?|supplemental(?:\s+material)?|annex)\b",
             title,

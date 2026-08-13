@@ -76,6 +76,68 @@ _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...]
             re.I,
         ),
     ),
+    (
+        re.compile(r"(?i)\bmasklets?\b"),
+        re.compile(r"(?i)\bmasklets?\b"),
+    ),
+    (
+        re.compile(
+            r"(?i)(?:single\s+click|later\s+frame).{0,100}"
+            r"(?:recover|restart\s+segmentation|from\s+scratch|several\s+clicks)|"
+            r"(?:recover|restart\s+segmentation|from\s+scratch|several\s+clicks)"
+            r".{0,100}(?:single\s+click|later\s+frame)"
+        ),
+        re.compile(
+            r"(?i)(?:single\s+click|later\s+frame).{0,100}"
+            r"(?:recover|restart\s+segmentation|from\s+scratch|several\s+clicks)|"
+            r"(?:recover|restart\s+segmentation|from\s+scratch|several\s+clicks)"
+            r".{0,100}(?:single\s+click|later\s+frame)"
+        ),
+    ),
+    (
+        re.compile(r"(?i)\brecover(?:s|ed|ing)?\s+(?:the\s+)?object\b"),
+        re.compile(r"(?i)\brecover(?:s|ed|ing)?\s+(?:the\s+)?object\b"),
+    ),
+    (
+        re.compile(
+            r"(?i)\brestart\s+segmentation\b|\bfrom\s+scratch\b|"
+            r"\bseveral\s+clicks\b"
+        ),
+        re.compile(
+            r"(?i)\brestart\s+segmentation\b|\bfrom\s+scratch\b|"
+            r"\bseveral\s+clicks\b"
+        ),
+    ),
+    (
+        re.compile(
+            r"(?i)\btwo[- ]way\s+transformer\b|"
+            r"(?:prompt|frame)\s+embeddings?.{0,60}\bupdate|"
+            r"\bupdate.{0,60}(?:prompt|frame)\s+embeddings?"
+        ),
+        re.compile(
+            r"(?i)\btwo[- ]way\s+transformer\b|"
+            r"(?:prompt|frame)\s+embeddings?.{0,60}\bupdate|"
+            r"\bupdate.{0,60}(?:prompt|frame)\s+embeddings?"
+        ),
+    ),
+    (
+        re.compile(
+            r"(?i)(?:ambiguous\s+prompts?|single\s+click).{0,100}"
+            r"(?:multiple\s+(?:compatible\s+)?(?:target\s+)?masks?|highest\s+predicted\s+IoU)|"
+            r"(?:multiple\s+(?:compatible\s+)?(?:target\s+)?masks?|highest\s+predicted\s+IoU)"
+            r".{0,100}(?:ambiguous\s+prompts?|single\s+click)"
+        ),
+        re.compile(
+            r"(?i)(?:ambiguous\s+prompts?|single\s+click).{0,100}"
+            r"(?:multiple\s+(?:compatible\s+)?(?:target\s+)?masks?|highest\s+predicted\s+IoU)|"
+            r"(?:multiple\s+(?:compatible\s+)?(?:target\s+)?masks?|highest\s+predicted\s+IoU)"
+            r".{0,100}(?:ambiguous\s+prompts?|single\s+click)"
+        ),
+    ),
+    (
+        re.compile(r"(?i)\bhighest\s+predicted\s+IoU\b"),
+        re.compile(r"(?i)\bhighest\s+predicted\s+IoU\b"),
+    ),
 )
 
 
@@ -640,6 +702,17 @@ def _strip_structural_locators(value: str) -> str:
         " ",
         surface,
     )
+    # Source-copy answer sections can begin with a bare dotted section number
+    # after a label (``verified source: 5.5. Vision encoder``). That number is
+    # a locator, not a measured value. Keep the rule narrow: it requires a
+    # colon/newline boundary and a title-like English phrase, so quantitative
+    # forms such as ``PSNR: 40.3 dB`` remain facts.
+    surface = re.sub(
+        r"(?:(?<=:)|(?<=：)|(?<=\n))\s*\d+(?:\.\d+)+\.?\s+"
+        r"(?=[A-Z][A-Za-z-]{2,}\s+[A-Za-z-]{2,})",
+        " ",
+        surface,
+    )
     return surface
 
 
@@ -857,6 +930,14 @@ def _system_a_fact_quantities(value: str) -> frozenset[tuple[str, str, str]]:
         token = str(match.group("number") or "")
         raw_unit = str(match.group("unit") or match.group("percent") or "").lower()
         unit = _FACT_UNIT_ALIASES.get(raw_unit, raw_unit)
+        model_designator_number = bool(
+            not unit
+            and re.search(
+                r"(?i)(?:\bSAM|\bGPT|\bYOLO|\bBERT|\bMamba|\bGemma|"
+                r"\bSegment\s+Anything\s+Model)\s*[- ]?\s*$",
+                surface[max(0, match.start() - 40) : match.start()],
+            )
+        )
         is_year_range_value = bool(
             not unit and len(token) == 4 and 1900 <= int(float(token)) <= 2100
         )
@@ -874,7 +955,7 @@ def _system_a_fact_quantities(value: str) -> frozenset[tuple[str, str, str]]:
             if explicit_count:
                 raw_count_unit = str(explicit_count.group("unit") or "").lower()
                 unit = _FACT_UNIT_ALIASES.get(raw_count_unit, raw_count_unit)
-        if not unit and not is_year_range_value:
+        if not unit and not is_year_range_value and not model_designator_number:
             continuation = surface[match.end() : match.end() + 72]
             continuation = re.split(r"[.!?;。！？；]", continuation, maxsplit=1)[0]
             next_quantity_or_metric = re.search(
@@ -892,6 +973,12 @@ def _system_a_fact_quantities(value: str) -> frozenset[tuple[str, str, str]]:
             if count_unit:
                 raw_count_unit = str(count_unit.group(1) or "").lower()
                 unit = _FACT_UNIT_ALIASES.get(raw_count_unit, raw_count_unit)
+        if model_designator_number and not unit:
+            # Model/version suffixes such as ``SAM 2`` are identities, not
+            # measurements.  They must not borrow a distant count word from
+            # prose such as ``across video frames`` and become a false
+            # ``2 frame`` evidence requirement.
+            continue
         if not unit and is_year_range_value:
             metric_context = surface[max(0, match.start() - 20) : match.start()]
             if not re.search(

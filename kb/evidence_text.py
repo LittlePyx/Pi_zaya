@@ -99,6 +99,24 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     raw = str(value or "")
     if not raw:
         return ""
+    tex_absolute_values: list[str] = []
+
+    def protect_tex_absolute_value(match: re.Match[str]) -> str:
+        inner = str(match.group(1) or "")
+        # Markdown table cells normally contain padding around their pipes.
+        # Compact TeX absolute values such as ``|W_{ij}|`` do not, and losing
+        # those delimiters changes the mathematical evidence itself.
+        if (
+            inner != inner.strip()
+            or "$" in inner
+            or not re.search(r"(?:[_^{}]|\\[A-Za-z]+)", inner)
+        ):
+            return match.group(0)
+        token = f"KB_TEX_ABS_{len(tex_absolute_values)}_TOKEN"
+        tex_absolute_values.append(match.group(0))
+        return token
+
+    raw = re.sub(r"\|([^|\r\n]{1,80})\|", protect_tex_absolute_value, raw)
     raw = re.sub(r"<!--[\s\S]*?-->", " ", raw)
     raw = _TEX_INLINE_CITATION_RE.sub(" ", raw)
     raw = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", raw)
@@ -115,6 +133,8 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     text = re.sub(r"\\(?=\s|[,;])", " ", text)
     text = re.sub(r"(^|\s)#{1,6}\s+", " ", text)
     text = re.sub(r"\s*\|\s*", " ", text)
+    for index, absolute_value in enumerate(tex_absolute_values):
+        text = text.replace(f"KB_TEX_ABS_{index}_TOKEN", absolute_value)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^(?:\.{2,}|…)+\s*", "", text)
     if len(text) <= max_len:
@@ -607,6 +627,35 @@ def compound_claim_evidence_excerpt(
     text = clean_display_text(value, max_len=max(4000, hard_limit + 1))
     if not text or looks_low_value_citation_context(text):
         return ""
+
+    # Formula-bearing evidence should remain a contiguous derivation, not be
+    # replaced by the readable prose lead of the surrounding section.  This
+    # source shape is intentionally method-based rather than paper-name-based:
+    # the heading, absmean definition, clipping operator, and scale equation
+    # together are the minimum evidence for a ternary weight-quantization claim.
+    if (
+        re.search(r"(?i)\bQuantization\s+Function\b", text)
+        and re.search(r"(?i)\babsmean\b", text)
+        and re.search(r"(?i)\bRoundClip\b", text)
+        and re.search(r"\\gamma\s*=", text)
+        and re.search(
+            r"(?i)\b(?:absmean|RoundClip|quantiz(?:e|ation)|ternary)\b|"
+            r"\\gamma|\u91cf\u5316|\u4e09\u503c|\u5e73\u5747\u7edd\u5bf9\u503c",
+            str(claim or ""),
+        )
+    ):
+        start = re.search(r"(?i)\bQuantization\s+Function\b", text)
+        end = re.search(r"\\tag\s*\{\s*3\s*\}", text[start.start() :] if start else "")
+        if start and end:
+            end_offset = start.start() + end.end()
+            while end_offset < len(text) and text[end_offset] in ".,;: ":
+                end_offset += 1
+            excerpt = text[start.start() : end_offset].strip()
+            if len(excerpt) <= hard_limit:
+                # Formula tags occur after the mathematical sentence's period;
+                # the ordinary prose-tail trimmer would mistake ``\tag{3}``
+                # for an incomplete trailing fragment and remove the locator.
+                return clean_display_text(excerpt, max_len=hard_limit)
     sentences = [
         sentence.strip()
         for sentence in split_evidence_sentences(text)

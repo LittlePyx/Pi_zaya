@@ -103,6 +103,25 @@ def method_identity_conflicts(claim: object, evidence: object) -> bool:
 # written verbatim in papers; they are never used to generate user-facing prose.
 _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        r"\u7a00\u758f(?:\u5316)?\u6b63\u5219(?:\u5316)?",
+        ("sparsity", "sparse", "regularization"),
+    ),
+    (r"\u526a\u679d", ("pruning", "pruned", "prune")),
+    (
+        r"\u8282\u70b9(?:\u7ea7|.{0,6}\u7c92\u5ea6)",
+        ("node", "level"),
+    ),
+    (
+        r"\u8fb9(?:\u7ea7|.{0,6}\u7c92\u5ea6)",
+        ("edge", "level"),
+    ),
+    (r"\u53ef\u89e3\u91ca", ("interpretability", "interpretable")),
+    (r"边界框|框提示", ("bounding", "boxes", "prompt")),
+    (r"提示编码器|提示编码", ("prompt", "encoder", "encoding")),
+    (r"位置编码", ("positional", "encoding")),
+    (r"交叉注意力", ("cross", "attention")),
+    (r"医学(?:目标|图像)", ("medical", "image")),
+    (
         r"\u65f6\u95f4\u6233\s*token|\u65f6\u95f4\s*token|\u65f6\u5e8f\s*token",
         ("temporal", "timestamp", "token"),
     ),

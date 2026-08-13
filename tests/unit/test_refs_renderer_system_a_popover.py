@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from ui.refs_renderer import (
+    _annotate_equation_tags_with_sources,
     _annotate_inpaper_citations_with_hover_meta,
     _assess_system_a_hit_binding,
     _compact_metric_table_evidence,
@@ -12,6 +13,51 @@ from ui.refs_renderer import (
     _system_a_pick_best_evidence_candidate,
     _system_a_ui_relevance_for_occurrence,
 )
+
+
+def test_equation_source_annotation_includes_clickable_marker_candidate() -> None:
+    rendered = _annotate_equation_tags_with_sources(
+        "$$\n" r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}" "\n$$",
+        [
+            {
+                "text": (
+                    "$$ "
+                    r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}"
+                    " $$"
+                ),
+                "meta": {"source_path": "bitnet.pdf"},
+            }
+        ],
+    )
+
+    assert "bitnet.pdf" in rendered
+    assert "`bitnet.pdf`）* [1]" in rendered
+
+
+def test_equation_source_annotation_accepts_multiple_hits_from_one_paper() -> None:
+    answer = (
+        "$$\n"
+        r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}" "\n"
+        r"\text{RoundClip}(x,a,b)=\max(a,\min(b,\text{round}(x))), \tag{2}" "\n"
+        "$$"
+    )
+    source_path = r"F:\db\bitnet\bitnet.en.md"
+    hits = [
+        {
+            "text": r"$$\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1}$$",
+            "meta": {"source_path": source_path},
+        },
+        {
+            "text": r"$$\text{RoundClip}(x,a,b)=\max(a,\min(b,\text{round}(x))), \tag{2}$$",
+            "meta": {"source_path": source_path},
+        },
+    ]
+
+    rendered = _annotate_equation_tags_with_sources(answer, hits)
+
+    assert "式(1)" in rendered
+    assert "bitnet.pdf" in rendered
+    assert "[1]" in rendered
 
 
 def test_quantitative_parenthetical_example_is_not_mistaken_for_another_paper() -> None:
@@ -3196,3 +3242,39 @@ def test_system_a_does_not_move_scientific_brackets_inside_display_math() -> Non
     )
 
     assert r"x \in [0,1] \tag{2}" in rendered
+
+
+def test_system_a_relocates_comma_terminated_display_math_citation() -> None:
+    source_path = "db/math/formula-paper.en.md"
+    rendered, details = _annotate_inpaper_citations_with_hover_meta(
+        "The source defines x as y plus one:\n$$\nx = y + 1, [1]\n$$",
+        [
+            {
+                "text": "The source defines x as y plus one.",
+                "meta": {
+                    "source_path": source_path,
+                    "heading_path": "Method / Definition",
+                    "ref_answer_citation_num": 1,
+                },
+            }
+        ],
+        canonical_paths=[source_path],
+        citation_plan={
+            "budget": {"system_a": 1, "system_b": 0},
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "candidate_hits": [1],
+                    "source_path": source_path,
+                    "heading_path": "Method / Definition",
+                    "evidence_quote": "The source defines x as y plus one.",
+                }
+            ],
+        },
+        anchor_ns="display-math-comma-citation",
+    )
+
+    assert "x = y + 1," in rendered
+    assert "x = y + 1, [1]" not in rendered
+    assert rendered.count("[1](#kb-cite-") == 1
+    assert len(details) == 1

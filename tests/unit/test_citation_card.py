@@ -1250,6 +1250,31 @@ def test_compound_plan_evidence_keeps_all_verified_source_clauses() -> None:
     assert "demodulated by p LIAs" in detail["evidence_quote"]
 
 
+def test_formula_card_derives_visible_equation_locators_from_source_tags() -> None:
+    detail = compose_citation_card(
+        {
+            "is_inpaper": False,
+            "source_name": "paper.pdf",
+            "heading_path": "2 Quantization Function",
+            "page_start": 2,
+            "location_label": "2 Quantization Function · p. 2",
+            "answer_claim": "RoundClip maps scaled weights to ternary values.",
+            "evidence_quote": (
+                r"\widetilde{W}=\text{RoundClip}(W/\gamma,-1,1), \tag{1} "
+                r"\gamma=\frac{1}{nm}\sum_{ij}|W_{ij}|. \tag{3}"
+            ),
+            "compound_plan_evidence": True,
+            "binding_status": "grounded",
+            "binding_confidence": 1.0,
+        },
+        locale="en",
+    )
+
+    assert "Equation (1)" in detail["card_locator"]
+    assert "Equation (3)" in detail["card_locator"]
+    assert "Equation (1)" in detail["card_view"]["sections"][-1]["text"]
+
+
 def test_citation_card_contract_uses_english_locale_for_system_b_trace_copy() -> None:
     detail = compose_citation_card(
         {

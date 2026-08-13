@@ -58,6 +58,32 @@ def test_verified_prompt_contract_uses_fast_binding_for_cross_language_spad(monk
     assert "已核对页码和原文块" in binding["reason"]
 
 
+def test_verified_plan_binds_chinese_medsam_prompt_mechanism_to_english_evidence() -> None:
+    evidence = (
+        "We follow the network architecture in SAM, including an image encoder, a prompt "
+        "encoder, and a mask decoder. The prompt encoder transforms user-drawn bounding "
+        "boxes into feature representations via positional encoding. Finally, the mask "
+        "decoder fuses image and prompt features using cross-attention."
+    )
+    binding = refs_renderer._assess_system_a_hit_binding(
+        answer_claim=(
+            "MedSAM 把医学目标的框提示通过位置编码与交叉注意力嵌入 SAM 架构。"
+        ),
+        hit={"text": evidence},
+        meta={
+            "citation_plan_evidence_authoritative": True,
+            "citation_plan_evidence_selection_reason": "requested_relation_bundle",
+            "page_start": 5,
+        },
+        heading="MedSAM: a foundation model for promptable medical image segmentation",
+        evidence_quote=evidence,
+        source_name="medsam.pdf",
+    )
+
+    assert binding["status"] == "grounded"
+    assert binding["suppress_link"] is False
+
+
 def test_same_source_plan_prefers_dense_risk_evidence_over_broad_prompt_passage(monkeypatch):
     source_path = "dl-spi.en.md"
     risk = "Data-driven strategies have prolonged training duration and limited generalization ability."
@@ -1024,6 +1050,85 @@ def test_structured_citation_detail_points_to_context_matched_reference(monkeypa
     assert detail["doi"] == "10.1364/OE.15.014013"
     assert "dual-disperser architecture" in detail["title"]
     assert "Wrong Reference" not in str(detail)
+
+
+def test_verified_system_b_plan_promotes_source_context_and_reference_locator(monkeypatch):
+    source_path = "modernbert.en.md"
+    sid = refs_renderer._source_cite_id(source_path)
+
+    def fake_resolve(_index_data, _source_path, ref_num, *, source_sha1=""):
+        del _index_data, _source_path, source_sha1
+        if int(ref_num) != 16:
+            return None
+        return {
+            "source_path": source_path,
+            "source_name": "modernbert.pdf",
+            "ref_num": 16,
+            "ref": {
+                "authors": "Tri Dao",
+                "year": "2023",
+                "title": (
+                    "Flashattention-2: Faster attention with better parallelism "
+                    "and work partitioning"
+                ),
+                "raw": (
+                    "[16] Tri Dao. Flashattention-2: Faster attention with better "
+                    "parallelism and work partitioning. 2023."
+                ),
+            },
+        }
+
+    monkeypatch.setattr(refs_renderer, "_load_reference_index_cached", lambda: {})
+    monkeypatch.setattr(refs_renderer, "_resolve_reference_entry_from_index", fake_resolve)
+    monkeypatch.setattr(refs_renderer, "_display_source_name", lambda _sp: "modernbert.pdf")
+    context = (
+        "ModernBERT uses Flash Attention 3 for global attention layers and "
+        "Flash Attention 2 (Dao, 2023) for local attention layers."
+    )
+    plan = {
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "topic": "FlashAttention-2",
+                "source_path": source_path,
+                "candidate_refs": [16],
+                "candidate_cite_examples": [f"[[CITE:{sid}:16]]"],
+                "evidence_quote": context,
+                "reference_source_page": 10,
+                "grounding_contract": {
+                    "same_context_reference": True,
+                    "context_marker_verified": True,
+                },
+            }
+        ],
+    }
+    md = (
+        "FlashAttention-2 is prior work by Tri Dao (2023). "
+        f"ModernBERT uses the upstream implementation [[CITE:{sid}:16]]."
+    )
+    hits = [{"text": context, "meta": {"source_path": source_path}}]
+
+    out, details = refs_renderer._annotate_inpaper_citations_with_hover_meta(
+        md,
+        hits,
+        anchor_ns="verified-plan",
+        citation_plan=plan,
+    )
+
+    assert "[16](#kb-cite-" in out
+    assert len(details) == 1
+    detail = details[0]
+    assert detail["citation_route"] == "system_b"
+    assert detail["citation_context"] == context
+    assert detail["citation_context_source"] == "citation_plan_same_context"
+    assert "Tri Dao" in detail["answer_claim"]
+    assert "ModernBERT uses the upstream implementation" in detail["answer_claim"]
+    assert detail["heading_path"] == "References"
+    assert detail["page_start"] == detail["page_end"] == 10
+    assert detail["location_label"] == "References / [16] / p. 10"
+    assert detail["system_b_trace_complete"] is True
+    assert "answer_context_only" not in detail["system_b_trace_flags"]
 
 
 def test_structured_system_b_detail_carries_answer_context_and_role(monkeypatch):
