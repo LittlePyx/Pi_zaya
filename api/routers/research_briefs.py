@@ -310,15 +310,10 @@ def generate_research_brief(project_id: str, body: ResearchBriefGenerateBody):
         shelf_items = [item for item in list((shelf or {}).get("items") or []) if isinstance(item, dict)]
         requested_keys = {str(key or "").strip() for key in body.item_keys if str(key or "").strip()}
         if requested_keys:
-            shelf_by_key = {
-                str(item.get("key") or item.get("id") or "").strip(): item
-                for item in shelf_items
-                if str(item.get("key") or item.get("id") or "").strip()
-            }
             unavailable_keys = sorted(
                 key
                 for key in requested_keys
-                if key not in shelf_by_key or not select_research_brief_sources([shelf_by_key[key]])
+                if not select_research_brief_sources(shelf_items, item_keys=[key])
             )
             if unavailable_keys:
                 raise HTTPException(

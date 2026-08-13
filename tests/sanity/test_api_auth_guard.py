@@ -389,15 +389,17 @@ def test_internal_admin_routes_are_hidden_when_public_auth_is_off(monkeypatch, t
         client.post("/api/library/quality/conversion/batch", json={}),
         client.post("/api/library/quality/figure-assets/scan", json={}),
         client.post("/api/library/quality/figure-assets/refresh", json={}),
-        client.post("/api/library/quality/repair", json={}),
         client.get("/api/generate/quality/summary"),
         client.get("/api/generate/internal-session/trace"),
     ]
+    user_quality_repair = client.post("/api/library/quality/repair", json={})
 
     assert maintenance.status_code == 404
     assert issue_listing.status_code == 404
     assert issue_summary.status_code == 404
     assert [res.status_code for res in library_quality_admin] == [404] * len(library_quality_admin)
+    assert user_quality_repair.status_code == 200
+    assert user_quality_repair.json()["requested"] == 0
     assert issue_record.status_code == 200
     assert issue_record.json()["ok"] is True
 

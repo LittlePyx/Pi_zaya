@@ -41,6 +41,7 @@ def test_source_bound_system_a_bibliometrics_uses_source_metadata_not_ref_number
         raise AssertionError("source-bound System A must bypass generic bibliography enrichment")
 
     monkeypatch.setattr(references, "ensure_source_citation_meta", source_meta)
+    monkeypatch.setattr(references, "_source_reference_index_identity_meta", lambda _value: {})
     monkeypatch.setattr(references, "_resolve_public_reference_source_input", lambda value: value)
     monkeypatch.setattr(references, "_pdf_dir", lambda: tmp_path)
     monkeypatch.setattr(references, "_md_dir", lambda: tmp_path)
@@ -104,6 +105,7 @@ def test_source_bound_system_a_bibliometrics_fails_without_bibliography_fallback
         raise AssertionError("unsafe generic bibliography fallback was called")
 
     monkeypatch.setattr(references, "ensure_source_citation_meta", source_meta)
+    monkeypatch.setattr(references, "_source_reference_index_identity_meta", lambda _value: {})
     monkeypatch.setattr(references, "_resolve_public_reference_source_input", lambda value: value)
     monkeypatch.setattr(references, "_pdf_dir", lambda: tmp_path)
     monkeypatch.setattr(references, "_md_dir", lambda: tmp_path)
@@ -156,6 +158,62 @@ def test_source_bound_system_a_bibliometrics_fails_without_bibliography_fallback
         "raw",
     ):
         assert key not in result
+
+
+def test_source_bound_system_a_bibliometrics_prefers_current_indexed_source_doi(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    source_path = str(tmp_path / "informer.en.md")
+
+    monkeypatch.setattr(
+        references,
+        "ensure_source_citation_meta",
+        lambda **_kwargs: {
+            "title": "Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting",
+            "summary_line": "Informer introduces ProbSparse attention for long-sequence forecasting.",
+            "summary_source": "abstract",
+            "summary_provider": "local_markdown",
+            "summary_locale": "en",
+            "summary_quality": {"ok": True, "status": "grounded", "locale": "en"},
+        },
+    )
+    monkeypatch.setattr(
+        references,
+        "_source_reference_index_identity_meta",
+        lambda _value: {
+            "doi": "10.1609/aaai.v35i12.17325",
+            "doi_url": "https://doi.org/10.1609/aaai.v35i12.17325",
+            "doi_identity_source": "source_reference_index",
+            "source_reference_lookup_version": references.REFERENCE_LOOKUP_VERSION,
+            "metadata_repair_status": "repaired",
+            "metadata_changed_fields": ["doi"],
+        },
+    )
+    monkeypatch.setattr(references, "_resolve_public_reference_source_input", lambda value: value)
+    monkeypatch.setattr(references, "_pdf_dir", lambda: tmp_path)
+    monkeypatch.setattr(references, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(references, "_lib_store", lambda: object())
+
+    result = references.get_bibliometrics(
+        references.BibliometricsBody(
+            target_locale="en",
+            meta={
+                "citation_route": "system_a",
+                "is_inpaper": False,
+                "source_path": source_path,
+                "title": "Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting",
+                "doi": "10.18653/v1/d15-1166",
+            },
+        )
+    )
+
+    assert result["doi"] == "10.1609/aaai.v35i12.17325"
+    assert result["doi_url"] == "https://doi.org/10.1609/aaai.v35i12.17325"
+    assert result["doi_identity_source"] == "source_reference_index"
+    assert result["source_reference_lookup_version"] == references.REFERENCE_LOOKUP_VERSION
+    assert result["metadata_repair_status"] == "repaired"
+    assert result["metadata_changed_fields"] == ["doi"]
 
 
 def test_bibliometrics_rejects_local_source_summary_for_reader_reference() -> None:

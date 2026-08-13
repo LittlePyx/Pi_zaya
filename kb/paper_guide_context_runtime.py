@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from pathlib import Path
 
@@ -38,7 +39,11 @@ from kb.paper_guide.router import _resolve_paper_guide_intent
 from kb.paper_guide_retrieval_runtime import _select_paper_guide_deepread_extras
 from kb.paper_guide_shared import _cite_source_id, _source_name_from_md_path
 from kb.paper_guide_target_scope import _build_paper_guide_target_scope
-from kb.retrieval_engine import _deep_read_md_for_context, _top_heading
+from kb.retrieval_engine import (
+    _collect_doc_overview_snippets,
+    _deep_read_md_for_context,
+    _top_heading,
+)
 from kb.retrieval_heuristics import _is_probably_bad_heading
 
 
@@ -242,6 +247,50 @@ def _build_paper_guide_context_records(
     }
 
 
+_PER_SOURCE_EVIDENCE_RE = re.compile(
+    r"(?:每(?:一)?篇(?:论文|文献)?|逐篇|each\s+paper|per[-\s]+paper)",
+    flags=re.IGNORECASE,
+)
+_CONCLUSION_HEADING_RE = re.compile(
+    r"(?:conclusions?|future\s+work|limitations?|discussion)",
+    flags=re.IGNORECASE,
+)
+
+
+def _requests_per_source_evidence(prompt: str, *, source_count: int) -> bool:
+    return bool(
+        int(source_count or 0) >= 4
+        and _PER_SOURCE_EVIDENCE_RE.search(str(prompt or ""))
+    )
+
+
+def _conclusion_deepread_text(
+    md_path: Path,
+    *,
+    deep_read_fn,
+    snippet_chars: int = 900,
+) -> str:
+    hits = deep_read_fn(
+        md_path,
+        "conclusion future work limitation limitations drawback weakness",
+        max_snippets=8,
+        snippet_chars=snippet_chars,
+    )
+    for hit in list(hits or []):
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta", {}) or {}
+        heading = str(
+            meta.get("heading_path")
+            or meta.get("top_heading")
+            or ""
+        ).strip()
+        text = str(hit.get("text") or "").strip()
+        if text and _CONCLUSION_HEADING_RE.search(heading):
+            return text
+    return ""
+
+
 def _apply_paper_guide_deepread_context(
     *,
     ctx_parts: list[str],
@@ -256,6 +305,7 @@ def _apply_paper_guide_deepread_context(
     should_cancel=None,
     on_stage=None,
     deep_read_fn=_deep_read_md_for_context,
+    overview_fn=_collect_doc_overview_snippets,
     select_extras_fn=_select_paper_guide_deepread_extras,
     merge_context_fn=_merge_paper_guide_deepread_context,
     allows_citeless_answer_fn=_paper_guide_allows_citeless_answer,
@@ -273,7 +323,14 @@ def _apply_paper_guide_deepread_context(
 
     deep_begin = time.monotonic()
     fine_query = str(used_query or retrieval_prompt or prompt or "").strip()
-    items = list((doc_first_idx or {}).items())[: min(3, max(1, len(doc_first_idx or {})))]
+    per_source_evidence = _requests_per_source_evidence(
+        prompt or retrieval_prompt or fine_query,
+        source_count=len(doc_first_idx or {}),
+    )
+    doc_cap = 6 if per_source_evidence else 3
+    items = list((doc_first_idx or {}).items())[
+        : min(doc_cap, max(1, len(doc_first_idx or {})))
+    ]
     total = len(items)
     for n, (src, idx0) in enumerate(items, start=1):
         if callable(should_cancel) and should_cancel():
@@ -284,21 +341,38 @@ def _apply_paper_guide_deepread_context(
             break
         if callable(on_stage):
             on_stage(f"deep-read {n}/{total}")
-        extras: list[dict] = []
-        if fine_query:
+        extras2: list[str] = []
+        if per_source_evidence:
+            overview = overview_fn(Path(src), max_n=1, snippet_chars=900)
+            extras2.extend(str(item or "").strip() for item in overview if str(item or "").strip())
+            if str(prompt_family or "").strip().lower() == "strength_limits":
+                conclusion = _conclusion_deepread_text(
+                    Path(src),
+                    deep_read_fn=deep_read_fn,
+                )
+                if conclusion:
+                    extras2.append(conclusion)
+
+        if len(extras2) < 2 and fine_query:
             deep_snippet_cap = 4 if str(prompt_family or "").strip().lower() == "abstract" else 2
-            extras.extend(deep_read_fn(Path(src), fine_query, max_snippets=deep_snippet_cap, snippet_chars=1000))
-        if not extras:
-            continue
-        deep_docs += 1
-        extras2 = select_extras_fn(
-            extras,
-            prompt=(prompt or retrieval_prompt or fine_query),
-            prompt_family=prompt_family,
-            limit=1 if allows_citeless_answer_fn(prompt_family) else 2,
-        )
+            extras = deep_read_fn(
+                Path(src),
+                fine_query,
+                max_snippets=deep_snippet_cap,
+                snippet_chars=1000,
+            )
+            extras2.extend(
+                select_extras_fn(
+                    extras,
+                    prompt=(prompt or retrieval_prompt or fine_query),
+                    prompt_family=prompt_family,
+                    limit=1 if allows_citeless_answer_fn(prompt_family) else 2,
+                )
+            )
+        extras2 = list(dict.fromkeys(text for text in extras2 if text))[:2]
         if not extras2:
             continue
+        deep_docs += 1
         try:
             base = updated_ctx_parts[int(idx0) - 1]
         except Exception:
@@ -321,6 +395,23 @@ def _apply_paper_guide_deepread_context(
                     texts.append(text)
                 if str(prompt_family or "").strip().lower() in {"abstract", "figure_walkthrough"}:
                     card["snippet"] = text
+            if per_source_evidence:
+                try:
+                    answer_hit = answer_hits[int(idx0) - 1]
+                except (IndexError, TypeError, ValueError):
+                    answer_hit = None
+                if isinstance(answer_hit, dict):
+                    answer_meta = (
+                        dict(answer_hit.get("meta") or {})
+                        if isinstance(answer_hit.get("meta"), dict)
+                        else {}
+                    )
+                    source_quotes = answer_meta.setdefault(
+                        "source_deepread_evidence_quotes", []
+                    )
+                    if isinstance(source_quotes, list) and text not in source_quotes:
+                        source_quotes.append(text)
+                    answer_hit["meta"] = answer_meta
         updated_ctx_parts[int(idx0) - 1] = base
 
     return {

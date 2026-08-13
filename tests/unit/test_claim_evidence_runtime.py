@@ -4,6 +4,7 @@ import sys
 import pytest
 
 from kb.claim_evidence_runtime import (
+    _mentioned_source_hit_indexes,
     _split_claim_segments,
     audit_and_repair_claim_evidence,
     claim_evidence_audit,
@@ -82,6 +83,36 @@ def test_final_gate_restores_qclfm_refocus_steps_after_claim_removal() -> None:
     assert all(term in repaired for term in ("QCLFM", "光线追踪", "波传播", "-z", "[1]"))
     assert meta["restored_source_facts"] == 1
     assert meta["minimum_ok"] is True
+
+
+def test_named_source_detection_does_not_treat_generic_transformer_as_a_paper() -> None:
+    hits = [
+        {
+            "text": "Autoformer uses Auto-Correlation for long-term forecasting.",
+            "meta": {"source_name": "Autoformer.pdf"},
+        },
+        {
+            "text": "FEDformer is a frequency enhanced Transformer.",
+            "meta": {"source_name": "FEDformer.pdf"},
+        },
+        {
+            "text": "TimesNet transforms one-dimensional series into 2D space.",
+            "meta": {"source_name": "TimesNet.pdf"},
+        },
+        {
+            "text": "PatchTST uses patches as Transformer input tokens.",
+            "meta": {"source_name": "A Time Series is Worth 64 Words.pdf"},
+        },
+    ]
+
+    assert _mentioned_source_hit_indexes(
+        "Autoformer uses an input length of 96 in the experiment.",
+        hits,
+    ) == [1]
+    assert _mentioned_source_hit_indexes(
+        "PatchTST uses patches as Transformer tokens.",
+        hits,
+    ) == [4]
 
 
 def test_claim_evidence_runtime_does_not_load_legacy_ui_renderer() -> None:
@@ -1858,3 +1889,133 @@ def test_strict_plan_prefers_uniquely_stronger_qclfm_occurrence() -> None:
         item.get("reason") == "uniquely_stronger_evidence"
         for item in meta.get("rebound_repairs", [])
     )
+
+
+def test_explicit_per_paper_sections_cannot_borrow_another_papers_citation() -> None:
+    hits = [
+        {
+            "text": (
+                "PatchTST uses channel-independence, where each channel is a single "
+                "univariate time series that shares the same embedding and Transformer "
+                "weights across all the series."
+            ),
+            "meta": {
+                "source_name": "ICLR-A TIME SERIES IS WORTH 64 WORDS.pdf",
+                "heading_path": "A Time Series is Worth 64 Words: Long-term Forecasting with Transformers / Abstract",
+            },
+        },
+        {
+            "text": (
+                "Autoformer is a decomposition architecture with an Auto-Correlation "
+                "mechanism that discovers dependencies and aggregates similar sub-series."
+            ),
+            "meta": {
+                "source_name": "arXiv-Autoformer-Decomposition.pdf",
+                "heading_path": "Autoformer: Decomposition Transformers with Auto-Correlation / Abstract",
+            },
+        },
+        {
+            "text": (
+                "iTransformer regards independent time series as the variate tokens "
+                "and uses self-attention to capture multivariate correlations."
+            ),
+            "meta": {
+                "source_name": "ICLR-ITRANSFORMER-INVERTED.pdf",
+                "heading_path": "iTransformer: Inverted Transformers / Abstract",
+            },
+        },
+        {
+            "text": (
+                "FEDformer combines Transformer with seasonal-trend decomposition. "
+                "The decomposition method captures the global profile while Transformer "
+                "captures more detailed structures."
+            ),
+            "meta": {
+                "source_name": "FEDformer.pdf",
+                "heading_path": "FEDformer: Frequency Enhanced Decomposed Transformer / Abstract",
+            },
+        },
+        {
+            "text": (
+                "TimesNet uses TimesBlock to transform 1D time series into 2D tensors "
+                "and model intraperiod and interperiod variations."
+            ),
+            "meta": {
+                "source_name": "ICLR-TIMESNET-TEMPORAL-2D.pdf",
+                "heading_path": "TimesNet: Temporal 2D-Variation Modeling / Abstract",
+            },
+        },
+        {
+            "text": (
+                "Informer introduces ProbSparse self-attention, which achieves "
+                "O(L log L) time complexity and memory usage for long sequence "
+                "time-series forecasting."
+            ),
+            "meta": {
+                "source_name": "arXiv-Informer-Beyond-Efficient.pdf",
+                "heading_path": "Informer: Beyond Efficient Transformer / Abstract",
+            },
+        },
+    ]
+    answer = """## Informer
+
+**Core modeling unit**: timestamp token in an encoder-decoder Transformer [3].
+
+**Core modeling unit**: \u65f6\u95f4\u6233\u7ea7token\uff0c\u6bcf\u4e2atoken\u878d\u5408\u540c\u4e00\u65f6\u95f4\u6233\u7684\u591a\u4e2a\u53d8\u91cf [3].
+
+**Long dependency mechanism**: Informer introduces ProbSparse self-attention with O(L log L) complexity.
+
+## FEDformer
+
+The decomposition method captures the global profile while Transformer captures detailed structures.
+
+## PatchTST
+
+**Core modeling unit**: channel-independent univariate series.
+
+**Experiment task**: multivariate long-term forecasting.
+
+**Limitation**: 论文未在检索到的摘要片段中明确陈述局限。
+
+## iTransformer
+
+**Core modeling unit**: independent time series as variate tokens [3].
+
+## Cross-paper comparison
+
+Informer and iTransformer both use temporal tokens, but iTransformer inverts them to variate tokens [3].
+
+Informer uses ProbSparse self-attention for long dependencies [3]."""
+
+    repaired, meta = audit_and_repair_claim_evidence(
+        answer,
+        hits,
+        prompt=(
+            "Compare Informer, Autoformer, FEDformer, PatchTST, TimesNet and "
+            "iTransformer core modeling unit, long dependency mechanism, "
+            "experimental task, and limitation. Each paper must provide "
+            "locatable evidence."
+        ),
+        allowed_citation_numbers={1, 2, 3, 4, 5, 6},
+        drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True,
+    )
+
+    informer_section = repaired.split("## FEDformer", 1)[0]
+    assert "timestamp token" not in informer_section
+    assert "\u65f6\u95f4\u6233\u7ea7token" not in informer_section
+    assert "ProbSparse self-attention" in informer_section
+    assert "[6]" in informer_section
+    assert "global profile" in repaired and "[4]" in repaired
+    assert "channel-independent" in repaired and "[1]" in repaired
+    assert "multivariate long-term forecasting [1]" in repaired
+    assert "未在检索到的摘要片段中明确陈述局限" in repaired
+    assert "variate tokens [3]" in repaired
+    assert "both use temporal tokens" not in repaired
+    assert "Informer uses ProbSparse self-attention for long dependencies [6]" in repaired
+    assert "The current evidence does not directly provide this facet" in repaired
+    assert meta["added_requested_facet_boundaries"] > 0
+    assert meta["section_source_rebound_citations"] >= 2
+    assert meta["dropped_cross_source_claims"] == 3
+    assert meta["minimum_ok"] is True

@@ -127,6 +127,22 @@ def _source_variants(value: object) -> set[str]:
     return {item for item in variants if item}
 
 
+def _shelf_item_request_keys(item: dict[str, Any]) -> set[str]:
+    """Return persisted and pre-normalization keys for one exact shelf item."""
+    keys = {
+        _first_text(item, "key", "id", limit=500),
+    }
+    anchor = _first_text(item, "anchor", limit=500)
+    source = _first_text(item, "sourceName", "source_name", "sourcePath", "source_path", limit=1_200)
+    number = _safe_int(item.get("num"))
+    if anchor and source and number > 0:
+        # React citation cards use this key before persistence. Metadata
+        # hydration can later replace the canonical key with a DOI identity;
+        # retain the exact original alias without relaxing source validation.
+        keys.add(f"{anchor}|{source}|{number}")
+    return {key for key in keys if key}
+
+
 def select_research_brief_sources(
     shelf_items: list[dict[str, Any]],
     *,
@@ -139,8 +155,7 @@ def select_research_brief_sources(
     for raw in list(shelf_items or []):
         if not isinstance(raw, dict):
             continue
-        key = _first_text(raw, "key", "id", limit=500)
-        if requested and key not in requested:
+        if requested and requested.isdisjoint(_shelf_item_request_keys(raw)):
             continue
         source_path = _source_path(raw)
         source_name = _source_name(raw)

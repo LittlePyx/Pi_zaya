@@ -31,7 +31,7 @@ from kb.source_filters import is_excluded_source_path
 INDEX_FILE_NAME = "references_index.json"
 CROSSREF_CACHE_FILE_NAME = "crossref_cache.json"
 REFERENCE_CATALOG_FILE_NAME = "reference_catalog.json"
-REFERENCE_LOOKUP_VERSION = 12
+REFERENCE_LOOKUP_VERSION = 13
 # Increment this independently of metadata lookup behavior whenever Markdown
 # reference parsing changes. It prevents unchanged documents from reusing refs
 # produced by an older parser.
@@ -39,7 +39,7 @@ REFERENCE_PARSER_VERSION = 3
 
 _REF_HEAD_RE = re.compile(
     r"^#{1,6}\s+(references(?:\s+and\s+(?:notes|links))?|bibliography)\b",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 _REF_START_BRACKET_RE = re.compile(r"^\[(\d{1,4})\]\s*(.*\S)?\s*$")
 _REF_START_DOT_RE = re.compile(r"^(\d{1,4})\.\s+(.*\S)?\s*$")
@@ -3915,6 +3915,11 @@ def build_reference_index(
                 and prev_needs_rebuild_for_enrich
                 and int(prev_lookup_version) < int(REFERENCE_LOOKUP_VERSION)
             )
+            prev_source_doi_stale = bool(
+                isinstance(prev_doc, dict)
+                and str(prev_doc.get("source_doi") or "").strip()
+                and int(prev_lookup_version) < int(REFERENCE_LOOKUP_VERSION)
+            )
             prev_crossref_retry_due = bool(prev_lookup_stale or _doc_crossref_retry_due(prev_doc, now_ts=time.time()))
             prev_needs_rebuild_for_catalog = _previous_doc_refs_stale_against_catalog(prev_doc, prev_refs_obj)
             prev_has_quality_gate = bool(
@@ -3929,6 +3934,7 @@ def build_reference_index(
                 and isinstance(prev_refs_obj, dict)
                 and ((not bool(quality_gate)) or prev_has_quality_gate)
                 and (not prev_parser_stale)
+                and (not prev_source_doi_stale)
                 and (not prev_needs_rebuild_for_catalog)
                 and (
                     (not need_crossref_enrich)
@@ -4497,6 +4503,9 @@ def build_reference_index(
                 kept_doc = dict(prev_doc)
                 if quality_fields:
                     kept_doc.update(quality_fields)
+                if prev_source_doi_stale:
+                    kept_doc["source_doi"] = source_doi
+                    kept_doc["reference_lookup_version"] = int(REFERENCE_LOOKUP_VERSION)
                 if need_crossref_enrich and doc_crossref_attempted:
                     prev_unresolved, prev_sparse = _assess_doc_crossref_enrichment(
                         prev_doc.get("refs") if isinstance(prev_doc.get("refs"), dict) else None
@@ -4521,6 +4530,8 @@ def build_reference_index(
                     kept_doc["reference_lookup_version"] = int(REFERENCE_LOOKUP_VERSION)
                     docs_updated += 1
                     _stat_inc(crossref_stats, "docs_cache_hydrated")
+                elif prev_source_doi_stale:
+                    docs_updated += 1
                 else:
                     docs_reused += 1
                 docs_out[src_key] = kept_doc

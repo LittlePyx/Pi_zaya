@@ -92,6 +92,17 @@ _INFERENCE_RE = re.compile(
     r"|^(?:this|that)\s+(?:suggests?|implies?|indicates?)\b",
     flags=re.IGNORECASE,
 )
+_EXPLICIT_RETRIEVAL_BOUNDARY_RE = re.compile(
+    r"(?:\u8bba\u6587|\u6587\u732e)?\u672a\u5728(?:\u5f53\u524d|\u672c\u8f6e)?"
+    r"(?:\u68c0\u7d22\u5230\u7684)?(?:\u6458\u8981|\u7247\u6bb5|\u8bc1\u636e|\u5185\u5bb9)?"
+    r"[^\u3002\uff01\uff1f!?]{0,20}(?:\u660e\u786e)?(?:\u9648\u8ff0|\u8bf4\u660e|\u62a5\u544a|\u8ba8\u8bba)"
+    r"|(?:the\s+)?paper\s+(?:does\s+not|did\s+not|doesn't)\s+explicitly\s+"
+    r"(?:state|report|discuss)(?:\s+(?:a|any))?\s+limitations?"
+    r"|(?:\u800c\u975e|\u4e0d\u662f).{0,32}(?:\u81ea\u8eab)?\u5c40\u9650.{0,12}(?:\u9648\u8ff0|\u8bf4\u660e)"
+    r"|\u5c5e\u4e8e.{0,24}\u672a\u6765\u65b9\u5411\u9648\u8ff0"
+    r"|\u5f53\u524d\u68c0\u7d22\u8bc1\u636e\u672a\u76f4\u63a5\u63d0\u4f9b",
+    flags=re.IGNORECASE,
+)
 _ZH_RE = re.compile(r"[\u4e00-\u9fff]")
 
 _MULTIPLIER_NUMBER_WORDS = {
@@ -549,7 +560,12 @@ def _meaningful_numbers(text: str) -> list[str]:
 
 def _is_high_risk_claim(unit: str) -> bool:
     plain = _plain_claim(unit)
-    if len(plain) < 12 or _BOUNDARY_RE.search(plain) or _INFERENCE_RE.search(plain):
+    if (
+        len(plain) < 12
+        or _BOUNDARY_RE.search(plain)
+        or _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain)
+        or _INFERENCE_RE.search(plain)
+    ):
         return False
     if re.search(r"[?？]\s*$", plain):
         return False
@@ -589,8 +605,323 @@ def _hit_payload(hit: dict[str, Any]) -> str:
         meta.get("title"),
         meta.get("heading_path"),
         meta.get("top_heading"),
+        meta.get("citation_plan_full_evidence_quote"),
+        "\n".join(
+            str(item or "")
+            for item in list(meta.get("citation_plan_evidence_quotes") or [])
+            if str(item or "").strip()
+        ),
     ]
     return "\n".join(str(value or "") for value in values if str(value or "").strip())
+
+
+_SOURCE_IDENTITY_STOPWORDS = {
+    "abstract",
+    "analysis",
+    "approach",
+    "conference",
+    "decomposition",
+    "forecasting",
+    "framework",
+    "introduction",
+    "journal",
+    "learning",
+    "long",
+    "method",
+    "model",
+    "paper",
+    "results",
+    "series",
+    "study",
+    "time",
+    "transformer",
+    "transformers",
+}
+
+
+def _source_identity_tokens(value: object) -> set[str]:
+    """Extract exact source-name tokens without fuzzy substring matching.
+
+    Exact tokens keep similarly named papers such as Informer and iTransformer
+    separate. Broad title words are excluded because they occur in nearly every
+    paper in a same-domain comparison.
+    """
+
+    surface = _CITATION_RE.sub(" ", str(value or ""))
+    return {
+        token
+        for token in re.findall(r"[a-z][a-z0-9]{3,}", surface.lower())
+        if token not in _SOURCE_IDENTITY_STOPWORDS
+    }
+
+
+def _hit_source_identity_surface(hit: dict[str, Any]) -> str:
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    return "\n".join(
+        str(value or "")
+        for value in (
+            hit.get("title"),
+            meta.get("source_name"),
+            meta.get("source_path"),
+            meta.get("title"),
+            meta.get("heading_path"),
+            meta.get("top_heading"),
+        )
+        if str(value or "").strip()
+    )
+
+
+def _section_source_hit_index(
+    heading: str,
+    answer_hits: list[dict[str, Any]],
+) -> int:
+    heading_tokens = _source_identity_tokens(_HEADING_RE.sub("", str(heading or "")))
+    if not heading_tokens:
+        return 0
+    scored: list[tuple[int, int]] = []
+    for index, hit in enumerate(answer_hits, start=1):
+        if not hit:
+            continue
+        overlap = heading_tokens & _source_identity_tokens(
+            _hit_source_identity_surface(hit)
+        )
+        if overlap:
+            scored.append((sum(max(1, len(token) - 3) for token in overlap), index))
+    # Some publication titles do not contain the model identifier used by the
+    # community (for example, "A Time Series is Worth 64 Words" vs PatchTST).
+    # Fall back to an exact identifier occurrence in the evidence passage only
+    # when the stronger bibliographic surfaces found no candidate.
+    if not scored:
+        for index, hit in enumerate(answer_hits, start=1):
+            if not hit:
+                continue
+            overlap = heading_tokens & _source_identity_tokens(_hit_payload(hit))
+            if overlap:
+                scored.append(
+                    (sum(max(1, len(token) - 3) for token in overlap), index)
+                )
+    if not scored:
+        return 0
+    scored.sort(reverse=True)
+    if len(scored) > 1 and scored[0][0] <= scored[1][0]:
+        return 0
+    return int(scored[0][1])
+
+
+def _mentioned_source_hit_indexes(
+    claim: str,
+    answer_hits: list[dict[str, Any]],
+) -> list[int]:
+    """Return unambiguous sources explicitly named in one claim segment."""
+
+    claim_surface = _plain_claim(claim)
+    claim_tokens = _source_identity_tokens(claim_surface)
+    if not claim_tokens:
+        return []
+    claim_model_tokens = {
+        token.casefold()
+        for token in re.findall(r"\b[A-Za-z][A-Za-z0-9]{3,}\b", claim_surface)
+        if token.casefold() not in _SOURCE_IDENTITY_STOPWORDS
+        and (
+            any(character.isupper() for character in token[1:])
+            or token.casefold().endswith(("former", "net"))
+            or token.casefold() in {"patchtst"}
+        )
+    }
+    matched: list[int] = []
+    for index, hit in enumerate(answer_hits, start=1):
+        if not hit:
+            continue
+        identity_tokens = _source_identity_tokens(_hit_source_identity_surface(hit))
+        if not (claim_tokens & identity_tokens):
+            # Community model names are not always present in the publication
+            # title (PatchTST is the important example), but are present in the
+            # authoritative source evidence. Restrict this fallback to
+            # model-shaped identifiers so generic words such as "dependency"
+            # cannot turn a one-paper claim into an accidental multi-source
+            # assertion.
+            payload_model_tokens = {
+                token.casefold()
+                for token in re.findall(
+                    r"\b[A-Za-z][A-Za-z0-9]{3,}\b",
+                    _hit_payload(hit),
+                )
+                if token.casefold() not in _SOURCE_IDENTITY_STOPWORDS
+                and (
+                    any(character.isupper() for character in token[1:])
+                    or token.casefold().endswith(("former", "net"))
+                    or token.casefold() in {"patchtst"}
+                )
+            }
+            if claim_model_tokens & payload_model_tokens:
+                matched.append(index)
+                continue
+        if claim_tokens & identity_tokens:
+            matched.append(index)
+    return matched
+
+
+def _explicit_per_source_evidence_request(prompt: str, *, source_count: int) -> bool:
+    return bool(
+        int(source_count or 0) >= 4
+        and re.search(
+            r"(?:\u6bcf(?:\u4e00)?(?:\u7bc7|\u4e2a)(?:\u8bba\u6587|\u6587\u732e)?|"
+            r"\u9010\u7bc7|each\s+paper|per[-\s]+paper)",
+            str(prompt or ""),
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _strict_section_factual_candidate(segment: str) -> bool:
+    plain = _plain_claim(segment)
+    if len(plain) < 8:
+        return False
+    if (
+        _BOUNDARY_RE.search(plain)
+        or _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain)
+        or _INFERENCE_RE.search(plain)
+        or _NON_FACTUAL_GUIDANCE_RE.search(plain)
+        or re.search(r"[?\uFF1F]\s*$", plain)
+    ):
+        return False
+    # Inside an explicitly named paper section, ordinary declarative prose is
+    # a source-specific factual claim even when it lacks a high-risk verb such
+    # as "reports" or a bold facet label.
+    return True
+
+
+def _enforce_named_source_section_citations(
+    answer: str,
+    answer_hits: list[dict[str, Any]],
+    *,
+    prompt: str,
+    min_support_score: int,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Bind explicitly named paper claims to each paper's own hit.
+
+    This pass is intentionally limited to comparisons that request evidence for
+    at least four papers. It prevents a semantically plausible sentence under
+    one paper heading or in the cross-paper synthesis from borrowing a citation
+    belonging to another paper.
+    """
+
+    source_count = sum(1 for hit in answer_hits if hit)
+    if not _explicit_per_source_evidence_request(prompt, source_count=source_count):
+        return str(answer or ""), [], []
+
+    output_lines: list[str] = []
+    repairs: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    in_fence = False
+    section_hit_index = 0
+    for raw_line in str(answer or "").splitlines():
+        stripped = raw_line.strip()
+        if stripped.startswith(("```", "~~~")):
+            in_fence = not in_fence
+            output_lines.append(raw_line)
+            continue
+        if _HEADING_RE.match(stripped):
+            section_hit_index = _section_source_hit_index(stripped, answer_hits)
+            output_lines.append(raw_line)
+            continue
+        if (
+            in_fence
+            or not stripped
+            or _TABLE_OR_CODE_RE.match(stripped)
+        ):
+            output_lines.append(raw_line)
+            continue
+
+        prefix_match = _LIST_PREFIX_RE.match(stripped)
+        prefix = prefix_match.group(0) if prefix_match else ""
+        body = stripped[len(prefix) :] if prefix else stripped
+        segments = _split_claim_segments(body)
+        if not segments:
+            output_lines.append(raw_line)
+            continue
+
+        rebuilt: list[str] = []
+        changed = False
+        for segment in segments:
+            citations = [
+                int(match.group(1))
+                for match in _NUMERIC_CITATION_RE.finditer(segment)
+                if 0 < int(match.group(1)) <= len(answer_hits)
+            ]
+            segment_hit_indexes = (
+                [section_hit_index]
+                if section_hit_index > 0
+                else _mentioned_source_hit_indexes(segment, answer_hits)
+            )
+            factual = bool(citations) or _strict_section_factual_candidate(segment)
+            if not factual:
+                rebuilt.append(segment)
+                continue
+
+            if not segment_hit_indexes:
+                rebuilt.append(segment)
+                continue
+
+            scores = {
+                hit_index: _support_score(
+                    segment,
+                    _hit_payload(answer_hits[hit_index - 1]),
+                    allow_comparison_scope=len(segment_hit_indexes) > 1,
+                )
+                for hit_index in segment_hit_indexes
+            }
+            required_score = (
+                min(3, max(1, int(min_support_score)))
+                if section_hit_index > 0
+                else max(1, int(min_support_score))
+            )
+            if any(score < required_score for score in scores.values()):
+                dropped.append(
+                    {
+                        "claim": _plain_claim(segment)[:220],
+                        "section_citation": section_hit_index,
+                        "named_source_citations": segment_hit_indexes,
+                        "from": list(dict.fromkeys(citations)),
+                        "scores": scores,
+                        "reason": "unsupported_by_named_source",
+                    }
+                )
+                changed = True
+                continue
+
+            unique_citations = list(dict.fromkeys(citations))
+            if unique_citations == segment_hit_indexes:
+                rebuilt.append(segment)
+                continue
+            cleaned = _NUMERIC_CITATION_RE.sub("", segment)
+            cleaned = re.sub(r"\s+([,.!?;:\u3002\uFF0C\uFF1B\uFF1A\uFF01\uFF1F])", r"\1", cleaned)
+            rebound = cleaned.strip()
+            for hit_index in segment_hit_indexes:
+                rebound = _append_citation(rebound, hit_index)
+            rebuilt.append(rebound)
+            repairs.append(
+                {
+                    "claim": _plain_claim(segment)[:220],
+                    "from": unique_citations,
+                    "citation": segment_hit_indexes[0],
+                    "citations": segment_hit_indexes,
+                    "score": min(scores.values()),
+                    "scores": scores,
+                    "reason": "named_section_source",
+                }
+            )
+            changed = True
+
+        if not rebuilt:
+            continue
+        if not changed:
+            output_lines.append(raw_line)
+            continue
+        joiner = "" if _ZH_RE.search("".join(rebuilt)) else " "
+        leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
+        output_lines.append(f"{leading}{prefix}{joiner.join(rebuilt)}")
+    return "\n".join(output_lines), repairs, dropped
 
 
 def _citation_group_covers_claim_quantities(
@@ -624,6 +955,105 @@ def _citation_group_covers_claim_quantities(
         _quantity_is_covered(quantity, union_quantities)
         for quantity in claim_quantities
     )
+
+
+def _ensure_named_source_requested_facets(
+    answer: str,
+    answer_hits: list[dict[str, Any]],
+    *,
+    prompt: str,
+) -> tuple[str, int]:
+    """Keep every requested paper/facet cell visible after strict evidence drops.
+
+    Unsupported content is never reconstructed.  Instead, an explicit retrieval
+    boundary replaces a missing cell so a strict audit cannot turn a requested
+    paper section into a misleading blank section.
+    """
+
+    source_count = sum(1 for hit in answer_hits if hit)
+    if not _explicit_per_source_evidence_request(prompt, source_count=source_count):
+        return str(answer or ""), 0
+    facet_specs: list[tuple[re.Pattern[str], str, str]] = []
+    prompt_text = str(prompt or "")
+    requested = (
+        (
+            re.compile(r"\u6838\u5fc3\u5efa\u6a21\u5355\u4f4d|core\s+model(?:ing|ling)\s+unit", re.I),
+            "\u6838\u5fc3\u5efa\u6a21\u5355\u4f4d",
+            "Core modeling unit",
+        ),
+        (
+            re.compile(r"\u957f\u671f\u4f9d\u8d56|long[-\s]+(?:range\s+)?dependenc", re.I),
+            "\u957f\u671f\u4f9d\u8d56\u5904\u7406\u673a\u5236",
+            "Long-dependency mechanism",
+        ),
+        (
+            re.compile(r"\u5b9e\u9a8c\u4efb\u52a1|experiment(?:al)?\s+tasks?", re.I),
+            "\u5b9e\u9a8c\u4efb\u52a1",
+            "Experimental task",
+        ),
+        (
+            re.compile(r"\u5c40\u9650|limitations?", re.I),
+            "\u4f5c\u8005\u660e\u786e\u9648\u8ff0\u7684\u5c40\u9650",
+            "Explicit author-stated limitation",
+        ),
+    )
+    for pattern, zh_label, en_label in requested:
+        if pattern.search(prompt_text):
+            facet_specs.append((pattern, zh_label, en_label))
+    if not facet_specs:
+        return str(answer or ""), 0
+
+    prefer_zh = bool(_ZH_RE.search(prompt_text))
+    output: list[str] = []
+    section_lines: list[str] = []
+    section_hit_index = 0
+    added = 0
+
+    def _flush_section() -> None:
+        nonlocal section_lines, section_hit_index, added
+        if not section_lines:
+            return
+        if section_hit_index > 0:
+            section_surface = "\n".join(section_lines)
+            missing = [
+                (zh_label, en_label)
+                for pattern, zh_label, en_label in facet_specs
+                if not pattern.search(section_surface)
+            ]
+            if missing:
+                trailing: list[str] = []
+                while section_lines and (
+                    not section_lines[-1].strip()
+                    or section_lines[-1].strip() == "---"
+                ):
+                    trailing.insert(0, section_lines.pop())
+                if section_lines and section_lines[-1].strip():
+                    section_lines.append("")
+                for zh_label, en_label in missing:
+                    if prefer_zh:
+                        section_lines.append(
+                            f"- **{zh_label}**：当前检索证据未直接提供这一项；"
+                            "未补写论文未说明的结论。"
+                        )
+                    else:
+                        section_lines.append(
+                            f"- **{en_label}**: The current evidence does not "
+                            "directly provide this facet; no unstated conclusion "
+                            "was added."
+                        )
+                    added += 1
+                section_lines.extend(trailing)
+        output.extend(section_lines)
+        section_lines = []
+
+    for raw_line in str(answer or "").splitlines():
+        stripped = raw_line.strip()
+        if _HEADING_RE.match(stripped):
+            _flush_section()
+            section_hit_index = _section_source_hit_index(stripped, answer_hits)
+        section_lines.append(raw_line)
+    _flush_section()
+    return "\n".join(output), added
 
 
 def _concept_ids(text: str) -> set[int]:
@@ -753,6 +1183,26 @@ def _support_score(
     )
     explicit_relation_requirements = (
         *explicit_relation_requirements,
+        (
+            re.compile(
+                r"(?:\u65f6\u95f4\u6233|\u65f6\u95f4|\u65f6\u5e8f)(?:\u7ea7)?\s*token|"
+                r"\b(?:timestamp|temporal)\s+tokens?\b",
+                re.I,
+            ),
+            re.compile(r"\b(?:timestamp|temporal)\s+tokens?\b", re.I),
+        ),
+        (
+            re.compile(
+                r"\u53d8\u91cf\s*(?:\u4f5c\u4e3a|\u4e3a)?\s*token|"
+                r"\b(?:variate|variable)\s+tokens?\b",
+                re.I,
+            ),
+            re.compile(r"\b(?:variate|variable)\s+tokens?\b", re.I),
+        ),
+        (
+            re.compile(r"\u901a\u9053\u72ec\u7acb|\bchannel[-\s]+independen", re.I),
+            re.compile(r"\bchannel[-\s]+independen", re.I),
+        ),
         (_OPTIMIZATION_DETAIL_RE, _OPTIMIZATION_DETAIL_RE),
         (_MASK_COMPRESSION_DETAIL_RE, _MASK_COMPRESSION_DETAIL_RE),
     )
@@ -772,12 +1222,13 @@ def _support_score(
         quantity_evidence,
         allow_comparison_scope=allow_comparison_scope,
     )
-    evidence_quantities = _system_a_fact_quantities(quantity_evidence)
-    if claim_quantities and not all(
-        _quantity_is_covered(quantity, evidence_quantities)
-        for quantity in claim_quantities
-    ):
-        return 0
+    if claim_quantities:
+        evidence_quantities = _system_a_fact_quantities(quantity_evidence)
+        if not all(
+            _quantity_is_covered(quantity, evidence_quantities)
+            for quantity in claim_quantities
+        ):
+            return 0
     claim_numbers = [_quantity_label(quantity) for quantity in claim_quantities]
     score = 2 * len(_concept_ids(claim_plain) & _concept_ids(evidence_norm))
     claim_acronyms = {item.lower() for item in _ACRONYM_RE.findall(claim_plain)}
@@ -1781,6 +2232,7 @@ def _repair_mismatched_unique_citations(
                 strict_plan
                 and len(plain_segment) >= 20
                 and not _BOUNDARY_RE.search(plain_segment)
+                and not _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain_segment)
                 and not _INFERENCE_RE.search(plain_segment)
                 and not _NON_FACTUAL_GUIDANCE_RE.search(plain_segment)
                 and not re.search(r"[?\uFF1F]\s*$", plain_segment)
@@ -2828,8 +3280,17 @@ def audit_and_repair_claim_evidence(
             min_support_score=min_support_score,
             strict_plan=strict_plan,
         )
+        repaired, section_repairs, dropped_section_claims = (
+            _enforce_named_source_section_citations(
+                repaired,
+                eligible_hits,
+                prompt=prompt,
+                min_support_score=min_support_score,
+            )
+        )
     else:
         repaired, repairs, rebound_repairs = scoped, [], []
+        section_repairs, dropped_section_claims = [], []
     repaired, removed_heading_citations = _strip_source_only_heading_citations(repaired)
     repaired, dropped_mismatches = _drop_hard_mismatched_claims(repaired, eligible_hits)
     renderer_rejected_citations: list[dict[str, Any]] = []
@@ -2917,6 +3378,11 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
         answer_hits=eligible_hits,
     )
+    repaired, requested_facet_boundary_count = _ensure_named_source_requested_facets(
+        repaired,
+        eligible_hits,
+        prompt=prompt,
+    )
     repaired = _renumber_ordered_lists(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]
@@ -2954,7 +3420,9 @@ def audit_and_repair_claim_evidence(
         "uncited_high_risk_claims": len(uncited),
         "citation_mismatch_claims": len(mismatches),
         "repaired_citations": len(repairs),
-        "rebound_citations": len(rebound_repairs),
+        "rebound_citations": len(rebound_repairs) + len(section_repairs),
+        "section_source_rebound_citations": len(section_repairs),
+        "dropped_cross_source_claims": len(dropped_section_claims),
         "scoped_negative_claims": int(scoped_count),
         "trimmed_unsupported_inferences": int(trimmed_inference_count),
         "repaired_modality_boundaries": int(modality_count),
@@ -2984,12 +3452,17 @@ def audit_and_repair_claim_evidence(
         "dropped_unsupported_unplanned_claims": len(dropped_unplanned_claims),
         "dropped_unsupported_inferences": int(dropped_distilled_inferences),
         "dropped_placeholder_sections": int(dropped_placeholder_sections),
+        "added_requested_facet_boundaries": int(requested_facet_boundary_count),
         "minimum_ok": not uncited and not mismatches,
     }
     if repairs:
         meta["repairs"] = repairs[:8]
     if rebound_repairs:
         meta["rebound_repairs"] = rebound_repairs[:8]
+    if section_repairs:
+        meta["section_source_repairs"] = section_repairs[:8]
+    if dropped_section_claims:
+        meta["dropped_cross_source_claim_details"] = dropped_section_claims[:8]
     if uncited:
         meta["unresolved_claims"] = [_plain_claim(unit)[:220] for unit in uncited[:8]]
     if mismatches:

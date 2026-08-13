@@ -1,6 +1,6 @@
 # Research QA Eval Runbook
 
-Updated: 2026-08-12
+Updated: 2026-08-13
 
 ## Purpose
 
@@ -1099,3 +1099,60 @@ failed 0/5 at conversation creation because the evaluator was launched without
 the isolated `--source-root`; all five 400 responses occurred before generation.
 The corrected command and its 5/5 report above preserve that configuration
 failure instead of reclassifying it as a product pass.
+
+## 2026-08-13 Full-Library Long-Tail and Evidence Acceptance
+
+This pass measured each real user-visible phase before making the final
+evidence fixes. The first exact-code 29-question run is retained at
+`F:\research-papers\2026\Jan\else\kb_chat_eval\formal_20260813\20260813_155630`.
+It passed 20/29 rather than being retried or narrowed. Its first-visible,
+answer-complete, evidence-card, and final-validation p50/p95/max times were
+2,968/5,257/6,494 ms, 6,458/10,713/13,583 ms, 7,459/13,483/17,259 ms, and
+8,351/14,160/18,735 ms respectively. The failures exposed real Unicode
+identity, named-source retention, System B lineage, answer/evidence alignment,
+and exact-section binding defects.
+
+The accepted full-library run is
+`F:\research-papers\2026\Jan\else\kb_chat_eval\formal_20260813\20260813_165402`.
+It passed 29/29 with every required answer term, source, page, System A/System B
+route, evidence binding, locator, and card-quality contract intact:
+
+| Milestone | p50 | p95 | max | Change from first run (p50 / p95 / max) |
+|---|---:|---:|---:|---:|
+| First visible answer | 2,954 ms | 5,470 ms | 6,613 ms | -0.5% / +4.1% / +1.8% |
+| Answer complete | 4,878 ms | 10,900 ms | 13,729 ms | -24.5% / +1.7% / +1.1% |
+| Evidence cards complete | 6,711 ms | 12,411 ms | 14,206 ms | -10.0% / -8.0% / -17.7% |
+| Final validation | 6,928 ms | 13,528 ms | 14,678 ms | -17.0% / -4.5% / -21.7% |
+
+Provider/model variation in first-visible p95/max and answer-complete p95/max
+is deliberately reported. The optimization did not shorten answers, reduce the
+full-library search scope, lower retrieval top-k, omit evidence cards, relax exact
+reference-marker checks, or weaken any pass threshold. It removes avoidable
+phase work and makes the remaining lineage bindings stricter: PDF ligatures are
+NFKC-normalized for identity matching; exact named sources survive seed
+selection; SCIGS `[42]` is accepted only from the already-retrieved SCIGS source
+and its exact source sentence; and the SCINeRF physics/training claim is bound
+to the matching Abstract sentence rather than a merely related Conclusion.
+Persisted plan opportunities enter final validation only when source, stable
+ID, exact marker, and verified context all agree.
+
+Intermediate attempts remain visible. Focused runs under the same
+`formal_20260813` root diagnosed each defect, and the full run at
+`20260813_164801` passed 28/29 before the SCINeRF Abstract alignment was fixed.
+The independent final paid-model smoke at `20260813_165757` passed 5/5. The
+deterministic full-library retrieval at
+`test_results\research_qa_eval\20260813_165849` passed 29/29, source validation
+passed 41/41, and the reviewed grounded replay passed 6/6.
+
+Final CI-equivalent local validation passed 4,295 backend unit tests with 41
+configuration-dependent skips, 262 sanity tests with two skips, and the visible
+Agent contract 5/5. Ruff, all deterministic quality fixtures, ESLint, and the
+production build passed. Playwright smoke passed 128 applicable tests with two
+private-auth-only skips; core citation/library E2E passed 111/111; and public-
+surface isolation passed 4/4.
+
+New papers are intentionally not added to this acceptance corpus: changing the
+corpus after measuring the baseline would make the latency and quality
+comparison non-equivalent. They belong in the next separately versioned,
+hash-pinned blind-transfer suite, where failures must remain visible and the
+same answer, evidence, locator, citation-card, and latency gates must apply.

@@ -2827,6 +2827,95 @@ test('System B metadata merge keeps only an upstream-identity-matched article su
   })
 })
 
+test('System A source-bound repair replaces a DOI already rejected by metadata quality', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { mergeCiteMeta, strictRepairMerge } = await import('/src/components/chat/citationState.ts')
+    const sourcePath = 'F:/papers/informer.md'
+    const base = {
+      anchor: 'informer-source',
+      key: 'informer-source|Informer.pdf|1',
+      num: 1,
+      isInpaper: false,
+      sourcePath,
+      title: 'Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting',
+      main: 'Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting',
+      doi: '10.18653/v1/d15-1166',
+      doiUrl: 'https://doi.org/10.18653/v1/d15-1166',
+      raw: 'Informer. doi:10.18653/v1/d15-1166',
+      metadataQuality: { ok: false, status: 'error', missing_fields: ['doi'], issues: ['doi_title_mismatch'] },
+      metadataExportAcceptance: { export_ready: false, missing_fields: ['doi'], issue_codes: ['doi_title_mismatch'] },
+      tags: [],
+      note: '',
+    }
+    const repair = {
+      citation_route: 'system_a',
+      is_inpaper: false,
+      bibliometrics_identity_source: 'source_path',
+      source_metadata_status: 'ready',
+      source_path: sourcePath,
+      title: base.title,
+      authors: 'Zhou H, Zhang S, Peng J, et al',
+      year: '2021',
+      venue: 'AAAI Conference on Artificial Intelligence',
+      doi: '10.1609/aaai.v35i12.17325',
+      doi_url: 'https://doi.org/10.1609/aaai.v35i12.17325',
+      metadata_quality: { ok: true, status: 'ready', missing_fields: [], issues: [] },
+      metadata_export_acceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+      metadata_repair_status: 'ready',
+    }
+    const merged = mergeCiteMeta(base, repair)
+    const strict = strictRepairMerge(base, repair)
+    const wrongSource = mergeCiteMeta(base, { ...repair, source_path: 'F:/papers/other.md' })
+    const sourceIndexRepair = {
+      ...repair,
+      doi_identity_source: 'source_reference_index',
+      source_reference_lookup_version: 13,
+      metadata_repair_status: 'repaired',
+      metadata_changed_fields: ['doi'],
+    }
+    const staleButPreviouslyAccepted = {
+      ...base,
+      authors: 'This sentence is an abstract, not an author list',
+      citationCount: 8599,
+      citationSource: 'OpenAlex',
+      metadataQuality: { ok: false, status: 'error', missing_fields: ['authors', 'venue', 'year'] },
+      metadataExportAcceptance: { export_ready: true, missing_fields: ['authors', 'venue', 'year'] },
+      metadataRepairStatus: 'partial',
+    }
+    const sourceIndexWithoutByline = { ...sourceIndexRepair }
+    delete sourceIndexWithoutByline.authors
+    const strictSourceIndex = strictRepairMerge(staleButPreviouslyAccepted, sourceIndexWithoutByline)
+    const sameDoiPolluted = {
+      ...staleButPreviouslyAccepted,
+      doi: sourceIndexRepair.doi,
+      doiUrl: sourceIndexRepair.doi_url,
+    }
+    const strictSameDoi = strictRepairMerge(sameDoiPolluted, sourceIndexWithoutByline)
+    return {
+      mergedDoi: merged.doi,
+      mergedDoiUrl: merged.doiUrl,
+      strictDoi: strict?.doi || '',
+      strictSourceIndexDoi: strictSourceIndex?.doi || '',
+      strictSourceIndexAuthors: strictSourceIndex?.authors || '',
+      strictSourceIndexCitationCount: strictSourceIndex?.citationCount || 0,
+      strictSameDoiAuthors: strictSameDoi?.authors || '',
+      strictSameDoiCitationCount: strictSameDoi?.citationCount || 0,
+      wrongSourceDoi: wrongSource.doi,
+    }
+  })
+
+  expect(result.mergedDoi).toBe('10.1609/aaai.v35i12.17325')
+  expect(result.mergedDoiUrl).toBe('https://doi.org/10.1609/aaai.v35i12.17325')
+  expect(result.strictDoi).toBe('10.1609/aaai.v35i12.17325')
+  expect(result.strictSourceIndexDoi).toBe('10.1609/aaai.v35i12.17325')
+  expect(result.strictSourceIndexAuthors).toBe('')
+  expect(result.strictSourceIndexCitationCount).toBe(0)
+  expect(result.strictSameDoiAuthors).toBe('')
+  expect(result.strictSameDoiCitationCount).toBe(0)
+  expect(result.wrongSourceDoi).toBe('10.18653/v1/d15-1166')
+})
+
 test('citation popover System B source panels derive clean locations and missing-title references', async ({ page }) => {
   const S = {
     cite_location_current: 'Current paper location',

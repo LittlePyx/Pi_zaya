@@ -89,6 +89,7 @@ from kb.reference_query_family import (
 )
 from kb.paper_guide_shared import _source_name_from_md_path
 from kb.reference_index import (
+    REFERENCE_LOOKUP_VERSION,
     extract_references_map_from_md,
     load_reference_index,
     resolve_reference_entry,
@@ -6639,7 +6640,66 @@ _SOURCE_BOUND_SYSTEM_A_AUTHORITY_FIELDS = (
     "summary_generation",
     "summary_locale",
     "summary_quality",
+    "doi_identity_source",
+    "source_reference_lookup_version",
+    "metadata_repair_status",
+    "metadata_changed_fields",
 )
+
+
+def _source_reference_index_identity_meta(source_path: str) -> dict:
+    raw = str(source_path or "").strip()
+    if not raw:
+        return {}
+    candidates = {
+        raw.replace("/", "\\").casefold(),
+        raw.replace("\\", "/").casefold(),
+    }
+    try:
+        resolved = str(Path(raw).expanduser().resolve(strict=False))
+        candidates.update(
+            {
+                resolved.replace("/", "\\").casefold(),
+                resolved.replace("\\", "/").casefold(),
+            }
+        )
+    except Exception:
+        pass
+    try:
+        payload = load_reference_index(get_settings().db_dir)
+    except Exception:
+        return {}
+    docs = payload.get("docs") if isinstance(payload, dict) else {}
+    if not isinstance(docs, dict):
+        return {}
+    record: dict | None = None
+    for key, value in docs.items():
+        normalized = str(key or "").strip().casefold()
+        if normalized in candidates or normalized.replace("\\", "/") in candidates:
+            if isinstance(value, dict):
+                record = value
+            break
+    if not isinstance(record, dict):
+        return {}
+    try:
+        lookup_version = int(record.get("reference_lookup_version") or 0)
+    except Exception:
+        lookup_version = 0
+    if lookup_version < int(REFERENCE_LOOKUP_VERSION):
+        return {}
+    doi = str(record.get("source_doi") or "").strip()
+    doi = re.sub(r"^https?://(?:dx\.)?doi\.org/", "", doi, flags=re.IGNORECASE).strip()
+    doi = doi.rstrip(".,;:)]}")
+    if not re.match(r"^10\.\d{4,9}/\S+$", doi, flags=re.IGNORECASE):
+        return {}
+    return {
+        "doi": doi,
+        "doi_url": f"https://doi.org/{doi}",
+        "doi_identity_source": "source_reference_index",
+        "source_reference_lookup_version": lookup_version,
+        "metadata_repair_status": "repaired",
+        "metadata_changed_fields": ["doi"],
+    }
 
 
 def _bibliometrics_is_source_bound_system_a(meta: dict | None) -> bool:
@@ -6685,6 +6745,9 @@ def _source_bound_system_a_bibliometrics(
             loaded = {}
         if isinstance(loaded, dict):
             authoritative = dict(loaded)
+        indexed_identity = _source_reference_index_identity_meta(resolved_source_path)
+        if indexed_identity:
+            authoritative.update(indexed_identity)
 
     # Only source-resolved fields may define the paper identity. In particular,
     # do not carry ``num``, ``linked_nums`` or ``raw`` into the generic

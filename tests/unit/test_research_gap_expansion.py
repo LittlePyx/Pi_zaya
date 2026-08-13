@@ -103,7 +103,7 @@ def test_cross_source_expansion_adds_a_new_grounded_row_without_filling_original
             "Experiments use a dynamic imaging benchmark with simulated and real measurements.",
             "We report PSNR and SSIM metrics for quantitative evaluation.",
             "The proposed method improves PSNR by 2.4 dB and outperforms the baseline.",
-            "However, reconstruction remains limited by calibration errors and rapid motion.",
+            "However, our reconstruction method remains limited by calibration errors and rapid motion.",
         )
     )
     chunks = [_chunk(source_b, text, chunk_id="paper-b:4")]
@@ -152,9 +152,10 @@ def test_cross_source_expansion_adds_a_new_grounded_row_without_filling_original
         "method",
         "dataset_or_experiment",
         "metric",
+        "key_result",
         "limitation",
     ]
-    assert preview["missing_fields"] == ["key_result"]
+    assert preview["missing_fields"] == []
     assert matrix["rows"] == original_rows
     assert matrix["evidence"] == original_evidence
 

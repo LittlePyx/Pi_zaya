@@ -61,6 +61,59 @@ def test_apply_paper_guide_deepread_context_updates_card_snippet_for_abstract():
     assert card["deepread_texts"] == ["# Abstract\nHere we introduce a new method."]
 
 
+def test_apply_deepread_covers_six_named_papers_for_per_paper_evidence():
+    paths = [rf"db\demo\paper-{idx}.en.md" for idx in range(1, 7)]
+    cards = {
+        idx: {"snippet": f"base-{idx}", "deepread_texts": []}
+        for idx in range(1, 7)
+    }
+    deep_calls: list[str] = []
+    overview_calls: list[str] = []
+
+    def _deep_read(path, query, **_kwargs):
+        deep_calls.append(str(path))
+        return [
+            {
+                "text": f"Conclusion evidence for {path.name}",
+                "meta": {"heading_path": "5 Conclusion and Future Work"},
+            }
+        ]
+
+    def _overview(path, **_kwargs):
+        overview_calls.append(str(path))
+        return [f"Overview evidence for {path.name}"]
+
+    answer_hits = [{"meta": {"source_path": path}} for path in paths]
+    out = context_runtime._apply_paper_guide_deepread_context(
+        ctx_parts=[f"DOC-{idx}\nbase-{idx}" for idx in range(1, 7)],
+        doc_first_idx={path: idx for idx, path in enumerate(paths, start=1)},
+        paper_guide_card_by_doc_idx=cards,
+        prompt="Compare all six methods; each paper must include locatable evidence.",
+        retrieval_prompt="compare six methods",
+        used_query="compare six methods",
+        prompt_family="strength_limits",
+        deep_read=True,
+        answer_hits=answer_hits,
+        deep_read_fn=_deep_read,
+        overview_fn=_overview,
+        select_extras_fn=lambda extras, **_kwargs: [item["text"] for item in extras],
+        merge_context_fn=lambda base, extra, **_kwargs: base + "\n\n" + extra,
+        allows_citeless_answer_fn=lambda _family: False,
+    )
+
+    assert out["deep_docs"] == 6
+    assert out["deep_added"] == 12
+    assert len(deep_calls) == 6
+    assert len(overview_calls) == 6
+    assert all("Overview evidence" in item for item in out["ctx_parts"])
+    assert all("Conclusion evidence" in item for item in out["ctx_parts"])
+    assert all(len(card["deepread_texts"]) == 2 for card in cards.values())
+    assert all(
+        len(hit["meta"]["source_deepread_evidence_quotes"]) == 2
+        for hit in answer_hits
+    )
+
+
 def test_build_paper_guide_context_records_builds_primary_evidence_card_even_when_not_paper_guide():
     hit = {
         "text": "Section 2.2 discusses Fourier single-pixel imaging and compares it with Hadamard sampling.",

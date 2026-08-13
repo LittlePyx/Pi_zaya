@@ -144,6 +144,27 @@ def test_research_brief_reference_requires_its_own_matched_fulltext() -> None:
     assert selected == []
 
 
+def test_research_brief_sources_accept_exact_pre_persistence_citation_key() -> None:
+    shelf = [
+        {
+            "key": "doi:10.1201/9781003612742-2",
+            "anchor": "kb-cite-fedformer-4",
+            "num": 3,
+            "sourceName": "AI for Time Series-2026-Fedformer.pdf",
+            "sourcePath": "F:/papers/FEDformer.en.md",
+            "title": "FEDformer: Frequency Enhanced Decomposed Transformer",
+            "doi": "10.1201/9781003612742-2",
+        }
+    ]
+
+    selected = select_research_brief_sources(
+        shelf,
+        item_keys=["kb-cite-fedformer-4|AI for Time Series-2026-Fedformer.pdf|3"],
+    )
+
+    assert selected == shelf
+
+
 def test_research_brief_quality_rejects_unexpected_or_unsupported_evidence() -> None:
     selected = [{"key": "a", "title": "Paper A", "sourcePath": "F:/papers/a.md"}]
     evidence = [{"citation_number": 1, "source_name": "Paper A", "source_path": "F:/papers/a.md"}]

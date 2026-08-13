@@ -794,6 +794,65 @@ function metadataRepairMetaTrusted(meta: Record<string, unknown>): boolean {
   return qualityOk && (changedCount > 0 || ['ready', 'repaired'].includes(repairStatus))
 }
 
+function metadataContractRejectsField(value: unknown, field: string): boolean {
+  if (!value || typeof value !== 'object') return false
+  const rec = value as Record<string, unknown>
+  const missing = Array.isArray(rec.missing_fields) ? rec.missing_fields : rec.missingFields
+  const issues = Array.isArray(rec.issue_codes)
+    ? rec.issue_codes
+    : Array.isArray(rec.issueCodes)
+      ? rec.issueCodes
+      : rec.issues
+  const target = String(field || '').trim().toLowerCase()
+  if (!target) return false
+  if (Array.isArray(missing) && missing.some((item) => String(item || '').trim().toLowerCase() === target)) {
+    return true
+  }
+  return Array.isArray(issues) && issues.some((item) => {
+    const issue = typeof item === 'object' && item !== null
+      ? String((item as Record<string, unknown>).field || (item as Record<string, unknown>).code || '').trim().toLowerCase()
+      : String(item || '').trim().toLowerCase()
+    return issue === target || issue.startsWith(`${target}_`) || issue.endsWith(`_${target}`)
+  })
+}
+
+function sourcePathIdentity(value: unknown): string {
+  return String(value || '').trim().replace(/\\/g, '/').toLowerCase()
+}
+
+function trustedLocalSystemARepair(detail: CiteDetail | CiteShelfItem, meta: Record<string, unknown>): boolean {
+  const route = String(meta.citation_route || meta.citationRoute || '').trim().toLowerCase()
+  const identitySource = String(
+    meta.bibliometrics_identity_source || meta.bibliometricsIdentitySource || '',
+  ).trim().toLowerCase()
+  const sourceStatus = String(meta.source_metadata_status || meta.sourceMetadataStatus || '').trim().toLowerCase()
+  const currentSource = sourcePathIdentity(detail.sourcePath)
+  const incomingSource = sourcePathIdentity(meta.source_path || meta.sourcePath)
+  const currentDoiRejected = (
+    metadataContractRejectsField(detail.metadataQuality, 'doi')
+    || metadataContractRejectsField(detail.metadataExportAcceptance, 'doi')
+  )
+  const changedFields = Array.isArray(meta.metadata_changed_fields)
+    ? meta.metadata_changed_fields
+    : meta.metadataChangedFields
+  const authoritativeSourceIndexDoi = Boolean(
+    String(meta.doi_identity_source || meta.doiIdentitySource || '').trim().toLowerCase() === 'source_reference_index'
+    && Number(meta.source_reference_lookup_version || meta.sourceReferenceLookupVersion || 0) > 0
+    && Array.isArray(changedFields)
+    && changedFields.some((field) => String(field || '').trim().toLowerCase() === 'doi')
+  )
+  return Boolean(
+    !detail.isInpaper
+    && route === 'system_a'
+    && identitySource === 'source_path'
+    && sourceStatus === 'ready'
+    && currentSource
+    && currentSource === incomingSource
+    && (currentDoiRejected || authoritativeSourceIndexDoi)
+    && metadataRepairMetaTrusted(meta)
+  )
+}
+
 export function shelfItemMetadataQualityReady(item: CiteShelfItem): boolean {
   return metadataQualityOk(item.metadataQuality, item.metadataExportAcceptance)
 }
@@ -828,6 +887,19 @@ export function shelfItemHasConflictingVenueSignals(item: CiteShelfItem): boolea
 }
 
 export function shelfItemNeedsMetadataRepair(item: CiteShelfItem, display = citationDisplay(item)): boolean {
+  const rejectedPresentField = [
+    ['doi', normalizeDoiLike(item.doi || item.doiUrl)],
+    ['authors', String(item.authors || '').trim()],
+    ['venue', String(item.venue || '').trim()],
+    ['year', String(item.year || '').trim()],
+  ].some(([field, value]) => Boolean(
+    value
+    && (
+      metadataContractRejectsField(item.metadataQuality, field)
+      || metadataContractRejectsField(item.metadataExportAcceptance, field)
+    )
+  ))
+  if (rejectedPresentField) return true
   if (shelfItemMetadataQualityReady(item)) return false
   if (shelfItemMetadataQualityNeedsRepair(item)) return true
   const rawTitle = String(item.title || '').trim()
@@ -1623,7 +1695,66 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
     && !currentRawDoi
     && metadataRepairMetaTrusted(incomingMeta),
   )
-  const hasDoiConflict = Boolean(currentDoi && incomingDoi && currentDoi !== incomingDoi && !trustedSystemBRepair)
+  const trustedSystemARepair = trustedLocalSystemARepair(detail, incomingMeta)
+  const hasDoiConflict = Boolean(
+    currentDoi
+    && incomingDoi
+    && currentDoi !== incomingDoi
+    && !trustedSystemBRepair
+    && !trustedSystemARepair
+  )
+  const currentIdentityContractRejectsPresentField = [
+    ['doi', currentDoi],
+    ['authors', String(detail.authors || '').trim()],
+    ['venue', String(detail.venue || '').trim()],
+    ['year', String(detail.year || '').trim()],
+  ].some(([field, value]) => Boolean(
+    value
+    && (
+      metadataContractRejectsField(detail.metadataQuality, field)
+      || metadataContractRejectsField(detail.metadataExportAcceptance, field)
+    )
+  ))
+  if (
+    trustedSystemARepair
+    && (
+      (currentDoi && incomingDoi && currentDoi !== incomingDoi)
+      || currentIdentityContractRejectsPresentField
+    )
+  ) {
+    for (const key of [
+      'authors',
+      'venue',
+      'year',
+      'volume',
+      'issue',
+      'pages',
+      'citationSource',
+      'journalIf',
+      'journalQuartile',
+      'journalIfSource',
+      'conferenceTier',
+      'conferenceRankSource',
+      'conferenceCcf',
+      'conferenceCcfSource',
+      'conferenceName',
+      'conferenceAcronym',
+      'externalMetadataStatus',
+      'externalMetadataReason',
+      'externalMatchMethod',
+      'externalTitle',
+      'externalAuthors',
+      'externalVenue',
+      'externalYear',
+      'externalDoi',
+      'externalDoiUrl',
+    ]) {
+      merged[key] = ''
+    }
+    for (const key of ['citationCount', 'externalMatchScore', 'externalTitleSimilarity']) {
+      merged[key] = 0
+    }
+  }
   const overwriteKeys = new Set([
     'doi',
     'doi_url',
@@ -1831,12 +1962,13 @@ export function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<str
   const baseRawDoi = extractDoiLike(base.raw || base.citeFmt)
   const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
   const trustedRepair = metadataRepairMetaTrusted(candidateMeta)
+  const trustedSystemARepair = trustedLocalSystemARepair(base, candidateMeta)
   if (baseDoi && mergedDoi && baseDoi !== mergedDoi) {
-    if (!(trustedRepair && base.isInpaper && !baseRawDoi)) return null
+    if (!(trustedSystemARepair || (trustedRepair && base.isInpaper && !baseRawDoi))) return null
   }
   if (baseRawDoi && mergedDoi && baseRawDoi === mergedDoi) return mergedItem
-  if (baseRawDoi && mergedDoi && baseRawDoi !== mergedDoi) return null
-  if (trustedRepair) return mergedItem
+  if (baseRawDoi && mergedDoi && baseRawDoi !== mergedDoi && !trustedSystemARepair) return null
+  if (trustedRepair || trustedSystemARepair) return mergedItem
 
   const titleSignal = jaccardTokens(base.title || base.main, mergedItem.title || mergedItem.main) >= 0.55
   const authorSignal = (

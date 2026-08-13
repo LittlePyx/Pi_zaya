@@ -101,8 +101,46 @@ export function LibraryFileQualityLine({
   const finalRepairResult = String(
     repairResult || (repairRecord ? formatQualityRepairRecordSummary(repairRecord, S) : ''),
   ).trim()
+  const qualityNeedsRepair = hasConversionQualityIssue(item)
+  const sourceReadiness = conversionSourceReadiness(item, S)
+  const sourceReadinessActionAvailable = qualityNeedsRepair || sourceReadiness.action === 'reindex'
+  const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
+    ? S.lib_btn_reconvert_quality
+    : sourceReadiness.action === 'reindex'
+      ? S.lib_btn_refresh_index
+      : S.lib_btn_repair_quality
 
-  if (!diagnosticsVisible) return null
+  // Detailed conversion diagnostics remain an internal surface, but the
+  // ordinary user must still be able to act on the readiness state shown in
+  // the file header. Otherwise “needs automatic repair” has no matching
+  // action and users can only repeat the much slower full conversion.
+  if (!diagnosticsVisible) {
+    if (!sourceReadinessActionAvailable && !finalRepairResult) return null
+    return (
+      <>
+        {sourceReadinessActionAvailable ? (
+          <div className="kb-lib-quality-line" data-testid="library-file-quality-action-line">
+            <Button
+              size="small"
+              icon={<ReloadOutlined />}
+              className="kb-lib-quality-repair-btn"
+              data-testid="library-quality-repair"
+              loading={repairing}
+              disabled={item.task_state !== 'idle'}
+              onClick={sourceReadiness.action === 'reindex' ? onReindex : onRepairQuality}
+            >
+              {qualityRepairButtonLabel}
+            </Button>
+          </div>
+        ) : null}
+        {finalRepairResult ? (
+          <div className="kb-lib-quality-repair-result" data-testid="library-quality-repair-result">
+            {finalRepairResult}
+          </div>
+        ) : null}
+      </>
+    )
+  }
 
   const qualityIssues = Array.isArray(quality?.issues) ? quality.issues.slice(0, 3) : []
   const sourceDocumentType = normalizeTextValue(sourceQuality?.document_type).toLowerCase()
@@ -128,8 +166,6 @@ export function LibraryFileQualityLine({
   const referenceMetricLabel = sourceDocumentType === 'supplementary' && referenceCount <= 0
     ? 'refs n/a'
     : `refs ${referenceCount}`
-  const qualityNeedsRepair = hasConversionQualityIssue(item)
-  const sourceReadiness = conversionSourceReadiness(item, S)
   const sourceQualityHasActionableIssues = Boolean(
     sourceQuality?.source_text_loss
     || sourceQuality?.references_before_body
@@ -148,12 +184,6 @@ export function LibraryFileQualityLine({
       ['queued', 'running', 'partial', 'blocked', 'failed', 'error'].includes(latestQualityRepairAttemptStatus)
       || (!sourceReadiness.qaReady && Boolean(latestQualityRepairAttemptStatus))
     )
-  const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
-    ? S.lib_btn_reconvert_quality
-    : sourceReadiness.action === 'reindex'
-      ? S.lib_btn_refresh_index
-      : S.lib_btn_repair_quality
-  const sourceReadinessActionAvailable = qualityNeedsRepair || sourceReadiness.action === 'reindex'
 
   return (
     <>

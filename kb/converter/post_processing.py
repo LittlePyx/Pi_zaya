@@ -546,6 +546,11 @@ def _looks_like_promotable_numbered_heading_line(line: str) -> bool:
             return False
     if len(head) > 140:
         return False
+    # Plot axes are commonly extracted as one standalone line beginning with
+    # several tick values (for example ``48 96 168 ... Encoder input``).  The
+    # first tick otherwise looks like a section number and gets promoted.
+    if re.match(r"^(?:\d+(?:\.\d+)?\s+){2,}", head):
+        return False
     if head.endswith((".", "!", "?", ";", ":")):
         return False
     if (head.count(",") >= 3) or ("http" in head.lower()) or ("doi" in head.lower()) or ("@" in head):
@@ -577,6 +582,7 @@ def _promote_bare_numbered_headings(md: str) -> str:
     in_fence = False
     in_math = False
     in_refs = False
+    seen_numbered_titles: set[str] = set()
 
     for ln in lines:
         st = ln.strip()
@@ -598,16 +604,26 @@ def _promote_bare_numbered_headings(md: str) -> str:
             out.append(ln)
             continue
         if re.match(r"^\s*#{1,6}\s+", ln):
+            existing_title = re.sub(r"^\s*#{1,6}\s+", "", st).strip()
+            if _parse_numbered_heading_level(existing_title) is not None:
+                seen_numbered_titles.add(_normalize_text(existing_title).strip().lower())
             out.append(ln)
             continue
 
         if _looks_like_promotable_numbered_heading_line(st):
             m = re.match(r"^(\d+(?:\.\d+)*)\.?\s+(.+)$", st)
             if m:
+                normalized_title = _normalize_text(st).strip().lower()
+                # A repeated bare copy after the real Markdown heading is a
+                # running header/footer, not a second document section.
+                if normalized_title in seen_numbered_titles:
+                    out.append(ln)
+                    continue
                 nums = [x for x in (m.group(1) or "").split(".") if x]
                 depth = max(1, len(nums))
                 lvl = min(6, depth + 1)  # reserve H1 for document title
                 out.append("#" * lvl + " " + st)
+                seen_numbered_titles.add(normalized_title)
                 continue
 
         out.append(ln)
@@ -1130,6 +1146,35 @@ def _repair_sentence_split_by_figure_blocks(md: str) -> str:
 
 def _looks_like_numbered_formula_fragment(text: str) -> bool:
     t = _normalize_text(text or "").strip()
+    match = re.match(r"^\d+(?:\.\d+)*\.?\s+(.+)$", t)
+    if match:
+        tail = str(match.group(1) or "").strip()
+        # Vision extraction can promote a display-equation row such as
+        # ``1 L K P L K d −`` to H2 before the surrounding math is normalized.
+        # Real section titles contain ordinary words; formula shards instead
+        # have a dense run of one-letter variables and operators. Keep this
+        # narrow so ``3 L2-Regularized Reconstruction`` stays structural.
+        single_letter_tokens = re.findall(r"(?<![A-Za-z])[A-Za-z](?![A-Za-z])", tail)
+        ordinary_words = re.findall(r"\b[A-Za-z]{3,}\b", tail)
+        operator_signal = bool(
+            re.search(r"[=<>~+*/−±≡∑∏{}]|\\(?:ln|log|exp|sum|prod)\b", tail)
+        )
+        math_symbol_signal = bool(
+            operator_signal
+            or re.search(r"[πσ∀∃⌊⌋̃]", tail)
+            or re.search(r"[\x00-\x1f\ufffd]", tail)
+        )
+        leading_fragment_signal = bool(
+            re.match(r"^(?:[.,=<>~+*/−±≡]|[πσ∀∃⌊⌋̃]|[\x00-\x1f\ufffd])", tail)
+        )
+        if math_symbol_signal and (not ordinary_words or leading_fragment_signal):
+            return True
+        if operator_signal and len(single_letter_tokens) >= 3 and len(ordinary_words) <= 1:
+            return True
+        if math_symbol_signal and len(single_letter_tokens) >= 3 and "⌋" in tail:
+            return True
+        if re.search(r"[§‡]", tail) and len(ordinary_words) >= 8:
+            return True
     return bool(
         re.match(
             r"^\d+(?:\.\d+)*\.?\s+(?:∥|‖|\|\||\\parallel\b|\$)",

@@ -161,6 +161,7 @@ export function ResearchBriefWorkspace({
         await Promise.all([loadRevisions(record.id), loadOpenUpdatePlan(record)])
       } else {
         applyRecord(null)
+        setTitle(S.research_brief_default_title)
         setRevisions([])
         configureUpdatePlan(null)
       }
@@ -169,7 +170,7 @@ export function ResearchBriefWorkspace({
     } finally {
       setLoading(false)
     }
-  }, [S.research_brief_load_failed, applyRecord, configureUpdatePlan, initialBriefId, loadOpenUpdatePlan, loadRevisions, projectId])
+  }, [S.research_brief_default_title, S.research_brief_load_failed, applyRecord, configureUpdatePlan, initialBriefId, loadOpenUpdatePlan, loadRevisions, projectId])
 
   const loadMatrices = useCallback(async () => {
     if (!projectId) return
@@ -179,7 +180,11 @@ export function ResearchBriefWorkspace({
       setVerifiedMatrices(rows)
       setSelectedMatrixId((current) => {
         const requested = String(sourceMatrixId || '').trim()
-        if (requested && rows.some((row) => row.id === requested)) return requested
+        if (requested && rows.some((row) => row.id === requested)) {
+          const sourceMatrix = rows.find((row) => row.id === requested)
+          setObjective((value) => value.trim() ? value : String(sourceMatrix?.objective || '').trim())
+          return requested
+        }
         if (current && rows.some((row) => row.id === current)) return current
         if (current) return current
         return rows[0]?.id || ''

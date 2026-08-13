@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import kb.retrieval_engine as retrieval_engine
 from kb.retrieval_engine import (
     _anchor_text_bonus,
     _deterministic_query_variants,
+    _extract_direct_prompt_phrases,
     _extract_explicit_anchor_hint,
     _group_hits_by_doc_for_refs,
     _search_hits_with_fallback,
@@ -110,6 +112,22 @@ def test_deterministic_query_variants_split_unmapped_named_methods() -> None:
     )
 
     assert variants == ["FlashAttention", "LoRA"]
+
+
+def test_deterministic_query_variants_preserve_six_enumerated_paper_names() -> None:
+    variants = _deterministic_query_variants(
+        "请比较 Informer、Autoformer、FEDformer、PatchTST、TimesNet 和 iTransformer，"
+        "每篇论文都给出证据。"
+    )
+
+    assert {item.lower() for item in variants} == {
+        "informer",
+        "autoformer",
+        "fedformer",
+        "patchtst",
+        "timesnet",
+        "itransformer",
+    }
 
 
 def test_unmapped_named_methods_survive_lossy_translation(monkeypatch) -> None:
@@ -304,6 +322,30 @@ def test_deterministic_query_variants_split_multi_method_microscopy_question() -
     assert "structured detection" in joined
     assert "interferometric image scanning microscopy" in joined
     assert "quantum correlation light-field microscope" in joined
+
+
+def test_direct_prompt_phrases_keep_hyphenated_method_identity() -> None:
+    phrases = _extract_direct_prompt_phrases(
+        "Compare structured detection, interferometric, and light-field methods."
+    )
+
+    assert "structured detection" in phrases
+    assert "interferometric" in phrases
+    assert "light field" in phrases
+
+
+def test_direct_prompt_match_normalizes_pdf_ligatures_in_source_identity() -> None:
+    score, matches = retrieval_engine._direct_prompt_match_score(
+        prompt_text=(
+            "Compare structured detection, interferometric, and light-field methods."
+        ),
+        source_path="Quantum correlation light-\ufb01eld microscope.en.md",
+        snippets=[],
+        headings=[],
+    )
+
+    assert score >= 3.0
+    assert "light field" in matches
 
 
 def test_deterministic_query_variants_pair_detector_review_with_pidl() -> None:

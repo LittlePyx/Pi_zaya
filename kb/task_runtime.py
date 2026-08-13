@@ -269,6 +269,7 @@ from kb.paper_guide_context_runtime import (
     _apply_paper_guide_deepread_context as _context_apply_deepread_context,
     _build_paper_guide_context_records as _context_build_context_records,
     _prepare_paper_guide_prompt_context as _context_prepare_prompt_context,
+    _requests_per_source_evidence as _context_requests_per_source_evidence,
 )
 from kb.paper_guide_direct_answer_runtime import (
     _build_paper_guide_exact_answer_preflight as _direct_answer_build_exact_preflight,
@@ -368,6 +369,7 @@ from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.retrieval_engine import (
     _collect_doc_overview_snippets,
     _deep_read_md_for_context,
+    _direct_prompt_match_score,
     _enrich_grouped_refs_with_llm_pack,
     _extract_md_headings,
     _group_hits_by_doc_for_refs,
@@ -2386,6 +2388,19 @@ def _focus_answer_seed_on_prompt_named_sources(
     ):
         return rows
 
+    named = _prompt_named_answer_seed(rows, prompt=q)
+    return named if len(named) >= 2 else rows
+
+
+def _prompt_named_answer_seed(
+    answer_seed: list[dict] | None,
+    *,
+    prompt: str,
+) -> list[dict]:
+    """Return only sources explicitly named in a multi-paper prompt."""
+
+    rows = [dict(hit) for hit in list(answer_seed or []) if isinstance(hit, dict)]
+    q = str(prompt or "").strip()
     named: list[dict] = []
     seen_sources: set[str] = set()
     for hit in rows:
@@ -2393,14 +2408,47 @@ def _focus_answer_seed_on_prompt_named_sources(
         source_path = str((meta or {}).get("source_path") or hit.get("source_path") or "").strip()
         source_name = str((meta or {}).get("source_name") or hit.get("source_name") or "").strip()
         source_surface = source_path or source_name
-        if _source_prompt_match_score(q, source_surface) < 6.5:
+        heading = str((meta or {}).get("heading_path") or (meta or {}).get("ref_best_heading_path") or "").strip()
+        snippet = str(hit.get("text") or (meta or {}).get("evidence_quote") or "").strip()
+        direct_score, direct_matches = _direct_prompt_match_score(
+            prompt_text=q,
+            source_path=source_surface,
+            snippets=[snippet],
+            headings=[heading],
+        )
+        strong_snippet_identity = False
+        for phrase in direct_matches:
+            raw_match = re.search(
+                rf"(?<![A-Za-z0-9_-]){re.escape(str(phrase or ''))}(?![A-Za-z0-9_-])",
+                q,
+                flags=re.I,
+            )
+            raw_token = raw_match.group(0) if raw_match else ""
+            if raw_token and (
+                raw_token.isupper()
+                or any(ch.isupper() for ch in raw_token[1:])
+                or any(ch.isdigit() for ch in raw_token)
+                or "-" in raw_token
+            ):
+                strong_snippet_identity = True
+                break
+        exact_multiword_identity = bool(
+            direct_score >= 2.3
+            and any(len(str(phrase or "").split()) >= 2 for phrase in direct_matches)
+        )
+        if (
+            _source_prompt_match_score(q, source_surface) < 6.5
+            and direct_score < 3.0
+            and not (direct_score >= 1.0 and strong_snippet_identity)
+            and not exact_multiword_identity
+        ):
             continue
         source_key = source_path.replace("\\", "/").casefold() or source_name.casefold()
         if source_key in seen_sources:
             continue
         seen_sources.add(source_key)
         named.append(hit)
-    return named if len(named) >= 2 else rows
+    return named
 
 
 def _should_sync_deep_seed_for_display(
@@ -3583,6 +3631,7 @@ def _query_scope_prompt_block(*, scope: str, selected_count: int, current_source
         "- Search and synthesize across the whole indexed literature library.\n"
         "- When multiple papers are relevant, organize the answer by paper and explain why each paper matches.\n"
         "- Pair every paper-specific mechanism, result, number, comparison, and limitation with exact retrieved evidence on that same sentence.\n"
+        "- Distinguish a paper's own author-stated limitations from limitations it attributes to prior work or uses only as design motivation. If the user asks for explicit author-stated limitations and none are retrieved, state that boundary instead of relabeling prior-work criticism.\n"
         "- Keep evidence boundaries between papers and neighboring modalities; background from one source cannot prove a claim about another source or modality.\n"
         "- If direct support is absent, omit the specific claim or label it explicitly as an inference; do not attach the nearest unrelated citation.\n"
         "- The retrieved snippets are only a bounded candidate window, not the full library inventory. Never infer the library's total paper count from them.\n"
@@ -4267,6 +4316,21 @@ def _answer_hit_limit_for_request(
     return max(1, min(top_k_safe, 4))
 
 
+def _max_tokens_for_explicit_per_source_answer(
+    requested_max_tokens: int,
+    *,
+    prompt: str,
+    source_count: int,
+) -> int:
+    """Reserve enough output for one concise, cited row per named paper."""
+
+    requested = max(1, int(requested_max_tokens or 1))
+    count = max(0, int(source_count or 0))
+    if not _context_requests_per_source_evidence(prompt, source_count=count):
+        return requested
+    return max(requested, min(2048, 320 * count))
+
+
 def _should_sync_deep_seed_for_answer(
     *,
     guide_strict_mode: bool,
@@ -4775,7 +4839,8 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         db_dir = Path(str(task.get("db_dir") or "")).expanduser()
         top_k = int(task.get("top_k") or 6)
         temperature = float(task.get("temperature") or 0.15)
-        max_tokens = int(task.get("max_tokens") or 1200)
+        requested_max_tokens = int(task.get("max_tokens") or 1200)
+        max_tokens = requested_max_tokens
         deep_read = bool(task.get("deep_read"))
         answer_contract_v1 = _answer_contract_enabled(task)
         answer_depth_auto = bool(task.get("answer_depth_auto", True))
@@ -6240,6 +6305,30 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_seed,
             prompt=(prompt or retrieval_prompt or ""),
         )
+        explicitly_named_seed = _prompt_named_answer_seed(
+            answer_seed,
+            prompt=(prompt or retrieval_prompt or ""),
+        )
+        if prompt_multi_source_synthesis and len(explicitly_named_seed) >= 2:
+            answer_hit_limit = max(
+                answer_hit_limit,
+                min(int(top_k or 1), 6, len(explicitly_named_seed)),
+            )
+            expanded_max_tokens = _max_tokens_for_explicit_per_source_answer(
+                max_tokens,
+                prompt=(prompt or retrieval_prompt or ""),
+                source_count=len(explicitly_named_seed),
+            )
+            if expanded_max_tokens != max_tokens:
+                max_tokens = expanded_max_tokens
+                _trace_section(
+                    "request",
+                    {
+                        "requested_max_tokens": int(requested_max_tokens),
+                        "max_tokens": int(max_tokens),
+                        "per_source_output_budget": True,
+                    },
+                )
         if len(named_source_seed) < len(list(answer_seed or [])):
             answer_seed = named_source_seed
             answer_hit_limit = min(answer_hit_limit, max(1, len(named_source_seed)))

@@ -30,7 +30,7 @@ _MAX_CELL_VALUE = 520
 _MAX_EVIDENCE_QUOTE = 1_200
 _FIELD_SPECS: dict[str, tuple[str, re.Pattern[str]]] = {
     "method": (
-        "method methodology approach architecture algorithm model framework pipeline implementation",
+        "method methodology approach architecture algorithm model framework pipeline implementation propose introduce design",
         re.compile(
             r"\b(?:method|methodology|approach|architecture|algorithm|model|framework|pipeline|implementation|network|techniques?)\b"
             r"|(?:方法|算法|模型|架构|框架|流程|网络|实现)",
@@ -38,15 +38,15 @@ _FIELD_SPECS: dict[str, tuple[str, re.Pattern[str]]] = {
         ),
     ),
     "dataset_or_experiment": (
-        "dataset benchmark experimental setup evaluation protocol training test samples simulation hardware",
+        "dataset benchmark experimental setup evaluation protocol training test samples simulation hardware input length prediction length",
         re.compile(
-            r"\b(?:dataset|benchmark|experiment|experimental|evaluation|protocol|training set|test set|simulation|hardware|samples?)\b"
+            r"\b(?:datasets?|benchmarks?|experiments?|experimental|evaluation|protocol|training set|test set|simulation|hardware|samples?)\b"
             r"|(?:数据集|基准|实验|评估|训练集|测试集|仿真|硬件|样本)",
             flags=re.IGNORECASE,
         ),
     ),
     "metric": (
-        "metric quantitative evaluation accuracy PSNR SSIM LPIPS RMSE F1 AUC IoU latency FPS runtime",
+        "metric quantitative evaluation accuracy PSNR SSIM LPIPS RMSE MSE MAE SMAPE MASE OWA F1 AUC IoU latency FPS runtime",
         re.compile(
             r"\b(?:metric|accuracy|precision|recall|PSNR|SSIM|LPIPS|RMSE|NMSE|MSE|MAE|SNR|FID|F1|AUC|IoU|Dice|FPS|latency|runtime|FLOPs|parameters?|mean average precision)\b"
             r"|(?:指标|准确率|精度|召回率|延迟|运行时间|参数量)",
@@ -69,6 +69,13 @@ _FIELD_SPECS: dict[str, tuple[str, re.Pattern[str]]] = {
             flags=re.IGNORECASE,
         ),
     ),
+}
+_FIELD_FOCUSED_QUERIES = {
+    "method": "we propose introduce design architecture consists combines method",
+    "dataset_or_experiment": "we evaluate datasets benchmark experimental setup input length prediction length",
+    "metric": "metrics metric MSE MAE RMSE F1 accuracy lower higher",
+    "key_result": "our method achieves improves outperforms results performance",
+    "limitation": "our limitation remains future work we will",
 }
 _NUMERIC_RE = re.compile(r"(?<![A-Za-z])[-+]?\d+(?:\.\d+)?\s*(?:%|dB|ms|s|fps|Hz|GB|MB)?", re.IGNORECASE)
 _STRONG_METRIC_RE = re.compile(
@@ -184,11 +191,19 @@ _RESULT_META_RE = re.compile(
     re.IGNORECASE,
 )
 _METHOD_META_RE = re.compile(
-    r"\b(?:describe|discuss|outline)\b.{0,80}\b(?:how|method|algorithm|implementation)\b",
+    r"\b(?:describe|discuss|outline)\b.{0,80}\b(?:how|method|algorithm|implementation)\b"
+    r"|\b(?:pseudo-?code|algorithm\s+\d+)\b.{0,80}\b(?:presented|provided|listed|shown)\b"
+    r"|\b(?:training|inference)\s+phase\b.{0,80}\balgorithm\b"
+    r"|\bgather\s+operation\b.{0,80}\bmemory-access\b"
+    r"|\b(?:overall\s+)?(?:\w+[ -])?architecture\b.{0,80}\b(?:shown|illustrated|presented)\s+in\s+(?:figure|fig\.?|table)\b",
     re.IGNORECASE,
 )
 _METHOD_NEGATIVE_RE = re.compile(
     r"\b(?:unrealistic|cannot|unable|not feasible|infeasible|struggle|suffer|limitation)\w*\b",
+    re.IGNORECASE,
+)
+_METHOD_EVALUATION_RE = re.compile(
+    r"\b(?:in this section,?\s+)?we\s+(?:evaluate|compare|test|benchmark)\b",
     re.IGNORECASE,
 )
 _OTHER_METHOD_LIMIT_RE = re.compile(
@@ -199,8 +214,8 @@ _OTHER_METHOD_LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 _LIMITATION_RESOLUTION_RE = re.compile(
-    r"\b(?:address|overcome|resolve|alleviate|mitigate)\w*\b.{0,60}\b(?:limit|limitation|challenge|drawback)s?\b"
-    r"|\b(?:limit|limitation|challenge|drawback)s?\b.{0,60}\b(?:are|is|were|was)?\s*(?:addressed|overcome|resolved|alleviated|mitigated)\b",
+    r"\b(?:address|overcome|resolve|alleviate|mitigate|tackle|solve)\w*\b.{0,60}\b(?:limit|limitation|challenge|drawback)s?\b"
+    r"|\b(?:limit|limitation|challenge|drawback)s?\b.{0,60}\b(?:are|is|were|was)?\s*(?:addressed|overcome|resolved|alleviated|mitigated|tackled|solved)\b",
     re.IGNORECASE,
 )
 _NON_LIMITATION_CHALLENGE_RE = re.compile(
@@ -211,7 +226,109 @@ _LIMITATION_ABSENCE_RE = re.compile(
     r"\b(?:no|without|not)\s+(?:(?:known|reported|explicit|significant|major|clear|apparent|any|a|an)\s+){0,3}"
     r"(?:limits?|limitations?|drawbacks?|challenges?|weaknesses?)\b"
     r"|\bwithout\s+(?:reporting|mentioning|identifying|showing)\s+(?:any\s+|a\s+|an\s+)?"
-    r"(?:limits?|limitations?|drawbacks?|challenges?|weaknesses?)\b",
+    r"(?:limits?|limitations?|drawbacks?|challenges?|weaknesses?)\b"
+    r"|\b(?:do|does|did)\s+not\s+(?:find|observe|identify|encounter|report)\b.{0,60}"
+    r"\b(?:failures?|limitations?|drawbacks?|challenges?|weaknesses?)\b",
+    re.IGNORECASE,
+)
+_OWN_LIMITATION_HEADING_RE = re.compile(
+    r"\b(?:limitations?|future(?:\s+work)?|outlook)\b|(?:灞€闄恷鏈潵宸ヤ綔|灞曟湜)",
+    re.IGNORECASE,
+)
+_AUTHOR_FUTURE_WORK_RE = re.compile(
+    r"\bwe\s+(?:will|plan|intend|hope|leave)\b"
+    r"|\b(?:future work|in (?:the )?future)\b.{0,24}\b(?:we|will|should|could|may|is to|are to)\b",
+    re.IGNORECASE,
+)
+_ANAPHORIC_FUTURE_WORK_RE = re.compile(
+    r"^(?:it|this|that|these|such)\b.{0,160}\b(?:future work|in (?:the )?future|we\s+will)\b",
+    re.IGNORECASE,
+)
+_EDITORIAL_LIMIT_RE = re.compile(
+    r"\b(?:space|page|word|length)\s+limitations?\b"
+    r"|\bdue to\b.{0,40}\b(?:main text|appendix|supplement(?:ary)?)\b"
+    r"|\b(?:full|additional) results?\b.{0,80}\b(?:appendix|supplement(?:ary)?|following)\b",
+    re.IGNORECASE,
+)
+_METHOD_PRIOR_CITATION_RE = re.compile(
+    r"\([^)]*\bet al\.,?\s*(?:19|20)\d{2}[^)]*\)"
+    r"|\[[0-9,;\-\s]+\]",
+    re.IGNORECASE,
+)
+_NAMED_METHOD_ACTION_RE = re.compile(
+    r"\b[A-Z][A-Za-z0-9-]{2,}\s+(?:uses?|combines?|repurposes?|adopts?|employs?|introduces?|"
+    r"implements?|consists?|contains?|captures?|models?|transforms?)\b",
+    re.IGNORECASE,
+)
+_CURRENT_NAMED_WORK_RE = re.compile(
+    r"\bour\s+[A-Z][A-Za-z0-9-]{2,}\b"
+    r"|\b[A-Z][A-Za-z0-9-]{2,}\b.{0,100}\bcore architecture\b",
+    re.IGNORECASE,
+)
+_METHOD_DESCRIPTION_RE = re.compile(
+    r"\b(?:uses?|using|based on|contains?|consists? of|combines?|comprises?|captures?|transforms?|"
+    r"repurposes?|adopts?|employs?|introduces?|implements?|designs?)\b",
+    re.IGNORECASE,
+)
+_EXPERIMENT_ACTION_RE = re.compile(
+    r"\b(?:we|the experiments?|the evaluation|all (?:of the )?models?)\b.{0,90}"
+    r"\b(?:use|uses|used|adopt|adopts|adopted|follow|follows|followed|evaluate|evaluates|evaluated|"
+    r"test|tests|tested|train|trains|trained|conduct|conducts|conducted|perform|performs|performed|"
+    r"build|builds|built|compare|compares|compared|include|includes|included)\b",
+    re.IGNORECASE,
+)
+_EXPERIMENT_DETAIL_RE = re.compile(
+    r"\b(?:input|lookback|prediction|forecast(?:ing)?)\s+(?:length|horizon|window)\b"
+    r"|\b(?:train|training)[- /]?(?:validation|val)[- /]?(?:test|testing)\b"
+    r"|\b(?:train(?:ing)?|validation|test(?:ing)?)\s+(?:set|split|protocol)\b"
+    r"|\b\d[\d, ]*\s+(?:datasets?|benchmarks?|samples?|subjects?|videos?|cases?)\b",
+    re.IGNORECASE,
+)
+_DATASET_DESIGN_ONLY_RE = re.compile(
+    r"\b(?:series|samples?)\s+within\s+a\s+batch\b.{0,100}\bsame\s+time-series\s+dataset\b",
+    re.IGNORECASE,
+)
+_BASELINE_ONLY_DATASET_RE = re.compile(
+    r"\b(?:include|choose|select|use)\w*\b.{0,100}\b(?:models?|methods?|forecasters?)\b.{0,80}\b(?:as\s+)?(?:the\s+)?(?:SOTA\s+)?(?:benchmarks?|baselines?)\b"
+    r"|\b(?:include|choose|select|use)\w*\b.{0,100}\b(?:FEDformer|Autoformer|Informer|Transformer|DLinear|PatchTST)\b.{0,80}\b(?:benchmarks?|baselines?)\b",
+    re.IGNORECASE,
+)
+_SPECIFIC_METRIC_RE = re.compile(
+    _STRONG_METRIC_RE.pattern
+    + r"|\b(?:accuracy|precision|recall|latency|runtime|mean\s+(?:square|squared|absolute)\s+error|"
+    r"symmetric\s+mean\s+absolute\s+percentage\s+error|overall\s+weighted\s+average)\b",
+    re.IGNORECASE,
+)
+_METRIC_DEFINITION_RE = re.compile(
+    r"\b(?:metrics?|evaluation metrics?)\b.{0,100}\b(?:use|uses|used|adopt|adopts|adopted|include|includes|included|are|is)\b"
+    r"|\b(?:lower|higher)\b.{0,80}\b(?:MSE|MAE|RMSE|F1|accuracy|precision|recall|PSNR|SSIM|LPIPS)\b"
+    r".{0,60}\b(?:indicat(?:e|es)|means?|better|accurate|preferred)\b"
+    r"|\b(?:MSE|MAE|RMSE|F1(?:-score)?)\b.{0,80}\b(?:lower|higher)\b"
+    r".{0,60}\b(?:indicat(?:e|es)|means?|better|accurate|preferred)\b"
+    r"|\b(?:calculate|report|evaluate|measure)\w*\b.{0,100}\b(?:MSE|MAE|RMSE|F1(?:-score)?)\b.{0,80}\bmetrics?\b",
+    re.IGNORECASE,
+)
+_METRIC_PLACEHOLDER_RE = re.compile(
+    r"^(?:[^:;=]{1,100}:\s*)?(?:[^:;=]{1,80}\s*=\s*)?(?:metric\s*=\s*)?[-+]?\d+(?:\.\d+)?\s*$"
+    r"|^[^:;=]{1,100}\s*=\s*(?:MSE|MAE|RMSE|F1)(?:\s+(?:MSE|MAE|RMSE|F1))*\s*;?$",
+    re.IGNORECASE,
+)
+_BROKEN_OCR_SENTENCE_RE = re.compile(
+    r"\b(?:experi|imple|atten|perfor|mance)-\s+(?:note|the|[a-z]{1,3}\b)"
+    r"|\bself-\s+[a-z]\s+mechanism\b",
+    re.IGNORECASE,
+)
+_RESULT_SETUP_ONLY_RE = re.compile(
+    r"\bfor (?:a )?better comparison\b.{0,180}\b(?:experiment settings?|input length|prediction length|protocol)\b"
+    r"|\b(?:follow|adopt|use)\w*\b.{0,80}\bexperiment settings?\b",
+    re.IGNORECASE,
+)
+_RESULT_NON_PERFORMANCE_RE = re.compile(
+    r"\b(?:datasets?|samples?|subjects?|videos?|cases?)\b.{0,80}\b(?:reduc(?:e|es|ed)|increas(?:e|es|ed))\s+from\b",
+    re.IGNORECASE,
+)
+_STATISTICAL_LIMIT_THEOREM_RE = re.compile(
+    r"\bcentral\s+limits?\s+theorem\b|\blimit(?:ing)?\s+distribution\b",
     re.IGNORECASE,
 )
 _DATASET_META_RE = re.compile(
@@ -317,6 +434,50 @@ def _sentence_candidates(value: object) -> list[str]:
     return candidates[:24]
 
 
+def _field_sentence_candidates(value: object, field: str) -> list[str]:
+    candidates = _sentence_candidates(value)
+    if field == "metric" and len(candidates) >= 2:
+        expanded_metrics: list[str] = list(candidates)
+        for index, sentence in enumerate(candidates[:-1]):
+            if not _SPECIFIC_METRIC_RE.search(sentence):
+                continue
+            combined = sentence
+            for following in candidates[index + 1 : index + 3]:
+                if (
+                    not _SPECIFIC_METRIC_RE.search(following)
+                    or _METRIC_PLACEHOLDER_RE.search(following)
+                    or _BROKEN_OCR_SENTENCE_RE.search(following)
+                    or "|" in following
+                    or "·" in following
+                    or re.search(r"^Models?\b.{0,120}\bMetric\b", following, re.IGNORECASE)
+                ):
+                    break
+                candidate = _text(f"{combined} {following}", limit=_MAX_CELL_VALUE)
+                if len(candidate) < len(combined) + len(following):
+                    break
+                combined = candidate
+            if combined != sentence:
+                expanded_metrics.append(combined)
+        return expanded_metrics
+    if field != "limitation" or len(candidates) < 2:
+        return candidates
+    expanded: list[str] = []
+    for index, sentence in enumerate(candidates):
+        if index and _ANAPHORIC_FUTURE_WORK_RE.search(sentence):
+            previous = candidates[index - 1]
+            if _NEGATIVE_LIMIT_SIGNAL_RE.search(previous) or re.search(
+                r"\bperformance\b.{0,80}\b(?:reduc|degrad|worse|lower|drop)\w*\b",
+                previous,
+                re.IGNORECASE,
+            ):
+                combined = _text(f"{previous} {sentence}", limit=_MAX_CELL_VALUE)
+                if len(combined) >= 20:
+                    expanded.append(combined)
+                continue
+        expanded.append(sentence)
+    return expanded
+
+
 def _candidate_score(
     sentence: str,
     *,
@@ -330,16 +491,33 @@ def _candidate_score(
     numeric_surface = re.sub(r"\[[0-9,;\-\s]+\]", " ", sentence)
     if field == "metric" and not (_NUMERIC_RE.search(numeric_surface) or _STRONG_METRIC_RE.search(sentence)):
         return -1.0
+    if field == "metric" and not _SPECIFIC_METRIC_RE.search(sentence):
+        return -1.0
+    if field == "metric" and (_METRIC_PLACEHOLDER_RE.search(sentence) or _BROKEN_OCR_SENTENCE_RE.search(sentence)):
+        return -1.0
     if field == "metric" and sentence.count("·") >= 3:
         return -1.0
     if field == "method" and (
         not _METHOD_SIGNAL_RE.search(sentence)
         or not _METHOD_MECHANISM_RE.search(sentence)
+        or not _METHOD_DESCRIPTION_RE.search(sentence)
     ):
         return -1.0
     if field == "method" and _PRIOR_METHOD_RE.search(sentence) and not _CURRENT_METHOD_PROPOSAL_RE.search(sentence):
         return -1.0
-    if field == "method" and (_METHOD_META_RE.search(sentence) or _METHOD_NEGATIVE_RE.search(sentence)):
+    if (
+        field == "method"
+        and _METHOD_PRIOR_CITATION_RE.search(sentence)
+        and not (_CURRENT_METHOD_PROPOSAL_RE.search(sentence) or _NAMED_METHOD_ACTION_RE.search(sentence))
+    ):
+        return -1.0
+    if field == "method" and (
+        _METHOD_META_RE.search(sentence)
+        or _METHOD_NEGATIVE_RE.search(sentence)
+        or _METHOD_EVALUATION_RE.search(sentence)
+    ):
+        return -1.0
+    if field == "method" and _RESULT_SIGNAL_RE.search(sentence) and not _METHOD_DESCRIPTION_RE.search(sentence):
         return -1.0
     if field == "dataset_or_experiment" and (
         len(sentence) < 36 or not _EXPERIMENT_SIGNAL_RE.search(sentence)
@@ -347,15 +525,35 @@ def _candidate_score(
         return -1.0
     if field == "dataset_or_experiment" and _DATASET_META_RE.search(sentence):
         return -1.0
+    if field == "dataset_or_experiment" and _DATASET_DESIGN_ONLY_RE.search(sentence):
+        return -1.0
+    if field == "dataset_or_experiment" and _BASELINE_ONLY_DATASET_RE.search(sentence):
+        return -1.0
     if field == "key_result" and not _RESULT_SIGNAL_RE.search(sentence):
         return -1.0
     if field == "key_result" and _RESULT_META_RE.search(sentence):
         return -1.0
-    if field == "limitation" and (
-        not _LIMITATION_SIGNAL_RE.search(sentence)
-        or not _NEGATIVE_LIMIT_SIGNAL_RE.search(sentence)
-    ):
+    if field == "key_result" and _RESULT_SETUP_ONLY_RE.search(sentence):
         return -1.0
+    if field == "key_result" and _RESULT_NON_PERFORMANCE_RE.search(sentence):
+        return -1.0
+    if field == "limitation":
+        future_work = bool(_AUTHOR_FUTURE_WORK_RE.search(sentence))
+        if not _LIMITATION_SIGNAL_RE.search(sentence) or not (
+            _NEGATIVE_LIMIT_SIGNAL_RE.search(sentence) or future_work
+        ):
+            return -1.0
+        # A negative sentence can describe the task, a baseline, or prior
+        # methods while still being perfectly quotable. A matrix limitation
+        # cell represents the selected paper's own boundary, so require either
+        # an explicit current-work subject or an author-owned limitation/future
+        # section. Otherwise keep the cell visibly empty.
+        if not (
+            _CURRENT_WORK_RE.search(sentence)
+            or _OWN_LIMITATION_HEADING_RE.search(heading)
+            or future_work
+        ):
+            return -1.0
     if field == "limitation" and _OTHER_METHOD_LIMIT_RE.search(sentence) and not _CURRENT_WORK_RE.search(sentence):
         return -1.0
     if field == "limitation" and _LIMITATION_RESOLUTION_RE.search(sentence):
@@ -364,11 +562,57 @@ def _candidate_score(
         return -1.0
     if field == "limitation" and _LIMITATION_ABSENCE_RE.search(sentence):
         return -1.0
+    if field == "limitation" and _EDITORIAL_LIMIT_RE.search(sentence):
+        return -1.0
+    if field == "limitation" and _ANAPHORIC_FUTURE_WORK_RE.search(sentence):
+        return -1.0
+    if field == "limitation" and _STATISTICAL_LIMIT_THEOREM_RE.search(sentence):
+        return -1.0
     sentence_tokens = {str(token).lower() for token in tokenize(sentence) if str(token).strip()}
     objective_weight = 0.8 if field == "method" else 0.45
     score = 3.0 + min(3.0, float(len(sentence_tokens & objective_tokens)) * objective_weight)
     if field in {"metric", "key_result"} and _NUMERIC_RE.search(numeric_surface):
         score += 2.0
+    if field == "method" and (
+        _CURRENT_METHOD_PROPOSAL_RE.search(sentence)
+        or _NAMED_METHOD_ACTION_RE.search(sentence)
+        or _CURRENT_NAMED_WORK_RE.search(sentence)
+    ):
+        score += 1.75
+    if field == "method" and _CURRENT_NAMED_WORK_RE.search(sentence):
+        score += 0.75
+    if field == "method" and re.search(
+        r"\b(?:appendix|implementation details?)\b",
+        heading,
+        re.IGNORECASE,
+    ):
+        score -= 1.25
+    if field == "dataset_or_experiment" and (
+        _EXPERIMENT_ACTION_RE.search(sentence) or _EXPERIMENT_DETAIL_RE.search(sentence)
+    ):
+        score += 1.5
+    if field == "dataset_or_experiment" and re.search(
+        r"\b(?:benchmarks?|datasets?)\b.{0,100}\b(?:include|includes|included|contain|contains|contained|cover|covers|covered)\b"
+        r"|\b(?:include|includes|included|contain|contains|contained|cover|covers|covered)\b.{0,100}\b(?:benchmarks?|datasets?)\b",
+        sentence,
+        re.IGNORECASE,
+    ):
+        score += 1.0
+    if field == "dataset_or_experiment" and re.search(
+        r"\b(?:input|lookback|prediction|forecast(?:ing)?)\s+(?:length|horizon|window)\b",
+        sentence,
+        re.IGNORECASE,
+    ):
+        score += 1.0
+    if field == "dataset_or_experiment" and re.search(
+        r"\b(?:train|training)[- /]?(?:validation|val)[- /]?(?:test|testing)\b"
+        r"|\b(?:protocol|data leakage)\b",
+        sentence,
+        re.IGNORECASE,
+    ):
+        score += 1.25
+    if field == "metric" and _METRIC_DEFINITION_RE.search(sentence):
+        score += 3.0
     if field == "limitation" and re.search(r"\b(?:however|although|but|remain)\b|(?:然而|但是|仍然)", sentence, re.I):
         score += 0.5
     if _FIELD_HEADING_RE[field].search(heading):
@@ -390,16 +634,25 @@ def _best_cell_hit(
     query_terms, pattern = _FIELD_SPECS[field]
     query = query_terms
     active_retriever = retriever or BM25Retriever(chunks)
-    ranked = active_retriever.search(query, top_k=min(20, max(8, len(chunks))))
+    ranked = active_retriever.search(query, top_k=min(32, max(8, len(chunks))))
+    focused = active_retriever.search(
+        _FIELD_FOCUSED_QUERIES[field],
+        top_k=min(20, max(8, len(chunks))),
+    )
+    seen_ranked = {
+        str(item.get("id") or _meta(item).get("chunk_id") or id(item))
+        for item in ranked
+    }
+    for item in focused:
+        identity = str(item.get("id") or _meta(item).get("chunk_id") or id(item))
+        if identity not in seen_ranked:
+            ranked.append(item)
+            seen_ranked.add(identity)
     if field == "method" and objective:
         contextual = active_retriever.search(
             f"{objective} {query_terms}",
-            top_k=min(20, max(8, len(chunks))),
+            top_k=min(32, max(8, len(chunks))),
         )
-        seen_ranked = {
-            str(item.get("id") or _meta(item).get("chunk_id") or id(item))
-            for item in ranked
-        }
         for item in contextual:
             identity = str(item.get("id") or _meta(item).get("chunk_id") or id(item))
             if identity not in seen_ranked:
@@ -413,12 +666,12 @@ def _best_cell_hit(
         if len(str(token).strip()) >= 2
     }
     best: tuple[float, dict[str, Any], str] | None = None
-    for rank, hit in enumerate(ranked[:32]):
+    for rank, hit in enumerate(ranked[:64]):
         meta = _meta(hit)
         heading = _text(meta.get("heading_path") or meta.get("top_heading"), limit=800)
         if _REFERENCE_HEADING_RE.search(heading):
             continue
-        for sentence in _sentence_candidates(hit.get("text")):
+        for sentence in _field_sentence_candidates(hit.get("text"), field):
             if _CAPTION_ONLY_RE.search(sentence):
                 continue
             if _normal(sentence) in set(excluded_quotes or set()):

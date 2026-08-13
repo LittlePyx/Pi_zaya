@@ -349,6 +349,66 @@ def test_do_not_promote_formula_fragments_as_numbered_headings():
     assert "\n1 T N )) , (4)\n" in f"\n{out}\n"
 
 
+def test_demote_variable_dense_formula_rows_mistaken_for_numbered_sections():
+    src = """
+# Informer
+
+## 3 Methodology
+
+## 1 L K P L K d −
+
+## 1 L K P L K d } + ln L K . When
+
+## 1 Informer § replaces our decoder with dynamic decoding one in Informer ‡ . 2 The '-' indicates failure for the unacceptable metric results.
+
+## 4 Experiment Datasets
+
+## Appendix C Supporting Analysis
+
+## 0 ≡ S 10 ± S 20 . As for the joint probability distribution
+
+## 2 π  ̃ σ 2
+
+## 2 . Due to the limitation of  ̃ σ 2
+
+## 4 L k ⌋ of A 1 and A 2 , it is guaranteed
+"""
+
+    out = postprocess_markdown(src)
+
+    assert "## 3 Methodology" in out
+    assert "## 4 Experiment Datasets" in out
+    assert "## 1 L K P L K d" not in out
+    assert "\n1 L K P L K d −\n" in f"\n{out}\n"
+    assert "## 1 Informer §" not in out
+    assert "## 0 ≡" not in out
+    assert "## 2 π" not in out
+    assert "## 2 . Due" not in out
+    assert "## 4 L k ⌋" not in out
+
+
+def test_do_not_promote_plot_axis_or_repeated_numbered_running_header():
+    src = """
+# Informer
+
+## 5 Conclusion
+
+Conclusion body.
+
+48 96 168 336 720 Encoder Input length (Lx)
+
+48 96 168 336 720 Decoder predict length (Ly)
+
+5 Conclusion
+"""
+
+    out = postprocess_markdown(src)
+
+    assert out.count("## 5 Conclusion") == 1
+    assert "## 48 96" not in out
+    assert "48 96 168 336 720 Encoder Input length (Lx)" in out
+
+
 def test_drop_running_journal_header_line_with_page_marker():
     src = """
 # Paper Title

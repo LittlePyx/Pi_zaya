@@ -649,6 +649,18 @@ def test_multiplier_quantities_normalize_language_magnitude_and_direction() -> N
     )
 
 
+def test_fact_quantity_extraction_reuses_immutable_cached_result() -> None:
+    evidence_binding._system_a_fact_quantities.cache_clear()
+    passage = "PSNR values are 30 dB, 31 dB across 100 images."
+
+    first = evidence_binding._system_a_fact_quantities(passage)
+    second = evidence_binding._system_a_fact_quantities(passage)
+
+    assert isinstance(first, frozenset)
+    assert first is second
+    assert evidence_binding._system_a_fact_quantities.cache_info().hits == 1
+
+
 def test_multiplier_binding_accepts_cross_language_equivalence_but_not_units() -> None:
     evidence = (
         "iISM reaches about 120 nm lateral resolution at tenfold lower incident "

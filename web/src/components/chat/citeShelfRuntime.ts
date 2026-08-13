@@ -176,6 +176,32 @@ export function dedupeShelfItems(items: CiteShelfItem[]): CiteShelfItem[] {
   return out
 }
 
+export function reconcilePersistedShelfSelection(
+  requestedItems: CiteShelfItem[],
+  persistedItems: CiteShelfItem[],
+): CiteShelfItem[] {
+  const persisted = dedupeShelfItems(persistedItems || []).slice(0, SHELF_MAX_ITEMS)
+  const used = new Set<number>()
+  const selected: CiteShelfItem[] = []
+  for (const requested of dedupeShelfItems(requestedItems || [])) {
+    const requestKey = String(requested.key || '').trim()
+    const requestSource = shelfSourceIdentity(requested)
+    const requestPaper = shelfPaperIdentity(requested)
+    const index = persisted.findIndex((candidate, candidateIndex) => (
+      !used.has(candidateIndex)
+      && (
+        (requestKey && String(candidate.key || '').trim() === requestKey)
+        || (requestSource && shelfSourceIdentity(candidate) === requestSource)
+        || (requestPaper && shelfPaperIdentity(candidate) === requestPaper)
+      )
+    ))
+    if (index < 0) continue
+    used.add(index)
+    selected.push(persisted[index])
+  }
+  return selected
+}
+
 export interface ShelfItemsMergeResult {
   nextItems: CiteShelfItem[]
   focusKey: string
@@ -573,8 +599,17 @@ export function shelfItemNeedsPersistedMetadataHydrate(item: CiteShelfItem): boo
   const libraryMatchStatus = String(item.libraryMatchStatus || '').trim().toLowerCase()
   const libraryMatchChecked = ['in_library', 'not_in_library', 'ambiguous'].includes(libraryMatchStatus)
   if (shelfKind(item) === 'reference' && !libraryMatchChecked) return true
+  const sourceBoundSystemARepairIncomplete = Boolean(
+    !item.isInpaper
+    && String(item.citationRoute || '').trim().toLowerCase() === 'system_a'
+    && String(item.sourcePath || '').trim()
+    && String(item.metadataRepairStatus || '').trim().toLowerCase() === 'partial'
+    && String(item.doi || item.doiUrl || '').trim()
+  )
+  if (sourceBoundSystemARepairIncomplete) return true
+  if (shelfItemNeedsMetadataRepair(item)) return true
   if (shelfItemMetadataQualityReady(item)) return false
-  return shelfItemNeedsMetadataRepair(item) || !item.bibliometricsChecked || !item.metadataQuality
+  return !item.bibliometricsChecked || !item.metadataQuality
 }
 
 export function shelfItemHasDisplayableArticleSummary(item: CiteShelfItem): boolean {

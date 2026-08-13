@@ -3863,6 +3863,47 @@ def _retarget_lineage_system_b_to_downstream_source(
             rf"\[\[\s*CITE\s*:\s*{re.escape(old_sid)}\s*:\s*{old_num}\s*\]\]",
             flags=re.IGNORECASE,
         )
+        old_grounding = (
+            dict(slot.get("grounding_contract") or {})
+            if isinstance(slot.get("grounding_contract"), dict)
+            else {}
+        )
+        old_evidence = str(
+            slot.get("evidence_quote") or slot.get("evidenceQuote") or ""
+        )
+        old_source_identity = _reading_slot_source_identity(old_source)
+        old_source_is_downstream = any(
+            _reading_slot_source_identity(
+                candidate.get("source_path") or candidate.get("sourcePath")
+            )
+            == old_source_identity
+            and re.search(
+                r"(?i)\b3DGS\b|dynamic\s+3D\s+scene|3D\s+explicit\s+scene",
+                " ".join(
+                    str(candidate.get(key) or "")
+                    for key in (
+                        "source_path",
+                        "source_name",
+                        "topic",
+                        "evidence_quote",
+                    )
+                ),
+            )
+            for candidate in system_a_slots
+        )
+        if (
+            old_source_is_downstream
+            and old_grounding.get("context_marker_verified") is True
+            and re.search(
+                rf"(?<!\[)\[[^\[\]]*\b{old_num}\b[^\[\]]*\](?!\])",
+                old_evidence,
+            )
+        ):
+            # The plan is already bound to the downstream paper and carries a
+            # source-verbatim same-context marker. Retargeting again would move
+            # the trace backwards to a neighboring paper (or suppress it when
+            # the answer-preservation guard rejects that rewrite).
+            continue
         old_token_match = old_token_re.search(text)
         answer_context = ""
         if old_token_match is not None:

@@ -1324,6 +1324,79 @@ def test_prepare_doc_context_prefetch_does_not_fetch_source_references(tmp_path,
     assert out["source_ref_rows"] == []
 
 
+def test_source_doi_extraction_never_takes_a_cited_work_from_references() -> None:
+    markdown = (
+        "# Informer: Beyond Efficient Transformer for Long Sequence Time-Series Forecasting\n\n"
+        "## Abstract\n\nNo source DOI is printed in the article front matter.\n\n"
+        "## References\n\n"
+        "Luong et al. Effective Approaches to Attention-based Neural Machine Translation. "
+        "doi:10.18653/v1/d15-1166.\n"
+    )
+
+    assert ref_index._extract_source_doi_from_md_head(markdown) == ""
+
+
+def test_source_doi_extraction_keeps_a_front_matter_doi_before_references() -> None:
+    markdown = (
+        "# FEDformer: Frequency Enhanced Decomposed Transformer\n\n"
+        "https://doi.org/10.1201/9781003612742-2\n\n"
+        "## References\n\nDOI: 10.18653/v1/d15-1166\n"
+    )
+
+    assert ref_index._extract_source_doi_from_md_head(markdown) == "10.1201/9781003612742-2"
+
+
+def test_incremental_index_revalidates_source_doi_after_lookup_contract_change(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    src_root = tmp_path / "src"
+    db_dir = tmp_path / "db"
+    src_root.mkdir()
+    db_dir.mkdir()
+    md_path = src_root / "informer.en.md"
+    md_path.write_text(
+        "# Informer\n\n## References\n\n"
+        "[1] Luong et al. Effective Approaches to Attention-based Neural Machine Translation. "
+        "doi:10.18653/v1/d15-1166.\n",
+        encoding="utf-8",
+    )
+    source_key = ref_index._norm_source_key(md_path.resolve())
+    previous = {
+        "version": 1,
+        "docs": {
+            source_key: {
+                "path": str(md_path.resolve()),
+                "name": md_path.name,
+                "stem": md_path.stem,
+                "sha1": ref_index.compute_file_sha1(md_path),
+                "source_doi": "10.18653/v1/d15-1166",
+                "reference_lookup_version": ref_index.REFERENCE_LOOKUP_VERSION - 1,
+                "reference_parser_version": ref_index.REFERENCE_PARSER_VERSION,
+                "refs": {},
+            }
+        },
+    }
+    (db_dir / "references_index.json").write_text(
+        json.dumps(previous),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(ref_index, "_crossref_preflight_ok", lambda **_kwargs: False)
+    monkeypatch.setattr(ref_index, "_iter_md_files", lambda *_args, **_kwargs: [md_path])
+
+    stats = ref_index.build_reference_index(
+        src_root=src_root,
+        db_dir=db_dir,
+        incremental=True,
+        enable_title_lookup=True,
+    )
+
+    document = next(iter(ref_index.load_reference_index(db_dir)["docs"].values()))
+    assert document["source_doi"] == ""
+    assert document["reference_lookup_version"] == ref_index.REFERENCE_LOOKUP_VERSION
+    assert stats["docs_updated"] == 1
+
+
 def test_infer_source_doi_from_doc_hints_prefers_heading_title_when_filename_is_truncated(monkeypatch, tmp_path):
     doc_dir = tmp_path / "NatCommun-2021-Imaging biological tissue with...pixel compressive holography"
     doc_dir.mkdir()

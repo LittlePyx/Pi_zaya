@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
@@ -766,7 +767,10 @@ _DIRECT_PROMPT_STOP_TOKENS = _DOC_HINT_STOP_TOKENS | {
 
 
 def _direct_phrase_surface(text: str) -> str:
-    s = _norm_text_for_match(text)
+    # PDF titles commonly preserve presentation ligatures (for example
+    # ``light-\ufb01eld``).  NFKC makes those identities comparable with the
+    # ordinary ASCII spelling users type without changing the query meaning.
+    s = _norm_text_for_match(unicodedata.normalize("NFKC", str(text or "")))
     s = re.sub(r"[-_/]+", " ", s)
     s = re.sub(r"[^a-z0-9\u4e00-\u9fff]+", " ", s)
     return " ".join(s.split())
@@ -823,6 +827,12 @@ def _extract_direct_prompt_phrases(prompt_text: str) -> tuple[str, ...]:
     )
     for run in latin_runs:
         raw_tokens = re.findall(r"[A-Za-z][A-Za-z0-9+_.-]*", run)
+        for raw_token in raw_tokens:
+            if "-" not in raw_token:
+                continue
+            compound = _direct_phrase_surface(raw_token)
+            if len(compound.split()) >= 2:
+                _push_phrase(compound)
         tokens = []
         for token in raw_tokens:
             normed = _direct_phrase_surface(token)
@@ -838,7 +848,16 @@ def _extract_direct_prompt_phrases(prompt_text: str) -> tuple[str, ...]:
             for n in range(max_n, 1, -1):
                 for idx in range(0, len(tokens) - n + 1):
                     phrase_tokens = tokens[idx : idx + n]
-                    if not any(len(t) >= 6 or any(ch.isdigit() for ch in t) for t in phrase_tokens):
+                    hyphenated_identity = bool(
+                        len(raw_tokens) == 1
+                        and "-" in raw_tokens[0]
+                        and idx == 0
+                        and n == len(tokens)
+                    )
+                    if not hyphenated_identity and not any(
+                        len(t) >= 6 or any(ch.isdigit() for ch in t)
+                        for t in phrase_tokens
+                    ):
                         continue
                     _push_phrase(" ".join(phrase_tokens))
 
@@ -2285,13 +2304,16 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
     # domain expansion applies, search each high-specificity identifier on its
     # own so RRF preserves every explicitly named paper.  Requiring at least
     # two identifiers keeps ordinary single-method queries unchanged.
+    variant_cap = 4
     if not variants:
         named_identifiers: list[str] = []
+        enumerated_titlecase_identifiers: list[str] = []
         seen_identifiers: set[str] = set()
-        for token in re.findall(
+        for token_match in re.finditer(
             r"(?<![A-Za-z0-9_-])[A-Za-z][A-Za-z0-9_-]{3,40}(?![A-Za-z0-9_-])",
             q,
         ):
+            token = token_match.group(0)
             raw_token = str(token or "").strip().strip("-_")
             low_token = raw_token.lower()
             if low_token in _DIRECT_PROMPT_STOP_TOKENS or low_token in seen_identifiers:
@@ -2303,13 +2325,41 @@ def _deterministic_query_variants(prompt_text: str) -> list[str]:
                 or ("-" in raw_token)
             )
             if not has_identity_signal:
+                # Model and paper names such as Informer/Autoformer use plain
+                # TitleCase, unlike acronyms such as FEDformer/PatchTST. Accept
+                # them only when they are visibly part of an enumerated list;
+                # this avoids turning an opening word such as ``Compare`` into
+                # a retrieval query.
+                before = q[max(0, token_match.start() - 8) : token_match.start()]
+                after = q[token_match.end() : min(len(q), token_match.end() + 8)]
+                enumerated = bool(
+                    re.search(r"(?:[,，、;；]\s*|(?:and|or)\s+|[和与及]\s*)$", before, flags=re.I)
+                    or re.match(r"^\s*(?:[,，、;；]|\b(?:and|or)\b|[和与及])", after, flags=re.I)
+                )
+                if enumerated and raw_token[:1].isupper() and len(raw_token) >= 6:
+                    enumerated_titlecase_identifiers.append(raw_token)
                 continue
             seen_identifiers.add(low_token)
             named_identifiers.append(raw_token)
         if len(named_identifiers) >= 2:
+            for identifier in enumerated_titlecase_identifiers:
+                key = identifier.lower()
+                if key in seen_identifiers:
+                    continue
+                seen_identifiers.add(key)
+                named_identifiers.append(identifier)
+        if len(named_identifiers) >= 2:
             for identifier in named_identifiers:
                 add(identifier)
-    return variants[:4]
+            # A bound current-paper query is prefixed with an absolute source
+            # path.  That path contains several acronym-shaped tokens (for
+            # example a venue, year, and filename) which must not expand the
+            # RRF budget and dilute the user's factual query.  Raise the cap
+            # only for an actual enumerated TitleCase paper/model list, the
+            # case this expansion was introduced to support.
+            if enumerated_titlecase_identifiers:
+                variant_cap = min(8, max(4, len(named_identifiers)))
+    return variants[:variant_cap]
 
 
 def _merge_expanded_results(

@@ -376,6 +376,27 @@ def _paper_guide_semantic_query_terms(prompt: str) -> list[str]:
     mojibake = "\ufffd" in q or bool(re.search(r"[鍏闃鏁绔缁鐨]{2,}", q))
     rules: tuple[tuple[str, str], ...] = (
         (
+            r"\u6838\u5fc3\u5efa\u6a21\u5355\u4f4d|\u5efa\u6a21\u5355\u4f4d|"
+            r"(?i:\b(?:core\s+)?model(?:ing|ling)\s+units?\b)",
+            "input tokens patches subseries variates temporal variations frequency components representation",
+        ),
+        (
+            r"\u957f\u671f\u4f9d\u8d56|\u957f\u5e8f\u5217|"
+            r"(?i:\blong[- ]term\s+(?:dependenc(?:y|ies)|sequence)\b)",
+            "long-term dependencies mechanism self-attention autocorrelation decomposition frequency domain "
+            "patching receptive field temporal variation",
+        ),
+        (
+            r"\u5b9e\u9a8c\u4efb\u52a1|\u5b9e\u9a8c\u8bbe\u7f6e|\u57fa\u51c6\u6570\u636e|"
+            r"(?i:\b(?:experimental?|benchmark)\s+(?:tasks?|settings?|datasets?)\b)",
+            "experiments tasks benchmarks datasets forecasting imputation classification anomaly detection",
+        ),
+        (
+            r"\u5c40\u9650|\u9650\u5236|\u4e0d\u8db3|\u672a\u6765\u5de5\u4f5c|"
+            r"(?i:\b(?:limitations?|constraints?|drawbacks?|weaknesses?|future\s+work)\b)",
+            "limitations constraints drawbacks weaknesses challenges future work",
+        ),
+        (
             r"(?i)\b(?:transpose|transposed)\b.{0,48}\b(?:attention|self[- ]attention)\b|"
             r"\b(?:attention|self[- ]attention)\b.{0,48}\b(?:transpose|transposed)\b|"
             r"\u901a\u9053\u7ef4\u5ea6",

@@ -423,6 +423,44 @@ test('ready historical reference retries metadata hydration until library match 
   expect(shelfItemNeedsPersistedMetadataHydrate(checkedMissing)).toBe(false)
 })
 
+test('persisted System A item retries hydration when its quality contract rejects the stored DOI', () => {
+  const staleDoi = shelfItem({
+    is_inpaper: false,
+    citation_route: 'system_a',
+    source_path: 'F:\\papers\\Informer.en.md',
+    doi: '10.18653/v1/d15-1166',
+    bibliometrics_checked: true,
+    metadata_quality: {
+      ok: false,
+      status: 'error',
+      missing_fields: ['authors', 'doi', 'venue', 'year'],
+      issues: [{ code: 'missing_doi', field: 'doi', severity: 'warning' }],
+    },
+    metadata_export_acceptance: {
+      export_ready: true,
+      field_ready: { doi: true },
+      doi: '10.18653/v1/d15-1166',
+    },
+  })
+
+  expect(shelfItemNeedsPersistedMetadataHydrate(staleDoi)).toBe(true)
+})
+
+test('partially repaired System A item retries source-bound hydration after a racing generic repair', () => {
+  const partial = shelfItem({
+    is_inpaper: false,
+    citation_route: 'system_a',
+    source_path: 'F:\\papers\\Informer.en.md',
+    doi: '10.18653/v1/d15-1166',
+    bibliometrics_checked: true,
+    metadata_repair_status: 'partial',
+    metadata_quality: { ok: false, status: 'error', missing_fields: ['venue', 'year'] },
+    metadata_export_acceptance: { export_ready: true, missing_fields: ['venue', 'year'] },
+  })
+
+  expect(shelfItemNeedsPersistedMetadataHydrate(partial)).toBe(true)
+})
+
 test('citation shelf source-open quality uses normalized source identity', () => {
   const item = shelfItem({
     source_path: 'DB\\\\Fixture//Paper.en.md/',

@@ -698,7 +698,13 @@ def _title_from_font_spans(page: fitz.Page) -> str:
             low = text.lower()
             if "abstract" == low or low.startswith("abstract "):
                 continue
-            if "arxiv" in low and len(text) < 30:
+            # arXiv stamps are often rendered vertically at 20pt while the
+            # actual paper title is only 17pt. Letting the stamp establish
+            # ``max_size`` makes the font pass return no title and the block
+            # fallback then picks an ICLR/NeurIPS running header instead.
+            # The identifier/version/date line is provenance, never a title,
+            # regardless of its extracted length.
+            if re.search(r"\barxiv\s*:\s*\d{4}\.\d{4,5}", low):
                 continue
             if re.search(r"university|inria|max planck|institute|department", low):
                 continue
@@ -729,7 +735,7 @@ def _title_from_font_spans(page: fitz.Page) -> str:
         if last_y is None:
             merged.append(text)
         else:
-            if (y0 - last_y) <= (H * 0.03):
+            if (y0 - last_y) <= (H * 0.04):
                 # same title block
                 merged.append(text)
             else:

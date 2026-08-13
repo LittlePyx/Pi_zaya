@@ -48,6 +48,88 @@ def test_named_paper_comparison_excludes_neighboring_retrieval_sources():
     assert out == [learned, ista]
 
 
+def test_named_six_paper_comparison_keeps_titlecase_and_body_alias_sources():
+    from kb import task_runtime
+
+    def hit(path: str, heading: str, text: str = "") -> dict:
+        return {
+            "text": text or heading,
+            "meta": {"source_path": path, "source_name": Path(path).name, "heading_path": heading},
+        }
+
+    rows = [
+        hit(r"db\arXiv-Informer.en.md", "Informer: Beyond Efficient Transformer"),
+        hit(r"db\arXiv-Autoformer.en.md", "Autoformer: Decomposition Transformers"),
+        hit(r"db\FEDformer.en.md", "FEDformer"),
+        hit(r"db\A Time Series is Worth 64 Words.en.md", "Patching", "PatchTST divides a series into patches."),
+        hit(r"db\TimesNet.en.md", "TimesNet"),
+        hit(r"db\iTransformer.en.md", "iTransformer"),
+        hit(r"db\Unrelated Transformer Survey.en.md", "Survey"),
+    ]
+    prompt = (
+        "请比较 Informer、Autoformer、FEDformer、PatchTST、TimesNet 和 iTransformer，"
+        "每篇论文都给出证据。"
+    )
+
+    out = task_runtime._focus_answer_seed_on_prompt_named_sources(rows, prompt=prompt)
+
+    assert out == rows[:6]
+
+
+def test_named_microscopy_comparison_keeps_light_field_pdf_ligature_source():
+    from kb import task_runtime
+
+    def hit(path: str, text: str = "generic abstract passage") -> dict:
+        return {
+            "text": text,
+            "meta": {"source_path": path, "source_name": Path(path).name},
+        }
+
+    structured = hit(
+        r"db\iISM\image scanning microscopy.en.md",
+        "Structured detection improves image scanning microscopy.",
+    )
+    interferometric = hit(
+        r"db\s2ISM\interferometric image scanning microscopy.en.md",
+        "Interferometric detection measures weak scattering signals.",
+    )
+    light_field = hit(
+        "db\\QCLFM\\Quantum correlation light-\ufb01eld microscope.en.md"
+    )
+    unrelated = hit(r"db\Forecasting\transformer survey.en.md")
+
+    out = task_runtime._focus_answer_seed_on_prompt_named_sources(
+        [structured, interferometric, light_field, unrelated],
+        prompt=(
+            "显微成像这些 structured detection、interferometric、light-field "
+            "方法分别是在解决什么麻烦？"
+        ),
+    )
+
+    assert out == [structured, interferometric, light_field]
+
+
+def test_explicit_per_paper_answer_budget_scales_only_for_four_or_more_sources():
+    from kb import task_runtime
+
+    prompt = "比较六篇论文；每篇论文都必须给出可定位证据。"
+    assert task_runtime._max_tokens_for_explicit_per_source_answer(
+        1216,
+        prompt=prompt,
+        source_count=6,
+    ) == 1920
+    assert task_runtime._max_tokens_for_explicit_per_source_answer(
+        1216,
+        prompt=prompt,
+        source_count=3,
+    ) == 1216
+    assert task_runtime._max_tokens_for_explicit_per_source_answer(
+        1216,
+        prompt="比较六篇论文。",
+        source_count=6,
+    ) == 1216
+
+
 def test_needs_bound_source_hint_for_inpaper_queries():
     from kb import task_runtime
 

@@ -62,6 +62,7 @@ import {
   mergeCitationDetailIntoShelfItems,
   mergeReaderSelectionDetailIntoShelfItems,
   mergeShelfItemWithLive,
+  reconcilePersistedShelfSelection,
   sameShelfItem,
   sameShelfItems,
   shelfDiscoverySourceDetail,
@@ -265,6 +266,14 @@ interface RefEntryLite {
 function bibliometricsSummaryFetchFailed(meta: Record<string, unknown>): boolean {
   const status = String(meta.summary_fetch_status || meta.summaryFetchStatus || '').trim().toLowerCase()
   return status === 'failed' || status === 'retryable'
+}
+
+function usesSourceBoundSystemAMetadata(item: CiteShelfItem): boolean {
+  return Boolean(
+    !item.isInpaper
+    && String(item.citationRoute || '').trim().toLowerCase() === 'system_a'
+    && String(item.sourcePath || '').trim()
+  )
 }
 
 function AssistantAvatar() {
@@ -1361,7 +1370,10 @@ export function MessageList({
     const requestedFingerprint = shelfItemRepairFingerprint(item)
     setShelfRepairLoadingKey(item.key)
     const payloads = shelfRepairPayloads(item)
-    const loadRepairCandidates = referencesApi.repairShelfMetadata(payloads, payloads.length)
+    const loadRepairCandidates = (usesSourceBoundSystemAMetadata(item)
+      ? referencesApi.bibliometrics(withBibliometricsLocale(item as unknown as Record<string, unknown>))
+        .then((meta) => [meta])
+      : referencesApi.repairShelfMetadata(payloads, payloads.length)
       .then((res) => {
         if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)) return []
         setShelfRepairImpact(res.impact || null)
@@ -1369,7 +1381,7 @@ export function MessageList({
         return repaired
           .map(shelfRepairMetaFromEntry)
           .filter((meta) => meta && Object.keys(meta).length > 0)
-      })
+      }))
       .catch(() => {
         if (!currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)) return []
         return Promise.all([
@@ -1538,6 +1550,7 @@ export function MessageList({
       for (const item of shelfItems) {
         if (targets.length >= SHELF_AUTO_REPAIR_BATCH_SIZE) break
         if (inFlight.has(item.key) || item.key === shelfRepairLoadingKey) continue
+        if (usesSourceBoundSystemAMetadata(item)) continue
         if (!shelfItemNeedsMetadataRepair(item)) continue
         const fingerprint = shelfItemRepairFingerprint(item)
         if (shelfAutoRepairFingerprintsRef.current[item.key] === fingerprint) continue
@@ -2016,8 +2029,7 @@ export function MessageList({
       message.warning(S.research_brief_sources_unavailable.replace('{n}', String(unavailableItems.length)))
       return
     }
-    const seedItems = requestedItems
-    if (seedItems.length <= 0) {
+    if (requestedItems.length <= 0) {
       message.warning(S.research_brief_sources_required)
       return
     }
@@ -2031,11 +2043,18 @@ export function MessageList({
         items: shelfItemsForBackend(latest.items),
       })
       shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
+      const persistedItems = restoreShelfItems(Array.isArray(record.items) ? record.items : [])
+      const seedItems = reconcilePersistedShelfSelection(requestedItems, persistedItems)
+      if (seedItems.length !== requestedItems.length) {
+        message.error(S.research_brief_shelf_sync_failed)
+        return
+      }
+      setShelfItems(persistedItems)
+      setResearchBriefSeedItems(seedItems)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_brief_shelf_sync_failed)
       return
     }
-    setResearchBriefSeedItems(seedItems)
     setResearchBriefSourceMatrixId('')
     setResearchBriefInitialId('')
     setResearchBriefOpen(true)
@@ -2075,19 +2094,32 @@ export function MessageList({
         items: shelfItemsForBackend(latest.items),
       })
       shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
+      const persistedItems = restoreShelfItems(Array.isArray(record.items) ? record.items : [])
+      const seedItems = reconcilePersistedShelfSelection(requestedItems, persistedItems)
+      if (seedItems.length !== requestedItems.length) {
+        message.error(S.evidence_matrix_shelf_sync_failed)
+        return
+      }
+      setShelfItems(persistedItems)
+      setEvidenceMatrixSeedItems(seedItems)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.evidence_matrix_shelf_sync_failed)
       return
     }
-    setEvidenceMatrixSeedItems(requestedItems)
     setEvidenceMatrixInitialId('')
     setEvidenceMatrixOpen(true)
   }, [S, activeConvId, shelfProjectId])
 
   const openResearchBriefEvidence = useCallback((evidence: Record<string, unknown>) => {
+    const evidenceAnchor = String(
+      evidence.anchor_id
+      || evidence.block_id
+      || evidence.id
+      || `research-evidence:${evidence.source_path || evidence.source_name || 'source'}`,
+    ).trim()
     const detail = normalizeCiteDetail({
       num: Number(evidence.citation_number || 0),
-      anchor: String(evidence.anchor_id || evidence.block_id || ''),
+      anchor: evidenceAnchor,
       sourceName: String(evidence.source_name || ''),
       sourcePath: String(evidence.source_path || ''),
       title: String(evidence.title || evidence.source_name || ''),

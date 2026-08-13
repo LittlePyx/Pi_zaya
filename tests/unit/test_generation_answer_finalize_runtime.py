@@ -490,6 +490,46 @@ def test_claim_audit_uses_prompt_aligned_plan_evidence_for_numeric_claim() -> No
     assert audit["minimum_ok"] is True
 
 
+def test_claim_audit_keeps_same_source_deepread_evidence_off_primary_locator() -> None:
+    abstract = "PatchTST is an efficient Transformer model for time series forecasting."
+    deepread = (
+        "PatchTST uses channel-independence, where each channel is a single "
+        "univariate time series and shares the same embedding and Transformer weights."
+    )
+    hits = [
+        {
+            "text": "A broad PatchTST retrieval passage.",
+            "meta": {
+                "source_name": "PatchTST.pdf",
+                "source_path": "patchtst.en.md",
+                "heading_path": "PatchTST / Abstract",
+            },
+        }
+    ]
+    plan = {
+        "intent": "comparison",
+        "budget": {"system_a": 1, "system_b": 0},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_name": "PatchTST.pdf",
+                "source_path": "patchtst.en.md",
+                "heading_path": "PatchTST / Abstract",
+                "candidate_hits": [1],
+                "evidence_quote": abstract,
+                "source_evidence_quotes": [deepread],
+            }
+        ],
+    }
+
+    merged = finalize_runtime._claim_evidence_hits_with_citation_plan(hits, plan)
+
+    assert merged[0]["text"] == abstract
+    assert merged[0]["meta"]["primary_evidence"]["snippet"] == abstract
+    assert merged[0]["meta"]["citation_plan_evidence_quotes"] == [abstract, deepread]
+    assert deepread in merged[0]["meta"]["citation_plan_full_evidence_quote"]
+
+
 def test_pidl_pascal_claim_rebinds_from_adjacent_review_to_primary_paper() -> None:
     pidl_path = "F:/kb/db/pidl/pidl.en.md"
     evidence = (
@@ -4512,6 +4552,90 @@ def test_finalize_keeps_precomputed_origin_reference_candidates(monkeypatch):
     )
 
     assert seen["paper_guide_candidate_refs_by_source"] == {"scinerf.md": [50]}
+
+
+def test_finalize_merges_grounded_planned_system_b_opportunity(monkeypatch):
+    planned_evidence = (
+        "Facing these challenges, video Snapshot Compressive Imaging (SCI) [42] "
+        "technology has been developed."
+    )
+    citation_plan = {
+        "version": 1,
+        "intent": "origin_lookup",
+        "budget": {"system_a": 1, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_b",
+                "candidate_refs": [42],
+                "sid": "sscigs123",
+                "source_path": "ICIP-2025-SCIGS.en.md",
+                "source_name": "SCIGS",
+                "topic": "snapshot compressive imaging",
+                "heading_path": "1. Introduction",
+                "evidence_quote": planned_evidence,
+                "grounding_contract": {"context_marker_verified": True},
+            }
+        ],
+    }
+    seen: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        finalize_runtime,
+        "detect_paper_guide_reference_opportunities",
+        lambda **_kwargs: [
+            {
+                "sid": "sscinerf",
+                "ref_num": 50,
+                "source_path": "SCINeRF.en.md",
+                "evidence_quote": "Video SCI [50] has emerged.",
+                "context_marker_verified": True,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        finalize_runtime,
+        "apply_reference_opportunities_to_answer",
+        lambda answer, *, opportunities, **_kwargs: (
+            answer,
+            seen.update({"opportunities": opportunities}) or {"mode": "none"},
+        ),
+    )
+
+    def _validate(answer, **kwargs):
+        seen["candidate_refs"] = kwargs["paper_guide_candidate_refs_by_source"]
+        return answer, {"kept": 1}
+
+    finalize_runtime._finalize_generation_answer(
+        "SCI's upstream step is snapshot compressive imaging [[CITE:sscigs123:42]].",
+        prompt="How did SCI develop from spectral imaging to 3D scene reconstruction?",
+        prompt_for_user="How did SCI develop from spectral imaging to 3D scene reconstruction?",
+        answer_hits=[{"text": planned_evidence, "meta": {"source_path": "ICIP-2025-SCIGS.en.md"}}],
+        db_dir=Path("db"),
+        locked_citation_source=None,
+        answer_intent="reading",
+        answer_depth="L2",
+        answer_output_mode="reading_guide",
+        paper_guide_mode=True,
+        paper_guide_contract_enabled=True,
+        paper_guide_prompt_family="overview",
+        paper_guide_special_focus_block="",
+        paper_guide_focus_source_path="",
+        paper_guide_direct_source_path="",
+        paper_guide_bound_source_path="",
+        paper_guide_candidate_refs_by_source={},
+        paper_guide_support_slots=[],
+        paper_guide_evidence_cards=[],
+        paper_guide_contracts_seed={"citation_plan": citation_plan},
+        apply_paper_guide_answer_postprocess=lambda answer, **_kwargs: (answer, []),
+        maybe_append_library_figure_markdown=lambda answer, **_kwargs: answer,
+        validate_structured_citations=_validate,
+    )
+
+    opportunities = list(seen["opportunities"])
+    assert [(item["sid"], item["ref_num"]) for item in opportunities] == [
+        ("sscigs123", 42)
+    ]
+    assert seen["candidate_refs"] == {"ICIP-2025-SCIGS.en.md": [42]}
 
 
 def test_fast_exact_finalize_binds_planned_source_before_claim_audit(monkeypatch) -> None:

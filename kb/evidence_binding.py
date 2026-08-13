@@ -815,7 +815,8 @@ def _fact_metric_qualifier(surface: str, start: int, end: int) -> str:
     return next(iter(closest_metrics)) if len(closest_metrics) == 1 else ""
 
 
-def _system_a_fact_quantities(value: str) -> set[tuple[str, str, str]]:
+@lru_cache(maxsize=512)
+def _system_a_fact_quantities(value: str) -> frozenset[tuple[str, str, str]]:
     """Return normalized ``(value, unit, metric)`` facts without locator labels."""
 
     surface = re.sub(r"^\s*\d+[.)、]\s*", "", str(value or ""))
@@ -962,7 +963,12 @@ def _system_a_fact_quantities(value: str) -> set[tuple[str, str, str]]:
         if unit in {"detector", "image", "frame", "pattern", "measurement"}:
             metric = ""
         out.add((normalized, unit, metric))
-    return out
+    # Evidence passages are audited repeatedly by the claim repair, renderer
+    # binding, and final mismatch checks.  Some passages contain hundreds of
+    # table values, so reparsing the same immutable string at every stage made
+    # finalization quadratic in practice.  A frozen cached result keeps the
+    # exact quantity contract while making repeated audits effectively free.
+    return frozenset(out)
 
 
 def _system_a_fact_numbers(value: str) -> set[str]:

@@ -48,6 +48,19 @@ def test_semantic_query_terms_cover_compound_mechanism_and_deployment_facets():
     )
 
 
+def test_semantic_query_terms_cover_cross_paper_time_series_facets():
+    terms = set(
+        retrieval_runtime._paper_guide_semantic_query_terms(
+            "比较六篇论文的核心建模单位、长期依赖机制、实验任务与作者明确陈述的局限。"
+        )
+    )
+
+    assert {"tokens", "patches", "variates", "representation"}.issubset(terms)
+    assert {"dependencies", "self-attention", "autocorrelation", "decomposition"}.issubset(terms)
+    assert {"experiments", "forecasting", "imputation", "classification"}.issubset(terms)
+    assert {"limitations", "constraints", "drawbacks", "future"}.issubset(terms)
+
+
 def test_semantic_query_terms_bridge_unseen_chinese_question_facets():
     prompts = {
         "unet": "U-Net 如何处理图像边界和接触细胞，并区分铺块与损失？",

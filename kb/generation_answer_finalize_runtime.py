@@ -348,6 +348,7 @@ def _claim_evidence_hits_with_citation_plan(
     if not merged or not isinstance(citation_plan, dict):
         return merged
     quotes_by_index: dict[int, list[str]] = {}
+    audit_quotes_by_index: dict[int, list[str]] = {}
     slots_by_index: dict[int, list[dict]] = {}
     for slot in list(citation_plan.get("slots") or []):
         if not isinstance(slot, dict):
@@ -361,6 +362,20 @@ def _claim_evidence_hits_with_citation_plan(
             index = int(number) - 1
             if 0 <= index < len(merged):
                 quotes_by_index.setdefault(index, []).append(quote)
+                audit_quotes_by_index.setdefault(index, []).extend(
+                    [
+                        quote,
+                        *[
+                            str(item or "").strip()
+                            for item in list(
+                                slot.get("source_evidence_quotes")
+                                or slot.get("sourceEvidenceQuotes")
+                                or []
+                            )
+                            if str(item or "").strip()
+                        ],
+                    ]
+                )
                 slots_by_index.setdefault(index, []).append(slot)
     for index, quotes in quotes_by_index.items():
         hit = dict(merged[index])
@@ -370,7 +385,11 @@ def _claim_evidence_hits_with_citation_plan(
         evidence_parts = list(dict.fromkeys(quotes))
         hit["text"] = "\n".join(part for part in evidence_parts if part)
         meta = dict(hit.get("meta") or {}) if isinstance(hit.get("meta"), dict) else {}
-        meta["citation_plan_evidence_quotes"] = list(dict.fromkeys(quotes))
+        audit_quotes = list(
+            dict.fromkeys(audit_quotes_by_index.get(index, quotes))
+        )
+        meta["citation_plan_evidence_quotes"] = audit_quotes
+        meta["citation_plan_full_evidence_quote"] = "\n".join(audit_quotes)
         # The plan sentence carries the authoritative paper identity.  Keep it
         # with the overlaid quote so claim auditing can distinguish adjacent
         # hits from different papers even when retrieval omitted source_name.
@@ -9661,6 +9680,58 @@ def _finalize_generation_answer(
             for raw_ref in list(slot.get("candidate_refs") or [])
             if str(raw_ref or "").isdigit() and int(raw_ref) > 0
         }
+        planned_system_b_opportunities: list[dict[str, object]] = []
+        for slot in list(citation_plan_seed.get("slots") or []):
+            if not isinstance(slot, dict) or str(
+                slot.get("preferred_system") or ""
+            ).strip().lower() != "system_b":
+                continue
+            grounding = (
+                dict(slot.get("grounding_contract") or {})
+                if isinstance(slot.get("grounding_contract"), dict)
+                else {}
+            )
+            evidence_quote = str(slot.get("evidence_quote") or "").strip()
+            source_path = str(slot.get("source_path") or "").strip()
+            sid = str(slot.get("sid") or "").strip()
+            for raw_ref in list(slot.get("candidate_refs") or []):
+                try:
+                    ref_num = int(raw_ref)
+                except (TypeError, ValueError):
+                    continue
+                if (
+                    ref_num <= 0
+                    or not sid
+                    or not source_path
+                    or len(evidence_quote) < 12
+                    or grounding.get("context_marker_verified") is not True
+                    or not re.search(
+                        rf"(?<!\[)\[[^\[\]]*\b{ref_num}\b[^\[\]]*\](?!\])",
+                        evidence_quote,
+                    )
+                ):
+                    continue
+                planned_system_b_opportunities.append(
+                    {
+                        "sid": sid,
+                        "ref_num": ref_num,
+                        "source_path": source_path,
+                        "source_name": str(slot.get("source_name") or "").strip(),
+                        "label": str(slot.get("topic") or f"ref {ref_num}").strip(),
+                        "heading_path": str(slot.get("heading_path") or "").strip(),
+                        "evidence_quote": evidence_quote,
+                        "context_marker_verified": True,
+                    }
+                )
+        if planned_system_b_opportunities:
+            # Citation-plan slots already passed the same-context marker gate.
+            # Preserve them through final validation even when the later broad
+            # opportunity detector selected a neighboring paper instead.
+            paper_guide_reference_opportunities = merge_reference_opportunities(
+                planned_system_b_opportunities,
+                paper_guide_reference_opportunities,
+                max_items=3,
+            )
         if planned_system_b_refs:
             paper_guide_reference_opportunities = [
                 item
@@ -9931,6 +10002,7 @@ def _finalize_generation_answer(
         if final_gate_has_grounded_system_a
         else None
     )
+    evidence_gate_initial_started = time.perf_counter()
     answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
         answer,
         answer_hits=claim_evidence_hits,
@@ -9940,6 +10012,10 @@ def _finalize_generation_answer(
         drop_unsupported_unplanned_claims=strict_comparison_numbers is not None,
         drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
         enforce_user_visible_binding=final_gate_has_grounded_system_a,
+    )
+    evidence_gate_initial_ms = round(
+        (time.perf_counter() - evidence_gate_initial_started) * 1000.0,
+        3,
     )
     # The evidence gate may remove a weakly-bound sentence that happened to be
     # the only occurrence of a precise source term. Re-run the deterministic
@@ -9962,7 +10038,9 @@ def _finalize_generation_answer(
         answer_hits=list(answer_hits or []),
     )
     if post_gate_answer != answer:
-        answer, final_claim_evidence_meta = audit_and_repair_claim_evidence(
+        initial_claim_evidence_meta = dict(final_claim_evidence_meta)
+        evidence_gate_recheck_started = time.perf_counter()
+        answer, rechecked_claim_evidence_meta = audit_and_repair_claim_evidence(
             post_gate_answer,
             answer_hits=claim_evidence_hits,
             allow_citation_repairs=True,
@@ -9972,9 +10050,65 @@ def _finalize_generation_answer(
             drop_unsupported_high_risk_claims=final_gate_has_grounded_system_a,
             enforce_user_visible_binding=final_gate_has_grounded_system_a,
         )
+        evidence_gate_recheck_ms = round(
+            (time.perf_counter() - evidence_gate_recheck_started) * 1000.0,
+            3,
+        )
+        final_claim_evidence_meta = dict(rechecked_claim_evidence_meta)
+        audit_count_keys = (
+            "repaired_citations",
+            "rebound_citations",
+            "section_source_rebound_citations",
+            "dropped_cross_source_claims",
+            "scoped_negative_claims",
+            "trimmed_unsupported_inferences",
+            "repaired_modality_boundaries",
+            "relocated_midphrase_citations",
+            "restored_prompt_terms",
+            "restored_evidence_numbers",
+            "restored_source_facts",
+            "dropped_hard_mismatch_claims",
+            "stripped_weak_citations",
+            "renderer_rejected_citations",
+            "removed_unplanned_citations",
+            "removed_heading_citations",
+            "dropped_unsupported_unplanned_claims",
+            "dropped_unsupported_inferences",
+            "dropped_placeholder_sections",
+            "added_requested_facet_boundaries",
+        )
+        for key in audit_count_keys:
+            final_claim_evidence_meta[key] = int(
+                initial_claim_evidence_meta.get(key) or 0
+            ) + int(rechecked_claim_evidence_meta.get(key) or 0)
+        audit_detail_keys = (
+            "repairs",
+            "rebound_repairs",
+            "section_source_repairs",
+            "dropped_cross_source_claim_details",
+            "unresolved_claims",
+            "mismatches",
+            "dropped_mismatches",
+            "weak_citation_details",
+            "renderer_rejected_details",
+            "dropped_unplanned_claims",
+        )
+        for key in audit_detail_keys:
+            rows = [
+                *list(initial_claim_evidence_meta.get(key) or []),
+                *list(rechecked_claim_evidence_meta.get(key) or []),
+            ]
+            if rows:
+                final_claim_evidence_meta[key] = rows[:8]
+        final_claim_evidence_meta["minimum_ok"] = bool(
+            initial_claim_evidence_meta.get("minimum_ok", True)
+            and rechecked_claim_evidence_meta.get("minimum_ok", True)
+        )
         if post_gate_terms_changed:
             final_claim_evidence_meta["post_gate_term_normalization"] = True
         final_claim_evidence_meta["post_gate_citation_rebinding"] = True
+    else:
+        evidence_gate_recheck_ms = 0.0
     answer = _collapse_adjacent_duplicate_numeric_citations(answer)
     answer = _sanitize_empty_markdown_label_fragments(answer)
     answer = _collapse_single_item_numbered_blocks(answer)
@@ -9982,6 +10116,10 @@ def _finalize_generation_answer(
     final_claim_evidence_meta["unsupported_claim_drop_enabled"] = bool(
         final_gate_has_grounded_system_a
     )
+    final_claim_evidence_meta["pass_timings_ms"] = {
+        "initial": evidence_gate_initial_ms,
+        "recheck": evidence_gate_recheck_ms,
+    }
     claim_evidence_meta = final_claim_evidence_meta
     _mark_finalize_stage("evidence_final_gate")
     grounded_answer = str(answer or "")

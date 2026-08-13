@@ -144,6 +144,147 @@ def test_build_matrix_leaves_ambiguous_reference_and_positive_contrast_cells_emp
     assert evidence[0]["field"] == "key_result"
 
 
+def test_matrix_limitation_requires_an_author_owned_boundary(monkeypatch) -> None:
+    source = "F:/papers/time-series.md"
+    chunks = [
+        _chunk(
+            source,
+            "Introduction",
+            "However, Transformers are challenged by larger lookback windows due to computation explosion.",
+            1,
+        ),
+        _chunk(
+            source,
+            "Missing-value task",
+            "However, sensor malfunctions can leave the collected time series partially missing.",
+            2,
+        ),
+        _chunk(
+            source,
+            "Model Robustness",
+            "Based on extensive experiments, we do not find exceptional failure cases.",
+            3,
+        ),
+        _chunk(
+            source,
+            "Conclusion",
+            "Our model has the potential to be a base model for future work on forecasting.",
+            4,
+        ),
+        _chunk(
+            source,
+            "Introduction",
+            "To tackle this limitation, we introduce a more efficient representation.",
+            5,
+        ),
+    ]
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: chunks)
+
+    rows, evidence, _flags = build_project_evidence_matrix(
+        [{"key": "paper", "title": "Paper", "sourcePath": source}],
+        objective="Compare the authors' explicit limitations.",
+        db_dir="unused",
+    )
+
+    assert rows[0]["cells"]["limitation"]["support_status"] == "missing"
+    assert not [item for item in evidence if item["field"] == "limitation"]
+
+
+def test_matrix_limitation_accepts_explicit_current_method_or_future_work(monkeypatch) -> None:
+    source = "F:/papers/time-series.md"
+    chunks = [
+        _chunk(
+            source,
+            "Results",
+            "Our proposed model remains limited by quadratic memory use on very long inputs.",
+            1,
+        ),
+        _chunk(
+            source,
+            "Conclusion",
+            "In future work, we will investigate pretraining on larger time-series corpora.",
+            2,
+        ),
+    ]
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: chunks)
+
+    rows, evidence, _flags = build_project_evidence_matrix(
+        [{"key": "paper", "title": "Paper", "sourcePath": source}],
+        objective="Compare the authors' explicit limitations.",
+        db_dir="unused",
+    )
+
+    assert rows[0]["cells"]["limitation"]["support_status"] == "grounded"
+    assert [item for item in evidence if item["field"] == "limitation"]
+
+
+def test_matrix_prefers_semantic_field_evidence_over_grounded_but_misleading_fragments(monkeypatch) -> None:
+    source = "F:/papers/semantic-fields.md"
+    chunks = [
+        _chunk(
+            source,
+            "Related Work",
+            "Channel Independence (Doe et al., 2023), regarding each time series independently, "
+            "has gained popularity as an architecture-free method.",
+            1,
+        ),
+        _chunk(
+            source,
+            "Method / Architecture",
+            "We propose AlphaNet, an architecture that combines patch tokens with cross-channel attention.",
+            2,
+        ),
+        _chunk(
+            source,
+            "Implementation Details",
+            "This design normalizes samples within a batch because they come from the same time-series dataset.",
+            3,
+        ),
+        _chunk(
+            source,
+            "Experiments / Datasets",
+            "We evaluate AlphaNet on four ETT datasets with an input length of 96 and prediction horizons up to 720.",
+            4,
+        ),
+        _chunk(source, "Results", "Transformer (2017): Metric = 0.369", 5),
+        _chunk(
+            source,
+            "Experiments / Metrics",
+            "We use two evaluation metrics, MSE and MAE, where lower values indicate more accurate forecasts.",
+            6,
+        ),
+        _chunk(source, "Results", "Results improve forecasting performance by 21 percent.", 7),
+        _chunk(
+            source,
+            "Full Results",
+            "Due to the space limitation of the main text, we place full results in the appendix.",
+            8,
+        ),
+        _chunk(
+            source,
+            "Experiments",
+            "Compared with the univariate results, our multivariate performance is reduced by anisotropic features. "
+            "It is beyond the scope of this paper, and we will explore it in future work.",
+            9,
+        ),
+    ]
+    monkeypatch.setattr("kb.evidence_matrix.load_all_chunks", lambda _db_dir: chunks)
+
+    rows, _evidence, _flags = build_project_evidence_matrix(
+        [{"key": "paper", "title": "AlphaNet", "sourcePath": source}],
+        objective="Compare method, setup, metrics, results, and author-owned limitations.",
+        db_dir="unused",
+    )
+
+    cells = rows[0]["cells"]
+    assert cells["method"]["value"].startswith("We propose AlphaNet")
+    assert cells["dataset_or_experiment"]["value"].startswith("We evaluate AlphaNet")
+    assert cells["metric"]["value"].startswith("We use two evaluation metrics")
+    assert cells["key_result"]["value"].startswith("Results improve")
+    assert cells["limitation"]["value"].startswith("Compared with the univariate results")
+    assert "future work" in cells["limitation"]["value"]
+
+
 def test_matrix_exports_include_matrix_and_evidence() -> None:
     row = {
         "paper": "Paper A",

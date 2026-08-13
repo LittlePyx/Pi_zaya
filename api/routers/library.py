@@ -6630,9 +6630,8 @@ def quality_repair_run(run_id: str, request: Request):
     }
 
 
-@router.post("/quality/repair-runs/{run_id}")
-def update_quality_repair_run(run_id: str, request: Request, body: QualityRepairRunUpdateBody):
-    require_internal_api(request)
+@router.post("/quality/repair-runs/{run_id}", dependencies=[Depends(require_management_api)])
+def update_quality_repair_run(run_id: str, body: QualityRepairRunUpdateBody):
     current = _quality_repair_run_by_id(run_id)
     if not current:
         raise HTTPException(404, "quality repair run not found")
@@ -6655,9 +6654,8 @@ def update_quality_repair_run(run_id: str, request: Request, body: QualityRepair
     }
 
 
-@router.post("/quality/repair-runs/{run_id}/advance")
-def advance_quality_repair_run(run_id: str, request: Request, body: QualityRepairRunAdvanceBody = QualityRepairRunAdvanceBody()):
-    require_internal_api(request)
+@router.post("/quality/repair-runs/{run_id}/advance", dependencies=[Depends(require_management_api)])
+def advance_quality_repair_run(run_id: str, body: QualityRepairRunAdvanceBody = QualityRepairRunAdvanceBody()):
     current = _quality_repair_run_by_id(run_id)
     if not current:
         raise HTTPException(404, "quality repair run not found")
@@ -7463,9 +7461,8 @@ def refresh_figure_assets(request: Request, body: FigureAssetRefreshBody):
     }
 
 
-@router.post("/quality/repair")
-def repair_library_quality(request: Request, body: QualityRepairBody):
-    require_internal_api(request)
+@router.post("/quality/repair", dependencies=[Depends(require_management_api)])
+def repair_library_quality(body: QualityRepairBody):
     settings = get_settings()
     pdf_d = _pdf_dir()
     md_d = _md_dir()

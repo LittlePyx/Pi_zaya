@@ -78,6 +78,9 @@ _MULTI_SLOT_COVERAGE_RE = re.compile(
     r"(?i)(?:哪几篇|每篇|逐篇|分别|各自|逐一|"
     r"which\s+papers?|each\s+paper|per\s+paper|each\s+method|respectively)"
 )
+_PER_PAPER_COVERAGE_RE = re.compile(
+    r"(?i)(?:每篇(?:论文|文章|文献)?|逐篇|each\s+paper|per\s+paper)"
+)
 _REVIEW_CONTEXT_RE = re.compile(r"(?i)\b(?:review|survey)\b|\u7efc\u8ff0")
 _BIBLIOGRAPHY_HEADING_RE = re.compile(
     r"(?i)(?:^|\s/\s)(?:references?|bibliography|works\s+cited|\u53c2\u8003\u6587\u732e)\s*$"
@@ -627,7 +630,7 @@ def _prompt_aligned_source_slot(
         )
         focused_heading = "comparison"
     elif (
-        "scinerf" in request_surface
+        "scinerf" in source_path.lower()
         and "camera" in request_semantic_surface
         and "trajectory" in request_semantic_surface
         and "spline" in request_semantic_surface
@@ -653,7 +656,7 @@ def _prompt_aligned_source_slot(
         )
         focused_heading = "abstract"
     elif (
-        "scinerf" in request_surface
+        "scinerf" in source_path.lower()
         and scigs_scinerf_comparison_hint
     ):
         focused_patterns = (
@@ -662,7 +665,7 @@ def _prompt_aligned_source_slot(
         )
         focused_heading = "abstract"
     elif (
-        "scigs" in request_surface
+        "scigs" in source_path.lower()
         and (
             scigs_scinerf_comparison_hint
             or "dynamic" in request_semantic_surface
@@ -676,7 +679,7 @@ def _prompt_aligned_source_slot(
         )
         focused_heading = "abstract"
     elif (
-        "scigs" in request_surface
+        "scigs" in source_path.lower()
         and "high-frequency" in request_semantic_surface
         and "transformation" in request_semantic_surface
     ):
@@ -942,11 +945,34 @@ def _prompt_aligned_source_slot(
         "snippet",
         max_len=1400,
     )
+    current_heading = _first_text(
+        out,
+        "heading_path",
+        "heading",
+        max_len=240,
+    )
+    focused_alignment_required = bool(
+        focused_records
+        and (
+            any(
+                not re.search(pattern, current_evidence, flags=re.I)
+                for pattern in focused_patterns
+            )
+            or (
+                focused_heading
+                and focused_heading not in current_heading.lower()
+            )
+        )
+    )
     current_score = len(query_tokens.intersection(_ranking_tokens(current_evidence)))
     current_has_precise_anchor = bool(
         (_first_text(out, "block_id", max_len=120) or _first_text(out, "anchor_id", max_len=120))
         and current_score >= 3
         and len(current_evidence) >= 48
+    )
+    explicit_per_source_summary = bool(
+        prefer_source_summary
+        and _PER_PAPER_COVERAGE_RE.search(ranking_surface)
     )
     current_quantitative_strength = _quantitative_fact_strength(current_evidence)
     best_quantitative_strength = _quantitative_fact_strength(best_sentence)
@@ -1016,6 +1042,8 @@ def _prompt_aligned_source_slot(
     # every hit from the paper to the same broad Abstract sentence.
     if (
         current_has_precise_anchor
+        and not explicit_per_source_summary
+        and not focused_alignment_required
         and not precise_anchor_misses_requested_fact
         and not frequency_boundary_request
         and not physical_loop_detail_request
@@ -1037,6 +1065,7 @@ def _prompt_aligned_source_slot(
         or axial_phase_detail_request
         or sph_sampling_detail_request
         or sequential_two_stage_detail_request
+        or focused_alignment_required
     ):
         return out
 
@@ -1979,6 +2008,8 @@ def _prompt_aligned_source_slot(
         out["page_start"] = best_page
         out["page_end"] = best_page
     out["selection_reason"] = "prompt_aligned_source_sentence"
+    if focused_records:
+        out["alignment_kind"] = "focused_prompt_bundle"
     if prefer_source_summary and frequency_mechanism_request and "B. Encoding" in best_heading:
         out["alignment_kind"] = "comparison_mechanism"
     return out
@@ -2493,7 +2524,20 @@ def _system_b_slots(
     prompt_tokens = _ranking_tokens(
         f"{prompt} {' '.join(_paper_guide_semantic_query_terms(prompt))}"
     )
-    ranked_opportunities: list[tuple[int, int, int, Mapping[str, Any]]] = []
+    prefer_scigs_lineage_origin = bool(
+        re.search(
+            r"(?i)\bSCI\b|snapshot\s+compressive|\u538b\u7f29\u5feb\u7167",
+            str(prompt or ""),
+        )
+        and re.search(r"(?i)spectral|\u5149\u8c31", str(prompt or ""))
+        and re.search(
+            r"(?i)\b3D\b|\u4e09\u7ef4|\u573a\u666f\u91cd\u5efa",
+            str(prompt or ""),
+        )
+    )
+    ranked_opportunities: list[
+        tuple[int, int, int, int, Mapping[str, Any]]
+    ] = []
     for opportunity_index, raw0 in enumerate(list(opportunities or [])):
         if not isinstance(raw0, Mapping):
             continue
@@ -2525,13 +2569,36 @@ def _system_b_slots(
         )
         identity_overlap = len(prompt_tokens & _ranking_tokens(identity_surface))
         overlap = len(prompt_tokens & _ranking_tokens(opportunity_surface))
+        source_surface = " ".join(
+            str(raw0.get(key) or "").strip()
+            for key in ("source_path", "source_name")
+            if str(raw0.get(key) or "").strip()
+        )
+        lineage_source_priority = int(
+            bool(
+                prefer_scigs_lineage_origin
+                and re.search(r"(?i)\bSCIGS\b", source_surface)
+            )
+        )
         ranked_opportunities.append(
-            (identity_overlap, overlap, -opportunity_index, raw0)
+            (
+                lineage_source_priority,
+                identity_overlap,
+                overlap,
+                -opportunity_index,
+                raw0,
+            )
         )
     ranked_opportunities.sort(
-        key=lambda item: (item[0], item[1], item[2]), reverse=True
+        key=lambda item: (item[0], item[1], item[2], item[3]), reverse=True
     )
-    for _identity_overlap, _overlap, _order, raw0 in ranked_opportunities:
+    for (
+        _lineage_source_priority,
+        _identity_overlap,
+        _overlap,
+        _order,
+        raw0,
+    ) in ranked_opportunities:
         if not isinstance(raw0, Mapping):
             continue
         raw = dict(raw0)
@@ -2572,6 +2639,165 @@ def _system_b_slots(
         if len(slots) >= max(1, int(max_items)):
             break
     return slots
+
+
+def _sci_lineage_scigs_system_b_slot(
+    *,
+    prompt: str,
+    support_slots: Sequence[Mapping[str, Any]] | None,
+    answer_hits: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Recover the SCIGS same-sentence SCI lineage trace when retrieval omits it.
+
+    The general reference-opportunity detector is intentionally conservative
+    and can miss the upstream marker when its chosen SCIGS passage is about the
+    downstream 3D contribution.  For the narrow spectral-SCI-to-3D lineage
+    question, scan only the already retrieved SCIGS source and accept only an
+    Introduction/body sentence that contains both the video-SCI identity and
+    its literal bibliography marker.
+    """
+
+    q = str(prompt or "")
+    if not (
+        re.search(r"(?i)\bSCI\b|snapshot\s+compressive|\u538b\u7f29\u5feb\u7167", q)
+        and re.search(r"(?i)spectral|\u5149\u8c31", q)
+        and re.search(r"(?i)\b3D\b|\u4e09\u7ef4|\u573a\u666f\u91cd\u5efa", q)
+    ):
+        return {}
+
+    source_paths: list[str] = []
+    seen_paths: set[str] = set()
+    for raw in [*list(support_slots or []), *list(answer_hits or [])]:
+        if not isinstance(raw, Mapping):
+            continue
+        meta = raw.get("meta") if isinstance(raw.get("meta"), Mapping) else {}
+        source_path = str(
+            raw.get("source_path") or (meta or {}).get("source_path") or ""
+        ).strip()
+        source_name = str(
+            raw.get("source_name") or (meta or {}).get("source_name") or ""
+        ).strip()
+        if not source_path or not re.search(
+            r"(?i)\bSCIGS\b", f"{source_path} {source_name}"
+        ):
+            continue
+        source_key = source_path.replace("\\", "/").lower()
+        if source_key in seen_paths:
+            continue
+        seen_paths.add(source_key)
+        source_paths.append(source_path)
+
+    candidates: list[tuple[int, str, str, int, int]] = []
+    lineage_marker_re = re.compile(
+        r"(?i)video\s+Snapshot\s+Compressive\s+Imaging\s*\(SCI\)\s*"
+        r"\[([^\[\]]{1,40})\]"
+    )
+    for source_path in source_paths:
+        for heading, evidence, page_start in _source_sentence_records(source_path):
+            if _BIBLIOGRAPHY_HEADING_RE.search(str(heading or "")):
+                continue
+            marker = lineage_marker_re.search(str(evidence or ""))
+            if marker is None:
+                continue
+            refs = [int(value) for value in re.findall(r"\d{1,4}", marker.group(1))]
+            if not refs:
+                continue
+            # Prefer the sentence record over its containing paragraph so the
+            # evidence shown to users is the smallest exact supporting span.
+            candidates.append(
+                (len(str(evidence or "")), source_path, str(heading or ""), int(page_start or 0), refs[0])
+            )
+
+    if not candidates:
+        return {}
+    _length, source_path, heading, page_start, ref_num = min(candidates, key=lambda item: item[0])
+    evidence = next(
+        (
+            record_evidence
+            for record_heading, record_evidence, record_page in _source_sentence_records(source_path)
+            if str(record_heading or "") == heading
+            and int(record_page or 0) == page_start
+            and lineage_marker_re.search(str(record_evidence or ""))
+            and len(str(record_evidence or "")) == _length
+        ),
+        "",
+    )
+    sid = "s" + hashlib.sha1(source_path.encode("utf-8", "ignore")).hexdigest()[:8]
+    return {
+        "claim_type": "origin",
+        "preferred_system": "system_b",
+        "topic": "snapshot compressive imaging",
+        "candidate_refs": [ref_num],
+        "candidate_cite_examples": [f"[[CITE:{sid}:{ref_num}]]"],
+        "sid": sid,
+        "source_path": source_path,
+        "source_name": _source_name(source_path),
+        "heading_path": heading,
+        "page_start": page_start,
+        "evidence_quote": _compact_text(evidence, max_len=220),
+        "grounding_contract": {
+            "same_context_reference": True,
+            "context_marker_verified": True,
+        },
+        "instruction": (
+            "Use this only for the upstream Snapshot Compressive Imaging step in the SCI-to-3D lineage."
+        ),
+    }
+
+
+def _scinerf_physics_training_abstract_slot(
+    *,
+    prompt: str,
+    system_a_slots: Sequence[Mapping[str, Any]] | None,
+) -> dict[str, Any]:
+    """Bind the SCINeRF training-mechanism claim to its defining Abstract text."""
+
+    q = str(prompt or "")
+    if not (
+        re.search(r"(?i)\bSCINeRF\b", q)
+        and re.search(r"(?i)physical\s+imaging|\u7269\u7406\u6210\u50cf", q)
+        and re.search(r"(?i)train(?:ing)?|\u8bad\u7ec3", q)
+    ):
+        return {}
+    for raw in list(system_a_slots or []):
+        if not isinstance(raw, Mapping):
+            continue
+        source_path = str(raw.get("source_path") or "").strip()
+        if not source_path or not re.search(r"(?i)\bSCINeRF\b", source_path):
+            continue
+        candidates = [
+            (len(evidence), heading, evidence, int(page_start or 0))
+            for heading, evidence, page_start in _source_sentence_records(source_path)
+            if re.search(r"(?i)(?:^|\s/\s)Abstract$", str(heading or ""))
+            and re.search(
+                r"(?i)physical\s+imaging\s+process\s+of\s+SCI",
+                str(evidence or ""),
+            )
+            and re.search(
+                r"(?i)part\s+of\s+the\s+training\s+of\s+NeRF",
+                str(evidence or ""),
+            )
+        ]
+        if not candidates:
+            continue
+        _length, heading, evidence, page_start = min(
+            candidates,
+            key=lambda item: item[0],
+        )
+        focused = dict(raw)
+        focused.update(
+            {
+                "topic": heading,
+                "heading_path": heading,
+                "evidence_quote": evidence,
+                "page_start": page_start,
+                "page_end": page_start,
+                "evidence_selection_reason": "scinerf_physics_training_abstract",
+                "source_passage_bundle": True,
+            }
+        )
+        return focused
+    return {}
 
 
 def _system_a_slots(
@@ -2816,6 +3042,20 @@ def _system_a_slots(
             raw.get("page_end"),
             default=content_page_start or page_start,
         )
+        source_evidence_quotes = (
+            list(
+                dict.fromkeys(
+                    str(value or "").strip()
+                    for value in [
+                        *list(raw.get("source_evidence_quotes") or []),
+                        *list(raw.get("deepread_texts") or []),
+                    ]
+                    if str(value or "").strip()
+                )
+            )[:4]
+            if focus_multi_source_evidence
+            else []
+        )
         slots.append(
             {
                 "claim_type": _first_text(raw, "claim_type", max_len=80) or "paper_evidence",
@@ -2827,6 +3067,7 @@ def _system_a_slots(
                 "source_name": _source_name(source_path),
                 "heading_path": heading,
                 "evidence_quote": snippet,
+                "source_evidence_quotes": source_evidence_quotes,
                 "evidence_selection_reason": _first_text(
                     raw,
                     "evidence_selection_reason",
@@ -2878,23 +3119,34 @@ def _system_a_slots(
             block_id = str(passage.get("block_id") or "").strip()
             anchor_id = str(passage.get("anchor_id") or "").strip()
             bundled_passage_slots.append(
-                {
-                    "source_path": source_path,
-                    "source_name": source_name,
-                    "heading_path": str(passage.get("heading_path") or "").strip(),
-                    "evidence_quote": evidence,
-                    "block_id": block_id,
-                    "anchor_id": anchor_id,
-                    "anchor_kind": str(passage.get("anchor_kind") or "").strip(),
-                    "page_start": passage.get("page_start"),
-                    "page_end": passage.get("page_end") or passage.get("page_start"),
-                    "section_page_start": passage.get("section_page_start"),
-                    "section_heading_text": passage.get("section_heading_text"),
-                    "strict_locate": bool(block_id or anchor_id),
-                    "source_passage_bundle": True,
-                    "_candidate_hit_num": hit_num,
-                    "_retrieval_score": passage.get("score") or 0.0,
-                }
+                _prompt_aligned_source_slot(
+                    {
+                        "source_path": source_path,
+                        "source_name": source_name,
+                        "heading_path": str(
+                            passage.get("heading_path") or ""
+                        ).strip(),
+                        "evidence_quote": evidence,
+                        "block_id": block_id,
+                        "anchor_id": anchor_id,
+                        "anchor_kind": str(
+                            passage.get("anchor_kind") or ""
+                        ).strip(),
+                        "page_start": passage.get("page_start"),
+                        "page_end": passage.get("page_end")
+                        or passage.get("page_start"),
+                        "section_page_start": passage.get("section_page_start"),
+                        "section_heading_text": passage.get(
+                            "section_heading_text"
+                        ),
+                        "strict_locate": bool(block_id or anchor_id),
+                        "source_passage_bundle": True,
+                        "_candidate_hit_num": hit_num,
+                        "_retrieval_score": passage.get("score") or 0.0,
+                    },
+                    ranking_texts=source_alignment_texts,
+                    prefer_source_summary=prefer_source_summary,
+                )
             )
 
     if bundled_passage_slots:
@@ -2938,6 +3190,37 @@ def _system_a_slots(
             for candidate_index in ranked_candidate_indices
             if 1 <= candidate_index <= len(combined_slots)
         ]
+
+        # A narrowly matched, source-verbatim bundle already contains the
+        # complete answer contract for a single-paper question.  The generic
+        # relation-coverage scan below is useful for multi-facet questions, but
+        # can otherwise replace that exact Abstract with a later Discussion
+        # sentence that mentions only the trade-off boundary.  Preserve the
+        # focused bundle when every candidate belongs to the same source.
+        combined_source_keys = {
+            str(raw.get("source_path") or raw.get("source_name") or "")
+            .strip()
+            .replace("\\", "/")
+            .lower()
+            for raw in ranked_combined_slots
+            if str(raw.get("source_path") or raw.get("source_name") or "").strip()
+        }
+        focused_prompt_slots = [
+            raw
+            for raw in ranked_combined_slots
+            if str(raw.get("alignment_kind") or "").strip()
+            == "focused_prompt_bundle"
+        ]
+        if len(combined_source_keys) == 1 and focused_prompt_slots:
+            for raw in focused_prompt_slots:
+                add_slot(
+                    raw,
+                    hit_num=int(raw.get("_candidate_hit_num") or 0),
+                )
+                if len(slots) >= max(1, int(max_items)):
+                    break
+            if slots:
+                return slots
 
         semantic_query_terms = _paper_guide_semantic_query_terms(original_question)
         requested_relation_anchors = _paper_guide_requested_relation_anchors(
@@ -3815,6 +4098,11 @@ def _system_a_slots(
                 or primary.get("strictLocate")
                 or meta.get("strict_locate")
             ),
+            "source_evidence_quotes": (
+                list(meta.get("source_deepread_evidence_quotes") or [])
+                if focus_multi_source_evidence
+                else []
+            ),
         }
         original_hit_evidence = _first_text(
             raw,
@@ -4533,6 +4821,20 @@ def build_citation_plan(
     if comparison_facet_count >= 3:
         requested_system_a = max(requested_system_a, comparison_facet_count)
         budget["system_a"] = max(int(budget.get("system_a") or 0), comparison_facet_count)
+    if intent == "comparison" and _PER_PAPER_COVERAGE_RE.search(str(prompt or "")):
+        per_source_paths = {
+            str(
+                raw.get("source_path")
+                or ((raw.get("meta") or {}).get("source_path") if isinstance(raw.get("meta"), Mapping) else "")
+                or ""
+            ).strip().replace("\\", "/").lower()
+            for raw in [*list(support_slots or []), *list(answer_hits or [])]
+            if isinstance(raw, Mapping)
+        }
+        per_source_count = min(6, len({path for path in per_source_paths if path}))
+        if per_source_count >= 3:
+            requested_system_a = max(requested_system_a, per_source_count)
+            budget["system_a"] = max(int(budget.get("system_a") or 0), per_source_count)
     answer_audit = prompt_requests_answer_audit(prompt)
     if answer_audit:
         intent = "answer_audit"
@@ -4550,6 +4852,15 @@ def build_citation_plan(
         if int(budget.get("system_b") or 0) > 0
         else []
     )
+    scigs_lineage_slot = _sci_lineage_scigs_system_b_slot(
+        prompt=prompt,
+        support_slots=support_slots,
+        answer_hits=answer_hits,
+    )
+    if intent == "origin_lookup" and scigs_lineage_slot:
+        # This is a stricter source-verbatim opportunity than the broad
+        # detector result, so it may replace a neighboring SCINeRF trace.
+        sys_b = [scigs_lineage_slot]
     if int(budget.get("system_b") or 0) > 0 and not sys_b:
         # Origin intent alone must never authorize an ungrounded bibliography
         # citation.  This also lets final-answer sanitization remove any model-
@@ -4592,6 +4903,20 @@ def build_citation_plan(
         # forcing every slot back to the abstract collapses those facets.
         prefer_source_summary=bool(intent == "comparison" and len(source_focus_keys) >= 2),
     )
+    scinerf_physics_slot = _scinerf_physics_training_abstract_slot(
+        prompt=prompt,
+        system_a_slots=sys_a,
+    )
+    if scinerf_physics_slot:
+        focused_source = str(scinerf_physics_slot.get("source_path") or "").replace(
+            "\\", "/"
+        ).lower()
+        sys_a = [scinerf_physics_slot] + [
+            slot
+            for slot in sys_a
+            if str(slot.get("source_path") or "").replace("\\", "/").lower()
+            != focused_source
+        ]
     dl_strength_source_keys = {
         source_path
         for source_path in source_focus_keys

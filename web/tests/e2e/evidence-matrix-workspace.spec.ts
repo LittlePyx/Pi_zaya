@@ -175,7 +175,7 @@ async function installBackend(page: Page, options: { groupedCandidates?: boolean
           source_name: 'Paper A',
           source_path: SHELF_ITEM.sourcePath,
           heading_path: 'Method / Architecture',
-          block_id: 'block-method',
+          block_id: '',
           evidence_quote: 'The method uses a coded optical network.',
         }],
         source_items: [{ key: SHELF_ITEM.key, title: 'Paper A', sourcePath: SHELF_ITEM.sourcePath }],
@@ -599,6 +599,9 @@ test('project basket becomes a persistent cell-audited evidence matrix', async (
   await page.getByRole('tab', { name: /Evidence/ }).click()
   await expect(page.getByTestId('project-evidence-matrix-evidence')).toContainText('Method / Architecture')
   await expect(page.getByTestId('project-evidence-matrix-evidence')).toContainText('coded optical network')
+  await page.getByTestId('project-evidence-matrix-evidence').click()
+  await page.getByLabel('Project evidence matrices').getByRole('button', { name: 'Close' }).click()
+  await expect(page.getByTestId('reader-evidence-focus')).toContainText('coded optical network')
 })
 
 test('evidence change inbox reports impact and refreshes only the affected source', async ({ page }) => {

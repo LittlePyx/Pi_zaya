@@ -103,6 +103,8 @@ def test_query_scope_prompt_block_names_full_library_mode() -> None:
     )
 
     assert "QUERY SCOPE: Full library." in block
+    assert "author-stated limitations" in block
+    assert "prior-work criticism" in block
     assert "whole indexed literature library" in block
     assert "organize the answer by paper" in block
 

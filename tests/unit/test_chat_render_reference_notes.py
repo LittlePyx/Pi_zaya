@@ -17154,6 +17154,80 @@ def test_lineage_system_b_retargets_same_reference_to_downstream_paper(tmp_path:
     )
 
 
+def test_lineage_system_b_keeps_already_grounded_downstream_source(
+    tmp_path: Path,
+) -> None:
+    from api.chat_render import _retarget_lineage_system_b_to_downstream_source
+    from api.reference_rendering import _source_cite_id
+
+    cassi = tmp_path / "CASSI.en.md"
+    scinerf = tmp_path / "SCINeRF.en.md"
+    scigs = tmp_path / "SCIGS.en.md"
+    cassi.write_text("# CASSI\n\nCoded aperture evidence.\n", encoding="utf-8")
+    scinerf.write_text("# SCINeRF\n\nNeRF 3D evidence.\n", encoding="utf-8")
+    scigs.write_text(
+        "# SCIGS\n\n## Introduction\nVideo Snapshot Compressive Imaging "
+        "(SCI) [42] technology has been developed.\n\n## References\n"
+        "[42] Snapshot Compressive Imaging: Theory, Algorithms, and Applications.\n",
+        encoding="utf-8",
+    )
+    sid = _source_cite_id(str(scigs))
+    marker = f"[[CITE:{sid}:42]]"
+    answer = f"The downstream SCI-to-3DGS stage cites the established video SCI route {marker}."
+    plan = {
+        "intent": "origin_lookup",
+        "budget": {"system_a": 3, "system_b": 1},
+        "slots": [
+            {
+                "preferred_system": "system_a",
+                "source_path": str(cassi),
+                "evidence_quote": "CASSI uses a binary-valued aperture.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(scinerf),
+                "evidence_quote": "SCINeRF integrates SCI into NeRF training for 3D scenes.",
+            },
+            {
+                "preferred_system": "system_a",
+                "source_path": str(scigs),
+                "source_name": "SCIGS",
+                "evidence_quote": "SCIGS is a variant of 3DGS for dynamic 3D scenes.",
+            },
+            {
+                "preferred_system": "system_b",
+                "source_path": str(scigs),
+                "source_name": "SCIGS",
+                "topic": "Snapshot Compressive Imaging: Theory, Algorithms, and Applications",
+                "sid": sid,
+                "candidate_refs": [42],
+                "candidate_cite_examples": [marker],
+                "evidence_quote": (
+                    "Video Snapshot Compressive Imaging (SCI) [42] technology has been developed."
+                ),
+                "grounding_contract": {
+                    "same_context_reference": True,
+                    "context_marker_verified": True,
+                },
+            },
+        ],
+    }
+
+    repaired_answer, repaired_plan = _retarget_lineage_system_b_to_downstream_source(
+        answer,
+        plan,
+    )
+
+    assert repaired_answer == answer
+    system_b = next(
+        slot
+        for slot in repaired_plan["slots"]
+        if slot.get("preferred_system") == "system_b"
+    )
+    assert system_b["source_path"] == str(scigs)
+    assert system_b["candidate_refs"] == [42]
+
+
 def test_lineage_system_b_drops_unsupported_spectral_origin_relation(tmp_path: Path) -> None:
     from api.chat_render import _retarget_lineage_system_b_to_downstream_source
     from api.reference_rendering import _source_cite_id

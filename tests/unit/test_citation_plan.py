@@ -425,6 +425,42 @@ def test_comparison_source_summary_replaces_front_matter_hit(tmp_path: Path) -> 
     assert "8 frames per second" in slot["evidence_quote"]
 
 
+def test_chinese_time_series_facets_prefer_method_abstract_over_code_link(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "autoformer.en.md"
+    source.write_text(
+        "<!-- kb_page: 1 -->\n\n# Autoformer\n\n## Abstract\n\n"
+        "Autoformer uses a decomposition architecture with decomposition blocks as inner operators. "
+        "Its Auto-Correlation mechanism discovers period-based dependencies and aggregates similar "
+        "sub-series. Experiments cover long-term time-series forecasting benchmarks.\n\n"
+        "Code is available at https://github.com/example/Autoformer.\n",
+        encoding="utf-8",
+    )
+
+    slot = _prompt_aligned_source_slot(
+        {
+            "source_path": str(source),
+            "heading_path": "Autoformer / Abstract",
+            "evidence_quote": (
+                "Table 1 reports Autoformer experiments on forecasting benchmark datasets "
+                "for long-term prediction."
+            ),
+            "block_id": "table-1",
+            "anchor_id": "tb-1",
+        },
+        ranking_texts=[
+            "比较 Autoformer 的核心建模单位、长期依赖机制、实验任务与作者明确陈述的局限；"
+            "每篇论文都必须给出可定位证据。"
+        ],
+        prefer_source_summary=True,
+    )
+
+    assert "decomposition architecture" in slot["evidence_quote"]
+    assert "Auto-Correlation mechanism" in slot["evidence_quote"]
+    assert "Code is available" not in slot["evidence_quote"]
+
+
 def test_chinese_fdm_query_ranks_exact_english_abstract_before_figure_caption() -> None:
     indexed_hits = [
         (
@@ -2267,6 +2303,76 @@ def test_multi_paper_source_marker_request_keeps_system_a_slots_for_every_reques
     assert [slot["candidate_hits"] for slot in system_a_slots] == [[1], [2], [3], [4]]
 
 
+def test_named_comparison_with_per_paper_evidence_budgets_every_available_source():
+    hits = [
+        {
+            "text": f"Evidence for named paper {idx}",
+            "meta": {
+                "source_path": f"named-paper-{idx}.en.md",
+                "heading_path": f"Named paper {idx} / Method",
+            },
+        }
+        for idx in range(1, 7)
+    ]
+
+    plan = build_citation_plan(
+        prompt=(
+            "请比较 Informer、Autoformer、FEDformer、PatchTST、TimesNet 和 iTransformer，"
+            "每篇论文都必须给出可定位证据。"
+        ),
+        answer_hits=hits,
+    )
+
+    assert plan["budget"]["system_a"] == 6
+    system_a_slots = [slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"]
+    assert len(system_a_slots) == 6
+
+
+def test_per_paper_plan_retains_same_source_deepread_evidence_for_final_audit():
+    support_slots = [
+        {
+            "doc_idx": index,
+            "source_path": f"paper-{index}.en.md",
+            "heading_path": f"Paper {index} / Abstract",
+            "snippet": f"Paper {index} abstract mechanism.",
+            "deepread_texts": [
+                f"Paper {index} experiment details and explicit limitations."
+            ],
+        }
+        for index in range(1, 7)
+    ]
+    hits = [
+        {
+            "text": f"Paper {index} abstract mechanism.",
+            "meta": {
+                "source_path": f"paper-{index}.en.md",
+                "heading_path": f"Paper {index} / Abstract",
+            },
+        }
+        for index in range(1, 7)
+    ]
+
+    plan = build_citation_plan(
+        prompt=(
+            "Compare AlphaNet, BetaNet, GammaNet, DeltaNet, EpsilonNet and ZetaNet. "
+            "Each paper must provide locatable evidence."
+        ),
+        answer_hits=hits,
+        support_slots=support_slots,
+    )
+
+    system_a_slots = [
+        slot for slot in plan["slots"] if slot["preferred_system"] == "system_a"
+    ]
+    assert len(system_a_slots) == 6
+    assert all(
+        slot["source_evidence_quotes"] == [
+            f"Paper {index} experiment details and explicit limitations."
+        ]
+        for index, slot in enumerate(system_a_slots, start=1)
+    )
+
+
 def test_explicit_multi_paper_plan_ranks_translated_query_facets_without_renumbering_hits():
     def hit(source: str, heading: str, text: str) -> dict:
         return {
@@ -3154,6 +3260,57 @@ def test_prompt_aligned_source_pins_fdm_speed_snr_abstract_bundle(tmp_path: Path
     assert slot["heading_path"].endswith("Abstract")
 
 
+def test_system_a_slots_keep_fdm_focused_abstract_over_relation_rescan(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "frequency-division-multiplexed-spi.en.md"
+    abstract = (
+        "Here, we implement frequency-division methods to parallelize the single-pixel "
+        "imaging process and demonstrate a trade-off between signal-to-noise ratio and "
+        "acquisition speed without altering detector integration time."
+    )
+    discussion = (
+        "At frequencies greater than f 3 dB, or shorter integration times, the noise "
+        "increases and it is no longer advantageous to trade off SNR for integration time."
+    )
+    source.write_text(
+        f"<!-- kb_page: 1 -->\n\n## Abstract\n\n{abstract}\n\n"
+        f"<!-- kb_page: 4 -->\n\n## 4. DISCUSSION\n\n{discussion}\n",
+        encoding="utf-8",
+    )
+    hit = {
+        "text": "one citeable bundled FDM document",
+        "meta": {
+            "source_path": str(source),
+            "same_source_evidence_bundle": True,
+            "source_passages": [
+                {
+                    "heading_path": "4. DISCUSSION",
+                    "page_start": 4,
+                    "block_id": "fdm-discussion",
+                    "text": discussion,
+                }
+            ],
+        },
+    }
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=[hit],
+        max_items=1,
+        ranking_texts=[
+            "Why is frequency-division single-pixel imaging faster, what is the SNR "
+            "trade-off, and must detector integration time change?"
+        ],
+        rank_answer_hits=True,
+    )
+
+    assert len(slots) == 1
+    assert slots[0]["heading_path"].endswith("Abstract")
+    assert slots[0]["evidence_quote"] == abstract
+    assert slots[0]["evidence_selection_reason"] == "prompt_aligned_source_sentence"
+
+
 def test_prompt_aligned_source_pins_sequential_support_abstract_bundle(tmp_path: Path) -> None:
     source = tmp_path / "sequential-adaptive-compressed-sensing.en.md"
     exact = (
@@ -3199,6 +3356,82 @@ def test_prompt_aligned_source_pins_scinerf_abstract_for_scigs_comparison(
     assert slot["evidence_quote"] == exact
     assert slot["heading_path"].endswith("Abstract")
     assert slot["page_start"] == 1
+
+
+def test_system_a_slots_align_bundled_scigs_scinerf_passages_before_budget(
+    tmp_path: Path,
+) -> None:
+    scigs = tmp_path / "ICIP-2025-SCIGS-3D-Gaussians.en.md"
+    scigs.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "We propose SCIGS, a variant of 3DGS. The proposed SCIGS is the first to "
+        "reconstruct a 3D explicit scene from a single compressed image, extending "
+        "its application to dynamic 3D scenes.\n\n"
+        "<!-- kb_page: 6 -->\n\n## 4.1 Experiment Setup\n\n"
+        "SCIGS compares GAP-TV, EfficientSCI, and SCINeRF using PSNR and SSIM.\n",
+        encoding="utf-8",
+    )
+    scinerf = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    scinerf.write_text(
+        "<!-- kb_page: 1 -->\n\n## Abstract\n\n"
+        "Specifically, we formulate the physical imaging process of SCI as part of "
+        "the training of NeRF, allowing the scene representation to be optimized.\n\n"
+        "<!-- kb_page: 5 -->\n\n## 4.1 Experimental Setup\n\n"
+        "SCINeRF compares GAP-TV, PnP-FFDNet, and EfficientSCI.\n",
+        encoding="utf-8",
+    )
+    answer_hits = [
+        {
+            "text": "one citeable bundled SCIGS document",
+            "meta": {
+                "source_path": str(scigs),
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "4.1 Experiment Setup",
+                        "page_start": 6,
+                        "block_id": "scigs-experiment",
+                        "text": (
+                            "SCIGS compares GAP-TV, EfficientSCI, and SCINeRF using "
+                            "PSNR and SSIM."
+                        ),
+                    }
+                ],
+            },
+        },
+        {
+            "text": "one citeable bundled SCINeRF document",
+            "meta": {
+                "source_path": str(scinerf),
+                "same_source_evidence_bundle": True,
+                "source_passages": [
+                    {
+                        "heading_path": "4.1 Experimental Setup",
+                        "page_start": 5,
+                        "block_id": "scinerf-experiment",
+                        "text": (
+                            "SCINeRF compares GAP-TV, PnP-FFDNet, and EfficientSCI."
+                        ),
+                    }
+                ],
+            },
+        },
+    ]
+
+    slots = _system_a_slots(
+        support_slots=[],
+        answer_hits=answer_hits,
+        max_items=2,
+        ranking_texts=["What is the difference between SCIGS and SCINeRF?"],
+        rank_answer_hits=True,
+    )
+
+    assert len(slots) == 2
+    by_source = {Path(slot["source_path"]).name: slot for slot in slots}
+    assert by_source[scigs.name]["heading_path"].endswith("Abstract")
+    assert "dynamic 3D scenes" in by_source[scigs.name]["evidence_quote"]
+    assert by_source[scinerf.name]["heading_path"].endswith("Abstract")
+    assert "physical imaging process of SCI" in by_source[scinerf.name]["evidence_quote"]
 
 
 def test_prompt_aligned_source_pins_cassi_dual_disperser_architecture(
@@ -4203,6 +4436,147 @@ def test_system_b_slots_prioritize_reference_identity_over_broad_context_overlap
     )
 
     assert slots[0]["candidate_refs"] == [26]
+
+
+def test_system_b_slots_bind_sci_lineage_upstream_to_scigs_transition() -> None:
+    opportunities = [
+        {
+            "source_path": "CVPR-2024-SCINeRF.en.md",
+            "sid": "sscinerf",
+            "ref_num": 50,
+            "label": "snapshot compressive imaging",
+            "ref_title": (
+                "Snapshot Compressive Imaging: Theory, Algorithms, and Applications"
+            ),
+            "heading_path": "SCINeRF / 1. Introduction",
+            "evidence_quote": (
+                "Video Snapshot Compressive Imaging (SCI) [50] has emerged."
+            ),
+            "context_marker_verified": True,
+        },
+        {
+            "source_path": "ICIP-2025-SCIGS.en.md",
+            "sid": "sscigs",
+            "ref_num": 42,
+            "label": "snapshot compressive imaging",
+            "ref_title": (
+                "Snapshot Compressive Imaging: Theory, Algorithms, and Applications"
+            ),
+            "heading_path": "SCIGS / 1. Introduction",
+            "evidence_quote": (
+                "Video Snapshot Compressive Imaging (SCI) [42] technology has been "
+                "developed for high-speed imaging."
+            ),
+            "context_marker_verified": True,
+        },
+    ]
+
+    slots = citation_plan._system_b_slots(
+        opportunities,
+        intent="origin_lookup",
+        max_items=1,
+        prompt=(
+            "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 "
+            "3D 场景重建的？"
+        ),
+    )
+
+    assert slots[0]["source_path"] == "ICIP-2025-SCIGS.en.md"
+    assert slots[0]["candidate_refs"] == [42]
+
+
+def test_citation_plan_recovers_scigs_lineage_marker_from_retrieved_source(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "ICIP-2025-SCIGS.en.md"
+    source.write_text(
+        "<!-- kb_page: 2 -->\n\n# SCIGS\n\n## 1. Introduction\n\n"
+        "Facing these challenges, Compressed Sensing (CS) [3,8] and video "
+        "Snapshot Compressive Imaging (SCI) [42] technology has been developed.\n\n"
+        "## References\n\n[42] Snapshot Compressive Imaging: Theory, Algorithms, "
+        "and Applications.\n",
+        encoding="utf-8",
+    )
+    plan = build_citation_plan(
+        prompt=(
+            "What is the upstream origin in the SCI lineage from spectral imaging "
+            "to 3D scene reconstruction?"
+        ),
+        prompt_family="overview",
+        answer_hits=[
+            {
+                "text": "SCIGS reconstructs a dynamic 3D scene.",
+                "meta": {"source_path": str(source), "heading_path": "Abstract"},
+            }
+        ],
+        support_slots=[],
+        reference_opportunities=[
+            {
+                "source_path": "CVPR-2024-SCINeRF.en.md",
+                "sid": "sscinerf",
+                "ref_num": 50,
+                "label": "snapshot compressive imaging",
+                "evidence_quote": "Video Snapshot Compressive Imaging (SCI) [50] has emerged.",
+                "context_marker_verified": True,
+            }
+        ],
+    )
+
+    system_b = next(
+        slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_b"
+    )
+    assert system_b["source_path"] == str(source)
+    assert system_b["candidate_refs"] == [42]
+    assert "[42]" in system_b["evidence_quote"]
+    assert system_b["grounding_contract"]["context_marker_verified"] is True
+
+
+def test_citation_plan_binds_scinerf_physics_training_to_abstract(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "CVPR-2024-SCINeRF.en.md"
+    source.write_text(
+        "<!-- kb_page: 1 -->\n\n# SCINeRF\n\n## Abstract\n\n"
+        "Specifically, we formulate the physical imaging process of SCI as part "
+        "of the training of NeRF, allowing us to capture complex scene structures.\n\n"
+        "<!-- kb_page: 8 -->\n\n## 5. Conclusion\n\nPhysical image formation "
+        "is exploited to formulate the training objective for joint NeRF training.\n",
+        encoding="utf-8",
+    )
+    plan = build_citation_plan(
+        prompt=(
+            "SCINeRF does not decode video first; where does the physical imaging "
+            "process enter NeRF training?"
+        ),
+        prompt_family="method",
+        answer_hits=[
+            {
+                "text": (
+                    "Physical image formation is exploited to formulate the training "
+                    "objective for joint NeRF training."
+                ),
+                "meta": {
+                    "source_path": str(source),
+                    "heading_path": "SCINeRF / 5. Conclusion",
+                    "page_start": 8,
+                },
+            }
+        ],
+        support_slots=[],
+        reference_opportunities=[],
+    )
+
+    system_a = next(
+        slot
+        for slot in plan["slots"]
+        if slot["preferred_system"] == "system_a"
+    )
+    assert system_a["heading_path"].endswith("Abstract")
+    assert system_a["page_start"] == 1
+    assert "physical imaging process of SCI" in system_a["evidence_quote"]
+    assert "part of the training of NeRF" in system_a["evidence_quote"]
 
 
 def test_system_a_slot_infers_cross_page_section_range_only_for_unanchored_bundle(
