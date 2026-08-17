@@ -105,7 +105,9 @@ jobs:
         shell: pwsh
         run: npm run test:e2e:core
         env:
-          PW_WORKERS: "4"
+          # Keep all 113 core tests and assertions, but avoid multiplying Vite's cold
+          # lazy-route transforms across parallel browsers on the Windows release runner.
+          PW_WORKERS: "1"
           VITE_ENABLE_AUTH_GATE: "0"
           VITE_ALLOW_LOCAL_AUTH_GATE: "0"
           VITE_PRIVATE_INSTANCE_AUTH: "0"

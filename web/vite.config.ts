@@ -5,6 +5,11 @@ import tailwindcss from '@tailwindcss/vite'
 const backendUrl = process.env.VITE_BACKEND_PROXY_TARGET
   || process.env.VITE_BACKEND_URL
   || 'http://127.0.0.1:8000'
+const internalRoutesEnabled = process.env.VITE_ENABLE_INTERNAL_ROUTES === '1'
+const warmupClientFiles = [
+  './src/pages/LibraryPage.tsx',
+  ...(internalRoutesEnabled ? ['./src/pages/MessageListRegressionPage.tsx'] : []),
+]
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
@@ -29,6 +34,11 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    // These lazy routes have broad module graphs. Pre-transform them so a cold dev server
+    // does not make parallel browser sessions compete through the same transform waterfall.
+    warmup: {
+      clientFiles: warmupClientFiles,
+    },
     proxy: {
       '/api': {
         target: backendUrl,
