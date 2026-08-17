@@ -5,10 +5,13 @@ from threading import Lock
 from kb.bg_queue_state import (
     begin_next_task_or_idle,
     cancel_all,
+    cancel_task,
     enqueue,
     finish_task,
     is_running_snapshot,
+    record_task_result,
     remove_queued_tasks_for_pdf,
+    should_cancel,
     snapshot,
     update_conversion_stage,
     update_page_progress,
@@ -286,6 +289,152 @@ def test_cancel_all_clears_queue_when_no_task_has_started():
     assert snap["total"] == 0
     assert snap["running"] is False
     assert is_running_snapshot(snap) is False
+
+
+def test_cancel_task_isolates_one_active_conversion_and_preserves_sibling():
+    state = _make_state()
+    lock = Lock()
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    enqueue(state, lock, {"_tid": "t2", "pdf": "b.pdf", "name": "b.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+    begin_next_task_or_idle(state, lock)
+    update_page_progress(state, lock, 1, 4, "Processing page 2/4 ...", task_id="t1")
+    update_page_progress(state, lock, 2, 5, "Processing page 3/5 ...", task_id="t2")
+
+    result = cancel_task(state, lock, "t1", "Canceling selected background conversion")
+
+    assert result == {
+        "matched": True,
+        "task_id": "t1",
+        "state": "cancelling",
+        "removed_queued": 0,
+    }
+    assert should_cancel(state, lock, task_id="t1") is True
+    assert should_cancel(state, lock, task_id="t2") is False
+    assert should_cancel(state, lock) is False
+
+    # Late callbacks from the cancelled child cannot restore a running stage.
+    update_page_progress(state, lock, 3, 4, "Finished page 3/4", task_id="t1")
+    update_running_pages(state, lock, [4], task_id="t1")
+    update_conversion_stage(state, lock, "indexing", task_id="t1")
+    canceling = snapshot(state, lock)
+    first, second = canceling["active_tasks"]
+    assert first["conversion_stage"] == "cancelling"
+    assert first["running_pages"] == []
+    assert second["conversion_stage"] == "converting"
+    assert second["cur_page_done"] == 2
+
+    finish_task(state, lock, "CANCELLED", task_id="t1")
+    update_page_progress(state, lock, 5, 5, "Finished page 5/5", task_id="t2")
+    finish_task(state, lock, "OK: b", task_id="t2")
+    done = snapshot(state, lock)
+    assert done["done"] == 2
+    assert done["running"] is False
+    assert done["last"] == "OK: b"
+    assert [item["task_id"] for item in done["recent_tasks"][:2]] == ["t2", "t1"]
+    assert done["recent_tasks"][0]["outcome"] == "success"
+    assert done["recent_tasks"][1]["outcome"] == "cancelled"
+
+
+def test_cancel_task_removes_only_selected_queued_conversion():
+    state = _make_state()
+    lock = Lock()
+    enqueue(state, lock, {"_tid": "t1", "pdf": "a.pdf", "name": "a.pdf", "replace": False})
+    enqueue(state, lock, {"_tid": "t2", "pdf": "b.pdf", "name": "b.pdf", "replace": False})
+    enqueue(state, lock, {"_tid": "t3", "pdf": "c.pdf", "name": "c.pdf", "replace": False})
+    begin_next_task_or_idle(state, lock)
+
+    result = cancel_task(state, lock, "t2", "Canceling selected background conversion")
+    missing = cancel_task(state, lock, "missing", "Canceling selected background conversion")
+    snap = snapshot(state, lock)
+
+    assert result["state"] == "queued_removed"
+    assert result["removed_queued"] == 1
+    assert missing["matched"] is False
+    assert [task["_tid"] for task in snap["queue"]] == ["t3"]
+    assert snap["active_tasks"][0]["_tid"] == "t1"
+    assert snap["total"] == 2
+    assert snap["recent_tasks"][0]["task_id"] == "t2"
+    assert snap["recent_tasks"][0]["outcome"] == "cancelled"
+    assert snap["recent_tasks"][0]["retry_action"] == "reconvert"
+
+
+def test_finish_task_classifies_terminal_results_and_keeps_original_task_metadata():
+    cases = [
+        ("OK+INGEST: out", "success", ""),
+        ("CANCELLED", "cancelled", "reconvert"),
+        ("FAIL: provider timed out", "conversion_failed", "reconvert"),
+        ("OK+QUALITY_BLOCKED: out", "quality_blocked", "reconvert"),
+        ("OK+INGEST_BLOCKED: out", "index_failed", "reindex"),
+    ]
+
+    for idx, (message, outcome, retry_action) in enumerate(cases, start=1):
+        state = _make_state()
+        lock = Lock()
+        task_id = f"t{idx}"
+        enqueue(
+            state,
+            lock,
+            {
+                "_tid": task_id,
+                "pdf": f"paper-{idx}.pdf",
+                "name": f"paper-{idx}.pdf",
+                "replace": True,
+                "speed_mode": "balanced",
+            },
+        )
+        begin_next_task_or_idle(state, lock)
+        update_page_progress(state, lock, 3, 4, "Finished page 3/4", task_id=task_id)
+        finish_task(state, lock, message, task_id=task_id)
+
+        result = snapshot(state, lock)["recent_tasks"][0]
+        assert result["task_id"] == task_id
+        assert result["name"] == f"paper-{idx}.pdf"
+        assert result["outcome"] == outcome
+        assert result["retry_action"] == retry_action
+        assert result["speed_mode"] == "balanced"
+        assert result["page_done"] == 3
+        assert result["page_total"] == 4
+        assert result["finished_at"] >= result["started_at"]
+
+
+def test_external_index_retry_result_replaces_duplicate_task_id_and_is_bounded():
+    state = _make_state()
+    lock = Lock()
+
+    for idx in range(55):
+        record_task_result(
+            state,
+            lock,
+            task_id=f"idx-{idx}",
+            pdf=f"paper-{idx}.pdf",
+            name=f"paper-{idx}.pdf",
+            outcome="success",
+            message="OK+INDEX_RETRY",
+            operation="index_retry",
+            started_at=10.0,
+            finished_at=12.5,
+        )
+    record_task_result(
+        state,
+        lock,
+        task_id="idx-54",
+        pdf="paper-54.pdf",
+        name="paper-54.pdf",
+        outcome="index_failed",
+        message="FAIL+INDEX_RETRY",
+        operation="index_retry",
+        detail="disk full",
+    )
+
+    recent = snapshot(state, lock)["recent_tasks"]
+    assert len(recent) == 50
+    assert recent[0]["task_id"] == "idx-54"
+    assert recent[0]["outcome"] == "index_failed"
+    assert recent[0]["operation"] == "index_retry"
+    assert recent[0]["retry_action"] == "reindex"
+    assert recent[0]["detail"] == "disk full"
+    assert sum(1 for item in recent if item["task_id"] == "idx-54") == 1
 
 
 def test_enqueue_after_cancel_waits_for_active_task_without_losing_new_work():

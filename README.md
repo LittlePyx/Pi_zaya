@@ -18,6 +18,22 @@ The product entry is FastAPI + React. The legacy Streamlit entry has been
 removed; do not use `app.py`, `streamlit run`, or port `8501` as the product
 entry.
 
+## Downloadable Windows beta
+
+The release engineering target is `v0.1.0-beta.1`: a Windows x64 portable ZIP
+with a bundled Python runtime and prebuilt React frontend. End users extract the
+ZIP and run `Start-Pi-zaya.cmd`; Node.js and system Python are not required.
+User databases, PDFs, converted Markdown, preferences, backups, and logs live
+under `%LOCALAPPDATA%\Pi_zaya`, so replacing the application folder preserves
+the library. See `docs/RELEASE_RUNBOOK.md` for build, smoke, checksum, and
+clean-machine acceptance details.
+
+The source is available under the MIT License. No official beta artifact has
+been published yet: the formal build requires a clean, versioned working tree,
+and the tag workflow still has to pass before it creates a GitHub prerelease.
+Background jobs also remain process-local, so the release is explicitly beta
+rather than a general-availability desktop product.
+
 ## Problem
 
 Academic PDF QA demos often fail in the places researchers care about most:
@@ -446,6 +462,10 @@ path for portfolio use:
 5. Ask a comparison or reading-guide question.
 6. Open the Research Agent Trace panel to show planner intent, tool calls,
    evidence matrix, evidence status, and claim verification.
+
+## License
+
+Pi_zaya is licensed under the MIT License. See `LICENSE`.
 
 ## Evaluation
 

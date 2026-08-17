@@ -36,12 +36,14 @@ from kb.file_naming import (
     sanitize_filename_component,
 )
 from kb.task_runtime import (
+    _bg_cancel_task,
     _bg_enqueue,
     _bg_snapshot,
     _bg_cancel_all,
     _build_bg_task,
     _bg_ensure_started,
     _bg_remove_queued_tasks_for_pdf,
+    _bg_record_task_result,
 )
 from kb.file_ops import (
     _list_pdf_paths_fast,
@@ -1158,6 +1160,63 @@ def _compact_active_tasks(snap: dict) -> list[dict]:
     return items
 
 
+def _compact_recent_tasks(snap: dict) -> list[dict]:
+    allowed_outcomes = {
+        "success",
+        "cancelled",
+        "conversion_failed",
+        "quality_blocked",
+        "index_failed",
+    }
+    allowed_operations = {"conversion", "index_retry"}
+    allowed_retry_actions = {"", "reconvert", "reindex"}
+    items: list[dict] = []
+    for task in list((snap or {}).get("recent_tasks") or [])[:50]:
+        if not isinstance(task, dict):
+            continue
+        outcome = str(task.get("outcome") or "").strip().lower()
+        operation = str(task.get("operation") or "conversion").strip().lower()
+        retry_action = str(task.get("retry_action") or "").strip().lower()
+        if outcome not in allowed_outcomes:
+            continue
+        if operation not in allowed_operations:
+            operation = "conversion"
+        if retry_action not in allowed_retry_actions:
+            retry_action = ""
+        items.append({
+            "task_id": str(task.get("task_id") or ""),
+            "name": str(task.get("name") or ""),
+            "pdf": str(task.get("pdf") or ""),
+            "outcome": outcome,
+            "operation": operation,
+            "message": str(task.get("message") or "")[:500],
+            "detail": str(task.get("detail") or "")[:500],
+            "retry_action": retry_action,
+            "replace": bool(task.get("replace", False)),
+            "speed_mode": str(task.get("speed_mode") or "")[:40],
+            "started_at": float(task.get("started_at") or 0.0),
+            "finished_at": float(task.get("finished_at") or 0.0),
+            "duration_s": max(0.0, float(task.get("duration_s") or 0.0)),
+            "page_done": max(0, int(task.get("page_done") or 0)),
+            "page_total": max(0, int(task.get("page_total") or 0)),
+        })
+    return items
+
+
+def _build_result_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[str, dict]]:
+    by_path: dict[str, dict] = {}
+    by_name: dict[str, dict] = {}
+    for result in _compact_recent_tasks(snap):
+        pdf = str(result.get("pdf") or "").strip()
+        name = str(result.get("name") or (Path(pdf).name if pdf else "")).strip()
+        key = _normalized_path_key(pdf)
+        if key and key not in by_path:
+            by_path[key] = result
+        if name and name not in by_name:
+            by_name[name] = result
+    return by_path, by_name
+
+
 def _is_pdf_active_in_snapshot(*, snap: dict, pdf_path: Path, pdf_name: str) -> bool:
     pdf_key = _normalized_path_key(pdf_path)
     for task in _compact_active_tasks(snap):
@@ -1270,6 +1329,8 @@ def _library_file_item(
     md_root: Path,
     task_by_path: dict[str, dict],
     task_by_name: dict[str, dict],
+    result_by_path: dict[str, dict] | None = None,
+    result_by_name: dict[str, dict] | None = None,
     docs_index_state: dict | None = None,
     meta_rec: dict | None = None,
 ) -> dict:
@@ -1278,6 +1339,10 @@ def _library_file_item(
     info = task_by_path.get(key) if key else None
     if not isinstance(info, dict):
         info = task_by_name.get(pdf.name) if isinstance(task_by_name.get(pdf.name), dict) else {}
+    result = (result_by_path or {}).get(key) if key else None
+    if not isinstance(result, dict):
+        named_result = (result_by_name or {}).get(pdf.name)
+        result = named_result if isinstance(named_result, dict) else None
     queued = bool((info or {}).get("queued"))
     running = bool((info or {}).get("running"))
     replace_task = bool((info or {}).get("replace"))
@@ -1315,6 +1380,7 @@ def _library_file_item(
         "category": category,
         "task_state": task_state,
         "status": status,
+        "task_id": str((info or {}).get("task_id") or ""),
         "replace_task": bool(replace_task),
         "queue_pos": int(queue_pos),
         "cur_page_done": int(cur_page_done),
@@ -1323,6 +1389,7 @@ def _library_file_item(
         "running_pages": running_pages,
         "running_page_count": running_page_count,
         "conversion_stage": conversion_stage,
+        "last_conversion": dict(result) if isinstance(result, dict) else None,
         "paper_category": str((meta_rec or {}).get("paper_category") or ""),
         "reading_status": str((meta_rec or {}).get("reading_status") or ""),
         "note": str((meta_rec or {}).get("note") or ""),
@@ -1350,6 +1417,7 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
     view = pdfs_all if limit <= 0 else pdfs_all[:limit]
     snap = _bg_snapshot()
     task_by_path, task_by_name = _build_task_maps_from_snapshot(snap)
+    result_by_path, result_by_name = _build_result_maps_from_snapshot(snap)
     meta_by_path = _library_store().list_records_by_paths(view)
     docs_index_state = _load_docs_index_state()
     items = [
@@ -1358,6 +1426,8 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
             md_root=md_dir,
             task_by_path=task_by_path,
             task_by_name=task_by_name,
+            result_by_path=result_by_path,
+            result_by_name=result_by_name,
             docs_index_state=docs_index_state,
             meta_rec=meta_by_path.get(str(pdf)),
         )
@@ -1404,6 +1474,7 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
             "done": int(snap.get("done", 0) or 0),
             "total": int(snap.get("total", 0) or 0),
             "active_tasks": _compact_active_tasks(snap),
+            "recent_tasks": _compact_recent_tasks(snap),
         },
     }
 
@@ -5732,6 +5803,7 @@ def _ingest_markdown_incremental(
     db_dir: Path,
     cancel_cb: Callable[[], bool] | None = None,
     ingest_proc_cb: Callable[[subprocess.Popen | None], None] | None = None,
+    rebuild_structured_indices: bool = False,
 ) -> dict:
     ingest_py = _ingest_py_path()
     if not ingest_py.exists():
@@ -5758,8 +5830,19 @@ def _ingest_markdown_incremental(
         except Exception:
             pass
 
+    ingest_args = [
+        os.sys.executable,
+        str(ingest_py),
+        "--src",
+        str(md_main),
+        "--db",
+        str(db_dir),
+        "--incremental",
+    ]
+    if rebuild_structured_indices:
+        ingest_args.append("--rebuild-structured-indices")
     proc = subprocess.Popen(
-        [os.sys.executable, str(ingest_py), "--src", str(md_main), "--db", str(db_dir), "--incremental"],
+        ingest_args,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
@@ -6404,6 +6487,7 @@ async def convert_status():
             "queued_count": len(queued_tasks),
             "active_count": int(snap.get("active_count", len(active_tasks)) or 0),
             "active_tasks": public_active_tasks,
+            "recent_tasks": _compact_recent_tasks(snap),
             "cur_page_done": snap.get("cur_page_done", 0),
             "cur_page_total": snap.get("cur_page_total", 0),
             "cur_page_msg": "",
@@ -6415,10 +6499,29 @@ async def convert_status():
     return sse_response(sse_generator(poll, interval=0.5))
 
 
+class CancelConvertBody(BaseModel):
+    task_id: str = ""
+
+
 @router.post("/convert/cancel", dependencies=[Depends(require_management_api)])
-def cancel_convert():
+def cancel_convert(body: CancelConvertBody | None = None):
+    task_id = str((body.task_id if body is not None else "") or "").strip()
+    if task_id:
+        result = _bg_cancel_task(task_id)
+        return {
+            "ok": True,
+            "scope": "task",
+            **result,
+        }
     _bg_cancel_all()
-    return {"ok": True}
+    return {
+        "ok": True,
+        "scope": "all",
+        "matched": True,
+        "task_id": "",
+        "state": "cancelling_all",
+        "removed_queued": 0,
+    }
 
 
 class OpenLibraryFileBody(BaseModel):
@@ -8277,6 +8380,58 @@ def resolve_library_guide_source(body: GuideSourceBody):
         # Bind to PDF path; runtime maps to latest markdown on disk.
         "source_path": str(pdf_path),
         "source_name": source_name,
+    }
+
+
+class ReindexFileBody(BaseModel):
+    pdf_name: str
+
+
+@router.post("/reindex/file", dependencies=[Depends(require_management_api)])
+def reindex_file(body: ReindexFileBody):
+    settings = get_settings()
+    pdf_path = _resolve_library_pdf_path_arg(body.pdf_name)
+    if not _path_is_file(pdf_path):
+        raise HTTPException(404, "pdf not found")
+    _, md_main, md_exists = _resolve_library_md_output_paths(_md_dir(), pdf_path)
+    if not md_exists or not _path_is_file(md_main):
+        raise HTTPException(409, "markdown output missing")
+
+    auto_backup = _dangerous_auto_snapshot(
+        "library_reindex_file",
+        label=pdf_path.stem,
+        metadata={"pdf_name": pdf_path.name, "md_path": str(md_main)},
+    )
+    started_at = time.time()
+    task_id = uuid.uuid4().hex
+    result = _ingest_markdown_incremental(
+        md_main=md_main,
+        db_dir=Path(settings.db_dir).expanduser(),
+        rebuild_structured_indices=True,
+    )
+    ready = bool(result.get("ready"))
+    error = str(result.get("error") or "").strip()[:500]
+    terminal = _bg_record_task_result(
+        task_id=task_id,
+        pdf=str(pdf_path),
+        name=pdf_path.name,
+        outcome="success" if ready else "index_failed",
+        message="OK+INDEX_RETRY" if ready else "FAIL+INDEX_RETRY",
+        operation="index_retry",
+        replace=False,
+        speed_mode="",
+        started_at=started_at,
+        detail=error,
+    )
+    return {
+        "ok": ready,
+        "task_id": task_id,
+        "pdf_name": pdf_path.name,
+        "md_path": str(md_main),
+        "outcome": str(terminal.get("outcome") or ""),
+        "message": str(terminal.get("message") or ""),
+        "detail": str(terminal.get("detail") or ""),
+        "auto_backup": auto_backup,
     }
 
 

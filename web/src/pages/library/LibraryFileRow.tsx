@@ -31,6 +31,9 @@ type LibraryFileRowProps = {
   onOpenMeta: (item: LibraryFileItem) => void
   onStartPaperGuide: (item: LibraryFileItem) => void
   onConvert: (item: LibraryFileItem) => void
+  onCancel: (item: LibraryFileItem) => void
+  onRetry: (item: LibraryFileItem) => void
+  retrying: boolean
   onOpenPdf: (name: string) => void
   onOpenMarkdown: (name: string) => void
   onDelete: (item: LibraryFileItem) => void
@@ -59,6 +62,9 @@ export function LibraryFileRow({
   onOpenMeta,
   onStartPaperGuide,
   onConvert,
+  onCancel,
+  onRetry,
+  retrying,
   onOpenPdf,
   onOpenMarkdown,
   onDelete,
@@ -119,6 +125,9 @@ export function LibraryFileRow({
         onOpenMeta={() => onOpenMeta(item)}
         onStartPaperGuide={() => onStartPaperGuide(item)}
         onConvert={() => onConvert(item)}
+        onCancel={() => onCancel(item)}
+        onRetry={() => onRetry(item)}
+        retrying={retrying}
         onOpenPdf={() => onOpenPdf(item.name)}
         onOpenMarkdown={() => onOpenMarkdown(item.name)}
         onDelete={() => onDelete(item)}

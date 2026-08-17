@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import {
   libraryApi,
+  type CancelConversionResponse,
   type ConvertActiveTask,
   type LibraryFilesResponse,
   type LibraryFileItem,
@@ -88,6 +89,7 @@ interface LibraryState {
   regenerateSuggestions: (body?: LibrarySuggestionRegenerateBody) => Promise<number>
   applySuggestionAction: (body: LibrarySuggestionActionBody) => Promise<LibraryFileItem | null>
   cancelConvert: () => Promise<void>
+  cancelConversionTask: (taskId: string) => Promise<CancelConversionResponse>
   reindex: () => Promise<{
     ok: boolean
     stdout: string
@@ -258,6 +260,7 @@ function mergeActiveConversionProgress(files: LibraryFileItem[], activeTasks: Co
     return {
       ...item,
       task_state: 'running' as const,
+      task_id: task.task_id,
       status: task.replace ? 'running_reconvert' : 'running',
       replace_task: Boolean(task.replace),
       category: 'pending' as const,
@@ -524,6 +527,13 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     await libraryApi.cancelConvert()
     get().startProgressStream()
     await get().loadFiles(get().viewScope || '200')
+  },
+
+  cancelConversionTask: async (taskId) => {
+    const res = await libraryApi.cancelConversionTask(taskId)
+    get().startProgressStream()
+    await get().loadFiles(get().viewScope || '200')
+    return res
   },
 
   reindex: async () => {

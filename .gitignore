@@ -66,6 +66,7 @@ DBnew/
 CLAUDE.md
 web/dist
 web/node_modules
+release/
 .claude
 .idea/
 docs/legacy/

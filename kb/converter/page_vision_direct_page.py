@@ -3,9 +3,12 @@ from __future__ import annotations
 import os
 import re
 import time
+import unicodedata
+from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
-from typing import Optional
 from types import SimpleNamespace
+from typing import Optional
 
 try:
     import fitz
@@ -18,6 +21,279 @@ from .heuristics import _page_is_predominantly_references
 from .layout_analysis import _collect_visual_rects, _detect_column_split_x, page_has_full_page_image_layer
 from .page_figure_metadata import infer_visual_rects_from_caption_candidates
 from .reference_page_vl import reference_markdown_entry_count, reference_markdown_is_usable
+from .tables import _page_maybe_has_table_from_dict
+
+
+_PAGE_CLASS_REFERENCES = "references"
+_PAGE_CLASS_TEXT_DENSE = "text_dense_body"
+_PAGE_CLASS_VISUAL = "figure_or_visual_heavy"
+_PAGE_CLASS_FORMULA = "formula_sensitive"
+_PAGE_CLASS_UNKNOWN = "unknown"
+
+
+def _adaptive_page_budgets_enabled() -> bool:
+    """Return whether the new class-aware budget policy is enabled.
+
+    The existing normal-mode plain-page budgets remain the compatibility path.
+    This flag only enables the stricter class-aware policy, so rollout and A/B
+    measurements can happen without silently changing production conversion.
+    """
+    try:
+        raw = str(os.environ.get("KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS", "0") or "0").strip().lower()
+    except Exception:
+        return False
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _vision_text_local_fastpath_enabled() -> bool:
+    """Return whether verified text-only pages may bypass the vision model."""
+    try:
+        raw = str(os.environ.get("KB_PDF_VISION_TEXT_LOCAL_FASTPATH", "0") or "0").strip().lower()
+    except Exception:
+        return False
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _page_has_table_risk(page) -> bool:
+    try:
+        page_dict = page.get_text("dict") or {}
+    except Exception:
+        return True
+    if not isinstance(page_dict, dict) or not page_dict:
+        return True
+    try:
+        return bool(_page_maybe_has_table_from_dict(page_dict))
+    except Exception:
+        return True
+
+
+def _page_looks_like_reference_continuation(page) -> bool:
+    """Reject heading-less bibliography continuation pages from the body fast path."""
+    try:
+        text = str(page.get_text("text") or "")
+    except Exception:
+        return True
+    reference_numbers = [
+        int(value)
+        for value in re.findall(r"(?m)^\s*\[\s*(\d{1,4})\s*\]\s+\S", text)
+    ]
+    if len(reference_numbers) < 3:
+        return False
+    return all(current > previous for previous, current in zip(reference_numbers, reference_numbers[1:]))
+
+
+def _local_text_fastpath_eligibility(
+    converter,
+    *,
+    page,
+    speed_mode: str,
+    page_class: str,
+    plain_text_chars: int,
+) -> tuple[bool, str]:
+    if str(speed_mode or "").strip().lower() != "normal":
+        return False, "speed_mode"
+    if page_class != _PAGE_CLASS_TEXT_DENSE:
+        return False, "page_class"
+    if int(plain_text_chars or 0) < 900:
+        return False, "source_too_short"
+    if not callable(getattr(converter, "_process_page_local_only", None)):
+        return False, "local_pipeline_unavailable"
+    if _page_looks_like_reference_continuation(page):
+        return False, "references_continuation"
+    if _page_has_table_risk(page):
+        return False, "table_risk"
+    return True, "eligible"
+
+
+def _normalized_word_tokens(text: str) -> list[str]:
+    normalized = unicodedata.normalize("NFKC", str(text or "")).casefold()
+    return re.findall(r"[^\W_]+(?:['’\-][^\W_]+)*", normalized, flags=re.UNICODE)
+
+
+def _counter_recall(source_items: list, output_items: list) -> float:
+    if not source_items:
+        return 0.0
+    source_counts = Counter(source_items)
+    output_counts = Counter(output_items)
+    matched = sum(min(count, int(output_counts.get(item, 0))) for item, count in source_counts.items())
+    return float(matched) / float(len(source_items))
+
+
+def _source_bold_prefix_headings(page, *, noise_texts: Optional[set[str]] = None) -> list[str]:
+    try:
+        page_dict = page.get_text("dict") or {}
+    except Exception:
+        return []
+    headings: list[str] = []
+    seen: set[str] = set()
+    normalized_noise = {" ".join(_normalized_word_tokens(item)) for item in (noise_texts or set())}
+    for block in page_dict.get("blocks") or []:
+        if int(block.get("type") or 0) != 0:
+            continue
+        spans = [
+            span
+            for line in block.get("lines") or []
+            for span in line.get("spans") or []
+            if str(span.get("text") or "").strip()
+        ]
+        if not spans:
+            continue
+        bold_parts: list[str] = []
+        for span in spans:
+            font = str(span.get("font") or "").strip().lower()
+            try:
+                bold_flag = bool(int(span.get("flags") or 0) & 16)
+            except Exception:
+                bold_flag = False
+            if not (bold_flag or any(label in font for label in ("bold", "semibold", "demibold"))):
+                break
+            bold_parts.append(str(span.get("text") or "").strip())
+        if not bold_parts:
+            continue
+        heading = re.sub(r"\s+", " ", " ".join(bold_parts)).strip(" -–—:;")
+        words = _normalized_word_tokens(heading)
+        if len(heading) < 4 or len(heading) > 120 or not (1 <= len(words) <= 16):
+            continue
+        if heading.endswith((".", ",")) or not re.search(r"[^\W\d_]", heading, flags=re.UNICODE):
+            continue
+        key = " ".join(words)
+        if key in {"article", "open access"} or key in normalized_noise:
+            continue
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        headings.append(heading)
+    return headings
+
+
+def _promote_source_headings(markdown: str | None, headings: list[str]) -> tuple[str, int]:
+    output = str(markdown or "")
+    promoted = 0
+    for heading in sorted(headings, key=len, reverse=True):
+        parts = [re.escape(part) for part in re.split(r"\s+", heading.strip()) if part]
+        if not parts:
+            continue
+        flexible = r"[ \t]+".join(parts)
+        pattern = re.compile(rf"(?m)^(?![ \t]*#)(?P<lead>[ \t]*){flexible}(?=[ \t]+)", flags=re.UNICODE)
+
+        def _replacement(match: re.Match) -> str:
+            return f"{match.group('lead')}### {heading}\n\n"
+
+        output, count = pattern.subn(_replacement, output, count=1)
+        promoted += int(count)
+    return output, promoted
+
+
+def _validate_local_text_markdown(
+    source_text: str,
+    markdown: str | None,
+    *,
+    required_headings: Optional[list[str]] = None,
+) -> tuple[bool, str, dict[str, float | int]]:
+    source_raw = str(source_text or "")
+    output_raw = str(markdown or "").strip()
+    source_tokens = _normalized_word_tokens(source_raw)
+    output_tokens = _normalized_word_tokens(output_raw)
+    metrics: dict[str, float | int] = {
+        "source_chars": len(source_raw.strip()),
+        "output_chars": len(output_raw),
+        "source_tokens": len(source_tokens),
+        "output_tokens": len(output_tokens),
+        "coverage": 0.0,
+        "bigram_coverage": 0.0,
+        "order_ratio": 0.0,
+        "length_ratio": 0.0,
+        "heading_candidates": len(required_headings or []),
+        "headings_promoted": 0,
+    }
+    if len(source_tokens) < 120:
+        return False, "source_tokens_too_few", metrics
+    if len(output_tokens) < 100:
+        return False, "output_too_short", metrics
+    if re.search(r"\[Page\s+\d+\s+conversion\s+incomplete\]", output_raw, flags=re.IGNORECASE):
+        return False, "incomplete_output", metrics
+    if "\ufffd" in output_raw or any(ord(ch) < 32 and ch not in "\n\r\t" for ch in output_raw):
+        return False, "garbled_output", metrics
+
+    coverage = _counter_recall(source_tokens, output_tokens)
+    source_bigrams = list(zip(source_tokens, source_tokens[1:]))
+    output_bigrams = list(zip(output_tokens, output_tokens[1:]))
+    bigram_coverage = _counter_recall(source_bigrams, output_bigrams)
+    order_ratio = SequenceMatcher(None, source_tokens, output_tokens).ratio()
+    length_ratio = float(len(output_tokens)) / float(max(1, len(source_tokens)))
+    metrics.update(
+        {
+            "coverage": coverage,
+            "bigram_coverage": bigram_coverage,
+            "order_ratio": order_ratio,
+            "length_ratio": length_ratio,
+        }
+    )
+    if length_ratio < 0.72:
+        return False, "length_too_short", metrics
+    if length_ratio > 1.35:
+        return False, "length_too_long", metrics
+    if coverage < 0.84:
+        return False, "low_word_coverage", metrics
+    if bigram_coverage < 0.68:
+        return False, "low_bigram_coverage", metrics
+    if order_ratio < 0.62:
+        return False, "low_order_similarity", metrics
+    markdown_heading_keys = {
+        " ".join(_normalized_word_tokens(line))
+        for line in re.findall(r"(?m)^#{1,6}\s+(.+?)\s*$", output_raw)
+    }
+    for heading in required_headings or []:
+        heading_key = " ".join(_normalized_word_tokens(heading))
+        if heading_key and heading_key not in markdown_heading_keys:
+            return False, "missing_source_heading", metrics
+    return True, "accepted", metrics
+
+
+def _collect_page_formula_candidates(
+    converter,
+    *,
+    page,
+    page_index: int,
+    is_references_page: bool,
+) -> Optional[list]:
+    if is_references_page:
+        return []
+    collector = getattr(converter, "_collect_display_math_candidates", None)
+    if not callable(collector):
+        return None
+    try:
+        candidates = collector(
+            page,
+            page_index=int(page_index),
+            is_references_page=False,
+        )
+    except Exception:
+        return None
+    return list(candidates or [])
+
+
+def _classify_page_budget(
+    *,
+    page_index: int,
+    is_references_page: bool,
+    image_names: list[str],
+    visual_rects: list["fitz.Rect"],
+    formula_candidate_count: int,
+    plain_text_chars: int,
+) -> str:
+    """Classify a page using only source-local signals available before VL."""
+    if is_references_page:
+        return _PAGE_CLASS_REFERENCES
+    if int(formula_candidate_count or 0) > 0:
+        return _PAGE_CLASS_FORMULA
+    if image_names or visual_rects:
+        return _PAGE_CLASS_VISUAL
+    # Keep cover/front-matter and textless/scan-like pages on the current
+    # quality envelope until a reviewed classifier can distinguish them.
+    if int(page_index) <= 0 or int(plain_text_chars or 0) <= 0:
+        return _PAGE_CLASS_UNKNOWN
+    return _PAGE_CLASS_TEXT_DENSE
 
 
 def _stage_timing_enabled() -> bool:
@@ -348,6 +624,7 @@ def _should_prefer_local_figure_order_pipeline(
     page_index: int,
     image_names: list[str],
     visual_rects: list["fitz.Rect"],
+    formula_candidates: Optional[list] = None,
 ) -> bool:
     if fitz is None or (not image_names) or len(visual_rects) != 1:
         return False
@@ -372,17 +649,19 @@ def _should_prefer_local_figure_order_pipeline(
     # column OCR whenever the source-backed formula detector finds an equation,
     # including formulas whose individual PDF text fragments are too short for
     # the lightweight raw-block heuristic below.
+    detected_formula_candidates = formula_candidates
     formula_collector = getattr(converter, "_collect_display_math_candidates", None)
-    if callable(formula_collector):
+    if detected_formula_candidates is None and callable(formula_collector):
         try:
-            if formula_collector(
+            detected_formula_candidates = formula_collector(
                 page,
                 page_index=int(page_index),
                 is_references_page=False,
-            ):
-                return False
+            )
         except Exception:
             pass
+    if detected_formula_candidates:
+        return False
 
     try:
         page_dict = page.get_text("dict") or {}
@@ -439,12 +718,22 @@ def _choose_page_max_tokens_override(
     visual_rects: list["fitz.Rect"],
     formula_placeholders: dict[str, str],
     plain_text_density: str = "unknown",
+    page_class: str = "",
+    adaptive_enabled: bool = False,
 ) -> Optional[int]:
     if str(speed_mode or "").strip().lower() != "normal":
         return None
     if is_references_page or page_index <= 0:
         return None
-    if page_hint or image_names or visual_rects or formula_placeholders:
+    if adaptive_enabled and page_class != _PAGE_CLASS_TEXT_DENSE:
+        return None
+    if image_names or visual_rects or formula_placeholders:
+        return None
+    # Under the adaptive policy, a source-verified text-only page may still carry
+    # a harmless layout hint (for example, two-column reading order).  That hint
+    # improves reconstruction but does not justify the full generation budget.
+    # Legacy behavior remains unchanged while the feature flag is disabled.
+    if page_hint and not adaptive_enabled:
         return None
     try:
         raw = str(os.environ.get("KB_PDF_VISION_PLAIN_PAGE_MAX_TOKENS", "") or "").strip()
@@ -491,6 +780,8 @@ def _choose_page_render_dpi(
     image_names: list[str],
     visual_rects: list["fitz.Rect"],
     base_dpi: int,
+    page_class: str = "",
+    adaptive_enabled: bool = False,
 ) -> tuple[int, str]:
     try:
         raw_forced = str(os.environ.get("KB_PDF_VISION_DPI", "") or "").strip()
@@ -501,6 +792,18 @@ def _choose_page_render_dpi(
 
     if str(speed_mode or "").strip().lower() != "normal":
         return int(base_dpi), "base"
+    if adaptive_enabled:
+        if page_class != _PAGE_CLASS_TEXT_DENSE:
+            return int(base_dpi), f"adaptive_{page_class or _PAGE_CLASS_UNKNOWN}"
+        try:
+            raw_plain = str(os.environ.get("KB_PDF_VISION_PLAIN_PAGE_DPI", "") or "").strip()
+            target = int(raw_plain) if raw_plain else 200
+        except Exception:
+            target = 200
+        target = max(200, min(int(base_dpi), int(target)))
+        if target < int(base_dpi):
+            return int(target), f"adaptive_{_PAGE_CLASS_TEXT_DENSE}"
+        return int(base_dpi), f"adaptive_{_PAGE_CLASS_TEXT_DENSE}"
     if is_references_page:
         return int(base_dpi), "references"
     if page_index <= 0:
@@ -535,15 +838,18 @@ def _apply_formula_overlay(
     dpi: int,
     is_references_page: bool,
     page_hint: str,
+    formula_candidates: Optional[list] = None,
 ) -> tuple[bytes, str, dict[str, str]]:
     formula_placeholders: dict[str, str] = {}
     if (not is_references_page) and converter._vision_formula_overlay_enabled():
         try:
-            eq_candidates = converter._collect_display_math_candidates(
-                page,
-                page_index=page_index,
-                is_references_page=False,
-            )
+            eq_candidates = formula_candidates
+            if eq_candidates is None:
+                eq_candidates = converter._collect_display_math_candidates(
+                    page,
+                    page_index=page_index,
+                    is_references_page=False,
+                )
             if eq_candidates:
                 eq_labeled_rects, formula_placeholders = converter._extract_formula_placeholders_for_page(
                     page,
@@ -626,6 +932,125 @@ def process_vision_direct_page(
             dpi=dpi,
         )
         _log_stage(3, "assets", step_start, f"images={len(image_names)} visuals={len(visual_rects)}")
+
+    adaptive_page_budgets = _adaptive_page_budgets_enabled()
+    text_local_fastpath = _vision_text_local_fastpath_enabled()
+    plain_text_density, plain_text_chars = _classify_plain_body_text_density(page)
+    try:
+        formula_overlay_enabled = bool(converter._vision_formula_overlay_enabled())
+    except Exception:
+        formula_overlay_enabled = False
+    formula_candidates: Optional[list] = None
+    # Benchmark controls must pay the same cheap classification cost as the
+    # candidate so provider timings remain comparable. Normal product runs keep
+    # the probe lazy unless formula overlay or adaptive budgets need it.
+    if adaptive_page_budgets or text_local_fastpath or formula_overlay_enabled or log_stage_timings:
+        formula_candidates = _collect_page_formula_candidates(
+            converter,
+            page=page,
+            page_index=page_index,
+            is_references_page=is_references_page,
+        )
+    page_class = _classify_page_budget(
+        page_index=page_index,
+        is_references_page=is_references_page,
+        image_names=image_names,
+        visual_rects=visual_rects,
+        formula_candidate_count=len(formula_candidates or []),
+        plain_text_chars=plain_text_chars,
+    )
+    if (adaptive_page_budgets or text_local_fastpath) and formula_candidates is None and page_class == _PAGE_CLASS_TEXT_DENSE:
+        page_class = _PAGE_CLASS_UNKNOWN
+
+    if text_local_fastpath and page_class == _PAGE_CLASS_TEXT_DENSE:
+        try:
+            source_text = str(page.get_text("text") or "")
+        except Exception:
+            source_text = ""
+        eligible, local_reason = _local_text_fastpath_eligibility(
+            converter,
+            page=page,
+            speed_mode=speed_mode,
+            page_class=page_class,
+            plain_text_chars=plain_text_chars,
+        )
+        source_tokens = _normalized_word_tokens(source_text)
+        source_headings = _source_bold_prefix_headings(
+            page,
+            noise_texts=set(getattr(converter, "noise_texts", set()) or set()),
+        )
+        local_metrics: dict[str, float | int] = {
+            "source_chars": len(source_text.strip()),
+            "output_chars": 0,
+            "source_tokens": len(source_tokens),
+            "output_tokens": 0,
+            "coverage": 0.0,
+            "bigram_coverage": 0.0,
+            "order_ratio": 0.0,
+            "length_ratio": 0.0,
+            "heading_candidates": len(source_headings),
+            "headings_promoted": 0,
+        }
+        md_local_text: Optional[str] = None
+        local_started = time.perf_counter()
+        if eligible:
+            try:
+                md_local_text = converter._process_page_local_only(
+                    page,
+                    page_index=page_index,
+                    pdf_path=pdf_path,
+                    assets_dir=assets_dir,
+                )
+                md_local_text, headings_promoted = _promote_source_headings(md_local_text, source_headings)
+                accepted, local_reason, local_metrics = _validate_local_text_markdown(
+                    source_text,
+                    md_local_text,
+                    required_headings=source_headings,
+                )
+                local_metrics["headings_promoted"] = int(headings_promoted)
+            except Exception as e:
+                accepted = False
+                local_reason = "local_pipeline_error"
+                print(
+                    f"[VISION_DIRECT][TEXT_LOCAL] local pipeline failed on page {page_index+1}: {e}",
+                    flush=True,
+                )
+        else:
+            accepted = False
+        local_elapsed = time.perf_counter() - local_started
+        print(
+            f"[VISION_DIRECT][TEXT_LOCAL] page {page_index+1}: "
+            f"accepted={int(accepted)} reason={local_reason} "
+            f"source_chars={int(local_metrics['source_chars'])} output_chars={int(local_metrics['output_chars'])} "
+            f"source_tokens={int(local_metrics['source_tokens'])} output_tokens={int(local_metrics['output_tokens'])} "
+            f"coverage={float(local_metrics['coverage']):.4f} "
+            f"bigram_coverage={float(local_metrics['bigram_coverage']):.4f} "
+            f"order_ratio={float(local_metrics['order_ratio']):.4f} "
+            f"length_ratio={float(local_metrics['length_ratio']):.4f} "
+            f"headings={int(local_metrics['headings_promoted'])}/{int(local_metrics['heading_candidates'])} "
+            f"elapsed={local_elapsed:.4f}",
+            flush=True,
+        )
+        if accepted and md_local_text:
+            _log_stage(4, "page render", time.perf_counter(), "skipped=text-local-fastpath")
+            _log_stage(5, "hints/overlay", time.perf_counter(), "formula=0 hint=0 text_local=1")
+            _log_stage(6, "local text convert", local_started, f"text_local=1 chars={len(md_local_text)}")
+            if log_stage_timings:
+                print(
+                    f"[VISION_DIRECT][BUDGET] page {page_index+1}: "
+                    f"class={page_class} enabled={int(adaptive_page_budgets)} "
+                    f"dpi=0 base_dpi={int(dpi)} max_tokens=default "
+                    f"density={plain_text_density} text_chars={plain_text_chars} "
+                    "formulas=0 images=0 visuals=0 profile=text_local_fastpath",
+                    flush=True,
+                )
+                print(f"  [Page {page_index+1}] TOTAL: {time.perf_counter() - perf_t0:.2f}s", flush=True)
+            elapsed = time.time() - t0
+            print(
+                f"Finished page {page_index+1}/{total_pages} ({elapsed:.1f}s, {len(md_local_text)} chars, text-local)",
+                flush=True,
+            )
+            return md_local_text
 
     if is_references_page and _should_prefer_local_references_pipeline(converter):
         step_start = time.perf_counter()
@@ -736,6 +1161,7 @@ def process_vision_direct_page(
         page_index=page_index,
         image_names=image_names,
         visual_rects=visual_rects,
+        formula_candidates=formula_candidates,
     ):
         try:
             step_start = time.perf_counter()
@@ -776,6 +1202,8 @@ def process_vision_direct_page(
         image_names=image_names,
         visual_rects=visual_rects,
         base_dpi=dpi,
+        page_class=page_class,
+        adaptive_enabled=adaptive_page_budgets,
     )
     page_mat = mat
     if int(page_dpi) != int(dpi):
@@ -830,8 +1258,8 @@ def process_vision_direct_page(
         dpi=page_dpi,
         is_references_page=is_references_page,
         page_hint=page_hint,
+        formula_candidates=formula_candidates,
     )
-    plain_text_density, plain_text_chars = _classify_plain_body_text_density(page)
     _log_stage(
         5,
         "hints/overlay",
@@ -848,7 +1276,21 @@ def process_vision_direct_page(
         visual_rects=visual_rects,
         formula_placeholders=formula_placeholders,
         plain_text_density=plain_text_density,
+        page_class=page_class,
+        adaptive_enabled=adaptive_page_budgets,
     )
+
+    if log_stage_timings:
+        print(
+            f"[VISION_DIRECT][BUDGET] page {page_index+1}: "
+            f"class={page_class} enabled={int(adaptive_page_budgets)} "
+            f"dpi={int(page_dpi)} base_dpi={int(dpi)} "
+            f"max_tokens={max_tokens_override if max_tokens_override is not None else 'default'} "
+            f"density={plain_text_density} text_chars={plain_text_chars} "
+            f"formulas={len(formula_candidates or [])} images={len(image_names)} visuals={len(visual_rects)} "
+            f"profile={render_profile}",
+            flush=True,
+        )
 
     step_start = time.perf_counter()
     md = converter._convert_page_with_vision_guardrails(

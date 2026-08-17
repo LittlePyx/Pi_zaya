@@ -23,6 +23,44 @@ def _enable_internal_quality_api_for_sanity(monkeypatch):
         pass
 
 
+def test_library_cancel_conversion_supports_task_scope_and_legacy_cancel_all(monkeypatch):
+    from api.routers import library as library_router
+
+    calls: list[tuple[str, str]] = []
+
+    def _cancel_task(task_id: str) -> dict:
+        calls.append(("task", task_id))
+        return {
+            "matched": True,
+            "task_id": task_id,
+            "state": "cancelling",
+            "removed_queued": 0,
+        }
+
+    monkeypatch.setattr(library_router, "_bg_cancel_task", _cancel_task)
+    monkeypatch.setattr(library_router, "_bg_cancel_all", lambda: calls.append(("all", "")))
+    client = TestClient(app)
+
+    task_response = client.post(
+        "/api/library/convert/cancel",
+        json={"task_id": "task-one"},
+    )
+    all_response = client.post("/api/library/convert/cancel")
+
+    assert task_response.status_code == 200
+    assert task_response.json() == {
+        "ok": True,
+        "scope": "task",
+        "matched": True,
+        "task_id": "task-one",
+        "state": "cancelling",
+        "removed_queued": 0,
+    }
+    assert all_response.status_code == 200
+    assert all_response.json()["scope"] == "all"
+    assert calls == [("task", "task-one"), ("all", "")]
+
+
 def test_quality_repair_plan_uses_fresh_report_escalation():
     from api.routers import library as library_router
 
@@ -332,13 +370,76 @@ def test_library_files_route_classifies_queue_and_reconvert(monkeypatch, tmp_pat
     assert by_name["a.pdf"]["task_state"] == "running"
     assert by_name["a.pdf"]["category"] == "pending"
     assert by_name["b.pdf"]["task_state"] == "queued"
+    assert by_name["b.pdf"]["task_id"] == "q2"
     assert by_name["b.pdf"]["replace_task"] is True
     assert by_name["b.pdf"]["category"] == "pending"
     assert by_name["c.pdf"]["queue_pos"] == 1
+    assert by_name["c.pdf"]["task_id"] == "q1"
     assert int((payload.get("counts") or {}).get("pending") or 0) == 3
     assert int((payload.get("counts") or {}).get("converted") or 0) == 0
     assert bool((payload.get("queue") or {}).get("running")) is True
     assert int((payload.get("queue") or {}).get("queued_count") or 0) == 2
+
+
+def test_library_files_route_exposes_latest_terminal_result_per_document(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True)
+    md_dir.mkdir(parents=True)
+    pdf = pdf_dir / "failed.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "_library_store",
+        lambda: SimpleNamespace(list_records_by_paths=lambda _paths: {}),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": False,
+            "active_tasks": [],
+            "queue": [],
+            "done": 1,
+            "total": 1,
+            "recent_tasks": [
+                {
+                    "task_id": "result-1",
+                    "pdf": str(pdf),
+                    "name": pdf.name,
+                    "outcome": "conversion_failed",
+                    "operation": "conversion",
+                    "message": "provider timed out",
+                    "detail": "provider timed out",
+                    "retry_action": "reconvert",
+                    "replace": True,
+                    "speed_mode": "balanced",
+                    "started_at": 100.0,
+                    "finished_at": 112.5,
+                    "duration_s": 12.5,
+                    "page_done": 3,
+                    "page_total": 8,
+                }
+            ],
+        },
+    )
+
+    response = TestClient(app).get("/api/library/files", params={"scope": "all"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    item = payload["items"][0]
+    assert item["task_state"] == "idle"
+    assert item["last_conversion"]["task_id"] == "result-1"
+    assert item["last_conversion"]["outcome"] == "conversion_failed"
+    assert item["last_conversion"]["retry_action"] == "reconvert"
+    assert item["last_conversion"]["duration_s"] == 12.5
+    assert payload["queue"]["recent_tasks"][0]["task_id"] == "result-1"
 
 
 def test_convert_status_treats_queued_tasks_as_running(monkeypatch):
@@ -394,6 +495,70 @@ def test_convert_status_treats_queued_tasks_as_running(monkeypatch):
     assert payload["running"] is True
     assert payload["done"] is False
     assert payload["queued_count"] == 1
+
+
+@pytest.mark.parametrize(
+    ("ingest_result", "expected_ok", "expected_outcome"),
+    [
+        ({"ready": True}, True, "success"),
+        ({"ready": False, "error": "disk full"}, False, "index_failed"),
+    ],
+)
+def test_reindex_file_retries_only_target_index(
+    monkeypatch,
+    tmp_path: Path,
+    ingest_result: dict,
+    expected_ok: bool,
+    expected_outcome: str,
+):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True)
+    md = md_dir / "paper" / "paper.en.md"
+    md.parent.mkdir(parents=True)
+    pdf = pdf_dir / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md.write_text("<!-- kb_page: 1 -->\n# Paper\n", encoding="utf-8")
+    calls: dict[str, object] = {}
+
+    def fake_ingest(**kwargs):
+        calls["ingest"] = kwargs
+        return dict(ingest_result)
+
+    def fake_record(**kwargs):
+        calls["record"] = kwargs
+        return {
+            **kwargs,
+            "message": "Index retry completed." if kwargs["outcome"] == "success" else "Index retry failed.",
+        }
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(library_router, "_ingest_markdown_incremental", fake_ingest)
+    monkeypatch.setattr(library_router, "_bg_record_task_result", fake_record)
+    monkeypatch.setattr(
+        library_router,
+        "run_pdf_to_md",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("index retry must not reconvert the PDF")),
+    )
+
+    response = TestClient(app).post("/api/library/reindex/file", json={"pdf_name": pdf.name})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is expected_ok
+    assert payload["outcome"] == expected_outcome
+    assert calls["ingest"]["md_main"] == md
+    assert calls["ingest"]["db_dir"] == db_dir
+    assert calls["ingest"]["rebuild_structured_indices"] is True
+    assert calls["record"]["operation"] == "index_retry"
+    assert calls["record"]["outcome"] == expected_outcome
+    assert calls["record"]["detail"] == str(ingest_result.get("error") or "")
 
 
 def test_convert_status_ignores_stale_total_without_active_or_queue(monkeypatch):
@@ -500,7 +665,9 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
 
     by_name = {str(item.get("name") or ""): item for item in list(payload.get("items") or [])}
     assert by_name["a.pdf"]["task_state"] == "running"
+    assert by_name["a.pdf"]["task_id"] == "r1"
     assert by_name["b.pdf"]["task_state"] == "running"
+    assert by_name["b.pdf"]["task_id"] == "r2"
     assert by_name["b.pdf"]["replace_task"] is True
     assert by_name["b.pdf"]["category"] == "pending"
     assert by_name["a.pdf"]["cur_page_done"] == 1
@@ -513,6 +680,7 @@ def test_library_files_route_classifies_multiple_active_tasks(monkeypatch, tmp_p
     assert by_name["a.pdf"]["running_pages"] == []
     assert by_name["c.pdf"]["task_state"] == "queued"
     assert by_name["c.pdf"]["queue_pos"] == 1
+    assert by_name["c.pdf"]["task_id"] == "q1"
     counts = payload.get("counts") or {}
     assert int(counts.get("running") or 0) == 2
     assert int(counts.get("queued") or 0) == 1

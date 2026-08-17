@@ -13,6 +13,8 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from kb.version import read_app_version
+
 router = APIRouter(prefix="/api/app", tags=["app"])
 
 _UPDATE_CACHE: dict[str, Any] = {}
@@ -50,12 +52,16 @@ def _current_build_info() -> dict[str, Any]:
     exact_tag = _run_git(["describe", "--tags", "--exact-match"])
     nearest_tag = _run_git(["describe", "--tags", "--abbrev=0"])
     env_version = str(os.environ.get("KB_APP_VERSION") or "").strip()
+    file_version = read_app_version()
     if env_version:
         version = env_version
         source = "env"
     elif exact_tag:
         version = exact_tag
         source = "git_tag"
+    elif file_version != "unknown":
+        version = file_version
+        source = "version_file"
     elif nearest_tag:
         version = nearest_tag
         source = "nearest_git_tag"
@@ -99,18 +105,48 @@ def _normalize_tag(value: object) -> str:
     return str(value or "").strip()
 
 
-def _semver_key(tag: str) -> tuple[int, int, int, str] | None:
+def _semver_key(tag: str) -> tuple[int, int, int, tuple[tuple[int, int | str], ...] | None] | None:
     clean = _normalize_tag(tag).lstrip("vV")
-    match = re.match(r"^(\d+)(?:\.(\d+))?(?:\.(\d+))?([-.+].*)?$", clean)
+    match = re.fullmatch(
+        r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
+        r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?"
+        r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?",
+        clean,
+    )
     if not match:
         return None
-    suffix = match.group(4) or ""
+    prerelease = match.group(4)
+    prerelease_key = None
+    if prerelease is not None:
+        identifiers: list[tuple[int, int | str]] = []
+        for identifier in prerelease.split("."):
+            identifiers.append((0, int(identifier)) if identifier.isdigit() else (1, identifier))
+        prerelease_key = tuple(identifiers)
     return (
         int(match.group(1)),
-        int(match.group(2) or 0),
-        int(match.group(3) or 0),
-        suffix,
+        int(match.group(2)),
+        int(match.group(3)),
+        prerelease_key,
     )
+
+
+def _prerelease_is_newer(
+    latest: tuple[tuple[int, int | str], ...] | None,
+    current: tuple[tuple[int, int | str], ...] | None,
+) -> bool:
+    if latest is None:
+        return current is not None
+    if current is None:
+        return False
+    for latest_item, current_item in zip(latest, current):
+        if latest_item == current_item:
+            continue
+        if latest_item[0] != current_item[0]:
+            # SemVer numeric identifiers always have lower precedence than
+            # non-numeric identifiers at the same position.
+            return latest_item[0] > current_item[0]
+        return latest_item[1] > current_item[1]
+    return len(latest) > len(current)
 
 
 def _tag_is_newer(latest: str, current: str) -> bool | None:
@@ -123,7 +159,9 @@ def _tag_is_newer(latest: str, current: str) -> bool | None:
     latest_key = _semver_key(latest_clean)
     current_key = _semver_key(current_clean)
     if latest_key and current_key:
-        return latest_key[:3] > current_key[:3]
+        if latest_key[:3] != current_key[:3]:
+            return latest_key[:3] > current_key[:3]
+        return _prerelease_is_newer(latest_key[3], current_key[3])
     return None
 
 

@@ -12,3 +12,26 @@
 .kb-lib-file-progress-note {
   margin-top: 8px;
 }
+
+.kb-lib-file-result-note {
+  width: fit-content;
+  max-width: 100%;
+  margin-top: 3px;
+  padding-left: 7px;
+  border-left: 2px solid color-mix(in srgb, var(--border) 74%, transparent);
+  line-height: 1.45;
+  cursor: help;
+}
+
+.kb-lib-file-result-note.is-success {
+  border-left-color: color-mix(in srgb, #16a34a 72%, var(--border));
+}
+
+.kb-lib-file-result-note.is-quality_blocked {
+  border-left-color: color-mix(in srgb, #d97706 74%, var(--border));
+}
+
+.kb-lib-file-result-note.is-conversion_failed,
+.kb-lib-file-result-note.is-index_failed {
+  border-left-color: color-mix(in srgb, #dc2626 72%, var(--border));
+}

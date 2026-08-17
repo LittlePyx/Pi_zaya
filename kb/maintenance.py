@@ -379,7 +379,7 @@ def _tail_text(path: Path, max_bytes: int = 64_000) -> str:
 
 
 def _safe_user_prefs() -> dict[str, Any]:
-    path = ROOT / "user_prefs.json"
+    path = Path(os.environ.get("KB_USER_PREFS_PATH") or (ROOT / "user_prefs.json")).expanduser()
     if not path.exists():
         return {}
     try:
@@ -548,7 +548,8 @@ def create_backup_archive(settings: Settings, *, label: str = "") -> dict[str, A
             safe_prefs = _safe_user_prefs()
             if safe_prefs:
                 _write_json(zf, "user_prefs.redacted.json", safe_prefs)
-                manifest["files"].append({"source": str(ROOT / "user_prefs.json"), "archive": "user_prefs.redacted.json", "redacted": True})
+                prefs_path = Path(os.environ.get("KB_USER_PREFS_PATH") or (ROOT / "user_prefs.json")).expanduser()
+                manifest["files"].append({"source": str(prefs_path), "archive": "user_prefs.redacted.json", "redacted": True})
             _write_json(zf, "manifest.json", manifest)
     return backup_info(archive)
 

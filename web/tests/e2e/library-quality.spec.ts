@@ -2707,14 +2707,16 @@ test('library delete action requires an explicit destructive confirmation', asyn
   await expect(dialog).toHaveCount(0)
 })
 
-test('library restores running conversion and keeps cancellation visible', async ({ page }) => {
+test('library cancels one concurrent conversion while its sibling keeps running', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 })
 
-  let cancelCalled = false
+  let cancelledTaskId = ''
   let statusCalls = 0
   const runningName = 'Pending paper.pdf'
+  const siblingName = 'Sibling paper.pdf'
   const runningItem = {
     ...baseItem,
+    task_id: 'task-running',
     name: runningName,
     path: `F:\\kb\\pdfs\\${runningName}`,
     md_exists: false,
@@ -2740,20 +2742,31 @@ test('library restores running conversion and keeps cancellation visible', async
     running_pages: [2],
     running_page_count: 1,
   }
+  const siblingItem = {
+    ...runningItem,
+    task_id: 'task-sibling',
+    name: siblingName,
+    path: `F:\\kb\\pdfs\\${siblingName}`,
+    md_folder: 'F:\\kb\\md\\sibling',
+    cur_page_done: 2,
+    cur_page_total: 4,
+    running_pages: [3, 4],
+    running_page_count: 2,
+  }
 
   await page.route('**/api/library/files**', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        items: [runningItem],
+        items: [runningItem, siblingItem],
         counts: {
-          total_view: 1,
-          total_all: 1,
-          pending: 1,
+          total_view: 2,
+          total_all: 2,
+          pending: 2,
           converted: 0,
           queued: 0,
-          running: 1,
+          running: 2,
           reconverting: 0,
           quality_review: 0,
           quality_ready: 0,
@@ -2763,7 +2776,7 @@ test('library restores running conversion and keeps cancellation visible', async
         queue: {
           running: true,
           queued_count: 0,
-          active_count: 1,
+          active_count: 2,
           active_tasks: [{
             task_id: 'task-running',
             name: runningName,
@@ -2771,31 +2784,42 @@ test('library restores running conversion and keeps cancellation visible', async
             replace: true,
             cur_page_done: 1,
             cur_page_total: 3,
-            cur_page_msg: cancelCalled ? 'Canceling current background conversion' : 'quality gate: provider=qwen model=private-name',
-            conversion_stage: cancelCalled ? 'cancelling' : 'converting',
-            running_pages: cancelCalled ? [] : [2],
-            running_page_count: cancelCalled ? 0 : 1,
+            cur_page_msg: cancelledTaskId ? 'Canceling selected background conversion' : 'quality gate: provider=qwen model=private-name',
+            conversion_stage: cancelledTaskId ? 'cancelling' : 'converting',
+            running_pages: cancelledTaskId ? [] : [2],
+            running_page_count: cancelledTaskId ? 0 : 1,
+          }, {
+            task_id: 'task-sibling',
+            name: siblingName,
+            pdf: `F:\\kb\\pdfs\\${siblingName}`,
+            replace: true,
+            cur_page_done: 2,
+            cur_page_total: 4,
+            cur_page_msg: '',
+            conversion_stage: 'converting',
+            running_pages: [3, 4],
+            running_page_count: 2,
           }],
           current: runningName,
           done: 0,
-          total: 1,
+          total: 2,
         },
       }),
     })
   })
   await page.route('**/api/library/convert/status', async (route) => {
     statusCalls += 1
-    const curPageMsg = cancelCalled ? 'Canceling current background conversion' : 'quality gate: provider=qwen model=private-name'
+    const curPageMsg = cancelledTaskId ? 'Canceling selected background conversion' : 'quality gate: provider=qwen model=private-name'
     await route.fulfill({
       status: 200,
       contentType: 'text/event-stream',
       body: `data: ${JSON.stringify({
         running: true,
         done: false,
-        total: 1,
+        total: 2,
         completed: 0,
         current: runningName,
-        active_count: 1,
+        active_count: 2,
         active_tasks: [{
           task_id: 'task-running',
           name: runningName,
@@ -2804,35 +2828,166 @@ test('library restores running conversion and keeps cancellation visible', async
           cur_page_done: 1,
           cur_page_total: 3,
           cur_page_msg: curPageMsg,
-          conversion_stage: cancelCalled ? 'cancelling' : 'converting',
-          running_pages: cancelCalled ? [] : [2],
-          running_page_count: cancelCalled ? 0 : 1,
+          conversion_stage: cancelledTaskId ? 'cancelling' : 'converting',
+          running_pages: cancelledTaskId ? [] : [2],
+          running_page_count: cancelledTaskId ? 0 : 1,
+        }, {
+          task_id: 'task-sibling',
+          name: siblingName,
+          pdf: `F:\\kb\\pdfs\\${siblingName}`,
+          replace: true,
+          cur_page_done: 2,
+          cur_page_total: 4,
+          cur_page_msg: '',
+          conversion_stage: 'converting',
+          running_pages: [3, 4],
+          running_page_count: 2,
         }],
         cur_page_done: 1,
         cur_page_total: 3,
         cur_page_msg: curPageMsg,
-        conversion_stage: cancelCalled ? 'cancelling' : 'converting',
-        running_pages: cancelCalled ? [] : [2],
-        running_page_count: cancelCalled ? 0 : 1,
+        conversion_stage: cancelledTaskId ? 'cancelling' : 'converting',
+        running_pages: cancelledTaskId ? [] : [2],
+        running_page_count: cancelledTaskId ? 0 : 1,
         last: '',
       })}\n\n`,
     })
   })
   await page.route('**/api/library/convert/cancel', async (route) => {
-    cancelCalled = true
-    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ ok: true }) })
+    const body = route.request().postDataJSON() as { task_id?: string } | null
+    cancelledTaskId = String(body?.task_id || '')
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        scope: 'task',
+        matched: true,
+        task_id: cancelledTaskId,
+        state: 'cancelling',
+        removed_queued: 0,
+      }),
+    })
   })
 
   await page.goto('/library')
-  await expect(page.getByRole('button', { name: /停止|Stop/ }).first()).toBeVisible()
+  await expect(page.getByRole('button', { name: /全部停止|Stop all/ }).first()).toBeVisible()
   await expect.poll(() => statusCalls).toBeGreaterThan(0)
   await expect(page.getByText(/剩余页：2|Remaining pages: 2/).first()).toBeVisible()
   await expect(page.getByText('quality gate: provider=qwen model=private-name')).toHaveCount(0)
   await expect(page.getByText(/private-name/)).toHaveCount(0)
 
-  await page.getByRole('button', { name: /停止|Stop/ }).first().click()
-  await expect.poll(() => cancelCalled).toBe(true)
-  await expect(page.getByText(/正在取消转换|Cancelling conversion/).first()).toBeVisible()
+  const runningRow = page.getByTestId('library-file-row').filter({ hasText: runningName })
+  const siblingRow = page.getByTestId('library-file-row').filter({ hasText: siblingName })
+  await runningRow.getByTestId('library-cancel-conversion').click()
+  await expect.poll(() => cancelledTaskId).toBe('task-running')
+  await expect(runningRow.getByText(/正在取消转换|Cancelling conversion/).first()).toBeVisible()
+  await expect(siblingRow.getByTestId('library-cancel-conversion')).toBeEnabled()
+  await expect(siblingRow.getByText(/转换中|Converting/).first()).toBeVisible()
+})
+
+test('library shows a document terminal result and retries only its failed index', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 })
+
+  const paperName = 'Index retry paper.pdf'
+  let indexRetried = false
+  let retryRequestName = ''
+  const terminalResult = () => ({
+    task_id: indexRetried ? 'index-retry-success' : 'conversion-index-failed',
+    name: paperName,
+    pdf: `F:\\kb\\pdfs\\${paperName}`,
+    outcome: indexRetried ? 'success' : 'index_failed',
+    operation: indexRetried ? 'index_retry' : 'conversion',
+    message: indexRetried ? 'Index retry completed.' : 'Conversion completed, but the index update failed.',
+    detail: indexRetried ? '' : 'temporary index writer failure',
+    retry_action: indexRetried ? '' : 'reindex',
+    replace: true,
+    speed_mode: 'balanced',
+    started_at: 100,
+    finished_at: indexRetried ? 125 : 120,
+    duration_s: indexRetried ? 5 : 20,
+    page_done: 4,
+    page_total: 4,
+  })
+
+  await page.route('**/api/library/files**', async (route) => {
+    const result = terminalResult()
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [{
+          ...baseItem,
+          name: paperName,
+          path: `F:\\kb\\pdfs\\${paperName}`,
+          md_exists: true,
+          md_path: 'F:\\kb\\md\\index-retry\\paper.en.md',
+          md_folder: 'F:\\kb\\md\\index-retry',
+          category: 'converted',
+          status: 'converted',
+          index_state: indexRetried ? 'ready' : 'not_ready',
+          index_status: indexRetried ? 'ready' : 'index_failed',
+          index_ready: indexRetried,
+          conversion_quality: null,
+          last_conversion: result,
+        }],
+        counts: {
+          total_view: 1,
+          total_all: 1,
+          pending: 0,
+          converted: 1,
+          queued: 0,
+          running: 0,
+          reconverting: 0,
+          quality_review: 0,
+          quality_ready: 1,
+          index_ready: indexRetried ? 1 : 0,
+          index_stale: indexRetried ? 0 : 1,
+        },
+        truncated: false,
+        scope: '200',
+        queue: {
+          running: false,
+          queued_count: 0,
+          active_count: 0,
+          active_tasks: [],
+          current: '',
+          done: 1,
+          total: 1,
+          recent_tasks: [result],
+        },
+      }),
+    })
+  })
+  await page.route('**/api/library/reindex/file', async (route) => {
+    const body = route.request().postDataJSON() as { pdf_name?: string } | null
+    retryRequestName = String(body?.pdf_name || '')
+    indexRetried = true
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        task_id: 'index-retry-success',
+        pdf_name: paperName,
+        md_path: 'F:\\kb\\md\\index-retry\\paper.en.md',
+        outcome: 'success',
+        message: 'Index retry completed.',
+        detail: '',
+      }),
+    })
+  })
+
+  await page.goto('/library')
+  const row = page.getByTestId('library-file-row').filter({ hasText: paperName })
+  await expect(row.getByTestId('library-conversion-result')).toContainText(/索引更新失败|Index update failed/)
+  await expect(row.getByTestId('library-retry-conversion')).toContainText(/重试索引|Retry index/)
+
+  await row.getByTestId('library-retry-conversion').click()
+
+  await expect.poll(() => retryRequestName).toBe(paperName)
+  await expect(row.getByTestId('library-conversion-result')).toContainText(/索引重试完成|Index retry completed/)
+  await expect(row.getByTestId('library-retry-conversion')).toHaveCount(0)
 })
 
 test('library resyncs conversion state from files snapshot after status stream failure', async ({ page }) => {

@@ -1,13 +1,27 @@
-import { Progress, Typography } from 'antd'
+import { Progress, Tooltip, Typography } from 'antd'
 import type { LibraryFileItem } from '../../api/library'
 import { useT } from '../../i18n'
-import { conversionStageLabel, derivePageProgress, runningPagesLabel } from './libraryPageUtils'
+import { conversionStageLabel, derivePageProgress, formatSeconds, runningPagesLabel } from './libraryPageUtils'
 import './LibraryFileProgressNote.css'
 
 const { Text } = Typography
 
 type LibraryFileProgressNoteProps = {
   item: LibraryFileItem
+}
+
+function conversionResultLabel(item: LibraryFileItem, S: Record<string, string>): string {
+  const result = item.last_conversion
+  if (!result) return ''
+  if (result.outcome === 'success') {
+    return result.operation === 'index_retry'
+      ? S.lib_conversion_result_index_retry_success
+      : S.lib_conversion_result_success
+  }
+  if (result.outcome === 'cancelled') return S.lib_conversion_result_cancelled
+  if (result.outcome === 'quality_blocked') return S.lib_conversion_result_quality_blocked
+  if (result.outcome === 'index_failed') return S.lib_conversion_result_index_failed
+  return S.lib_conversion_result_failed
 }
 
 export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) {
@@ -24,6 +38,24 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
   const itemProgressPercent = itemProgress.total > 0
     ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
     : 0
+  const result = item.task_state === 'idle' ? item.last_conversion : null
+  const resultLabel = conversionResultLabel(item, S)
+  const resultType = result?.outcome === 'success'
+    ? 'success'
+    : result?.outcome === 'cancelled'
+      ? 'secondary'
+      : result?.outcome === 'quality_blocked'
+        ? 'warning'
+        : 'danger'
+  const resultDuration = result && Number(result.duration_s || 0) > 0
+    ? S.lib_conversion_result_duration.replace('{seconds}', formatSeconds(Number(result.duration_s || 0)))
+    : ''
+  const resultTime = result && Number(result.finished_at || 0) > 0
+    ? new Date(Number(result.finished_at) * 1000).toLocaleString()
+    : ''
+  const resultTitle = result
+    ? [resultLabel, String(result.detail || result.message || '').trim()].filter(Boolean).join('\n')
+    : ''
 
   return (
     <>
@@ -49,6 +81,18 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
             </div>
           ) : null}
         </div>
+      ) : null}
+      {result && resultLabel ? (
+        <Tooltip title={resultTitle} placement="bottomLeft">
+          <div
+            className={`kb-lib-file-result-note is-${result.outcome}`}
+            data-testid="library-conversion-result"
+          >
+            <Text type={resultType} className="text-xs">
+              {[resultLabel, resultDuration, resultTime].filter(Boolean).join(' · ')}
+            </Text>
+          </div>
+        </Tooltip>
       ) : null}
     </>
   )

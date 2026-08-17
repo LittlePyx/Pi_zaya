@@ -19,8 +19,10 @@ from kb import runtime_state as RUNTIME
 from kb.bg_queue_state import (
     begin_next_task_or_idle as bg_begin_next_task_or_idle,
     cancel_all as bg_cancel_all,
+    cancel_task as bg_cancel_task,
     enqueue as bg_enqueue,
     finish_task as bg_finish_task,
+    record_task_result as bg_record_task_result,
     remove_queued_tasks_for_pdf as bg_remove_queued_tasks_for_pdf,
     should_cancel as bg_should_cancel,
     snapshot as bg_snapshot,
@@ -4551,6 +4553,7 @@ if not hasattr(RUNTIME, "BG_STATE"):
     RUNTIME.BG_STATE = {
         "queue": [],
         "active_tasks": [],
+        "recent_tasks": [],
         "active_count": 0,
         "running": False,
         "done": 0,
@@ -4566,6 +4569,8 @@ if not hasattr(RUNTIME, "BG_STATE"):
     }
 if "active_tasks" not in RUNTIME.BG_STATE:
     RUNTIME.BG_STATE["active_tasks"] = []
+if "recent_tasks" not in RUNTIME.BG_STATE:
+    RUNTIME.BG_STATE["recent_tasks"] = []
 if "active_count" not in RUNTIME.BG_STATE:
     RUNTIME.BG_STATE["active_count"] = 0
 if not hasattr(RUNTIME, "BG_THREADS"):
@@ -7988,8 +7993,22 @@ def _safe_clear_conversion_output(path_obj: Path, root_obj: Path, *, preserve_pa
 def _bg_cancel_all() -> None:
     bg_cancel_all(_BG_STATE, _BG_LOCK, "Canceling current background conversion")
 
+
+def _bg_cancel_task(task_id: str) -> dict:
+    return bg_cancel_task(
+        _BG_STATE,
+        _BG_LOCK,
+        task_id,
+        "Canceling selected background conversion",
+    )
+
+
 def _bg_snapshot() -> dict:
     return bg_snapshot(_BG_STATE, _BG_LOCK)
+
+
+def _bg_record_task_result(**kwargs) -> dict:
+    return bg_record_task_result(_BG_STATE, _BG_LOCK, **kwargs)
 
 def _bg_target_worker_count() -> int:
     try:
@@ -7998,6 +8017,8 @@ def _bg_target_worker_count() -> int:
             return max(1, min(4, int(raw)))
     except Exception:
         pass
+    # Two active documents passed the fixed product-path throughput, per-document
+    # latency, retry, fallback, marker, and quality gates on 2026-08-17.
     return 2
 
 
@@ -8321,7 +8342,7 @@ def _bg_worker_loop() -> None:
                     pass
 
             def _should_cancel() -> bool:
-                return bg_should_cancel(_BG_STATE, _BG_LOCK)
+                return bg_should_cancel(_BG_STATE, _BG_LOCK, task_id=task_id)
 
             def _clear_md_folder_for_retry(*, preserve_page_cache: bool = False) -> None:
                 _safe_clear_conversion_output(
@@ -8348,6 +8369,10 @@ def _bg_worker_loop() -> None:
             ok, out_folder, msg = _bg_conversion_result_message(ok, out_folder, _should_cancel)
 
             _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
+            if ok and not md_exists and not _bg_cancel_requested(_should_cancel):
+                ok = False
+                out_folder = "markdown output missing"
+                msg = "FAIL: markdown output missing"
             if repair_context and md_exists:
                 _bg_record_repair_attempt(
                     md_main,
@@ -8574,8 +8599,11 @@ def _bg_worker_loop() -> None:
                                     or msg
                                 ),
                             )
+                    else:
+                        msg = "OK+INGEST_BLOCKED: ingest.py or Markdown output missing"
                 except Exception:
                     # Not fatal; conversion still succeeded.
+                    msg = "OK+INGEST_BLOCKED: background ingest failed"
                     if repair_context:
                         _bg_record_repair_attempt(
                             md_main if "md_main" in locals() else None,
@@ -8595,12 +8623,12 @@ def _bg_worker_loop() -> None:
         except Exception as e:
             msg = f"FAIL: {e}"
 
-        if bg_should_cancel(_BG_STATE, _BG_LOCK):
+        if bg_should_cancel(_BG_STATE, _BG_LOCK, task_id=task_id):
             msg = "CANCELLED"
         bg_finish_task(_BG_STATE, _BG_LOCK, msg, task_id=task_id)
 
 def _bg_ensure_started() -> None:
-    worker_ver = "2026-05-29.bg.source-retry.v1"
+    worker_ver = "2026-08-17.bg.task-results.v1"
     desired_workers = _bg_target_worker_count()
     threads = list(getattr(RUNTIME, "BG_THREADS", []) or [])
     running_ver = str(getattr(RUNTIME, "BG_WORKER_VERSION", "") or "")

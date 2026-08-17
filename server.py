@@ -9,6 +9,10 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
+from kb.app_paths import configure_release_environment
+
+configure_release_environment(create_directories=True)
+
 from api.main import app
 
 

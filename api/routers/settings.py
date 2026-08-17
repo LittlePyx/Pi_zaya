@@ -20,6 +20,7 @@ from api.security import auth_token_configured, management_auth_required, manage
 from kb.file_ops import _pick_directory_dialog
 from kb.maintenance import latest_restore_review_state
 from kb.user_issue_store import UserIssueStore
+from kb.version import read_app_version
 
 router = APIRouter(prefix="/api", tags=["settings"])
 _PATH_PREF_KEYS = {"pdf_dir", "md_dir"}
@@ -916,6 +917,7 @@ def health():
     auth_required = bool(getattr(s, "auth_required", False))
     return {
         "status": "ok",
+        "version": read_app_version(),
         "env": str(getattr(s, "app_env", "development") or "development"),
         "production": bool(getattr(s, "production", False)),
         "auth": {

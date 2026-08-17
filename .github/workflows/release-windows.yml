@@ -1,0 +1,164 @@
+name: Windows release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build_test_publish:
+    name: Quality gates, portable build, and release
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate version, tag, and distribution license
+        shell: pwsh
+        run: |
+          $version = (Get-Content -LiteralPath VERSION -Raw).Trim()
+          $package = Get-Content -LiteralPath web/package.json -Raw | ConvertFrom-Json
+          if ([string]$package.version -ne $version) {
+            throw "web/package.json version '$($package.version)' does not match VERSION '$version'."
+          }
+          if (-not (Test-Path -LiteralPath LICENSE)) {
+            throw "LICENSE is required before Pi_zaya can be distributed. Choose the license deliberately; the workflow will not infer one."
+          }
+          $license = Get-Content -LiteralPath LICENSE -Raw
+          if ($license -notmatch '^MIT License\s' -or $license -notmatch 'Copyright \(c\) [^\r\n]+ LittlePyx') {
+            throw "LICENSE must contain the approved MIT license and LittlePyx copyright line."
+          }
+          if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME -ne "v$version") {
+            throw "Tag '$env:GITHUB_REF_NAME' must exactly match VERSION as 'v$version'."
+          }
+          "PI_ZAYA_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Setup backend Python
+        uses: ./.github/actions/setup-backend-python
+        with:
+          requirements-file: requirements-release.txt
+
+      - name: Backend static and unit gates
+        shell: pwsh
+        run: |
+          python -m ruff check . --output-format=github
+          python -m pytest tests/unit -q
+          python -m pytest tests/sanity -q
+
+      - name: Research and conversion quality gates
+        shell: pwsh
+        run: |
+          python tools/research_qa/run_research_qa_eval.py --dry-run
+          python tools/version_ab/run_version_ab_eval.py --dry-run
+          python tools/evidence_matrix/run_comparison_eval.py --dry-run
+          python tools/evidence_matrix/run_comparison_candidate_eval.py --dry-run
+          python tools/evidence_matrix/run_project_status_eval.py --dry-run
+          python tools/evidence_matrix/run_project_research_journey_eval.py --dry-run
+          python tools/research_qa/run_research_qa_eval.py --replay docs/research_qa_grounded_replay_v1.jsonl --fail-on-quality
+          python tools/research_qa/run_reviewed_replay_eval.py
+          python tools/converter_quality/run_converter_quality_eval.py --dry-run
+
+      - name: Install, lint, and build frontend
+        working-directory: web
+        shell: pwsh
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+          npx playwright install chromium
+
+      - name: Run frontend E2E smoke
+        working-directory: web
+        shell: pwsh
+        run: npm run test:e2e:smoke
+        env:
+          PW_WORKERS: "2"
+          VITE_ENABLE_AUTH_GATE: "1"
+          VITE_ALLOW_LOCAL_AUTH_GATE: "1"
+          VITE_PRIVATE_INSTANCE_AUTH: "0"
+
+      - name: Run core citation and library E2E regressions
+        working-directory: web
+        shell: pwsh
+        run: npm run test:e2e:core
+        env:
+          PW_WORKERS: "4"
+          VITE_ENABLE_AUTH_GATE: "0"
+          VITE_ALLOW_LOCAL_AUTH_GATE: "0"
+          VITE_PRIVATE_INSTANCE_AUTH: "0"
+          VITE_ENABLE_INTERNAL_DEBUG: "1"
+          VITE_ENABLE_INTERNAL_ROUTES: "1"
+          VITE_SHOW_USER_QUALITY_DIAGNOSTICS: "0"
+
+      - name: Check ordinary-user surface isolation
+        working-directory: web
+        shell: pwsh
+        run: npm run test:e2e:public-surface
+        env:
+          PW_WORKERS: "1"
+          VITE_ENABLE_INTERNAL_DEBUG: "0"
+          VITE_ENABLE_INTERNAL_ROUTES: "0"
+          VITE_SHOW_USER_QUALITY_DIAGNOSTICS: "0"
+          VITE_SHOW_INTERNAL_SETTINGS: "0"
+
+      - name: Build self-contained Windows x64 ZIP
+        shell: pwsh
+        run: .\tools\release\build_windows_portable.ps1 -PythonRuntime Embedded -SkipFrontendBuild -KeepStage
+
+      - name: Smoke-test packaged runtime and frontend
+        shell: pwsh
+        run: .\tools\release\smoke_windows_portable.ps1 -BundleRoot ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64"
+
+      - name: Verify artifact checksum
+        shell: pwsh
+        run: |
+          $zip = ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip"
+          $expected = ((Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+')[0]
+          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) { throw "Release checksum mismatch." }
+
+      - name: Retain verified release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pi_zaya-windows-x64-${{ github.run_id }}
+          path: |
+            release/*.zip
+            release/*.zip.sha256
+            release/*.manifest.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub prerelease for a tag
+        if: ${{ github.event_name == 'push' }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $title = "Pi_zaya $tag"
+          $assets = @(
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip",
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip.sha256",
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.manifest.json"
+          )
+          gh release create $tag @assets --verify-tag --prerelease --generate-notes --title $title

@@ -7,6 +7,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from kb.app_paths import configure_release_environment
+
 
 # Offset added to snippet numbers in classic RAG context so that hit citations
 # (System A: [10001], [10002], ...) and in-paper bibliography references
@@ -137,6 +139,7 @@ class Settings:
 
 def load_settings() -> Settings:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
+    configure_release_environment()
 
     _env = os.environ.get
     prefs = _load_runtime_prefs()

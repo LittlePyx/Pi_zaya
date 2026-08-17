@@ -4,6 +4,8 @@ from pathlib import Path
 import threading
 import time
 
+import pytest
+
 from kb.converter.config import ConvertConfig, LlmConfig
 from kb.converter.llm_worker import LLMWorker
 
@@ -352,6 +354,39 @@ def test_multiple_workers_share_process_level_inflight_gate(tmp_path, monkeypatc
     assert errs == []
     assert state["calls"] == 2
     assert state["max_active"] == 1
+
+
+def test_shared_inflight_gate_releases_slot_after_provider_exception(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.setenv("KB_LLM_MAX_INFLIGHT", "1")
+    LLMWorker._reset_shared_llm_gate_for_tests(limit=1)
+    worker_a = LLMWorker(_make_cfg(tmp_path))
+    worker_b = LLMWorker(_make_cfg(tmp_path))
+    calls = {"count": 0}
+
+    def _fail_then_succeed(self, *, timeout_s: float, has_image_payload: bool, **kwargs):
+        del self, timeout_s, has_image_payload, kwargs
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("simulated provider failure")
+        return _FakeResp("recovered")
+
+    monkeypatch.setattr(LLMWorker, "_client_create_with_guard_timeout", _fail_then_succeed)
+
+    with pytest.raises(RuntimeError, match="simulated provider failure"):
+        worker_a._llm_create(
+            messages=[{"role": "user", "content": "first"}],
+            max_tokens=32,
+            max_retries=0,
+        )
+    recovered = worker_b._llm_create(
+        messages=[{"role": "user", "content": "second"}],
+        max_tokens=32,
+        max_retries=0,
+    )
+
+    assert recovered.choices[0].message.content == "recovered"
+    assert calls["count"] == 2
 
 
 def test_ultra_fast_vision_circuit_skips_later_requests_after_timeouts(tmp_path, monkeypatch):

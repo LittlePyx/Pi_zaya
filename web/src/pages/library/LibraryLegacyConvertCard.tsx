@@ -113,7 +113,7 @@ export function LibraryLegacyConvertCard({
           </Button>
           {converting ? (
             <Button icon={<StopOutlined />} danger onClick={() => { void onStopConvert() }}>
-              {S.lib_btn_stop}
+              {S.lib_btn_stop_all}
             </Button>
           ) : null}
         </div>

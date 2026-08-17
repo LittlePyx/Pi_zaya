@@ -24,6 +24,8 @@ def test_production_env_template_keeps_required_release_keys() -> None:
         "KB_USER_ISSUES_INGEST_RATE_LIMIT_PER_MIN=600",
         "KB_STARTUP_PREFLIGHT=1",
         "KB_STARTUP_STRICT=0",
+        "KB_RELEASE_MODE=0",
+        "KB_APP_DATA_DIR=",
         "KB_DB_DIR",
         "KB_CHAT_DB",
         "KB_LIBRARY_DB",

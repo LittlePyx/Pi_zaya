@@ -176,6 +176,7 @@ export default function LibraryPage() {
   const [shelfMetadataBackfillRefreshing, setShelfMetadataBackfillRefreshing] = useState(false)
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
+  const [conversionRetryingName, setConversionRetryingName] = useState('')
   const {
     directoriesConfigured,
     dirDirty,
@@ -791,6 +792,58 @@ export default function LibraryPage() {
     await store.convert(item.name, CONVERT_MODE, true)
   }
 
+  const handleCancelConversion = async (item: LibraryFileItem) => {
+    const taskId = String(item.task_id || '').trim()
+    if (!taskId) {
+      message.info(S.lib_msg_conversion_task_not_found)
+      await store.loadFiles(scope)
+      return
+    }
+    try {
+      const result = await store.cancelConversionTask(taskId)
+      if (!result.matched) {
+        message.info(S.lib_msg_conversion_task_not_found)
+      } else if (result.state === 'queued_removed') {
+        message.success(S.lib_msg_conversion_queue_removed.replace('{name}', item.name))
+      } else {
+        message.success(S.lib_msg_conversion_cancel_requested.replace('{name}', item.name))
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.lib_msg_conversion_cancel_failed)
+    }
+  }
+
+  const handleRetryConversion = async (item: LibraryFileItem) => {
+    if (item.task_state !== 'idle' || conversionRetryingName) return
+    const retryAction = String(item.last_conversion?.retry_action || '')
+    if (!retryAction) return
+    setConversionRetryingName(item.name)
+    try {
+      if (retryAction === 'reindex') {
+        const result = await libraryApi.reindexFile(item.name)
+        await store.loadFiles(scope)
+        if (result.ok) {
+          message.success(S.lib_msg_index_retry_complete.replace('{name}', item.name))
+        } else {
+          message.error(result.detail || S.lib_msg_index_retry_failed)
+        }
+        return
+      }
+      const speedMode = String(item.last_conversion?.speed_mode || CONVERT_MODE)
+      await store.convert(item.name, speedMode, true)
+      message.success(S.lib_msg_conversion_retry_enqueued.replace('{name}', item.name))
+    } catch (err) {
+      message.error(
+        err instanceof Error
+          ? err.message
+          : (retryAction === 'reindex' ? S.lib_msg_index_retry_failed : S.lib_msg_conversion_retry_failed),
+      )
+      await store.loadFiles(scope)
+    } finally {
+      setConversionRetryingName('')
+    }
+  }
+
   const { recordQualityFullChainResult } = useLibraryQualityActionRecorder({
     setQualityFullChainResults,
   })
@@ -1193,6 +1246,9 @@ export default function LibraryPage() {
         onOpenMeta={openMetaEditor}
         onStartPaperGuide={(rowItem) => { void handleStartPaperGuide(rowItem) }}
         onConvert={(rowItem) => { void handleConvertOne(rowItem) }}
+        onCancel={(rowItem) => { void handleCancelConversion(rowItem) }}
+        onRetry={(rowItem) => { void handleRetryConversion(rowItem) }}
+        retrying={conversionRetryingName === item.name}
         onOpenPdf={(name) => { void store.openFile(name, 'pdf') }}
         onOpenMarkdown={(name) => { void store.openFile(name, 'md') }}
         onDelete={confirmDeleteOne}
@@ -1394,7 +1450,7 @@ export default function LibraryPage() {
         convertPageProgress={convertPageProgress}
         convertPercent={convertPercent}
         convertPagePercent={convertPagePercent}
-        stopLabel={S.lib_btn_stop}
+        stopLabel={S.lib_btn_stop_all}
         refSyncRunning={Boolean(store.refSync?.running)}
         refSyncTitle={S.lib_refsync_title}
         refSyncMessage={refSyncDisplayMessage}

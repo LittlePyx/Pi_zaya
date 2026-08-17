@@ -8,6 +8,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
+from kb.app_paths import configure_release_environment
+from kb.version import read_app_version
+
+configure_release_environment()
+
 from api.routers import app as app_router
 from api.routers import auth, chat, evidence_matrices, generate, library, maintenance, references, research_briefs, research_gaps, settings, user_issues
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
@@ -29,7 +34,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Pi-zaya API", lifespan=lifespan)
+app = FastAPI(title="Pi-zaya API", version=read_app_version(), lifespan=lifespan)
 
 _CORS_EXPOSE_HEADERS = [
     "Content-Disposition",

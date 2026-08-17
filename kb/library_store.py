@@ -425,10 +425,12 @@ class LibraryStore:
             candidate_roots.append(root)
 
         _push(os.environ.get("KB_MD_DIR") or "")
-        for prefs_path in (
-            self._db_path.parent / "user_prefs.json",
-            Path(__file__).resolve().parent.parent / "user_prefs.json",
-        ):
+        configured_prefs = str(os.environ.get("KB_USER_PREFS_PATH") or "").strip()
+        prefs_paths = [self._db_path.parent / "user_prefs.json"]
+        if configured_prefs:
+            prefs_paths.append(Path(configured_prefs).expanduser())
+        prefs_paths.append(Path(__file__).resolve().parent.parent / "user_prefs.json")
+        for prefs_path in prefs_paths:
             try:
                 prefs = _load_local_prefs(prefs_path)
             except Exception:

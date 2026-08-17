@@ -1,5 +1,5 @@
 import { Button, Dropdown } from 'antd'
-import { DeleteOutlined, MoreOutlined, ReloadOutlined } from '@ant-design/icons'
+import { DeleteOutlined, MoreOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import type { LibraryFileItem } from '../../api/library'
 import './LibraryFileActions.css'
 
@@ -9,6 +9,9 @@ type LibraryFileActionsProps = {
   onOpenMeta: () => void
   onStartPaperGuide: () => void
   onConvert: () => void
+  onCancel: () => void
+  onRetry: () => void
+  retrying: boolean
   onOpenPdf: () => void
   onOpenMarkdown: () => void
   onDelete: () => void
@@ -20,11 +23,17 @@ export function LibraryFileActions({
   onOpenMeta,
   onStartPaperGuide,
   onConvert,
+  onCancel,
+  onRetry,
+  retrying,
   onOpenPdf,
   onOpenMarkdown,
   onDelete,
 }: LibraryFileActionsProps) {
   const showPrimaryConvertAction = !item.md_exists
+  const conversionBusy = item.task_state !== 'idle'
+  const conversionCancelling = item.conversion_stage === 'cancelling'
+  const retryAction = conversionBusy ? '' : String(item.last_conversion?.retry_action || '')
 
   return (
     <div className={`kb-lib-file-actions${showPrimaryConvertAction ? ' has-convert' : ' is-compact'}`}>
@@ -42,12 +51,37 @@ export function LibraryFileActions({
           {S.lib_btn_read}
         </Button>
       ) : null}
-      {showPrimaryConvertAction ? (
+      {conversionBusy ? (
+        <Button
+          className="kb-lib-file-action-link"
+          type="text"
+          size="small"
+          danger
+          icon={<StopOutlined />}
+          disabled={!item.task_id || conversionCancelling}
+          onClick={onCancel}
+          data-testid="library-cancel-conversion"
+        >
+          {conversionCancelling ? S.lib_convert_cancelling : S.lib_btn_cancel_conversion}
+        </Button>
+      ) : retryAction ? (
         <Button
           className="kb-lib-file-action-link is-accent"
           type="text"
           size="small"
-          disabled={item.task_state !== 'idle'}
+          icon={<ReloadOutlined />}
+          loading={retrying}
+          disabled={retrying}
+          onClick={onRetry}
+          data-testid="library-retry-conversion"
+        >
+          {retryAction === 'reindex' ? S.lib_btn_retry_index : S.lib_btn_retry_conversion}
+        </Button>
+      ) : showPrimaryConvertAction ? (
+        <Button
+          className="kb-lib-file-action-link is-accent"
+          type="text"
+          size="small"
           onClick={onConvert}
         >
           {S.lib_btn_convert}

@@ -14,6 +14,7 @@ from kb.task_runtime import (
     _augment_prompt_with_source_hint,
     _await_stored_doc_list_contract,
     _bg_ingest_py_path,
+    _bg_target_worker_count,
     _bg_conversion_result_message,
     _bg_post_convert_quality_gate,
     _bg_run_ingest_subprocess,
@@ -83,6 +84,20 @@ from kb.task_runtime import (
     _should_sync_deep_seed_for_display,
     _stabilize_paper_guide_output_mode,
 )
+
+
+def test_background_conversion_parallelism_defaults_to_two_and_is_bounded(monkeypatch) -> None:
+    monkeypatch.delenv("KB_BG_CONVERT_MAX_ACTIVE", raising=False)
+    assert _bg_target_worker_count() == 2
+
+    monkeypatch.setenv("KB_BG_CONVERT_MAX_ACTIVE", "2")
+    assert _bg_target_worker_count() == 2
+
+    monkeypatch.setenv("KB_BG_CONVERT_MAX_ACTIVE", "99")
+    assert _bg_target_worker_count() == 4
+
+    monkeypatch.setenv("KB_BG_CONVERT_MAX_ACTIVE", "invalid")
+    assert _bg_target_worker_count() == 2
 
 
 def test_answer_hit_limit_keeps_default_library_context_compact() -> None:

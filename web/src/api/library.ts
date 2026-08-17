@@ -30,6 +30,36 @@ export interface ConvertProgress {
   running_pages?: number[]
   running_page_count?: number
   last: string
+  recent_tasks?: ConversionTaskResult[]
+}
+
+export type ConversionOutcome = 'success' | 'cancelled' | 'conversion_failed' | 'quality_blocked' | 'index_failed'
+
+export interface ConversionTaskResult {
+  task_id: string
+  name: string
+  pdf: string
+  outcome: ConversionOutcome
+  operation: 'conversion' | 'index_retry'
+  message: string
+  detail: string
+  retry_action: '' | 'reconvert' | 'reindex'
+  replace: boolean
+  speed_mode: string
+  started_at: number
+  finished_at: number
+  duration_s: number
+  page_done: number
+  page_total: number
+}
+
+export interface CancelConversionResponse {
+  ok: boolean
+  scope: 'task' | 'all'
+  matched: boolean
+  task_id: string
+  state: 'queued_removed' | 'cancelling' | 'not_found' | 'cancelling_all' | string
+  removed_queued: number
 }
 
 export interface LibraryFileItem {
@@ -51,12 +81,14 @@ export interface LibraryFileItem {
   category: 'pending' | 'converted'
   task_state: 'idle' | 'queued' | 'running'
   status: string
+  task_id?: string
   replace_task: boolean
   queue_pos: number
   cur_page_done: number
   cur_page_total: number
   cur_page_msg: string
   conversion_stage: ConversionStage
+  last_conversion?: ConversionTaskResult | null
   running_pages?: number[]
   running_page_count?: number
   paper_category: string
@@ -326,6 +358,7 @@ export interface LibraryFilesResponse {
     current: string
     done: number
     total: number
+    recent_tasks?: ConversionTaskResult[]
   }
 }
 
@@ -1197,7 +1230,20 @@ export const libraryApi = {
       '/api/library/convert/pending',
       { speed_mode: speedMode, limit, replace: true },
     ),
-  cancelConvert: () => api.post('/api/library/convert/cancel'),
+  cancelConvert: () => api.post<CancelConversionResponse>('/api/library/convert/cancel'),
+  cancelConversionTask: (taskId: string) => api.post<CancelConversionResponse>(
+    '/api/library/convert/cancel',
+    { task_id: taskId },
+  ),
+  reindexFile: (pdfName: string) => api.post<{
+    ok: boolean
+    task_id: string
+    pdf_name: string
+    md_path: string
+    outcome: ConversionOutcome
+    message: string
+    detail: string
+  }>('/api/library/reindex/file', { pdf_name: pdfName }),
   openFile: (pdfName: string, target: 'pdf' | 'md' | 'pdf_dir' | 'md_dir' = 'pdf') =>
     api.post<{ ok: boolean; target: string; path: string }>('/api/library/file/open', {
       pdf_name: pdfName,

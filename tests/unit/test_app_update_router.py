@@ -39,6 +39,26 @@ def test_app_version_payload_uses_current_build_info(monkeypatch):
     assert payload["repository"] == "LittlePyx/Pi_zaya"
 
 
+def test_current_build_info_uses_version_file_without_tag(monkeypatch):
+    monkeypatch.delenv("KB_APP_VERSION", raising=False)
+    monkeypatch.setattr(app_router, "_run_git", lambda args: "abc123" if args[0] == "rev-parse" else "")
+    monkeypatch.setattr(app_router, "read_app_version", lambda: "0.1.0-beta.1")
+
+    payload = app_router._current_build_info()
+
+    assert payload["version"] == "0.1.0-beta.1"
+    assert payload["version_source"] == "version_file"
+
+
+def test_prerelease_version_ordering():
+    assert app_router._tag_is_newer("v0.1.0-beta.2", "0.1.0-beta.1") is True
+    assert app_router._tag_is_newer("v0.1.0", "0.1.0-beta.9") is True
+    assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0") is False
+    assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0-beta.1") is False
+    assert app_router._tag_is_newer("v0.1.0-beta.alpha", "0.1.0-beta.1") is True
+    assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0-beta.alpha") is False
+
+
 def test_update_check_reports_newer_latest_release(monkeypatch):
     app_router._UPDATE_CACHE.clear()
     monkeypatch.setenv("KB_UPDATE_CHECK_ENABLED", "1")
