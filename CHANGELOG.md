@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.2] - 2026-08-18
+
+### Fixed
+
+- Force UTF-8 for Python processes in the Windows release workflow so Unicode research fixtures and conversion paths cannot fail under the runner's legacy console encoding.
+
 ## [0.1.0-beta.1] - 2026-08-17
 
 First downloadable beta candidate:

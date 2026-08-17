@@ -18,6 +18,9 @@ jobs:
     name: Quality gates, portable build, and release
     runs-on: windows-latest
     timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
 
     steps:
       - name: Checkout release commit

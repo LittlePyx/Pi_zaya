@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.1"
-    assert release_tag(version) == "v0.1.0-beta.1"
+    assert version == "0.1.0-beta.2"
+    assert release_tag(version) == "v0.1.0-beta.2"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -84,6 +84,8 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "--prerelease" in workflow
     assert "PythonRuntime Embedded" in workflow
     assert "requirements-file: requirements-release.txt" in workflow
+    assert 'PYTHONUTF8: "1"' in workflow
+    assert 'PYTHONIOENCODING: "utf-8"' in workflow
     assert "AllowMissingLicense" in builder
     assert "AllowDirty" in builder
     assert "source_dirty" in builder
