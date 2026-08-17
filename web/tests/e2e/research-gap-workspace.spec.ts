@@ -34,11 +34,15 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
 
-async function installBackend(page: Page) {
+async function installBackend(page: Page, options: { holdBibliometrics?: boolean } = {}) {
   let status = 'open'
   let repaired = false
   let expanded = false
   let candidateConfirmed = false
+  let markBibliometricsStarted = () => {}
+  let releaseBibliometrics = () => {}
+  const bibliometricsStarted = new Promise<void>((resolve) => { markBibliometricsStarted = resolve })
+  const bibliometricsGate = new Promise<void>((resolve) => { releaseBibliometrics = resolve })
   const gap = () => ({
     id: 'gap-limitation',
     gap_key: 'gap-key-limitation',
@@ -184,7 +188,11 @@ async function installBackend(page: Page) {
   })
   await page.route('**/api/references/conversation/**', async (route) => { await fulfillJson(route, {}) })
   await page.route('**/api/references/citation-meta', async (route) => { await fulfillJson(route, {}) })
-  await page.route('**/api/references/bibliometrics', async (route) => { await fulfillJson(route, { bibliometrics_checked: true }) })
+  await page.route('**/api/references/bibliometrics', async (route) => {
+    markBibliometricsStarted()
+    if (options.holdBibliometrics) await bibliometricsGate
+    await fulfillJson(route, { bibliometrics_checked: true })
+  })
   await page.route('**/api/library/quality/sources**', async (route) => { await fulfillJson(route, { items: [] }) })
 
   await page.route(`**/api/projects/${PROJECT.id}/research-gaps/scan`, async (route) => {
@@ -390,6 +398,11 @@ async function installBackend(page: Page) {
       },
     })
   })
+
+  return {
+    waitForBibliometrics: () => bibliometricsStarted,
+    releaseBibliometrics,
+  }
 }
 
 async function openResearchGapQueue(page: Page) {
@@ -426,9 +439,12 @@ test('project gap queue exposes impact and requires human confirmation for candi
 })
 
 test('same-source repair updates the matrix and exposes the affected brief workflow', async ({ page }) => {
-  await installBackend(page)
+  const backend = await installBackend(page, { holdBibliometrics: true })
   await page.goto(`/?conversation=${CONVERSATION.id}`)
 
+  await backend.waitForBibliometrics()
+  await expect(page.getByTestId('citation-shelf-open-research-gaps')).toBeDisabled()
+  backend.releaseBibliometrics()
   const dialog = await openResearchGapQueue(page)
   await dialog.getByTestId('research-gap-find-repairs').click()
   await expect(dialog.getByTestId('research-gap-repairs')).toContainText(

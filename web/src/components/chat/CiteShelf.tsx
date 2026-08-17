@@ -1448,6 +1448,7 @@ export function CiteShelf({
                     type="button"
                     className="kb-shelf-command"
                     onClick={onOpenResearchGaps}
+                    disabled={shelfBackgroundBusy}
                     aria-label={S.research_gap_open}
                     title={S.research_gap_open_tip}
                     data-testid="citation-shelf-open-research-gaps"
@@ -1463,6 +1464,7 @@ export function CiteShelf({
                         type="button"
                         className="kb-shelf-command is-primary"
                         onClick={() => onOpenEvidenceMatrix(selectedCount > 0 ? selectedItems : items)}
+                        disabled={shelfBackgroundBusy}
                         aria-label={S.evidence_matrix_open}
                         title={S.evidence_matrix_open_tip}
                         data-testid="citation-shelf-open-evidence-matrix"
@@ -1476,6 +1478,7 @@ export function CiteShelf({
                         type="button"
                         className="kb-shelf-command"
                         onClick={() => onOpenResearchBrief(selectedCount > 0 ? selectedItems : items)}
+                        disabled={shelfBackgroundBusy}
                         aria-label={S.research_brief_open}
                         title={S.research_brief_open_tip}
                         data-testid="citation-shelf-open-research-brief"
