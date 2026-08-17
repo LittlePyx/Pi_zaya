@@ -59,7 +59,8 @@ export default defineConfig({
   workers,
   use: {
     baseURL,
-    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
+    trace: 'retain-on-failure',
   },
   webServer: externalServer
     ? undefined

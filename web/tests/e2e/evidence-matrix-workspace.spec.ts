@@ -549,6 +549,7 @@ async function installBackend(page: Page, options: { groupedCandidates?: boolean
 async function openEvidenceMatrixWorkspace(page: Page) {
   await expect(page.getByText('The selected evidence is ready.')).toBeVisible()
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  await expect(page.getByTestId('citation-shelf-open-research-gaps')).toBeVisible()
   const openButton = page.getByTestId('citation-shelf-open-evidence-matrix')
   await expect(openButton).toBeEnabled()
   await openButton.click()

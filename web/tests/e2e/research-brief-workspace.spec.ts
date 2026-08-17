@@ -454,15 +454,24 @@ async function installBackend(page: Page) {
   }
 }
 
+async function openResearchBriefWorkspace(page: Page) {
+  await expect(page.getByText('The selected evidence is ready.')).toBeVisible()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  await expect(page.getByTestId('citation-shelf-open-research-gaps')).toBeVisible()
+  const openButton = page.getByTestId('citation-shelf-open-research-brief')
+  await expect(openButton).toBeEnabled()
+  await openButton.click()
+  const dialog = page.getByRole('dialog', { name: 'Project research briefs' })
+  await expect(dialog).toBeVisible()
+  return dialog
+}
+
 test('project basket becomes a versioned, audited, exportable research brief', async ({ page }) => {
   const backend = await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
 
   await expect(page).toHaveURL(new RegExp(`conversation=${CONVERSATION.id}`))
-  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
-  await page.getByTestId('citation-shelf-open-research-brief').click()
-
-  await expect(page.getByRole('dialog', { name: 'Project research briefs' })).toBeVisible()
+  await openResearchBriefWorkspace(page)
   await page.getByTestId('research-brief-new').click()
   await page.getByTestId('research-brief-title').fill('Imaging comparison brief')
   await page.getByTestId('research-brief-objective').fill('Compare the selected method without merging experimental conditions.')
@@ -502,7 +511,7 @@ test('project basket becomes a versioned, audited, exportable research brief', a
 test('matrix changes keep historical verification visible and update only through the bound matrix', async ({ page }) => {
   const backend = await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
-  await page.getByTestId('citation-shelf-open-research-brief').click()
+  await openResearchBriefWorkspace(page)
   await page.getByTestId('research-brief-new').click()
   await page.getByTestId('research-brief-title').fill('Lineage-aware brief')
   await page.getByTestId('research-brief-objective').fill('Keep the brief synchronized with audited evidence.')
@@ -512,7 +521,7 @@ test('matrix changes keep historical verification visible and update only throug
   backend.markMatrixUpdated()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: 'Project research briefs' })).not.toBeVisible()
-  await page.getByTestId('citation-shelf-open-research-brief').click()
+  await openResearchBriefWorkspace(page)
 
   await expect(page.getByTestId('research-brief-lineage-tag')).toHaveText('The upstream evidence matrix changed')
   await expect(page.getByText('Historical snapshot audit passed')).toBeVisible()

@@ -3332,6 +3332,19 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Fast hyperspectral single-pixel imaging')
 })
 
+test('project-only basket actions stay hidden without a ready project context', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-reference-actions&project=%20')
+
+  await page.getByText(SOURCE_PANEL_RE).click()
+  const ref = page.getByTestId('agent-trace-reference').first()
+  await ref.getByTestId('agent-trace-ref-add').click()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+
+  await expect(page.getByTestId('citation-shelf-open-evidence-matrix')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-open-research-brief')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-open-research-gaps')).toHaveCount(0)
+})
+
 test('research agent evaluation and execution diagnostics require the internal debug switch', async ({ page }) => {
   await page.goto('/__message_list_test__?scenario=agent-trace-reference-actions&debug=1')
 

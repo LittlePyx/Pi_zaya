@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.4"
-    assert release_tag(version) == "v0.1.0-beta.4"
+    assert version == "0.1.0-beta.5"
+    assert release_tag(version) == "v0.1.0-beta.5"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -94,6 +94,7 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "requirements-file: requirements-release.txt" in workflow
     assert 'PYTHONUTF8: "1"' in workflow
     assert 'PYTHONIOENCODING: "utf-8"' in workflow
+    assert "Retain frontend E2E failure diagnostics" in workflow
     assert "AllowMissingLicense" in builder
     assert "AllowDirty" in builder
     assert "source_dirty" in builder
@@ -105,6 +106,20 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert 'KB_RELEASE_MODE = "1"' in launcher
     assert 'KB_SERVER_HOST = "127.0.0.1"' in launcher
     assert "streamlit run" not in launcher.lower()
+
+
+def test_browser_gates_retain_first_failure_diagnostics() -> None:
+    root = Path(__file__).resolve().parents[2]
+    config = (root / "web" / "playwright.config.ts").read_text(encoding="utf-8")
+    ci_workflow = (root / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    release_workflow = (root / ".github" / "workflows" / "release-windows.yml").read_text(encoding="utf-8")
+
+    assert "trace: 'retain-on-failure'" in config
+    assert "screenshot: 'only-on-failure'" in config
+    assert "Retain frontend E2E failure diagnostics" in ci_workflow
+    assert "Retain frontend E2E failure diagnostics" in release_workflow
+    assert "web/test-results/" in ci_workflow
+    assert "web/test-results/" in release_workflow
 
 
 def test_mit_license_contract() -> None:

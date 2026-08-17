@@ -2,6 +2,14 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.5] - 2026-08-18
+
+### Fixed
+
+- Show project-only literature-basket actions only after the active project context is ready, preventing an early evidence-matrix or research-brief click from being discarded during conversation restoration.
+- Preserve Playwright traces and screenshots on the first failed attempt and upload them from CI and Windows release runs for actionable browser-gate diagnostics.
+- Require an untagged Windows release workflow preflight before creating the next immutable beta tag.
+
 ## [0.1.0-beta.4] - 2026-08-18
 
 ### Fixed

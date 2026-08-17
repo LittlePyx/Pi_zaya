@@ -361,6 +361,7 @@ export function MessageList({
   const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
   const S = useT()
   const shelfScopeId = shelfProjectScopeId(shelfProjectId)
+  const shelfProjectReady = Boolean(String(shelfProjectId || '').trim())
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const persistShelfBackendTimerRef = useRef<number | null>(null)
@@ -2188,9 +2189,9 @@ export function MessageList({
       }}
       onOpenMessage={openMessageFromShelfItem}
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
-      onOpenEvidenceMatrix={(items) => { void openEvidenceMatrixWorkspace(items) }}
-      onOpenResearchBrief={(items) => { void openResearchBriefWorkspace(items) }}
-      onOpenResearchGaps={shelfProjectId ? openResearchGapWorkspace : undefined}
+      onOpenEvidenceMatrix={shelfProjectReady ? (items) => { void openEvidenceMatrixWorkspace(items) } : undefined}
+      onOpenResearchBrief={shelfProjectReady ? (items) => { void openResearchBriefWorkspace(items) } : undefined}
+      onOpenResearchGaps={shelfProjectReady ? openResearchGapWorkspace : undefined}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
         if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)

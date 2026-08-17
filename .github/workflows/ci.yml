@@ -86,6 +86,15 @@ jobs:
           VITE_SHOW_INTERNAL_SETTINGS: "0"
         run: npm run test:e2e:public-surface
 
+      - name: Retain frontend E2E failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pi_zaya-frontend-e2e-failure-${{ github.run_id }}
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
