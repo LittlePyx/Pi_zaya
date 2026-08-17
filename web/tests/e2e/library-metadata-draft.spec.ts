@@ -85,10 +85,14 @@ function createLibraryItem(overrides: Partial<MetadataItem> = {}): MetadataItem 
 async function installLibraryMetadataBackend(
   page: Page,
   overrides: Partial<MetadataItem> = {},
-  options: { suggestionApplyDelayMs?: number } = {},
+  options: { holdSuggestionApply?: boolean } = {},
 ) {
   let item = createLibraryItem(overrides)
   const metaUpdates: MetaUpdatePayload[] = []
+  let releaseSuggestionApply: (() => void) | null = null
+  const suggestionApplyGate = options.holdSuggestionApply
+    ? new Promise<void>((resolve) => { releaseSuggestionApply = resolve })
+    : null
 
   await page.addInitScript(() => {
     window.localStorage.removeItem('kb.library.qualityRepairHistory.v1')
@@ -173,9 +177,7 @@ async function installLibraryMetadataBackend(
     })
   })
   await page.route('**/api/library/meta/suggestions/apply', async (route) => {
-    if (options.suggestionApplyDelayMs) {
-      await new Promise((resolve) => setTimeout(resolve, options.suggestionApplyDelayMs))
-    }
+    if (suggestionApplyGate) await suggestionApplyGate
     const body = route.request().postDataJSON() as {
       category_action?: string
       accept_tags?: string[]
@@ -230,6 +232,10 @@ async function installLibraryMetadataBackend(
 
   return {
     metaUpdates: () => metaUpdates,
+    releaseSuggestionApply: () => {
+      releaseSuggestionApply?.()
+      releaseSuggestionApply = null
+    },
   }
 }
 
@@ -283,7 +289,7 @@ test('accepting a suggestion preserves unsaved note, status, and unrelated tags'
 })
 
 test('saving immediately after accepting all waits for suggestion category and tags', async ({ page }) => {
-  const backend = await installLibraryMetadataBackend(page, {}, { suggestionApplyDelayMs: 350 })
+  const backend = await installLibraryMetadataBackend(page, {}, { holdSuggestionApply: true })
   await openMetadataDrawer(page)
 
   const save = page.getByTestId('library-meta-save')
@@ -296,7 +302,9 @@ test('saving immediately after accepting all waits for suggestion category and t
   await expect(page.locator('.ant-drawer-close')).toHaveCount(0)
 
   // A rapid user click waits until accepting suggestions has updated the draft.
-  await save.click()
+  const saveClick = save.click()
+  backend.releaseSuggestionApply()
+  await saveClick
   await expect(metadataDrawer(page)).toBeHidden()
   await expect.poll(() => backend.metaUpdates().length).toBe(1)
   expect(backend.metaUpdates()[0]).toMatchObject({
