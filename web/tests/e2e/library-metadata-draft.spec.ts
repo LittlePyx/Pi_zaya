@@ -366,7 +366,7 @@ test('dismissing a duplicate suggestion preserves the already persisted tag', as
   expect(backend.metaUpdates()[0]?.user_tags).toEqual(['existing-tag', 'suggested-tag'])
 })
 
-test('dirty drawer close paths offer continue, discard, and save without silent loss', async ({ page }) => {
+test('dirty drawer cancel and close paths preserve or discard without saving', async ({ page }) => {
   const backend = await installLibraryMetadataBackend(page)
   await openMetadataDrawer(page)
 
@@ -383,7 +383,10 @@ test('dirty drawer close paths offer continue, discard, and save without silent 
   await unsavedDialog(page).getByRole('button', { name: '放弃修改', exact: true }).click()
   await expect(metadataDrawer(page)).toBeHidden()
   expect(backend.metaUpdates()).toHaveLength(0)
+})
 
+test('dirty drawer escape can save and close without data loss', async ({ page }) => {
+  const backend = await installLibraryMetadataBackend(page)
   await openMetadataDrawer(page)
   await page.getByTestId('library-meta-note').fill('Save from escape path')
   await page.keyboard.press('Escape')
@@ -398,7 +401,10 @@ test('dirty drawer close paths offer continue, discard, and save without silent 
   await expect(unsavedDialog(page)).toBeHidden()
   await expect(metadataDrawer(page)).toBeHidden()
   expect(backend.metaUpdates()[0]?.note).toBe('Save from escape path')
+})
 
+test('dirty drawer mask close can continue editing without draft loss', async ({ page }) => {
+  await installLibraryMetadataBackend(page)
   await openMetadataDrawer(page)
   await page.getByTestId('library-meta-note').fill('Mask close keeps draft')
   await page.locator('.ant-drawer-mask').click({ position: { x: 20, y: 20 } })
