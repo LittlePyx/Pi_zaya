@@ -8,6 +8,7 @@ All notable user-facing changes are recorded here. Pi_zaya follows Semantic Vers
 
 - Show project-only literature-basket actions only after the active project context is ready, preventing an early evidence-matrix or research-brief click from being discarded during conversation restoration.
 - Keep research-gap, evidence-matrix, and research-brief actions disabled while basket metadata is still updating, so a background refresh cannot consume the user's first click.
+- Separate cold lazy-route readiness from functional browser assertions, preventing Windows runners from reporting false failures while preserving the original interaction and result budgets.
 - Preserve Playwright traces and screenshots on the first failed attempt and upload them from CI and Windows release runs for actionable browser-gate diagnostics.
 - Require an untagged Windows release workflow preflight before creating the next immutable beta tag.
 

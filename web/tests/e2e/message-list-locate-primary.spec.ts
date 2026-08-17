@@ -74,6 +74,19 @@ test.beforeEach(async ({ page }) => {
   await mockEmptyCitationShelf(page)
 })
 
+const INTERNAL_ROUTE_READY_TIMEOUT_MS = 15_000
+
+async function openMessageListRegressionPage(page: Page, path: string) {
+  await page.goto(path)
+  const scenario = new URL(path, 'http://playwright.local').searchParams.get('scenario')
+    || 'structured-primary-rerank'
+  // The regression page is a large lazy chunk. Windows runners can need more than the
+  // normal assertion budget for its first cold transform, while later behavior remains fast.
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText(scenario, {
+    timeout: INTERNAL_ROUTE_READY_TIMEOUT_MS,
+  })
+}
+
 async function mockReaderDoc(page: Page) {
   await page.route('**/api/references/citation-meta', async (route) => {
     await route.fulfill({
@@ -277,7 +290,7 @@ function shelfMetadataRepairFixture(items: Array<Record<string, unknown>>, ready
 
 test('structured locate chip prefers the best evidence block over a wrong raw primary block', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__')
+  await openMessageListRegressionPage(page, '/__message_list_test__')
 
   const chip = page.locator('.kb-prov-locate-chip').first()
   await expect(chip).toBeVisible()
@@ -294,7 +307,7 @@ test('structured locate chip prefers the best evidence block over a wrong raw pr
 
 test('required segment without explicit anchor_kind still renders a strict locate chip', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=required-fallback-anchor')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=required-fallback-anchor')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('required-fallback-anchor')
   const chip = page.locator('.kb-prov-locate-chip').first()
@@ -314,7 +327,7 @@ test('required segment without explicit anchor_kind still renders a strict locat
 
 test('figure panel locate chip remaps to the guide figure anchor', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=guide-figure-remap')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=guide-figure-remap')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('guide-figure-remap')
   const chip = page.locator('.kb-prov-locate-chip').first()
@@ -332,7 +345,7 @@ test('figure panel locate chip remaps to the guide figure anchor', async ({ page
 
 test('formula locate chip remaps to the guide equation anchor', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=guide-formula-remap')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=guide-formula-remap')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('guide-formula-remap')
   const chip = page.locator('.kb-prov-locate-chip').first()
@@ -357,7 +370,7 @@ test('library figure asset URL is not rewritten as inline math', async ({ page }
       body: '<svg xmlns="http://www.w3.org/2000/svg" width="32" height="24"><rect width="32" height="24" fill="navy"/></svg>',
     })
   })
-  await page.goto('/__message_list_test__?scenario=library-figure-asset-url')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=library-figure-asset-url')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('library-figure-asset-url')
   const image = page.getByRole('img', { name: 'NatPhoton Fig. 5' })
@@ -367,7 +380,7 @@ test('library figure asset URL is not rewritten as inline math', async ({ page }
 
 test('render packet contract can drive body render and strict locate without top-level render fields', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=render-packet-contract')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=render-packet-contract')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-contract')
   await expect(page.locator('body')).not.toContainText('[[CITE:')
@@ -417,7 +430,7 @@ test('render packet contract can drive body render and strict locate without top
 })
 
 test('empty packet citation list stays authoritative when refs contain hits', async ({ page }) => {
-  await page.goto('/__message_list_test__?scenario=render-packet-empty-citations')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=render-packet-empty-citations')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-empty-citations')
   const assistant = page.locator('.kb-msg-bubble-assistant').last()
@@ -428,7 +441,7 @@ test('empty packet citation list stays authoritative when refs contain hits', as
 })
 
 test('packet citation number and card copy do not follow refs ordering', async ({ page }) => {
-  await page.goto('/__message_list_test__?scenario=render-packet-refs-order')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=render-packet-refs-order')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-refs-order')
   const assistant = page.locator('.kb-msg-bubble-assistant').last()
@@ -447,7 +460,7 @@ test('packet citation number and card copy do not follow refs ordering', async (
 test('system B upstream reference citation is explicitly clickable and opens its card', async ({ page }) => {
   await page.setViewportSize({ width: 900, height: 600 })
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=render-packet-contract')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=render-packet-contract')
 
   const systemBChip = page.locator('.kb-cite-chip-sysb').first()
   await expect(systemBChip).toBeVisible()
@@ -490,7 +503,7 @@ test('system B popover folds LLM citation-context summary into current-paper usa
       }),
     })
   })
-  await page.goto('/__message_list_test__?scenario=render-packet-contract')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=render-packet-contract')
 
   const systemBChip = page.locator('.kb-cite-chip-sysb').first()
   await expect(systemBChip).toBeVisible()
@@ -503,7 +516,7 @@ test('system B popover folds LLM citation-context summary into current-paper usa
 
 test('system B popover suppresses weak raw context without dropping metrics', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
   const systemBChip = page.locator('.kb-cite-chip-sysb').first()
@@ -527,7 +540,7 @@ test('system B popover suppresses weak raw context without dropping metrics', as
 
 test('render packet hidden locate does not leak a visible locate chip', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=render-packet-hidden-locate')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=render-packet-hidden-locate')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-hidden-locate')
   await expect(page.locator('body')).toContainText('This answer should not expose a hidden locate target.')
@@ -572,7 +585,7 @@ test('citation popover ignores stale async metadata after switching citations', 
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=citation-hover-race')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=citation-hover-race')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('citation-hover-race')
   const citeChips = page.locator('.kb-cite-chip-sysb')
@@ -589,7 +602,7 @@ test('citation popover ignores stale async metadata after switching citations', 
 
 test('system A citation popover shows source location, evidence quote, and opens strict reader target', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
   const citeChip = page.locator('.kb-cite-chip').first()
@@ -632,7 +645,7 @@ test('system A citation popover shows source location, evidence quote, and opens
 test('citation shelf persists under project scope across message-list conversations', async ({ page }) => {
   await mockReaderDoc(page)
   await mockEmptyCitationShelf(page)
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover')
 
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
@@ -648,7 +661,7 @@ test('citation shelf persists under project scope across message-list conversati
     window.localStorage.getItem('kb_cite_shelf:project:message-list-regression-project') || ''
   ).includes('Fixture Paper'))
 
-  await page.goto('/__message_list_test__?scenario=required-fallback-anchor')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=required-fallback-anchor')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('required-fallback-anchor')
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Fixture Paper')
@@ -683,14 +696,14 @@ test('citation shelf restores backend project basket over stale empty local snap
     }))
   })
 
-  await page.goto('/__message_list_test__?scenario=required-fallback-anchor')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=required-fallback-anchor')
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Backend Project Paper')
   await page.waitForTimeout(450)
   expect(patchPayloads.some((payload) => Array.isArray(payload.items) && payload.items.length === 0 && payload.allow_empty_overwrite === false)).toBe(false)
 
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Backend Project Paper')
@@ -867,7 +880,7 @@ test('citation shelf ignores stale metadata repair after project scope switch', 
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover&project=stale-project-a&switchProject=stale-project-b')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover&project=stale-project-a&switchProject=stale-project-b')
   await expect(page.getByTestId('message-list-current-project')).toContainText('stale-project-a')
   await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
   await expect(page.getByTestId('citation-shelf-item-title')).toContainText('Project A Original Title')
@@ -909,7 +922,7 @@ test('citation shelf item exposes source trail and can jump back to the answer',
       body: JSON.stringify({ ok: true, requested: 0, ready: 0, partial: 0, failed: 0, items: [] }),
     })
   })
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover')
 
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
@@ -990,7 +1003,7 @@ test('historical System B shelf item opens local full text and preserves citatio
     },
   ])
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover&reader=1')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover&reader=1')
   const item = page.getByTestId('citation-shelf-item')
   await expect(item).toHaveCount(1)
   await expect(item.getByTestId('citation-shelf-library-match')).toContainText(/Library full text|库内全文/)
@@ -1073,7 +1086,7 @@ test('historical System B shelf and async backfill hide a misbound summary from 
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
   const item = page.getByTestId('citation-shelf-item').filter({ hasText: boydTitle })
   await expect(item).toHaveCount(1)
   await expandFocusedShelfDetails(page)
@@ -1144,7 +1157,7 @@ test('citation shelf migrates legacy conversation storage into project shelf', a
     }))
   })
 
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover')
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item')).toContainText('Legacy Source')
 
@@ -1195,7 +1208,7 @@ test('citation shelf reflects actual reader locate result after opening source',
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
 
   const citeChip = page.locator('.kb-cite-chip').first()
@@ -1269,7 +1282,7 @@ test('citation shelf does not call source quality maintenance APIs for ordinary 
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
@@ -1475,7 +1488,7 @@ test('citation shelf advances source repair run and refreshes repaired locate st
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover')
 
   const citeChip = page.locator('.kb-cite-chip').first()
@@ -1575,7 +1588,7 @@ test('citation shelf hydrates persisted quality-center metadata on open', async 
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
   const citeChip = page.locator('.kb-cite-chip-sysb').first()
   await expect(citeChip).toBeVisible()
@@ -1631,7 +1644,7 @@ test('citation shelf exposes retry when abstract providers fail transiently', as
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
   const citeChip = page.locator('.kb-cite-chip-sysb').first()
   await expect(citeChip).toBeVisible()
   await citeChip.click()
@@ -1688,7 +1701,7 @@ test('citation popover upgrades to waited LLM polish when it is ready', async ({
       }),
     })
   })
-  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover')
 
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
@@ -1710,7 +1723,7 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
       body: JSON.stringify(shelfMetadataRepairFixture(payload.items || [], false)),
     })
   })
-  await page.goto('/__message_list_test__?scenario=card-view-priority-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=card-view-priority-popover')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('card-view-priority-popover')
   const citeChip = page.locator('.kb-cite-chip').first()
@@ -1746,7 +1759,7 @@ test('citation popover and shelf prefer card_view over legacy fallback fields', 
 })
 
 test('citation popover keeps compact evidence while reader receives the continuous locator passage', async ({ page }) => {
-  await page.goto('/__message_list_test__?scenario=card-view-priority-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=card-view-priority-popover')
 
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
@@ -1801,7 +1814,7 @@ test('citation shelf export auto-completes metadata before download', async ({ p
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
 
   const citeChip = page.locator('.kb-cite-chip-sysb').first()
@@ -1863,7 +1876,7 @@ test('citation shelf copy auto-completes metadata before writing clipboard citat
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
 
   const citeChip = page.locator('.kb-cite-chip-sysb').first()
@@ -2035,7 +2048,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
     })
   })
 
-  await page.goto('/__message_list_test__?scenario=weak-system-b-popover')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('weak-system-b-popover')
 
   const citeChip = page.locator('.kb-cite-chip-sysb').first()
@@ -2151,7 +2164,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=repeated-system-a-old-packet')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=repeated-system-a-old-packet')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('repeated-system-a-old-packet')
   const citeChips = page.locator('.kb-cite-chip')
@@ -2176,7 +2189,7 @@ test('old repeated system A citations use clicked answer line and clean markdown
 
 test('old low-quality system A card hides label claim and strips paper metadata from evidence', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=low-quality-system-a-old-packet')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=low-quality-system-a-old-packet')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('low-quality-system-a-old-packet')
   const citeChip = page.locator('.kb-cite-chip').first()
@@ -2198,7 +2211,7 @@ test('old low-quality system A card hides label claim and strips paper metadata 
 
 test('old fragmentary system A card starts from a readable evidence sentence', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=fragmentary-system-a-old-packet')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=fragmentary-system-a-old-packet')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('fragmentary-system-a-old-packet')
   const citeChip = page.locator('.kb-cite-chip').first()
@@ -2218,7 +2231,7 @@ test('old fragmentary system A card starts from a readable evidence sentence', a
 test('plain numeric citations become clickable from refs hits when cite details are absent', async ({ page }) => {
   test.setTimeout(60_000)
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=plain-citation-refs-fallback')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=plain-citation-refs-fallback')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('plain-citation-refs-fallback')
   const citeChips = page.locator('.kb-cite-chip')
@@ -2245,7 +2258,7 @@ test('plain numeric citations become clickable from refs hits when cite details 
 
 test('plain citation fallback drops unresolved members from mixed brackets', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=plain-citation-refs-partial')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=plain-citation-refs-partial')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('plain-citation-refs-partial')
   const assistant = page.locator('.kb-msg-bubble-assistant').last()
@@ -2268,7 +2281,7 @@ test('plain citation fallback drops unresolved members from mixed brackets', asy
 
 test('guide refs remain renderable when only the bound source was filtered out', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=guide-filter-empty-external')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=guide-filter-empty-external')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('guide-filter-empty-external')
   await expect(page.locator('.kb-refs-panel')).toBeVisible()
@@ -2279,7 +2292,7 @@ test('guide refs remain renderable when only the bound source was filtered out',
 
 test('refs render after the latest user message while assistant is still streaming', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=live-user-pending-refs')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=live-user-pending-refs')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('live-user-pending-refs')
   await expect(page.locator('.kb-refs-panel')).toBeVisible()
@@ -2291,7 +2304,7 @@ test('refs render after the latest user message while assistant is still streami
 
 test('negative evidence-note locate is suppressed instead of showing a misleading jump', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=negative-evidence-locate')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=negative-evidence-locate')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('negative-evidence-locate')
   await expect(page.locator('body')).toContainText('does not mention ADMM')
@@ -2300,7 +2313,7 @@ test('negative evidence-note locate is suppressed instead of showing a misleadin
 
 test('normal multi-doc answer suppresses ambiguous inline locate buttons without structured bindings', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=normal-multi-doc-ambiguous-inline-locate')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=normal-multi-doc-ambiguous-inline-locate')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('normal-multi-doc-ambiguous-inline-locate')
   await expect(page.locator('body')).toContainText('DOC-1')
@@ -2310,7 +2323,7 @@ test('normal multi-doc answer suppresses ambiguous inline locate buttons without
 
 test('CJK-adjacent strong markdown renders as emphasis without leaking delimiters', async ({ page }) => {
   await mockReaderDoc(page)
-  await page.goto('/__message_list_test__?scenario=cjk-adjacent-strong')
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=cjk-adjacent-strong')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('cjk-adjacent-strong')
   const assistant = page.locator('.kb-msg-bubble-assistant').last()

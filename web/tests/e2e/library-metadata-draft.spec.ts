@@ -242,7 +242,9 @@ async function installLibraryMetadataBackend(
 async function openMetadataDrawer(page: Page) {
   await page.goto('/library')
   const row = page.getByTestId('library-file-row').filter({ hasText: PAPER_NAME })
-  await expect(row).toBeVisible()
+  // Lazy route compilation can outlive the normal assertion budget on a cold Windows runner.
+  // Keep the wider budget scoped to route readiness; drawer behavior still uses the global gate.
+  await expect(row).toBeVisible({ timeout: 15_000 })
   await row.locator('.kb-lib-file-action-main').click()
   await expect(metadataDrawer(page)).toBeVisible()
 }
