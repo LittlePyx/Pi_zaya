@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.3"
-    assert release_tag(version) == "v0.1.0-beta.3"
+    assert version == "0.1.0-beta.4"
+    assert release_tag(version) == "v0.1.0-beta.4"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -75,9 +75,17 @@ def test_version_is_consistent_across_frontend_manifests() -> None:
 def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github" / "workflows" / "release-windows.yml").read_text(encoding="utf-8")
-    builder = (root / "tools" / "release" / "build_windows_portable.ps1").read_text(encoding="utf-8")
+    builder_path = root / "tools" / "release" / "build_windows_portable.ps1"
+    smoke_path = root / "tools" / "release" / "smoke_windows_portable.ps1"
+    builder = builder_path.read_text(encoding="utf-8")
+    smoke = smoke_path.read_text(encoding="utf-8")
     launcher = (root / "packaging" / "windows" / "Start-Pi-zaya.ps1").read_text(encoding="utf-8")
+    ignore_lines = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
 
+    assert builder_path.is_file()
+    assert smoke_path.is_file()
+    assert "/release/" in ignore_lines
+    assert "release/" not in ignore_lines
     assert "tags:" in workflow
     assert "LICENSE is required" in workflow
     assert "smoke_windows_portable.ps1" in workflow
@@ -89,6 +97,10 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "AllowMissingLicense" in builder
     assert "AllowDirty" in builder
     assert "source_dirty" in builder
+    assert '"LICENSE"' in smoke
+    assert 'manifest.license -ne "MIT"' in smoke
+    assert "manifest.source_dirty" in smoke
+    assert "AllowDirty" in smoke
     assert "Copyright \\(c\\) [^\\r\\n]+ LittlePyx" in workflow
     assert 'KB_RELEASE_MODE = "1"' in launcher
     assert 'KB_SERVER_HOST = "127.0.0.1"' in launcher
