@@ -8,6 +8,7 @@ All notable user-facing changes are recorded here. Pi_zaya follows Semantic Vers
 
 - Scope the generated-artifact ignore rule to the repository root so the Windows portable build and packaged-runtime smoke scripts are tracked and available on clean release runners.
 - Make the packaged-runtime smoke gate require the bundled MIT license and reject artifacts whose manifest reports a dirty source tree.
+- Wait for restored conversation and project-shelf state before evidence-matrix browser tests open the workspace, preserving the full comparison-review assertions under slow parallel runners.
 
 ## [0.1.0-beta.3] - 2026-08-18
 

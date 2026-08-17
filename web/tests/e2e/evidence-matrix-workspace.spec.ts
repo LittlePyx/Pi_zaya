@@ -546,13 +546,22 @@ async function installBackend(page: Page, options: { groupedCandidates?: boolean
   }
 }
 
+async function openEvidenceMatrixWorkspace(page: Page) {
+  await expect(page.getByText('The selected evidence is ready.')).toBeVisible()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  const openButton = page.getByTestId('citation-shelf-open-evidence-matrix')
+  await expect(openButton).toBeEnabled()
+  await openButton.click()
+  const dialog = page.getByRole('dialog', { name: 'Project evidence matrices' })
+  await expect(dialog).toBeVisible()
+  return dialog
+}
+
 test('project basket becomes a persistent cell-audited evidence matrix', async ({ page }) => {
   const backend = await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
 
-  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
-  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
-  await expect(page.getByRole('dialog', { name: 'Project evidence matrices' })).toBeVisible()
+  await openEvidenceMatrixWorkspace(page)
   await page.getByRole('button', { name: 'New matrix' }).click()
   await page.getByTestId('evidence-matrix-title').fill('Imaging evidence matrix')
   await page.getByTestId('evidence-matrix-objective').fill('Compare methods without merging experimental conditions.')
@@ -607,7 +616,7 @@ test('project basket becomes a persistent cell-audited evidence matrix', async (
 test('evidence change inbox reports impact and refreshes only the affected source', async ({ page }) => {
   const backend = await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
-  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
+  await openEvidenceMatrixWorkspace(page)
   await page.getByRole('button', { name: 'New matrix' }).click()
   await page.getByTestId('evidence-matrix-title').fill('Living imaging evidence')
   await page.getByTestId('evidence-matrix-generate').click()
@@ -630,7 +639,7 @@ test('evidence change inbox reports impact and refreshes only the affected sourc
 test('evidence-bound comparison candidate requires mapping review before strict audit', async ({ page }) => {
   await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
-  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
+  await openEvidenceMatrixWorkspace(page)
   await page.getByRole('button', { name: 'New matrix' }).click()
   await page.getByTestId('evidence-matrix-title').fill('Candidate comparison matrix')
   await page.getByTestId('evidence-matrix-generate').click()
@@ -664,7 +673,7 @@ test('evidence-bound comparison candidate requires mapping review before strict 
 test('comparison review groups datasets and reuses only an exact in-group mapping confirmation', async ({ page }) => {
   await installBackend(page, { groupedCandidates: true })
   await page.goto(`/?conversation=${CONVERSATION.id}`)
-  await page.getByTestId('citation-shelf-open-evidence-matrix').click()
+  await openEvidenceMatrixWorkspace(page)
   await page.getByRole('button', { name: 'New matrix' }).click()
   await page.getByTestId('evidence-matrix-title').fill('Grouped comparison matrix')
   await page.getByTestId('evidence-matrix-generate').click()
