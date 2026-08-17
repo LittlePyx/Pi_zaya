@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.2"
-    assert release_tag(version) == "v0.1.0-beta.2"
+    assert version == "0.1.0-beta.3"
+    assert release_tag(version) == "v0.1.0-beta.3"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:

@@ -2,6 +2,12 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.3] - 2026-08-18
+
+### Fixed
+
+- Make the research-gap browser acceptance test wait for restored conversation and project-shelf state before exercising the workspace, eliminating a slow-runner hydration race without relaxing its assertions.
+
 ## [0.1.0-beta.2] - 2026-08-18
 
 ### Fixed

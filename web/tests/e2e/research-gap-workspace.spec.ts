@@ -392,18 +392,26 @@ async function installBackend(page: Page) {
   })
 }
 
+async function openResearchGapQueue(page: Page) {
+  await expect(page.getByText('The evidence audit is ready.')).toBeVisible()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  const openButton = page.getByTestId('citation-shelf-open-research-gaps')
+  await expect(openButton).toBeEnabled()
+  await openButton.click()
+  const dialog = page.getByRole('dialog', { name: 'Project research gap queue' })
+  await expect(dialog).toBeVisible()
+  return dialog
+}
+
 test('project gap queue exposes impact and requires human confirmation for candidate evidence', async ({ page }) => {
   const pageErrors: string[] = []
   page.on('pageerror', (error) => pageErrors.push(error.message))
   await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
 
-  await page.getByTestId('citation-shelf-open-research-gaps').click()
+  const dialog = await openResearchGapQueue(page)
   await expect.poll(() => pageErrors).toEqual([])
-  await page.waitForTimeout(200)
   expect(await page.locator('.ant-message-notice-content').allTextContents()).toEqual([])
-  const dialog = page.getByRole('dialog', { name: 'Project research gap queue' })
-  await expect(dialog).toBeVisible()
   await expect(dialog.getByTestId('research-gap-card')).toContainText('Paper A: limitation')
   await expect(dialog.getByTestId('research-gap-card')).toContainText('1 briefs')
   await expect(dialog.getByTestId('research-gap-card')).toContainText('2 citations')
@@ -421,9 +429,7 @@ test('same-source repair updates the matrix and exposes the affected brief workf
   await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
 
-  await page.getByTestId('citation-shelf-open-research-gaps').click()
-  const dialog = page.getByRole('dialog', { name: 'Project research gap queue' })
-  await expect(dialog).toBeVisible()
+  const dialog = await openResearchGapQueue(page)
   await dialog.getByTestId('research-gap-find-repairs').click()
   await expect(dialog.getByTestId('research-gap-repairs')).toContainText(
     'However, our reconstruction remains limited by motion and calibration errors.',
@@ -443,8 +449,7 @@ test('confirmed cross-source evidence previews and adds a separate matrix row', 
   await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)
 
-  await page.getByTestId('citation-shelf-open-research-gaps').click()
-  const dialog = page.getByRole('dialog', { name: 'Project research gap queue' })
+  const dialog = await openResearchGapQueue(page)
   await dialog.getByTestId('research-gap-find-candidates').click()
   await dialog.getByTestId('research-gap-confirm-candidate').click()
   await page.getByRole('button', { name: 'Confirm candidate', exact: true }).last().click()

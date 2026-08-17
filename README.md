@@ -20,7 +20,7 @@ entry.
 
 ## Downloadable Windows beta
 
-The current release engineering target is `v0.1.0-beta.2`: a Windows x64 portable ZIP
+The current release engineering target is `v0.1.0-beta.3`: a Windows x64 portable ZIP
 with a bundled Python runtime and prebuilt React frontend. End users extract the
 ZIP and run `Start-Pi-zaya.cmd`; Node.js and system Python are not required.
 User databases, PDFs, converted Markdown, preferences, backups, and logs live

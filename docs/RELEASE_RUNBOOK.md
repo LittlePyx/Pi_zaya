@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.2`, delivered as a self-contained Windows x64 portable ZIP.
+This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.3`, delivered as a self-contained Windows x64 portable ZIP.
 
 ## Current release decision
 
@@ -38,7 +38,7 @@ The following fast build uses the current system Python only to validate staging
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.2-windows-x64
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.3-windows-x64
 ```
 
 `-AllowDirty` marks the manifest as a non-release build. `-AllowMissingLicense` only exists for mechanical tests on historical branches; it creates an internal artifact whose manifest says `missing-release-blocked`. Never distribute either kind of artifact.
@@ -60,14 +60,14 @@ cd ..
   -KeepStage
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\release\Pi_zaya-v0.1.0-beta.2-windows-x64
+  -BundleRoot .\release\Pi_zaya-v0.1.0-beta.3-windows-x64
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.2-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.2-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.3-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.3-windows-x64.zip.sha256
 ```
 
 ## Tag release
@@ -75,14 +75,14 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.2-windows-x64.zip.sha256
 1. Confirm the MIT `LICENSE` and copyright line are still correct.
 2. Update `VERSION`, both frontend version fields, and `CHANGELOG.md`.
 3. Confirm the normal CI workflow passes on the exact commit.
-4. Create and push the exact tag, such as `v0.1.0-beta.2`.
+4. Create and push the exact tag, such as `v0.1.0-beta.3`.
 5. `.github/workflows/release-windows.yml` reruns the complete backend, frontend, research, conversion, and browser gates on Windows.
 6. The workflow builds the embedded-runtime ZIP, starts the packaged application from its staged folder, checks `/api/health`, `/api/app/version`, and the React root, then stops it through the packaged stop command.
 7. Only after those checks pass does the workflow create a GitHub prerelease and attach the ZIP, checksum, and artifact manifest.
 
 ### Failed tag recovery
 
-Do not move or overwrite a tag after it has been pushed. If a tagged workflow fails before publishing a release, fix the cause, advance the prerelease version, and create a new tag. The `v0.1.0-beta.1` workflow attempt failed before artifact creation because Python inherited the Windows runner's legacy `cp1252` console encoding; `v0.1.0-beta.2` sets `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` at job scope while preserving every quality gate.
+Do not move or overwrite a tag after it has been pushed. If a tagged workflow fails before publishing a release, fix the cause, advance the prerelease version, and create a new tag. The `v0.1.0-beta.1` workflow attempt failed before artifact creation because Python inherited the Windows runner's legacy `cp1252` console encoding; `v0.1.0-beta.2` fixed that issue and passed the research/conversion gates, but a slow-runner hydration race then caused one research-gap browser test to click before restored project state was stable. `v0.1.0-beta.3` preserves all assertions while waiting for the intended conversation and shelf preconditions.
 
 ## Clean-machine acceptance
 
