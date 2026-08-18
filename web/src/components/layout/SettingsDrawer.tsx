@@ -1,8 +1,16 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
 import { ApiOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons'
-import { Alert, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Space, Switch, Typography, message } from 'antd'
+import { Alert, AutoComplete, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Space, Switch, Typography, message } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
-import { settingsApi, type AuthStatusPayload, type SettingsPatch } from '../../api/settings'
+import {
+  settingsApi,
+  type AuthStatusPayload,
+  type ModelDiscoveryModel,
+  type ModelDiscoveryPayload,
+  type ModelDiscoveryStatus,
+  type ModelProviderId,
+  type SettingsPatch,
+} from '../../api/settings'
 import { userIssuesApi, type UserIssueRemoteStatus } from '../../api/userIssues'
 import { authGateBuildEnabled } from '../../api/authGate'
 import { AUTH_REQUIRED_EVENT, setAccessToken } from '../../api/client'
@@ -14,6 +22,79 @@ import { internalSettingsToolsVisible } from '../../utils/internalDebug'
 
 const { Text } = Typography
 type LocalTestResult = { ok: boolean; checked_at: number; error_type?: string; transient: boolean }
+type DiscoveryTarget = 'text' | 'vision'
+type DiscoveryUiState = {
+  status: ModelDiscoveryStatus
+  provider: Exclude<ModelProviderId, 'auto'> | ''
+  models: ModelDiscoveryModel[]
+  errorType: string
+}
+
+const EMPTY_DISCOVERY: DiscoveryUiState = {
+  status: 'idle',
+  provider: '',
+  models: [],
+  errorType: '',
+}
+const MODEL_REQUEST_TIMEOUT_MS = 8_000
+const CONNECTION_REQUEST_TIMEOUT_MS = 15_000
+const PROVIDER_PRESETS: Record<Exclude<ModelProviderId, 'auto' | 'custom'>, {
+  baseUrl: string
+  text: string[]
+  vision: string[]
+}> = {
+  qwen: {
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    text: ['qwen3.7-plus-2026-05-26', 'qwen3-max', 'qwen-plus', 'qwen-turbo'],
+    vision: ['qwen3-vl-plus', 'qwen-vl-max', 'qwen-vl-plus'],
+  },
+  deepseek: {
+    baseUrl: 'https://api.deepseek.com/v1',
+    text: ['deepseek-v4-flash', 'deepseek-v4-pro'],
+    vision: [],
+  },
+  openai: {
+    baseUrl: 'https://api.openai.com/v1',
+    text: ['gpt-5', 'gpt-5-mini', 'gpt-4.1', 'gpt-4.1-mini', 'gpt-4o'],
+    vision: ['gpt-5', 'gpt-4.1', 'gpt-4o'],
+  },
+}
+
+function inferProviderFromBaseUrl(baseUrl: string): ModelProviderId {
+  const clean = String(baseUrl || '').trim()
+  if (!clean) return 'auto'
+  try {
+    const host = new URL(clean).hostname.toLowerCase()
+    if (host === 'api.openai.com' || host.endsWith('.openai.com')) return 'openai'
+    if (host === 'api.deepseek.com' || host.endsWith('.deepseek.com')) return 'deepseek'
+    if (host === 'dashscope.aliyuncs.com' || host.endsWith('.dashscope.aliyuncs.com')) return 'qwen'
+  } catch {
+    return 'custom'
+  }
+  return 'custom'
+}
+
+function presetFor(provider: ModelProviderId) {
+  if (provider === 'auto' || provider === 'custom') return null
+  return PROVIDER_PRESETS[provider]
+}
+
+function mergeModelOptions(
+  provider: ModelProviderId,
+  target: DiscoveryTarget,
+  discovered: ModelDiscoveryModel[],
+) {
+  const preset = presetFor(provider)?.[target] || []
+  const ids = [...discovered.map((item) => item.id), ...preset]
+  const seen = new Set<string>()
+  return ids.flatMap((id) => {
+    const value = String(id || '').trim()
+    const key = value.toLowerCase()
+    if (!value || seen.has(key)) return []
+    seen.add(key)
+    return [{ value, label: value }]
+  })
+}
 
 function authGateEnabled() {
   return authGateBuildEnabled()
@@ -127,9 +208,17 @@ export function SettingsDrawer({
   const [textApiKey, setTextApiKey] = useState('')
   const [textBaseUrl, setTextBaseUrl] = useState('')
   const [textModel, setTextModel] = useState('')
+  const [textProvider, setTextProvider] = useState<ModelProviderId>('auto')
   const [visionApiKey, setVisionApiKey] = useState('')
   const [visionBaseUrl, setVisionBaseUrl] = useState('')
   const [visionModel, setVisionModel] = useState('')
+  const [visionProvider, setVisionProvider] = useState<ModelProviderId>('auto')
+  const [modelDiscovery, setModelDiscovery] = useState<Record<DiscoveryTarget, DiscoveryUiState>>({
+    text: EMPTY_DISCOVERY,
+    vision: EMPTY_DISCOVERY,
+  })
+  const discoveryControllersRef = useRef<Record<DiscoveryTarget, AbortController | null>>({ text: null, vision: null })
+  const connectionControllersRef = useRef<Record<DiscoveryTarget, AbortController | null>>({ text: null, vision: null })
   const [savingConnection, setSavingConnection] = useState(false)
   const [testingTarget, setTestingTarget] = useState<'text' | 'vision' | null>(null)
   const [localTestResults, setLocalTestResults] = useState<Record<'text' | 'vision', LocalTestResult | null>>({ text: null, vision: null })
@@ -224,14 +313,39 @@ export function SettingsDrawer({
 
   useEffect(() => {
     if (!open) return
+    discoveryControllersRef.current.text?.abort()
+    discoveryControllersRef.current.vision?.abort()
+    connectionControllersRef.current.text?.abort()
+    connectionControllersRef.current.vision?.abort()
+    const hasDedicatedVision = s.hasVisionApiKey && !s.visionUsesTextFallback
     setTextApiKey('')
     setVisionApiKey('')
-    setTextBaseUrl(s.textBaseUrl || '')
-    setTextModel(s.textModel || s.model || '')
-    setVisionBaseUrl(s.visionBaseUrl || '')
-    setVisionModel(s.visionModel || '')
+    setTextBaseUrl(s.hasTextApiKey ? (s.textBaseUrl || '') : '')
+    setTextModel(s.hasTextApiKey ? (s.textModel || s.model || '') : '')
+    setTextProvider(s.hasTextApiKey ? inferProviderFromBaseUrl(s.textBaseUrl) : 'auto')
+    setVisionBaseUrl(hasDedicatedVision ? (s.visionBaseUrl || '') : '')
+    setVisionModel(hasDedicatedVision ? (s.visionModel || '') : '')
+    setVisionProvider(hasDedicatedVision ? inferProviderFromBaseUrl(s.visionBaseUrl) : 'auto')
+    setModelDiscovery({ text: EMPTY_DISCOVERY, vision: EMPTY_DISCOVERY })
     setLocalTestResults({ text: null, vision: null })
-  }, [open, s.model, s.textBaseUrl, s.textModel, s.visionBaseUrl, s.visionModel])
+  }, [
+    open,
+    s.hasTextApiKey,
+    s.hasVisionApiKey,
+    s.model,
+    s.textBaseUrl,
+    s.textModel,
+    s.visionBaseUrl,
+    s.visionModel,
+    s.visionUsesTextFallback,
+  ])
+
+  useEffect(() => () => {
+    discoveryControllersRef.current.text?.abort()
+    discoveryControllersRef.current.vision?.abort()
+    connectionControllersRef.current.text?.abort()
+    connectionControllersRef.current.vision?.abort()
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -278,16 +392,238 @@ export function SettingsDrawer({
     return () => window.clearTimeout(timer)
   }, [focusTarget, open])
 
+  const providerOptions = (target: DiscoveryTarget) => [
+    { label: S.settings_provider_auto, value: 'auto' },
+    { label: 'Qwen / 通义千问', value: 'qwen' },
+    ...(target === 'text' ? [{ label: 'DeepSeek', value: 'deepseek' }] : []),
+    { label: 'OpenAI', value: 'openai' },
+    { label: S.settings_provider_custom, value: 'custom' },
+  ]
+
+  const runModelDiscovery = async (
+    target: DiscoveryTarget,
+    overrides: { provider?: ModelProviderId; baseUrl?: string } = {},
+  ): Promise<ModelDiscoveryPayload | null> => {
+    discoveryControllersRef.current[target]?.abort()
+    const controller = new AbortController()
+    discoveryControllersRef.current[target] = controller
+    let timedOut = false
+    const timeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, MODEL_REQUEST_TIMEOUT_MS)
+    const provider = overrides.provider || (target === 'text' ? textProvider : visionProvider)
+    const baseUrl = overrides.baseUrl !== undefined
+      ? overrides.baseUrl
+      : (target === 'text' ? textBaseUrl : visionBaseUrl)
+    const apiKey = target === 'text' ? textApiKey.trim() : visionApiKey.trim()
+    setModelDiscovery((current) => ({
+      ...current,
+      [target]: { ...current[target], status: 'detecting', errorType: '' },
+    }))
+    try {
+      const result = await settingsApi.discoverModels(target, {
+        provider,
+        apiKey: apiKey || undefined,
+        baseUrl: baseUrl.trim() || undefined,
+      }, controller.signal)
+      if (discoveryControllersRef.current[target] !== controller) return null
+      const resolvedProvider = result.provider || (provider === 'auto' ? '' : provider)
+      setModelDiscovery((current) => ({
+        ...current,
+        [target]: {
+          status: result.status,
+          provider: resolvedProvider,
+          models: result.models || [],
+          errorType: String(result.error_type || ''),
+        },
+      }))
+      if (result.provider && provider === 'auto') {
+        if (target === 'text') setTextProvider(result.provider)
+        else setVisionProvider(result.provider)
+      }
+      if (result.base_url) {
+        if (target === 'text') setTextBaseUrl(result.base_url)
+        else setVisionBaseUrl(result.base_url)
+      }
+      if (result.recommended_model) {
+        if (target === 'text') setTextModel((current) => current.trim() ? current : result.recommended_model)
+        else setVisionModel((current) => current.trim() ? current : result.recommended_model)
+      }
+      return result
+    } catch (err) {
+      if (discoveryControllersRef.current[target] !== controller) return null
+      setModelDiscovery((current) => ({
+        ...current,
+        [target]: {
+          ...current[target],
+          status: 'error',
+          errorType: timedOut || (err instanceof Error && err.name === 'AbortError') ? 'timeout' : 'network',
+        },
+      }))
+      return null
+    } finally {
+      window.clearTimeout(timeout)
+      if (discoveryControllersRef.current[target] === controller) {
+        discoveryControllersRef.current[target] = null
+      }
+    }
+  }
+
+  const changeProvider = (target: DiscoveryTarget, provider: ModelProviderId) => {
+    discoveryControllersRef.current[target]?.abort()
+    const preset = presetFor(provider)
+    const nextBaseUrl = preset?.baseUrl || ''
+    const presetModels = preset?.[target] || []
+    setModelDiscovery((current) => ({ ...current, [target]: EMPTY_DISCOVERY }))
+    if (target === 'text') {
+      setTextProvider(provider)
+      setTextBaseUrl(nextBaseUrl)
+      setTextModel(presetModels[0] || '')
+    } else {
+      setVisionProvider(provider)
+      setVisionBaseUrl(nextBaseUrl)
+      setVisionModel(presetModels[0] || '')
+    }
+    const hasUsableKey = target === 'text'
+      ? Boolean(textApiKey.trim() || s.hasTextApiKey)
+      : Boolean(visionApiKey.trim() || (s.hasVisionApiKey && !s.visionUsesTextFallback))
+    if (hasUsableKey && (provider !== 'custom' || nextBaseUrl)) {
+      void runModelDiscovery(target, { provider, baseUrl: nextBaseUrl })
+    }
+  }
+
+  const discoverAfterApiKeyInput = (target: DiscoveryTarget) => {
+    const key = target === 'text' ? textApiKey.trim() : visionApiKey.trim()
+    if (key) void runModelDiscovery(target)
+  }
+
+  const discoverAfterBaseUrlInput = (target: DiscoveryTarget) => {
+    const baseUrl = target === 'text' ? textBaseUrl.trim() : visionBaseUrl.trim()
+    if (!baseUrl) return
+    const provider = inferProviderFromBaseUrl(baseUrl)
+    if (target === 'text') setTextProvider(provider)
+    else setVisionProvider(provider)
+    void runModelDiscovery(target, { provider, baseUrl })
+  }
+
+  const discoveryStatusText = (target: DiscoveryTarget) => {
+    const discovery = modelDiscovery[target]
+    if (discovery.status === 'idle') return S.settings_provider_auto_hint
+    if (discovery.status === 'detecting') return S.settings_discovery_detecting
+    if (discovery.status === 'needs_provider') return S.settings_discovery_needs_provider
+    if (discovery.status === 'needs_base_url') return S.settings_discovery_needs_base_url
+    if (discovery.status === 'unsupported_target') return S.settings_discovery_unsupported
+    if (discovery.status === 'fallback') return S.settings_discovery_fallback
+    if (discovery.status === 'manual') return S.settings_discovery_manual
+    if (discovery.status === 'error') {
+      return discovery.errorType === 'timeout'
+        ? S.settings_discovery_timeout
+        : S.settings_discovery_fallback
+    }
+    const provider = providerOptions(target).find((item) => item.value === discovery.provider)?.label || discovery.provider
+    return S.settings_discovery_ready
+      .replace('{provider}', String(provider || ''))
+      .replace('{count}', String(discovery.models.length))
+  }
+
+  const renderModelDiscovery = (target: DiscoveryTarget) => {
+    const discovery = modelDiscovery[target]
+    const warning = ['needs_provider', 'needs_base_url', 'unsupported_target', 'fallback', 'manual', 'error'].includes(discovery.status)
+    return (
+      <Text
+        className={`kb-settings-model-discovery ${warning ? 'is-warning' : ''}`}
+        data-testid={`settings-${target}-model-discovery`}
+      >
+        {discoveryStatusText(target)}
+      </Text>
+    )
+  }
+
+  const textModelOptions = mergeModelOptions(textProvider, 'text', modelDiscovery.text.models)
+  const visionModelOptions = mergeModelOptions(visionProvider, 'vision', modelDiscovery.vision.models)
+
   const saveConnection = async () => {
     setSavingConnection(true)
     try {
+      let resolvedTextBaseUrl = textBaseUrl.trim()
+      let resolvedTextModel = textModel.trim()
+      let resolvedVisionBaseUrl = visionBaseUrl.trim()
+      let resolvedVisionModel = visionModel.trim()
+      const initialTextBaseUrl = s.hasTextApiKey ? String(s.textBaseUrl || '').trim() : ''
+      const initialTextModel = s.hasTextApiKey ? String(s.textModel || s.model || '').trim() : ''
+      const hadDedicatedVision = s.hasVisionApiKey && !s.visionUsesTextFallback
+      const initialVisionBaseUrl = hadDedicatedVision ? String(s.visionBaseUrl || '').trim() : ''
+      const initialVisionModel = hadDedicatedVision ? String(s.visionModel || '').trim() : ''
+      const textChanged = Boolean(
+        textApiKey.trim()
+        || resolvedTextBaseUrl !== initialTextBaseUrl
+        || resolvedTextModel !== initialTextModel,
+      )
+      const visionChanged = Boolean(
+        visionApiKey.trim()
+        || resolvedVisionBaseUrl !== initialVisionBaseUrl
+        || resolvedVisionModel !== initialVisionModel,
+      )
+      if (
+        textChanged
+        && (
+          textProvider === 'auto'
+          || !resolvedTextBaseUrl
+          || !resolvedTextModel
+          || modelDiscovery.text.status === 'detecting'
+        )
+      ) {
+        const result = await runModelDiscovery('text')
+        if (!result || ['needs_provider', 'needs_base_url', 'unsupported_target', 'manual'].includes(result.status)) {
+          const detail = result?.status === 'needs_provider'
+            ? S.settings_discovery_needs_provider
+            : result?.status === 'needs_base_url'
+              ? S.settings_discovery_needs_base_url
+              : result?.status === 'unsupported_target'
+                ? S.settings_discovery_unsupported
+                : result?.status === 'manual'
+                  ? S.settings_discovery_manual
+                  : S.settings_discovery_timeout
+          message.warning(detail)
+          return
+        }
+        resolvedTextBaseUrl = result.base_url || resolvedTextBaseUrl
+        resolvedTextModel = resolvedTextModel || result.recommended_model
+      }
+      if (
+        visionChanged
+        && (
+          visionProvider === 'auto'
+          || !resolvedVisionBaseUrl
+          || !resolvedVisionModel
+          || modelDiscovery.vision.status === 'detecting'
+        )
+      ) {
+        const result = await runModelDiscovery('vision')
+        if (!result || ['needs_provider', 'needs_base_url', 'unsupported_target', 'manual'].includes(result.status)) {
+          const detail = result?.status === 'needs_provider'
+            ? S.settings_discovery_needs_provider
+            : result?.status === 'needs_base_url'
+              ? S.settings_discovery_needs_base_url
+              : result?.status === 'unsupported_target'
+                ? S.settings_discovery_unsupported
+                : result?.status === 'manual'
+                  ? S.settings_discovery_manual
+                  : S.settings_discovery_timeout
+          message.warning(detail)
+          return
+        }
+        resolvedVisionBaseUrl = result.base_url || resolvedVisionBaseUrl
+        resolvedVisionModel = resolvedVisionModel || result.recommended_model
+      }
       await settingsApi.update({
         ...(textApiKey.trim() ? { textApiKey: textApiKey.trim() } : {}),
-        textBaseUrl: textBaseUrl.trim(),
-        textModel: textModel.trim(),
+        textBaseUrl: resolvedTextBaseUrl,
+        textModel: resolvedTextModel,
         ...(visionApiKey.trim() ? { visionApiKey: visionApiKey.trim() } : {}),
-        visionBaseUrl: visionBaseUrl.trim(),
-        visionModel: visionModel.trim(),
+        visionBaseUrl: resolvedVisionBaseUrl,
+        visionModel: resolvedVisionModel,
       })
       setTextApiKey('')
       setVisionApiKey('')
@@ -302,6 +638,14 @@ export function SettingsDrawer({
   }
 
   const testLlm = async (target: 'text' | 'vision') => {
+    connectionControllersRef.current[target]?.abort()
+    const controller = new AbortController()
+    connectionControllersRef.current[target] = controller
+    let timedOut = false
+    const timeout = window.setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, CONNECTION_REQUEST_TIMEOUT_MS)
     setTestingTarget(target)
     try {
       const res = await settingsApi.testLlm(target, target === 'text'
@@ -314,7 +658,8 @@ export function SettingsDrawer({
             apiKey: visionApiKey.trim(),
             baseUrl: visionBaseUrl.trim(),
             model: visionModel.trim(),
-          })
+          }, controller.signal)
+      if (connectionControllersRef.current[target] !== controller) return
       message[res.ok ? 'success' : 'error'](
         res.ok
           ? S.settings_test_ok.replace('{reply}', String(res.reply || S.settings_test_default_reply))
@@ -335,8 +680,18 @@ export function SettingsDrawer({
         s.refreshReadiness().catch(() => {}),
         s.refreshAppReadiness().catch(() => {}),
       ])
+    } catch (err) {
+      if (connectionControllersRef.current[target] !== controller) return
+      const detail = timedOut || (err instanceof Error && err.name === 'AbortError')
+        ? S.settings_discovery_timeout
+        : (err instanceof Error ? err.message : S.settings_test_unknown_error)
+      message.error(S.settings_test_failed.replace('{error}', detail))
     } finally {
-      setTestingTarget(null)
+      window.clearTimeout(timeout)
+      if (connectionControllersRef.current[target] === controller) {
+        connectionControllersRef.current[target] = null
+        setTestingTarget(null)
+      }
     }
   }
 
@@ -951,9 +1306,17 @@ export function SettingsDrawer({
               </div>
               {renderProviderState('text')}
               <div className="kb-settings-credential-fields">
+                <Select
+                  aria-label={S.settings_provider}
+                  value={textProvider}
+                  onChange={(value) => changeProvider('text', value as ModelProviderId)}
+                  options={providerOptions('text')}
+                  data-testid="settings-text-provider"
+                />
                 <Input.Password
                   value={textApiKey}
                   onChange={(event) => setTextApiKey(event.target.value)}
+                  onBlur={() => discoverAfterApiKeyInput('text')}
                   placeholder={S.settings_api_key_placeholder}
                   autoComplete="off"
                   data-testid="settings-text-api-key"
@@ -961,13 +1324,20 @@ export function SettingsDrawer({
                 <Input
                   value={textBaseUrl}
                   onChange={(event) => setTextBaseUrl(event.target.value)}
+                  onBlur={() => discoverAfterBaseUrlInput('text')}
                   placeholder={S.settings_base_url}
+                  data-testid="settings-text-base-url"
                 />
-                <Input
+                <AutoComplete
                   value={textModel}
-                  onChange={(event) => setTextModel(event.target.value)}
+                  onChange={setTextModel}
+                  options={textModelOptions}
+                  filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
                   placeholder={S.settings_model_id}
+                  data-testid="settings-text-model"
                 />
+                {renderModelDiscovery('text')}
+                <Text className="kb-settings-model-input-hint">{S.settings_model_input_hint}</Text>
               </div>
               <div className="kb-settings-credential-actions">
                 <Button
@@ -976,6 +1346,13 @@ export function SettingsDrawer({
                   onClick={() => { void testLlm('text') }}
                 >
                   {S.settings_test_text_connection}
+                </Button>
+                <Button
+                  icon={<ReloadOutlined />}
+                  loading={modelDiscovery.text.status === 'detecting'}
+                  onClick={() => { void runModelDiscovery('text') }}
+                >
+                  {S.settings_discover_models}
                 </Button>
               </div>
             </section>
@@ -997,9 +1374,17 @@ export function SettingsDrawer({
               </div>
               {renderProviderState('vision')}
               <div className="kb-settings-credential-fields">
+                <Select
+                  aria-label={S.settings_provider}
+                  value={visionProvider}
+                  onChange={(value) => changeProvider('vision', value as ModelProviderId)}
+                  options={providerOptions('vision')}
+                  data-testid="settings-vision-provider"
+                />
                 <Input.Password
                   value={visionApiKey}
                   onChange={(event) => setVisionApiKey(event.target.value)}
+                  onBlur={() => discoverAfterApiKeyInput('vision')}
                   placeholder={S.settings_api_key_placeholder}
                   autoComplete="off"
                   data-testid="settings-vision-api-key"
@@ -1007,13 +1392,20 @@ export function SettingsDrawer({
                 <Input
                   value={visionBaseUrl}
                   onChange={(event) => setVisionBaseUrl(event.target.value)}
+                  onBlur={() => discoverAfterBaseUrlInput('vision')}
                   placeholder={S.settings_base_url}
+                  data-testid="settings-vision-base-url"
                 />
-                <Input
+                <AutoComplete
                   value={visionModel}
-                  onChange={(event) => setVisionModel(event.target.value)}
+                  onChange={setVisionModel}
+                  options={visionModelOptions}
+                  filterOption={(input, option) => String(option?.value || '').toLowerCase().includes(input.toLowerCase())}
                   placeholder={S.settings_model_id}
+                  data-testid="settings-vision-model"
                 />
+                {renderModelDiscovery('vision')}
+                <Text className="kb-settings-model-input-hint">{S.settings_model_input_hint}</Text>
               </div>
               <div className="kb-settings-credential-actions">
                 <Button
@@ -1022,6 +1414,13 @@ export function SettingsDrawer({
                   onClick={() => { void testLlm('vision') }}
                 >
                   {S.settings_test_vision_connection}
+                </Button>
+                <Button
+                  icon={<ReloadOutlined />}
+                  loading={modelDiscovery.vision.status === 'detecting'}
+                  onClick={() => { void runModelDiscovery('vision') }}
+                >
+                  {S.settings_discover_models}
                 </Button>
               </div>
             </section>

@@ -19,6 +19,15 @@ from api.internal_access import management_api_allowed, require_management_api
 from api.security import auth_token_configured, management_auth_required, management_token_configured, request_is_authenticated
 from kb.file_ops import _pick_directory_dialog
 from kb.maintenance import latest_restore_review_state
+from kb.model_catalog import (
+    fallback_models,
+    filter_discovered_models,
+    infer_provider,
+    provider_base_url,
+    provider_catalog,
+    provider_supports_target,
+    recommended_model,
+)
 from kb.user_issue_store import UserIssueStore
 from kb.version import read_app_version
 
@@ -72,6 +81,8 @@ _MAX_API_KEY_CHARS = 4096
 _MAX_BASE_URL_CHARS = 500
 _MAX_MODEL_CHARS = 200
 _MAX_HINT_CHARS = 40
+_MODEL_DISCOVERY_TIMEOUT_S = 5.0
+_CONNECTION_TEST_TIMEOUT_S = 12.0
 
 
 def _validate_model_base_url(raw: str, *, key: str) -> str:
@@ -834,10 +845,168 @@ class ConnectionTestBody(BaseModel):
         return str(value).replace("\x00", "").strip()
 
 
+class ModelDiscoveryBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    target: Literal["text", "vision"] = "text"
+    provider: Literal["auto", "qwen", "deepseek", "openai", "custom"] = "auto"
+    api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
+    base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
+
+    @field_validator("api_key", "base_url")
+    @classmethod
+    def _clean_discovery_override(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return str(value).replace("\x00", "").strip()
+
+
+def _list_provider_models(*, api_key: str, base_url: str, timeout_s: float) -> list[str]:
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout_s,
+        max_retries=0,
+    )
+    response = client.models.list()
+    return [str(getattr(item, "id", "") or "").strip() for item in response.data]
+
+
+@router.post("/settings/discover-models", dependencies=[Depends(require_management_api)])
+def discover_models(body: ModelDiscoveryBody):
+    target = body.target
+    settings = get_settings()
+    saved_api_key = settings.vision_api_key if target == "vision" else settings.text_api_key
+    saved_base_url = settings.vision_base_url if target == "vision" else settings.text_base_url
+    api_key = (
+        _normalize_pref_value("text_api_key", body.api_key)
+        if body.api_key is not None
+        else saved_api_key
+    )
+    supplied_base_url = (
+        _normalize_pref_value("text_base_url", body.base_url)
+        if body.base_url is not None
+        else ""
+    )
+    provider = body.provider
+    inference = "selected" if provider != "auto" else ""
+    if provider == "auto":
+        provider, inference = infer_provider(api_key=api_key, base_url=supplied_base_url)
+        if not provider and body.api_key is None:
+            provider, inference = infer_provider(api_key=api_key, base_url=saved_base_url)
+    providers = provider_catalog(target=target)
+    if not provider:
+        return {
+            "ok": False,
+            "status": "needs_provider",
+            "provider": "",
+            "inference": inference or "ambiguous",
+            "base_url": "",
+            "models": [],
+            "recommended_model": "",
+            "providers": providers,
+            "error_type": "ambiguous_provider",
+        }
+    if not provider_supports_target(provider, target):
+        return {
+            "ok": False,
+            "status": "unsupported_target",
+            "provider": provider,
+            "inference": inference,
+            "base_url": supplied_base_url or provider_base_url(provider),
+            "models": [],
+            "recommended_model": "",
+            "providers": providers,
+            "error_type": "unsupported_target",
+        }
+
+    base_url = supplied_base_url or provider_base_url(provider)
+    if not base_url and provider == "custom" and body.api_key is None:
+        base_url = str(saved_base_url or "").strip()
+    if not base_url:
+        return {
+            "ok": False,
+            "status": "needs_base_url",
+            "provider": provider,
+            "inference": inference,
+            "base_url": "",
+            "models": [],
+            "recommended_model": "",
+            "providers": providers,
+            "error_type": "missing_base_url",
+        }
+    base_url = _validate_model_base_url(base_url, key="base_url")
+    catalog_models = fallback_models(provider, target)
+    if not api_key:
+        return {
+            "ok": False,
+            "status": "fallback",
+            "provider": provider,
+            "inference": inference,
+            "base_url": base_url,
+            "models": catalog_models,
+            "recommended_model": recommended_model(catalog_models, provider=provider, target=target),
+            "providers": providers,
+            "error_type": "missing_api_key",
+        }
+
+    try:
+        discovered = filter_discovered_models(
+            _list_provider_models(
+                api_key=api_key,
+                base_url=base_url,
+                timeout_s=_MODEL_DISCOVERY_TIMEOUT_S,
+            ),
+            target=target,
+        )
+        if not discovered:
+            return {
+                "ok": False,
+                "status": "fallback" if catalog_models else "manual",
+                "provider": provider,
+                "inference": inference,
+                "base_url": base_url,
+                "models": catalog_models,
+                "recommended_model": recommended_model(catalog_models, provider=provider, target=target),
+                "providers": providers,
+                "error_type": "no_matching_models",
+            }
+        return {
+            "ok": True,
+            "status": "discovered",
+            "provider": provider,
+            "inference": inference,
+            "base_url": base_url,
+            "models": discovered,
+            "recommended_model": recommended_model(discovered, provider=provider, target=target),
+            "providers": providers,
+            "error_type": "",
+        }
+    except Exception as exc:
+        error_type = _classify_connection_error(exc)
+        return {
+            "ok": False,
+            "status": "fallback" if catalog_models else "manual",
+            "provider": provider,
+            "inference": inference,
+            "base_url": base_url,
+            "models": catalog_models,
+            "recommended_model": recommended_model(catalog_models, provider=provider, target=target),
+            "providers": providers,
+            "error": _public_error_text(exc, limit=240),
+            "error_type": error_type,
+        }
+
+
 def _test_chat_completion(*, api_key: str | None, base_url: str, model: str, timeout_s: float) -> dict:
     if not api_key:
         return {"ok": False, "error": "API key is missing", "error_type": "auth"}
-    client = OpenAI(api_key=api_key, base_url=base_url)
+    client = OpenAI(
+        api_key=api_key,
+        base_url=base_url,
+        timeout=timeout_s,
+        max_retries=0,
+    )
     resp = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": "Hi, reply OK in one word."}],
@@ -869,7 +1038,7 @@ def test_llm(body: ConnectionTestBody | None = None):
                 api_key=api_key,
                 base_url=base_url,
                 model=model,
-                timeout_s=s.timeout_s,
+                timeout_s=min(max(float(s.timeout_s), 1.0), _CONNECTION_TEST_TIMEOUT_S),
             )
         else:
             api_key = override_api_key or s.text_api_key
@@ -879,7 +1048,7 @@ def test_llm(body: ConnectionTestBody | None = None):
                 api_key=api_key,
                 base_url=base_url,
                 model=model,
-                timeout_s=s.timeout_s,
+                timeout_s=min(max(float(s.timeout_s), 1.0), _CONNECTION_TEST_TIMEOUT_S),
             )
         error_type = str(result.get("error_type") or "")
         if not result.get("ok") and not error_type:

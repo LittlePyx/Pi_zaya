@@ -160,6 +160,51 @@ export interface LlmTestOverrides {
   model?: string
 }
 
+export type ModelProviderId = 'auto' | 'qwen' | 'deepseek' | 'openai' | 'custom'
+export type ModelDiscoveryStatus =
+  | 'idle'
+  | 'detecting'
+  | 'needs_provider'
+  | 'needs_base_url'
+  | 'unsupported_target'
+  | 'discovered'
+  | 'fallback'
+  | 'manual'
+  | 'error'
+
+export interface ModelDiscoveryModel {
+  id: string
+  label: string
+  capabilities: Array<'text' | 'vision' | string>
+  source: 'provider' | 'catalog' | string
+}
+
+export interface ModelDiscoveryProvider {
+  id: Exclude<ModelProviderId, 'auto'>
+  label: string
+  base_url: string
+  targets: Array<'text' | 'vision'>
+}
+
+export interface ModelDiscoveryPayload {
+  ok: boolean
+  status: Exclude<ModelDiscoveryStatus, 'idle' | 'detecting' | 'error'>
+  provider: Exclude<ModelProviderId, 'auto'> | ''
+  inference: string
+  base_url: string
+  models: ModelDiscoveryModel[]
+  recommended_model: string
+  providers: ModelDiscoveryProvider[]
+  error?: string
+  error_type?: string
+}
+
+export interface ModelDiscoveryOverrides {
+  provider?: ModelProviderId
+  apiKey?: string
+  baseUrl?: string
+}
+
 function toServerPatch(patch: SettingsPatch) {
   const out: Record<string, unknown> = {}
   if (patch.topK !== undefined) out.top_k = patch.topK
@@ -197,13 +242,23 @@ export const settingsApi = {
       target,
       initial_dir: initialDir || '',
     }),
-  testLlm: (target: 'text' | 'vision' = 'text', overrides: LlmTestOverrides = {}) =>
+  testLlm: (target: 'text' | 'vision' = 'text', overrides: LlmTestOverrides = {}, signal?: AbortSignal) =>
     api.post<{ ok: boolean; reply?: string; error?: string; error_type?: string; checked_at?: number }>('/api/settings/test-llm', {
       target,
       api_key: overrides.apiKey || undefined,
       base_url: overrides.baseUrl || undefined,
       model: overrides.model || undefined,
-    }),
+    }, { signal }),
+  discoverModels: (
+    target: 'text' | 'vision',
+    overrides: ModelDiscoveryOverrides = {},
+    signal?: AbortSignal,
+  ) => api.post<ModelDiscoveryPayload>('/api/settings/discover-models', {
+    target,
+    provider: overrides.provider || 'auto',
+    api_key: overrides.apiKey || undefined,
+    base_url: overrides.baseUrl || undefined,
+  }, { signal }),
   readiness: () => api.get<LlmReadinessPayload>('/api/settings/readiness'),
   appReadiness: () => api.get<AppReadinessPayload>('/api/readiness'),
   health: () => api.get<{ status: string; env?: string; production?: boolean; auth?: { required: boolean; configured: boolean } }>('/api/health'),

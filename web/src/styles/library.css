@@ -1713,13 +1713,32 @@
 }
 
 .kb-settings-credential-fields .ant-input,
-.kb-settings-credential-fields .ant-input-affix-wrapper {
+.kb-settings-credential-fields .ant-input-affix-wrapper,
+.kb-settings-credential-fields .ant-select-selector {
   border-radius: 6px;
+}
+
+.kb-settings-model-discovery.ant-typography,
+.kb-settings-model-input-hint.ant-typography {
+  margin: 0;
+  color: color-mix(in srgb, var(--muted-text) 82%, transparent);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.kb-settings-model-discovery.is-warning.ant-typography {
+  color: color-mix(in srgb, #d9911b 76%, var(--text-main));
+}
+
+.kb-settings-model-input-hint.ant-typography {
+  margin-top: -5px;
 }
 
 .kb-settings-credential-actions {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .kb-settings-credential-actions .ant-btn {

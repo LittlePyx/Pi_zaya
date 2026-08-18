@@ -111,6 +111,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\Stop-Pi-zaya.ps1"
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\Start-Pi-zaya.cmd") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\Stop-Pi-zaya.cmd") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\README-PORTABLE.md") -Destination $stageRoot
+Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\README-中文.md") -Destination $stageRoot
 
 $pythonVersion = (Get-Content -LiteralPath (Join-Path $repoRoot ".python-version") -Raw).Trim()
 $runtimeKind = $PythonRuntime.ToLowerInvariant()

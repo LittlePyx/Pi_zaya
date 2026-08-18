@@ -78,6 +78,7 @@ async function installMinimalBackend(
     qualityCollectorInvalidPort?: boolean
     qualityCollectorMissingToken?: boolean
     qualityCollectorStatusFails?: boolean
+    modelDiscoveryFallback?: boolean
   } = {},
 ) {
   const text = provider('text', options.text)
@@ -89,6 +90,7 @@ async function installMinimalBackend(
   let qualityCollectorPending = 2
   let qualityCollectorTests = 0
   let qualityCollectorFlushes = 0
+  const modelDiscoveryCalls: Array<Record<string, unknown>> = []
   let failNextSettingsGet = false
   const qualityCollectorHost = options.qualityCollectorLocal
     ? '127.0.0.1:9000'
@@ -338,6 +340,49 @@ async function installMinimalBackend(
   await page.route('**/api/settings/readiness', async (route) => {
     await fulfillJson(route, readiness)
   })
+  await page.route('**/api/settings/discover-models', async (route) => {
+    const body = JSON.parse(route.request().postData() || '{}') as {
+      target?: 'text' | 'vision'
+      provider?: string
+      api_key?: string
+      base_url?: string
+    }
+    modelDiscoveryCalls.push(body)
+    const target = body.target || 'text'
+    if (!body.provider || body.provider === 'auto') {
+      await fulfillJson(route, {
+        ok: false,
+        status: 'needs_provider',
+        provider: '',
+        inference: 'ambiguous',
+        base_url: '',
+        models: [],
+        recommended_model: '',
+        providers: [],
+        error_type: 'ambiguous_provider',
+      })
+      return
+    }
+    const models = target === 'vision'
+      ? ['qwen3-vl-plus', 'qwen-vl-max']
+      : ['qwen3.7-plus-2026-05-26', 'qwen-plus']
+    await fulfillJson(route, {
+      ok: !options.modelDiscoveryFallback,
+      status: options.modelDiscoveryFallback ? 'fallback' : 'discovered',
+      provider: body.provider,
+      inference: 'selected',
+      base_url: body.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+      models: models.map((id) => ({
+        id,
+        label: id,
+        capabilities: [target],
+        source: options.modelDiscoveryFallback ? 'catalog' : 'provider',
+      })),
+      recommended_model: models[0],
+      providers: [],
+      error_type: options.modelDiscoveryFallback ? 'timeout' : '',
+    })
+  })
   await page.route('**/api/readiness', async (route) => {
     await fulfillJson(route, appReadiness)
   })
@@ -583,6 +628,7 @@ async function installMinimalBackend(
     getLogoutCalls: () => logoutCalls,
     getQualityCollectorTests: () => qualityCollectorTests,
     getQualityCollectorFlushes: () => qualityCollectorFlushes,
+    modelDiscoveryCalls,
   }
 }
 
@@ -650,6 +696,74 @@ test('configured text model does not show the first-run API guide', async ({ pag
 
   await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-api-text', 'ok')
   await expect(page.getByTestId('first-run-api-guide')).toHaveCount(0)
+})
+
+test('ambiguous API key asks for a provider before discovering selectable models', async ({ page }) => {
+  const backend = await installMinimalBackend(page, {
+    text: { has_api_key: false, status: 'missing', severity: 'error' },
+  })
+  await page.goto('/')
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  const apiKey = page.getByTestId('settings-text-api-key')
+  await apiKey.fill('sk-ambiguous-provider-key')
+  await page.getByRole('button', { name: 'Save API settings' }).click()
+
+  await expect(page.getByTestId('settings-text-model-discovery')).toContainText(
+    'does not identify one provider',
+  )
+  await expect.poll(() => backend.modelDiscoveryCalls.some((call) => call.provider === 'auto')).toBe(true)
+  const autoCall = backend.modelDiscoveryCalls.find((call) => call.provider === 'auto')
+  expect(autoCall).toMatchObject({
+    target: 'text',
+    provider: 'auto',
+    api_key: 'sk-ambiguous-provider-key',
+  })
+  expect(backend.settingsPatches.some((patch) => patch.text_api_key === 'sk-ambiguous-provider-key')).toBe(false)
+
+  await page.getByTestId('settings-text-provider').click()
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content', { hasText: 'Qwen / 通义千问' }).click()
+
+  await expect(page.getByTestId('settings-text-model-discovery')).toContainText('Detected Qwen / 通义千问')
+  await expect(page.getByTestId('settings-text-model').locator('input')).toHaveValue('qwen3.7-plus-2026-05-26')
+  await expect.poll(() => backend.modelDiscoveryCalls.some((call) => call.provider === 'qwen')).toBe(true)
+  const qwenCall = backend.modelDiscoveryCalls.find((call) => call.provider === 'qwen')
+  expect(qwenCall).toMatchObject({
+    target: 'text',
+    provider: 'qwen',
+    api_key: 'sk-ambiguous-provider-key',
+    base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+  })
+  await page.getByRole('button', { name: 'Save API settings' }).click()
+  await expect.poll(() => backend.settingsPatches.some((patch) => (
+    patch.text_api_key === 'sk-ambiguous-provider-key'
+    && patch.text_model === 'qwen3.7-plus-2026-05-26'
+  ))).toBe(true)
+})
+
+test('model discovery fallback keeps the model field editable', async ({ page }) => {
+  const backend = await installMinimalBackend(page, {
+    text: { has_api_key: false, status: 'missing', severity: 'error' },
+    modelDiscoveryFallback: true,
+  })
+  await page.goto('/')
+  await page.locator('button[aria-label="Open settings"]').click()
+
+  await page.getByTestId('settings-text-api-key').fill('sk-ambiguous-provider-key')
+  await page.getByTestId('settings-text-provider').click()
+  await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content', { hasText: 'Qwen / 通义千问' }).click()
+
+  await expect(page.getByTestId('settings-text-model-discovery')).toContainText(
+    'built-in mainstream models',
+  )
+  const model = page.getByTestId('settings-text-model').locator('input')
+  await model.fill('private-provider-model-2026')
+  await expect(model).toHaveValue('private-provider-model-2026')
+  await page.getByRole('button', { name: 'Save API settings' }).click()
+  await expect.poll(() => backend.settingsPatches.some((patch) => (
+    patch.text_model === 'private-provider-model-2026'
+    && patch.text_base_url === 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+  ))).toBe(true)
 })
 
 test('settings event can focus the vision provider', async ({ page }) => {

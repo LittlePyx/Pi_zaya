@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.6"
-    assert release_tag(version) == "v0.1.0-beta.6"
+    assert version == "0.1.0-beta.7"
+    assert release_tag(version) == "v0.1.0-beta.7"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -80,6 +80,8 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     builder = builder_path.read_text(encoding="utf-8")
     smoke = smoke_path.read_text(encoding="utf-8")
     launcher = (root / "packaging" / "windows" / "Start-Pi-zaya.ps1").read_text(encoding="utf-8")
+    chinese_readme_path = root / "packaging" / "windows" / "README-中文.md"
+    chinese_readme = chinese_readme_path.read_text(encoding="utf-8")
     ignore_lines = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
 
     assert builder_path.is_file()
@@ -98,6 +100,12 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "AllowMissingLicense" in builder
     assert "AllowDirty" in builder
     assert "source_dirty" in builder
+    assert chinese_readme_path.is_file()
+    assert '"packaging\\windows\\README-中文.md"' in builder
+    assert '"README-中文.md"' in smoke
+    assert "配置 API Key 和模型" in chinese_readme
+    assert "不会被发送给多家服务" in chinese_readme
+    assert "不会一直卡在加载状态" in chinese_readme
     assert '"LICENSE"' in smoke
     assert 'manifest.license -ne "MIT"' in smoke
     assert "manifest.source_dirty" in smoke

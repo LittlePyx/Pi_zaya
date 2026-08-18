@@ -2,6 +2,19 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.7] - 2026-08-18
+
+### Added
+
+- Ship a dedicated `README-中文.md` in the Windows portable package with startup, API/model setup, data-location, update, and checksum instructions.
+- Add safe provider detection and live model discovery for Qwen, DeepSeek, OpenAI, and custom OpenAI-compatible endpoints, with text/vision model-category filtering.
+- Provide provider and model dropdowns while preserving free-form model IDs for private, newly released, or otherwise unlisted models.
+
+### Changed
+
+- Bound interactive model discovery to five seconds and connection tests to twelve seconds, disable automatic retries, and add client-side cancellation so unavailable or mismatched providers cannot leave Settings stuck loading.
+- Treat generic `sk-` credentials as ambiguous instead of probing multiple providers; the user selects the intended provider before the key is sent anywhere.
+
 ## [0.1.0-beta.6] - 2026-08-18
 
 ### Added

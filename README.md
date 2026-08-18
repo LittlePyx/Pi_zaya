@@ -20,8 +20,8 @@ entry.
 
 ## Downloadable Windows beta
 
-The current published release is [`v0.1.0-beta.5`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.5),
-and the next release engineering target is `v0.1.0-beta.6`. Both use a Windows
+The current published release is [`v0.1.0-beta.6`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.6),
+and the next release engineering target is `v0.1.0-beta.7`. Both use a Windows
 x64 portable ZIP with a bundled Python runtime and prebuilt React frontend. End
 users extract the ZIP and run `Start-Pi-zaya.cmd`; Node.js and system Python are
 not required.

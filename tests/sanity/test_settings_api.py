@@ -401,6 +401,8 @@ def test_settings_models_reject_overlong_sensitive_and_path_values():
     with pytest.raises(ValidationError):
         settings_router.ConnectionTestBody(api_key="k" * 4097)
     with pytest.raises(ValidationError):
+        settings_router.ModelDiscoveryBody(api_key="k" * 4097)
+    with pytest.raises(ValidationError):
         settings_router.PickDirRequest(target="pdf", initial_dir="p" * 1201)
 
 
@@ -556,6 +558,177 @@ def test_llm_connection_test_accepts_transient_overrides(monkeypatch):
         "model": "transient-model",
         "timeout_s": 9.0,
     }
+
+
+def test_llm_connection_test_caps_interactive_timeout(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key="saved-text",
+        text_base_url="https://saved-text.example/v1",
+        text_model="saved-text-model",
+        vision_api_key="saved-vision",
+        vision_base_url="https://saved-vision.example/v1",
+        vision_model="saved-vision-model",
+        timeout_s=90.0,
+    )
+    observed: dict[str, object] = {}
+
+    def fake_test_chat_completion(**kwargs):
+        observed.update(kwargs)
+        return {"ok": True, "reply": "OK"}
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(settings_router, "_test_chat_completion", fake_test_chat_completion)
+
+    result = settings_router.test_llm(settings_router.ConnectionTestBody(target="text"))
+
+    assert result["ok"] is True
+    assert observed["timeout_s"] == settings_router._CONNECTION_TEST_TIMEOUT_S
+
+
+def test_model_discovery_does_not_probe_ambiguous_key(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key=None,
+        text_base_url="https://api.openai.com/v1",
+        vision_api_key=None,
+        vision_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    calls = {"count": 0}
+
+    def unexpected_list(**_kwargs):
+        calls["count"] += 1
+        raise AssertionError("ambiguous credentials must not be sent to a provider")
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(settings_router, "_list_provider_models", unexpected_list)
+
+    result = settings_router.discover_models(settings_router.ModelDiscoveryBody(
+        target="text",
+        provider="auto",
+        api_key="sk-ambiguous-provider-key",
+    ))
+
+    assert result["status"] == "needs_provider"
+    assert result["error_type"] == "ambiguous_provider"
+    assert result["models"] == []
+    assert {item["id"] for item in result["providers"]} >= {"qwen", "deepseek", "openai", "custom"}
+    assert calls["count"] == 0
+
+
+def test_model_discovery_recognizes_strong_openai_key_prefix(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key=None,
+        text_base_url="https://api.openai.com/v1",
+        vision_api_key=None,
+        vision_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_list(**kwargs):
+        observed.update(kwargs)
+        return ["gpt-4.1", "text-embedding-3-small"]
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(settings_router, "_list_provider_models", fake_list)
+
+    result = settings_router.discover_models(settings_router.ModelDiscoveryBody(
+        target="text",
+        provider="auto",
+        api_key="sk-proj-example-key",
+    ))
+
+    assert result["ok"] is True
+    assert result["provider"] == "openai"
+    assert result["inference"] == "key_prefix"
+    assert result["models"] == [
+        {
+            "id": "gpt-4.1",
+            "label": "gpt-4.1",
+            "capabilities": ["text", "vision"],
+            "source": "provider",
+        }
+    ]
+    assert observed["base_url"] == "https://api.openai.com/v1"
+
+
+def test_model_discovery_uses_selected_provider_and_filters_model_category(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key=None,
+        text_base_url="https://api.openai.com/v1",
+        vision_api_key=None,
+        vision_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    observed: dict[str, object] = {}
+
+    def fake_list(**kwargs):
+        observed.update(kwargs)
+        return ["qwen3-vl-plus", "qwen-plus", "text-embedding-v3", "qwen3-vl-plus"]
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(settings_router, "_list_provider_models", fake_list)
+
+    result = settings_router.discover_models(settings_router.ModelDiscoveryBody(
+        target="vision",
+        provider="qwen",
+        api_key="sk-qwen-key",
+    ))
+
+    assert result["ok"] is True
+    assert result["status"] == "discovered"
+    assert result["provider"] == "qwen"
+    assert result["base_url"] == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    assert result["recommended_model"] == "qwen3-vl-plus"
+    assert [item["id"] for item in result["models"]] == ["qwen3-vl-plus"]
+    assert observed["timeout_s"] == settings_router._MODEL_DISCOVERY_TIMEOUT_S
+
+
+def test_model_discovery_falls_back_without_blocking_manual_selection(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key=None,
+        text_base_url="https://api.openai.com/v1",
+        vision_api_key=None,
+        vision_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(
+        settings_router,
+        "_list_provider_models",
+        lambda **_kwargs: (_ for _ in ()).throw(TimeoutError("provider timed out")),
+    )
+
+    result = settings_router.discover_models(settings_router.ModelDiscoveryBody(
+        target="text",
+        provider="deepseek",
+        api_key="sk-deepseek-key",
+    ))
+
+    assert result["ok"] is False
+    assert result["status"] == "fallback"
+    assert result["error_type"] == "timeout"
+    assert result["recommended_model"] == "deepseek-v4-flash"
+    assert [item["id"] for item in result["models"]][:2] == [
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+    ]
+
+
+def test_model_discovery_rejects_text_only_provider_for_vision(monkeypatch):
+    settings = SimpleNamespace(
+        text_api_key=None,
+        text_base_url="https://api.openai.com/v1",
+        vision_api_key=None,
+        vision_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    )
+    monkeypatch.setattr(settings_router, "get_settings", lambda: settings)
+
+    result = settings_router.discover_models(settings_router.ModelDiscoveryBody(
+        target="vision",
+        provider="deepseek",
+        api_key="sk-deepseek-key",
+    ))
+
+    assert result["status"] == "unsupported_target"
+    assert result["models"] == []
 
 
 def test_llm_connection_test_redacts_sensitive_error_text(monkeypatch):
