@@ -139,9 +139,9 @@ jobs:
         shell: pwsh
         run: .\tools\release\build_windows_portable.ps1 -PythonRuntime Embedded -SkipFrontendBuild -KeepStage
 
-      - name: Smoke-test packaged runtime and frontend
+      - name: Smoke-test downloaded ZIP on a clean Windows profile
         shell: pwsh
-        run: .\tools\release\smoke_windows_portable.ps1 -BundleRoot ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64"
+        run: .\tools\release\smoke_windows_portable.ps1 -ArchivePath ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip" -CleanProfile
 
       - name: Verify artifact checksum
         shell: pwsh

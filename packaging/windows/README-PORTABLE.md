@@ -5,7 +5,7 @@
 1. Extract the entire ZIP to a normal folder. Do not run it inside the ZIP preview.
 2. Double-click `Start-Pi-zaya.cmd`.
 3. Pi_zaya opens `http://127.0.0.1:8000/` in your browser.
-4. Configure a text-model API key in Settings. Configure a Qwen vision key for the best PDF conversion quality.
+4. On a new profile, use the first-run guide to configure a text-model API key. Configure a Qwen vision key for the best PDF conversion quality. You can dismiss the guide and continue using local library and reader tools first.
 
 The package includes its own Python runtime and prebuilt React frontend. Node.js and a system Python installation are not required.
 
@@ -32,7 +32,7 @@ Pi_zaya is distributed under the MIT License. See `LICENSE` in this folder.
 1. 将 ZIP 完整解压到普通文件夹，不要在压缩包预览窗口内直接运行。
 2. 双击 `Start-Pi-zaya.cmd`。
 3. Pi_zaya 会在浏览器中打开 `http://127.0.0.1:8000/`。
-4. 在“设置”中填写文本模型 API Key；若需最佳 PDF 转换质量，请同时配置 Qwen 视觉模型 Key。
+4. 新用户可按首次启动引导填写文本模型 API Key；若需最佳 PDF 转换质量，请同时配置 Qwen 视觉模型 Key。也可以暂时关闭引导，先使用本地文库与阅读功能。
 
 软件包已经包含 Python 运行时和构建好的 React 前端，不要求用户另行安装 Node.js 或 Python。
 

@@ -605,6 +605,53 @@ test('text API block opens settings focused on the text provider', async ({ page
   )).toBe('text')
 })
 
+test('clean first run explains model requirements and opens text settings', async ({ page }) => {
+  await installMinimalBackend(page, {
+    text: { has_api_key: false, status: 'missing', severity: 'error' },
+  })
+  await page.goto('/library')
+
+  const guide = page.getByTestId('first-run-api-guide')
+  await expect(guide).toBeVisible()
+  await expect(guide).toContainText('Connect a model to get started')
+  await expect(guide).toContainText('Text model · required')
+  await expect(guide).toContainText('Vision model · recommended')
+  await expect(guide).toContainText('Library and reader tools work locally')
+
+  await guide.getByRole('button', { name: 'Configure text API key' }).click()
+
+  await expect(page.locator('[data-api-target="text"]')).toHaveClass(/is-targeted/)
+  await expect.poll(async () => (
+    page.evaluate(() => document.activeElement?.closest('[data-api-target]')?.getAttribute('data-api-target') || '')
+  )).toBe('text')
+})
+
+test('first-run API guide dismissal persists across reloads', async ({ page }) => {
+  await installMinimalBackend(page, {
+    text: { has_api_key: false, status: 'missing', severity: 'error' },
+  })
+  await page.goto('/')
+
+  const guide = page.getByTestId('first-run-api-guide')
+  await expect(guide).toBeVisible()
+  await guide.getByRole('button', { name: 'Set up later' }).last().click()
+  await expect(guide).toHaveCount(0)
+
+  await page.reload()
+  await expect(page.getByTestId('first-run-api-guide')).toHaveCount(0)
+  await expect.poll(() => page.evaluate(() => (
+    window.localStorage.getItem('kb_first_run_api_guide_dismissed_v1')
+  ))).toBe('1')
+})
+
+test('configured text model does not show the first-run API guide', async ({ page }) => {
+  await installMinimalBackend(page)
+  await page.goto('/')
+
+  await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-api-text', 'ok')
+  await expect(page.getByTestId('first-run-api-guide')).toHaveCount(0)
+})
+
 test('settings event can focus the vision provider', async ({ page }) => {
   await installMinimalBackend(page)
   await page.goto('/')

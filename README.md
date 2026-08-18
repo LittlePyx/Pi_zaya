@@ -20,19 +20,21 @@ entry.
 
 ## Downloadable Windows beta
 
-The current release engineering target is `v0.1.0-beta.5`: a Windows x64 portable ZIP
-with a bundled Python runtime and prebuilt React frontend. End users extract the
-ZIP and run `Start-Pi-zaya.cmd`; Node.js and system Python are not required.
+The current published release is [`v0.1.0-beta.5`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.5),
+and the next release engineering target is `v0.1.0-beta.6`. Both use a Windows
+x64 portable ZIP with a bundled Python runtime and prebuilt React frontend. End
+users extract the ZIP and run `Start-Pi-zaya.cmd`; Node.js and system Python are
+not required.
 User databases, PDFs, converted Markdown, preferences, backups, and logs live
 under `%LOCALAPPDATA%\Pi_zaya`, so replacing the application folder preserves
 the library. See `docs/RELEASE_RUNBOOK.md` for build, smoke, checksum, and
 clean-machine acceptance details.
 
-The source is available under the MIT License. No official beta artifact has
-been published yet: the formal build requires a clean, versioned working tree,
-and the tag workflow still has to pass before it creates a GitHub prerelease.
-Background jobs also remain process-local, so the release is explicitly beta
-rather than a general-availability desktop product.
+The source and release artifacts are available under the MIT License. The
+published beta passed the complete Windows packaging and packaged-runtime gates.
+Background jobs remain process-local, the ZIP is unsigned, and updates are
+manual, so the release is explicitly beta rather than a general-availability
+desktop product.
 
 ## Problem
 

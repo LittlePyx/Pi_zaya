@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.5`, delivered as a self-contained Windows x64 portable ZIP.
+This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.6`, delivered as a self-contained Windows x64 portable ZIP. `v0.1.0-beta.5` is the first successfully published downloadable beta.
 
 ## Current release decision
 
@@ -38,7 +38,7 @@ The following fast build uses the current system Python only to validate staging
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.5-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.6-windows-x64 `
   -AllowDirty
 ```
 
@@ -61,14 +61,15 @@ cd ..
   -KeepStage
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\release\Pi_zaya-v0.1.0-beta.5-windows-x64
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.6-windows-x64.zip `
+  -CleanProfile
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.5-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.5-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.6-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.6-windows-x64.zip.sha256
 ```
 
 ## Tag release
@@ -77,18 +78,20 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.5-windows-x64.zip.sha256
 2. Update `VERSION`, both frontend version fields, and `CHANGELOG.md`.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.5`.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.6`.
 6. The tag run repeats the complete backend, frontend, research, conversion, browser, package, and packaged-runtime gates on Windows.
-7. The workflow starts the packaged application from its staged folder, checks `/api/health`, `/api/app/version`, and the React root, then stops it through the packaged stop command.
+7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
 8. Only after those checks pass does the workflow create a GitHub prerelease and attach the ZIP, checksum, and artifact manifest.
 
 ### Failed tag recovery
 
-Do not move or overwrite a tag after it has been pushed. If a tagged workflow fails before publishing a release, fix the cause, advance the prerelease version, and create a new tag. The `v0.1.0-beta.1` workflow attempt failed before artifact creation because Python inherited the Windows runner's legacy `cp1252` console encoding; `v0.1.0-beta.2` fixed that issue and passed the research/conversion gates, but a slow-runner hydration race then caused one research-gap browser test to click before restored project state was stable. `v0.1.0-beta.3` preserved all assertions while waiting for the intended conversation and shelf preconditions, then passed every source and browser gate; packaging exposed that the unanchored `release/` ignore rule had also excluded `tools/release/` from clean checkouts. `v0.1.0-beta.4` tracked the release tooling and passed normal CI on both its commit and tag, but its Windows tag run exposed a narrower project-context entrance race before packaging and therefore published no release. `v0.1.0-beta.5` keeps project-only basket actions unavailable until both the project context and background basket metadata updates are stable, retains first-failure browser diagnostics, pre-transforms the large browser-test routes and serializes the Windows core suite without changing its 113 tests or assertions, and adds an untagged Windows preflight before any new immutable release tag is created.
+Do not move or overwrite a tag after it has been pushed. If a tagged workflow fails before publishing a release, fix the cause, advance the prerelease version, and create a new tag. The `v0.1.0-beta.1` workflow attempt failed before artifact creation because Python inherited the Windows runner's legacy `cp1252` console encoding; `v0.1.0-beta.2` fixed that issue and passed the research/conversion gates, but a slow-runner hydration race then caused one research-gap browser test to click before restored project state was stable. `v0.1.0-beta.3` preserved all assertions while waiting for the intended conversation and shelf preconditions, then passed every source and browser gate; packaging exposed that the unanchored `release/` ignore rule had also excluded `tools/release/` from clean checkouts. `v0.1.0-beta.4` tracked the release tooling and passed normal CI on both its commit and tag, but its Windows tag run exposed a narrower project-context entrance race before packaging and therefore published no release. `v0.1.0-beta.5` keeps project-only basket actions unavailable until both the project context and background basket metadata updates are stable, retains first-failure browser diagnostics, pre-transforms the large browser-test routes and serializes the Windows core suite without changing its 113 tests or assertions, adds the untagged Windows preflight, and became the first successfully published downloadable beta. `v0.1.0-beta.6` adds first-run API guidance and upgrades the packaged-runtime gate to exercise the verified ZIP under an isolated, runtime-free Windows profile.
 
 ## Clean-machine acceptance
 
-Before promoting beyond beta, also test the downloaded ZIP manually on a Windows account that has neither Python nor Node.js on `PATH`:
+The formal Windows workflow automates the clean-start portion before any asset can be published: it verifies the ZIP checksum, extracts that ZIP to a fresh temporary location, replaces the process profile and `%LOCALAPPDATA%`, removes Python and Node.js from `PATH`, clears inherited provider credentials, starts only the bundled runtime, checks the health/version/settings/React surfaces, confirms the default data path and missing-key state, and stops through the packaged stop command.
+
+The following hands-on workflow remains required before promotion beyond beta because it exercises real provider credentials, representative papers, user interaction, and a second physical or virtual Windows account that has neither Python nor Node.js on `PATH`:
 
 1. Verify SHA-256, then extract the whole ZIP.
 2. Double-click `Start-Pi-zaya.cmd` and confirm the browser opens the library page.
@@ -134,6 +137,19 @@ The local acceptance package was intentionally built with `-AllowMissingLicense`
 After the owner selected MIT, the standard license was added with `Copyright (c) 2026 LittlePyx`. The release builder now rejects a dirty Git working tree unless `-AllowDirty` is explicit, validates the MIT contract, copies `LICENSE` into the application root, and records license and source-cleanliness fields in both manifests.
 
 A new embedded-runtime acceptance build used `-AllowDirty` but did not use `-AllowMissingLicense`. It passed `pip check`, packaged-runtime startup, health/version APIs, React root, safe stop, root-versus-package license hash equality, ZIP license presence, and independent SHA-256 verification. The observed ZIP size remained 90.4 MB. Its manifests correctly report `license=MIT`, `license_status=included`, and `source_dirty=true`; it remains a non-distributable mechanics proof until these sources are committed. A clean tagged checkout will report `source_dirty=false` and is the only form the release workflow may publish.
+
+### 2026-08-18 beta.6 clean-profile acceptance
+
+- first-run API guidance regressions: 23 passed, 1 build-mode-specific case skipped;
+- complete browser smoke: 132 passed, 2 build-mode-specific cases skipped;
+- core citation/library browser regressions: 113 passed;
+- ordinary-user surface isolation: 4 passed;
+- backend unit: 4,444 passed, 41 skipped;
+- backend sanity: 266 passed, 2 skipped;
+- Ruff, frontend lint/build, research QA, reviewed replay, version A/B, comparison, comparison candidates, project status/journey, and converter quality gates: pass;
+- embedded ZIP clean-profile mechanics: checksum verification, fresh extraction, runtime-free `PATH`, isolated profile, cleared credential environment, default `%LOCALAPPDATA%\Pi_zaya`, health/version/settings/React checks, and packaged safe stop all pass.
+
+The local mechanics artifact was built with `-AllowDirty` and has SHA-256 `540aac9e125dba3e0029ef1952bd27ac4918db3051362f7bdc065a6de9301ddb`; it is not distributable. The formal untagged preflight must rebuild from the clean commit and repeat every gate before the beta.6 tag may be created.
 
 ## Promotion gates after beta
 

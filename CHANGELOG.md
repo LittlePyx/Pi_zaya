@@ -2,6 +2,17 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.6] - 2026-08-18
+
+### Added
+
+- Show a dismissible first-run model setup guide when no text-model API key is configured, with a direct, focused path into text credentials and clear guidance that the vision connection is optional but recommended.
+
+### Changed
+
+- Run the formal Windows package acceptance from the checksum-verified ZIP after fresh extraction, with an isolated Windows profile, an empty credential environment, no Python or Node.js on `PATH`, and the default `%LOCALAPPDATA%\Pi_zaya` data path.
+- Verify that a clean packaged launch does not inherit a text-model API key before publishing the release assets.
+
 ## [0.1.0-beta.5] - 2026-08-18
 
 ### Fixed

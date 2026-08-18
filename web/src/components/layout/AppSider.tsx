@@ -39,6 +39,7 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
 import { CHAT_MAIN_WINDOW_NAME, READER_SESSION_NAV_CHANNEL } from '../chat/reader/readerTypes'
 import { SettingsDrawer } from './SettingsDrawer'
+import { FirstRunApiGuide } from './FirstRunApiGuide'
 import {
   OPEN_SETTINGS_EVENT,
   apiSettingsTargetFromUnknown,
@@ -1060,6 +1061,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </Sider>
 
       <Content className={`kb-app-content relative ${loc.pathname === '/' ? 'overflow-hidden' : 'overflow-auto'} min-h-0 bg-[var(--bg)]`}>
+        <FirstRunApiGuide
+          visible={settingsLoaded && !hasTextApiKey}
+          onConfigure={() => openSettingsDrawer('text')}
+        />
         {children}
       </Content>
     </Layout>

@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.5"
-    assert release_tag(version) == "v0.1.0-beta.5"
+    assert version == "0.1.0-beta.6"
+    assert release_tag(version) == "v0.1.0-beta.6"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -102,6 +102,14 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert 'manifest.license -ne "MIT"' in smoke
     assert "manifest.source_dirty" in smoke
     assert "AllowDirty" in smoke
+    assert "ArchivePath" in smoke
+    assert "CleanProfile" in smoke
+    assert "Expand-Archive" in smoke
+    assert '"python.exe", "python3.exe", "node.exe", "npm.cmd"' in smoke
+    assert "Clean-profile launch did not use the default LOCALAPPDATA data directory" in smoke
+    assert "Smoke-test downloaded ZIP on a clean Windows profile" in workflow
+    assert "-ArchivePath" in workflow
+    assert "-CleanProfile" in workflow
     assert "Copyright \\(c\\) [^\\r\\n]+ LittlePyx" in workflow
     assert 'KB_RELEASE_MODE = "1"' in launcher
     assert 'KB_SERVER_HOST = "127.0.0.1"' in launcher
