@@ -6,11 +6,19 @@ param(
     [switch]$SkipFrontendBuild,
     [switch]$KeepStage,
     [switch]$AllowDirty,
-    [switch]$AllowMissingLicense
+    [switch]$AllowMissingLicense,
+    [string]$SigningThumbprint = $env:PI_ZAYA_SIGNING_THUMBPRINT,
+    [string]$SignToolPath = "",
+    [string]$TimestampUrl = "http://timestamp.digicert.com",
+    [switch]$RequireSignature
 )
 
 $ErrorActionPreference = "Stop"
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\.."))
+. (Join-Path $PSScriptRoot "Authenticode.ps1")
+if ($RequireSignature -and [string]::IsNullOrWhiteSpace($SigningThumbprint)) {
+    throw "-RequireSignature needs a trusted code-signing certificate thumbprint."
+}
 if (-not $OutputDir) {
     $OutputDir = Join-Path $repoRoot "release"
 }
@@ -222,6 +230,16 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\Stop-Pi-zaya.cmd"
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\README-PORTABLE.md") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\README-中文.md") -Destination $stageRoot
 Build-WindowsLauncher (Join-Path $stageRoot "Pi_zaya.exe") (Join-Path $stageRoot "Pi_zaya.ico")
+$launcherPath = Join-Path $stageRoot "Pi_zaya.exe"
+$launcherSignature = if ([string]::IsNullOrWhiteSpace($SigningThumbprint)) {
+    Get-PiZayaAuthenticodeState -Path $launcherPath
+}
+else {
+    Invoke-PiZayaAuthenticodeSign -Path $launcherPath -Thumbprint $SigningThumbprint -SignToolPath $SignToolPath -TimestampUrl $TimestampUrl
+}
+if ($RequireSignature -and (-not $launcherSignature.Signed -or -not $launcherSignature.Timestamped)) {
+    throw "The native Windows launcher must have a valid timestamped Authenticode signature."
+}
 
 $pythonVersion = (Get-Content -LiteralPath (Join-Path $repoRoot ".python-version") -Raw).Trim()
 $runtimeKind = $PythonRuntime.ToLowerInvariant()
@@ -281,6 +299,11 @@ $manifest = [ordered]@{
     stop_command = "Stop-Pi-zaya.cmd"
     launcher = "native_windows_tray"
     launcher_runtime = "windows_dotnet_framework_4"
+    launcher_signed = [bool]$launcherSignature.Signed
+    launcher_signature_status = [string]$launcherSignature.Status
+    launcher_certificate_thumbprint = [string]$launcherSignature.Thumbprint
+    launcher_certificate_subject = [string]$launcherSignature.Subject
+    launcher_timestamped = [bool]$launcherSignature.Timestamped
     commit = [string]$commit
     source_dirty = [bool]$sourceDirty
     built_at = $builtAt
@@ -309,6 +332,10 @@ $artifactManifest = [ordered]@{
     commit = [string]$commit
     source_dirty = [bool]$sourceDirty
     license = if (Test-Path -LiteralPath $licensePath) { "MIT" } else { "" }
+    launcher_signed = [bool]$launcherSignature.Signed
+    launcher_signature_status = [string]$launcherSignature.Status
+    launcher_certificate_thumbprint = [string]$launcherSignature.Thumbprint
+    launcher_timestamped = [bool]$launcherSignature.Timestamped
 }
 $artifactManifestPath = Join-Path $outputRoot "$packageName.manifest.json"
 $artifactManifest | ConvertTo-Json | Set-Content -LiteralPath $artifactManifestPath -Encoding UTF8

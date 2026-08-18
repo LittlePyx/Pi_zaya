@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   build_test_publish:
-    name: Quality gates, portable build, and release
+    name: Quality gates, portable/installer builds, and release
     runs-on: windows-latest
     timeout-minutes: 90
     env:
@@ -135,21 +135,96 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Build self-contained Windows x64 ZIP
+      - name: Install pinned Inno Setup compiler
         shell: pwsh
-        run: .\tools\release\build_windows_portable.ps1 -PythonRuntime Embedded -SkipFrontendBuild -KeepStage
+        run: |
+          $download = Join-Path $env:RUNNER_TEMP "innosetup-7.1.0-x64.exe"
+          $toolDir = Join-Path $env:RUNNER_TEMP "inno-setup-7.1.0"
+          Invoke-WebRequest -Uri "https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/innosetup-7.1.0-x64.exe" -OutFile $download
+          $signature = Get-AuthenticodeSignature -LiteralPath $download
+          if ($signature.Status -ne "Valid" -or $signature.SignerCertificate.Subject -notmatch "Pyrsys B\.V\.") {
+            throw "Pinned Inno Setup compiler did not have the expected valid Pyrsys B.V. signature."
+          }
+          $arguments = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/DIR=`"$toolDir`"")
+          $process = Start-Process -FilePath $download -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed with exit code $($process.ExitCode)." }
+          $compiler = Join-Path $toolDir "ISCC.exe"
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw "ISCC.exe was not installed." }
+          "PI_ZAYA_ISCC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Import optional trusted code-signing certificate
+        shell: pwsh
+        env:
+          SIGNING_CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+          SIGNING_CERT_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
+        run: |
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERT_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:SIGNING_CERT_PASSWORD)
+          if (-not $hasCertificate -and -not $hasPassword) {
+            "PI_ZAYA_SIGNING_ENABLED=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+            Write-Host "No trusted signing certificate is configured; beta artifacts will be explicitly marked unsigned."
+            exit 0
+          }
+          if ($hasCertificate -ne $hasPassword) {
+            throw "Both WINDOWS_SIGNING_CERT_BASE64 and WINDOWS_SIGNING_CERT_PASSWORD must be configured together."
+          }
+          $pfxPath = Join-Path $env:RUNNER_TEMP "pi-zaya-codesigning.pfx"
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_CERT_BASE64))
+            $password = ConvertTo-SecureString $env:SIGNING_CERT_PASSWORD -AsPlainText -Force
+            $imported = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+          }
+          finally {
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+          $certificate = $imported | Where-Object { $_.HasPrivateKey } | Select-Object -First 1
+          if (-not $certificate) { throw "The imported PFX did not contain a certificate with a private key." }
+          "PI_ZAYA_SIGNING_ENABLED=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PI_ZAYA_SIGNING_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PI_ZAYA_IMPORTED_CERT_THUMBPRINTS=$((@($imported.Thumbprint) -join ';'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Build self-contained Windows x64 ZIP and installer
+        shell: pwsh
+        run: |
+          $signing = @{}
+          if ($env:PI_ZAYA_SIGNING_ENABLED -eq "1") {
+            $signing.SigningThumbprint = $env:PI_ZAYA_SIGNING_THUMBPRINT
+            $signing.RequireSignature = $true
+          }
+          .\tools\release\build_windows_portable.ps1 -PythonRuntime Embedded -SkipFrontendBuild -KeepStage @signing
+          .\tools\release\build_windows_installer.ps1 `
+            -StageRoot ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64" `
+            -InnoSetupCompiler $env:PI_ZAYA_ISCC `
+            @signing
 
       - name: Smoke-test downloaded ZIP on a clean Windows profile
         shell: pwsh
         run: .\tools\release\smoke_windows_portable.ps1 -ArchivePath ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip" -CleanProfile
 
-      - name: Verify artifact checksum
+      - name: Smoke-test installer, in-place upgrade, and preserved user data
         shell: pwsh
         run: |
-          $zip = ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip"
-          $expected = ((Get-Content -LiteralPath "$zip.sha256" -Raw).Trim() -split '\s+')[0]
-          $actual = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-          if ($actual -ne $expected) { throw "Release checksum mismatch." }
+          $signature = @{}
+          if ($env:PI_ZAYA_SIGNING_ENABLED -eq "1") { $signature.RequireSignature = $true }
+          .\tools\release\smoke_windows_installer.ps1 `
+            -InstallerPath ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe" `
+            @signature
+
+      - name: Verify artifact checksums and signature declarations
+        shell: pwsh
+        run: |
+          $artifacts = @(
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip",
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe"
+          )
+          foreach ($artifact in $artifacts) {
+            $expected = ((Get-Content -LiteralPath "$artifact.sha256" -Raw).Trim() -split '\s+')[0]
+            $actual = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $expected) { throw "Release checksum mismatch for $artifact." }
+          }
+          $installerManifest = Get-Content -LiteralPath ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.manifest.json" -Raw | ConvertFrom-Json
+          $expectedSigned = $env:PI_ZAYA_SIGNING_ENABLED -eq "1"
+          if ([bool]$installerManifest.signed -ne $expectedSigned) { throw "Installer signing declaration does not match the workflow mode." }
 
       - name: Retain verified release artifacts
         uses: actions/upload-artifact@v4
@@ -158,6 +233,8 @@ jobs:
           path: |
             release/*.zip
             release/*.zip.sha256
+            release/*-setup.exe
+            release/*-setup.exe.sha256
             release/*.manifest.json
           if-no-files-found: error
           retention-days: 30
@@ -173,6 +250,19 @@ jobs:
           $assets = @(
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip",
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip.sha256",
-            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.manifest.json"
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.manifest.json",
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe",
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe.sha256",
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.manifest.json"
           )
           gh release create $tag @assets --verify-tag --prerelease --generate-notes --title $title
+
+      - name: Remove imported code-signing certificate
+        if: always()
+        shell: pwsh
+        run: |
+          foreach ($thumbprint in @($env:PI_ZAYA_IMPORTED_CERT_THUMBPRINTS -split ';')) {
+            if (-not [string]::IsNullOrWhiteSpace($thumbprint)) {
+              Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
+            }
+          }

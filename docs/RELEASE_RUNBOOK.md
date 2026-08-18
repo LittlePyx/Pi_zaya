@@ -1,10 +1,10 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.8`, delivered as a self-contained Windows x64 portable ZIP. `v0.1.0-beta.7` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
+This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.9`, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.8` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
 
 ## Current release decision
 
-The project is suitable for an explicitly labeled beta release. The application can be downloaded, extracted, and started without installing Node.js or Python. It is not yet a polished generally available desktop release because jobs are not durable across restarts, the artifact is unsigned, and updates are manual.
+The project is suitable for an explicitly labeled beta release. The application can be installed or extracted and started without installing Node.js or Python. It is not yet a polished generally available desktop release because jobs are not durable across restarts and updates are manual. The Authenticode path is ready, but an artifact is considered signed only when its manifest says `signed: true` and Windows validates its trusted publisher; without configured certificate secrets, beta artifacts remain explicitly unsigned.
 
 The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the standard MIT terms with `Copyright (c) 2026 LittlePyx`. Formal builds and the tag workflow still require that file to be present.
 
@@ -13,13 +13,16 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - Canonical version: root `VERSION`, valid Semantic Versioning without a leading `v`.
 - Git tag: exactly `v` plus `VERSION`.
 - Frontend version: `web/package.json` and the lockfile must match `VERSION`.
-- Platform: Windows x64 portable ZIP.
+- Platform: Windows x64 current-user installer plus portable ZIP.
 - Runtime: official CPython embeddable distribution at the version in `.python-version`, with backend dependencies installed into the package.
 - Dependencies: exact Windows runtime versions in `requirements-release.txt`; the built package records the resolved set in `THIRD_PARTY_PACKAGES.txt` and must pass `pip check`.
 - Frontend: production `web/dist`; Node.js is not included or needed at runtime.
 - User data: `%LOCALAPPDATA%\Pi_zaya` by default. An explicit `KB_APP_DATA_DIR` still wins.
 - Network binding: desktop launcher uses `127.0.0.1` only.
-- Integrity: every ZIP has an adjacent SHA-256 file and JSON artifact manifest.
+- Installer: per-user `%LOCALAPPDATA%\Programs\Pi_zaya`, no elevation, stable AppId, Start menu entry, optional desktop shortcut, in-place upgrade, and normal uninstall.
+- Data preservation: installer upgrade and uninstall never remove `%LOCALAPPDATA%\Pi_zaya`; complete personal-data deletion remains a separate, explicit user action.
+- Integrity: the installer and ZIP each have an adjacent SHA-256 file and JSON artifact manifest.
+- Signing: optional trusted Authenticode covers `Pi_zaya.exe`, Setup, and Uninstaller with SHA-256 plus an RFC 3161 timestamp. The release manifest records the observed status, publisher, thumbprint, and timestamp. Self-signed certificates are not release signatures.
 - License: MIT; `LICENSE` must be present both in the repository and inside the ZIP.
 - Entry/exit: native `Pi_zaya.exe` with a system-tray safe-exit action; `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain diagnostic fallbacks.
 
@@ -27,7 +30,7 @@ Development mode is unchanged: repository-local databases and preferences remain
 
 ## Local validation build
 
-The following fast build uses the current system Python only to validate staging and startup. It is not an end-user artifact:
+The following fast build uses the current system Python only to validate portable staging and startup. It is not an end-user artifact and cannot be used to build the installer, which requires the embedded runtime:
 
 ```powershell
 .\tools\release\build_windows_portable.ps1 `
@@ -38,7 +41,7 @@ The following fast build uses the current system Python only to validate staging
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.8-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.9-windows-x64 `
   -AllowDirty
 ```
 
@@ -46,7 +49,7 @@ The following fast build uses the current system Python only to validate staging
 
 ## Formal local build
 
-After the license is present:
+After the license and Inno Setup 7 are present:
 
 ```powershell
 cd web
@@ -60,16 +63,25 @@ cd ..
   -SkipFrontendBuild `
   -KeepStage
 
+.\tools\release\build_windows_installer.ps1 `
+  -StageRoot .\release\Pi_zaya-v0.1.0-beta.9-windows-x64 `
+  -InnoSetupCompiler "C:\Program Files\Inno Setup 7\ISCC.exe"
+
 .\tools\release\smoke_windows_portable.ps1 `
-  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip `
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.9-windows-x64.zip `
   -CleanProfile
+
+.\tools\release\smoke_windows_installer.ps1 `
+  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.9-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.9-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe.sha256
 ```
 
 ## Tag release
@@ -78,10 +90,17 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip.sha256
 2. Update `VERSION`, both frontend version fields, and `CHANGELOG.md`.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.8`.
-6. The tag run repeats the complete backend, frontend, research, conversion, browser, package, and packaged-runtime gates on Windows.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.9`.
+6. The tag run repeats the complete backend, frontend, research, conversion, browser, portable-package, installer, and packaged-runtime gates on Windows.
 7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
-8. Only after those checks pass does the workflow create a GitHub prerelease and attach the ZIP, checksum, and artifact manifest.
+8. The workflow also silently installs into an isolated directory, repeats the runtime checks without system Python or Node.js, performs an in-place reinstall, uninstalls, and proves that the separate user-data sentinel remains.
+9. Only after those checks pass does the workflow create a GitHub prerelease and attach both artifacts, both checksums, and both artifact manifests.
+
+### Trusted signing configuration
+
+The optional CI path reads `WINDOWS_SIGNING_CERT_BASE64` and `WINDOWS_SIGNING_CERT_PASSWORD` only from protected GitHub Actions secrets. The PFX is imported into the ephemeral runner's current-user certificate store immediately before packaging and removed in an `always()` cleanup step. When neither secret exists, the build remains allowed for beta but both manifests must report the real unsigned state. If only one secret exists, or signing/timestamp verification fails anywhere, packaging fails.
+
+For a signed local build, import the trusted code-signing certificate into the current user's Personal store and pass the same `-SigningThumbprint ... -RequireSignature` options to both builders. Never put a PFX, password, or private key in the repository, build directory, ZIP, logs, or release assets.
 
 ### Failed tag recovery
 
@@ -91,19 +110,21 @@ Do not move or overwrite a tag after it has been pushed. If a tagged workflow fa
 
 `v0.1.0-beta.8` makes a small native `Pi_zaya.exe` the primary Windows entrypoint. It keeps a single tray instance, opens the local browser surface, exposes log/data/open/exit actions, delegates safe backend lifecycle to the bounded PowerShell launchers, and retains the command files as diagnostic fallbacks. The launch path now detects an occupied preferred loopback port and selects another local port. The packaged-runtime smoke must invoke the EXE itself with no tray/browser, hold the preferred port open, require a different recorded port, and preserve the existing clean-profile health/version/settings/React/safe-stop checks.
 
+`v0.1.0-beta.9` adds a standard per-user installer while retaining the portable ZIP. It uses a stable AppId and active-launcher mutex for safe in-place upgrades, creates normal Windows shortcuts, and keeps program files separate from `%LOCALAPPDATA%\Pi_zaya`. The installer gate must cover clean-profile install, embedded-runtime launch, same-version reinstall, uninstall, registration cleanup, and preserved user data. The release workflow also supports trusted Authenticode signing for the launcher, Setup, and Uninstaller; unsigned beta output remains allowed only when its manifests say so explicitly.
+
 ## Clean-machine acceptance
 
-The formal Windows workflow automates the clean-start portion before any asset can be published: it verifies the ZIP checksum, extracts that ZIP to a fresh temporary location, replaces the process profile and `%LOCALAPPDATA%`, removes Python and Node.js from `PATH`, clears inherited provider credentials, starts only the bundled runtime, checks the health/version/settings/React surfaces, confirms the default data path and missing-key state, and stops through the packaged stop command.
+The formal Windows workflow automates both clean-start paths before any asset can be published. It verifies the ZIP and installer checksums; exercises the extracted ZIP and the installed application from fresh temporary locations; replaces the process profile and `%LOCALAPPDATA%`; removes Python and Node.js from `PATH`; clears inherited provider credentials; starts only the bundled runtime; checks the health/version/settings/React surfaces; confirms the expected isolated data path and missing-key state; and stops safely. The installer path additionally reinstalls in place, uninstalls, removes its HKCU registration, and proves that user data was not deleted.
 
 The following hands-on workflow remains required before promotion beyond beta because it exercises real provider credentials, representative papers, user interaction, and a second physical or virtual Windows account that has neither Python nor Node.js on `PATH`:
 
-1. Verify SHA-256, then extract the whole ZIP.
-2. Double-click `Pi_zaya.exe`, confirm the browser opens the library page, and confirm the Pi_zaya system-tray menu can reopen it.
+1. Verify SHA-256 for both artifacts. Install with Setup on one account and extract the whole ZIP on the other.
+2. Start from the Start menu or double-click `Pi_zaya.exe`, confirm the browser opens the library page, and confirm the Pi_zaya system-tray menu can reopen it.
 3. Configure provider credentials in Settings and restart once to prove preferences survive.
 4. Upload two representative PDFs, run concurrent conversion, cancel one document, and retry it.
 5. Confirm each document reports its own terminal outcome; induce or use a fixture for index retry without reconversion.
 6. Ask a grounded question, open a citation in the reader, build and export a small evidence matrix and research brief.
-7. Exit through the Pi_zaya system-tray menu, replace the app folder with the same-version test build, restart, and confirm the library persists under `%LOCALAPPDATA%\Pi_zaya`; separately retain `Stop-Pi-zaya.cmd` as a diagnostic fallback.
+7. Exit through the Pi_zaya system-tray menu, install the next test build over the installed version, restart, and confirm the library persists under `%LOCALAPPDATA%\Pi_zaya`. Then uninstall and confirm the same data remains. For the portable path, replace the app folder and separately retain `Stop-Pi-zaya.cmd` as a diagnostic fallback.
 8. Inspect `%LOCALAPPDATA%\Pi_zaya\logs` and confirm no API keys are printed.
 
 Record the Windows version, package SHA-256, result, and known exceptions in the release notes.
@@ -182,12 +203,26 @@ The final local beta.7 mechanics artifact was rebuilt after the save-race fix wi
 - research QA 56-case fixture, version A/B, comparison 5, comparison candidates 5, project status 5, project journey, grounded replay 6, reviewed replay 5, and converter quality 13: pass;
 - the embedded CPython 3.10.11 ZIP passes `pip check` and the same EXE-driven clean-profile archive smoke with Python/Node removed from `PATH`, inherited provider keys cleared, isolated `%LOCALAPPDATA%`, an occupied preferred port, and packaged safe stop.
 
-The local beta.8 mechanics artifact has SHA-256 `56512c889ddda7fccaa04f3a5b3c23ff83daa0e90937137bdb187129c9714942`. Its manifest correctly records `source_dirty=true`, so it is not distributable. A clean beta.8 commit must still pass normal CI and an untagged Windows preflight before an immutable tag may be created.
+The local beta.8 mechanics artifact has SHA-256 `56512c889ddda7fccaa04f3a5b3c23ff83daa0e90937137bdb187129c9714942`. Its manifest correctly records `source_dirty=true`, so it is not distributable. Normal CI and the untagged Windows preflight subsequently passed on commit `605fb2d283e6`; the immutable tag workflow passed after rerunning the same commit when one four-worker Linux browser attempt timed out, without changing tests, workers, or timeouts. The published beta.8 ZIP has SHA-256 `cf013f161154b1c7e90a89529ce1fe91e47a7b1b44ed004728e038fcb205f5e7`.
+
+### 2026-08-18 beta.9 installer mechanics acceptance
+
+- Inno Setup 7.1.0 was downloaded from the official release, and its installer validated with a trusted `Pyrsys B.V.` Authenticode signature before use;
+- the generated current-user Setup compiles as one x64-compatible EXE, requires no elevation, uses a stable AppId, creates Start menu/optional desktop shortcuts, and guards active launcher replacement with the same named mutex;
+- an embedded beta.8 stage was used only for the first installer compile/mechanics proof; the complete beta.9 embedded stage then repeated checksum/manifest validation, silent clean install, runtime-free profile launch, occupied-port fallback, health/version/settings/React checks, same-version in-place reinstall, silent uninstall, HKCU registration cleanup, installed-launcher/uninstaller signature-state validation, and user-data preservation;
+- backend unit: 4,444 passed, 41 skipped; backend sanity: 272 passed, 2 skipped; Ruff and the release-foundation contract: pass;
+- frontend lint/build: pass; complete browser smoke: 134 passed, 2 skipped; core citation/library regressions: 113 passed; ordinary-user surface isolation: 4 passed;
+- research QA 56-case fixture, version A/B, comparison 5, comparison candidates 5, project status 5, project journey, grounded replay 6, reviewed replay 5, and converter quality 13: pass;
+- the embedded CPython 3.10.11 ZIP passed `pip check` and EXE-driven clean-profile archive smoke. Its local SHA-256 is `edc2104eb6ed87f7b02741b25b1b7802478eaaf68919270fbe8282345e5df8c5`;
+- the local installer SHA-256 is `bc3ed076e9c793461b26cd0be5d2e351658230571419671439c90ac66665b67e`. It is intentionally unsigned, and its manifest reports `signed=false` and `signature_status=NotSigned`;
+- the release path can optionally require one trusted certificate for the timestamped native launcher, Setup, and signed Uninstaller. The unconfigured path cannot claim or simulate a release signature.
+
+Both local beta.9 artifacts record `source_dirty=true`, so they are mechanics proofs rather than distributable assets. A clean commit, untagged Windows preflight, and exact-tag run are still required before publication.
 
 ## Promotion gates after beta
 
 - Persist queued/active conversion jobs and recover or honestly fail them after restart.
-- Add code signing and decide whether to ship an installer in addition to the portable ZIP.
+- Acquire and protect a trusted public code-signing certificate before promotion beyond unsigned beta; exercise the required-signature CI branch with the real publisher identity.
 - Define an automatic or guided updater with rollback and data-schema compatibility checks.
 - Exercise backup/restore and data migration across consecutive real release versions.
 - Expand clean-machine coverage beyond the GitHub-hosted Windows image.

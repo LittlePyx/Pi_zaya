@@ -216,9 +216,14 @@ try {
     if ($build.version -ne $expectedVersion) { throw "Build version '$($build.version)' did not match '$expectedVersion'." }
     if ($frontPage.StatusCode -ne 200) { throw "Frontend root returned HTTP $($frontPage.StatusCode)." }
     if ($CleanProfile) {
-        $expectedDataRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Pi_zaya"))
+        $expectedDataRoot = if ($explicitDataDir) {
+            [IO.Path]::GetFullPath($DataDir)
+        }
+        else {
+            [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Pi_zaya"))
+        }
         if (-not $dataRoot.Equals($expectedDataRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Clean-profile launch did not use the default LOCALAPPDATA data directory."
+            throw "Clean-profile launch did not use the expected isolated data directory."
         }
         if ([bool]$settings.has_api_key) {
             throw "Clean-profile launch unexpectedly inherited a text-model API key."
@@ -254,7 +259,7 @@ finally {
         Assert-GeneratedTempPath $dataRoot "Smoke data cleanup directory"
         Remove-Item -LiteralPath $dataRoot -Recurse -Force
     }
-    if ($cleanProfileRoot -and -not $KeepData -and (Test-Path -LiteralPath $cleanProfileRoot)) {
+    if ($cleanProfileRoot -and (-not $KeepData -or $explicitDataDir) -and (Test-Path -LiteralPath $cleanProfileRoot)) {
         Assert-GeneratedTempPath $cleanProfileRoot "Clean profile cleanup directory"
         Remove-Item -LiteralPath $cleanProfileRoot -Recurse -Force
     }

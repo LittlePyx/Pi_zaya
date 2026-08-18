@@ -20,13 +20,14 @@ entry.
 
 ## Downloadable Windows beta
 
-The current published release is [`v0.1.0-beta.7`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.7),
-and the next release engineering target is `v0.1.0-beta.8`. Both use a Windows
-x64 portable ZIP with a bundled Python runtime and prebuilt React frontend. End
-users extract the ZIP and run `Pi_zaya.exe`; it opens the local app in the
-default browser, remains available from the system tray, and selects another
-loopback port if the preferred port is occupied. Node.js and system Python are
-not required. The command launchers remain available as diagnostic fallbacks.
+The current published release is [`v0.1.0-beta.8`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.8),
+and the next release engineering target is `v0.1.0-beta.9`. The target publishes
+a standard current-user Windows installer alongside the portable ZIP. Both have
+a bundled Python runtime and prebuilt React frontend, so Node.js, system Python,
+and administrator privileges are not required. The installed Start menu entry
+or portable `Pi_zaya.exe` opens the local app in the default browser, remains
+available from the system tray, and selects another loopback port if the
+preferred port is occupied. The command launchers remain diagnostic fallbacks.
 User databases, PDFs, converted Markdown, preferences, backups, and logs live
 under `%LOCALAPPDATA%\Pi_zaya`, so replacing the application folder preserves
 the library. See `docs/RELEASE_RUNBOOK.md` for build, smoke, checksum, and
@@ -34,9 +35,10 @@ clean-machine acceptance details.
 
 The source and release artifacts are available under the MIT License. The
 published beta passed the complete Windows packaging and packaged-runtime gates.
-Background jobs remain process-local, the ZIP is unsigned, and updates are
-manual, so the release is explicitly beta rather than a general-availability
-desktop product.
+Background jobs remain process-local and automatic updates are not implemented.
+Unless the release manifest says `signed: true` and Windows validates the named
+publisher, the installer and launcher are unsigned. These boundaries keep the
+release explicitly beta rather than a general-availability desktop product.
 
 ## Problem
 

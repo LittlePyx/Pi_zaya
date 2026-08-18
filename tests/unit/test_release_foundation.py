@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.8"
-    assert release_tag(version) == "v0.1.0-beta.8"
+    assert version == "0.1.0-beta.9"
+    assert release_tag(version) == "v0.1.0-beta.9"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -77,9 +77,15 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     workflow = (root / ".github" / "workflows" / "release-windows.yml").read_text(encoding="utf-8")
     builder_path = root / "tools" / "release" / "build_windows_portable.ps1"
     smoke_path = root / "tools" / "release" / "smoke_windows_portable.ps1"
+    installer_builder_path = root / "tools" / "release" / "build_windows_installer.ps1"
+    installer_smoke_path = root / "tools" / "release" / "smoke_windows_installer.ps1"
+    installer_script_path = root / "packaging" / "windows" / "Pi_zaya.iss"
     native_launcher_path = root / "packaging" / "windows" / "PiZayaLauncher.cs"
     builder = builder_path.read_text(encoding="utf-8")
     smoke = smoke_path.read_text(encoding="utf-8")
+    installer_builder = installer_builder_path.read_text(encoding="utf-8")
+    installer_smoke = installer_smoke_path.read_text(encoding="utf-8")
+    installer_script = installer_script_path.read_text(encoding="utf-8")
     launcher = (root / "packaging" / "windows" / "Start-Pi-zaya.ps1").read_text(encoding="utf-8")
     stopper = (root / "packaging" / "windows" / "Stop-Pi-zaya.ps1").read_text(encoding="utf-8")
     native_launcher = native_launcher_path.read_text(encoding="utf-8")
@@ -89,12 +95,19 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
 
     assert builder_path.is_file()
     assert smoke_path.is_file()
+    assert installer_builder_path.is_file()
+    assert installer_smoke_path.is_file()
+    assert installer_script_path.is_file()
     assert native_launcher_path.is_file()
     assert "/release/" in ignore_lines
     assert "release/" not in ignore_lines
     assert "tags:" in workflow
     assert "LICENSE is required" in workflow
     assert "smoke_windows_portable.ps1" in workflow
+    assert "build_windows_installer.ps1" in workflow
+    assert "smoke_windows_installer.ps1" in workflow
+    assert "WINDOWS_SIGNING_CERT_BASE64" in workflow
+    assert "Pyrsys B\\.V\\." in workflow
     assert "--prerelease" in workflow
     assert "PythonRuntime Embedded" in workflow
     assert "requirements-file: requirements-release.txt" in workflow
@@ -107,6 +120,8 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert chinese_readme_path.is_file()
     assert '"packaging\\windows\\README-中文.md"' in builder
     assert "Build-WindowsLauncher" in builder
+    assert "Invoke-PiZayaAuthenticodeSign" in builder
+    assert "launcher_signed" in builder
     assert "AssemblyInformationalVersion" in builder
     assert '"Pi_zaya.exe"' in builder
     assert 'entrypoint = "Pi_zaya.exe"' in builder
@@ -128,7 +143,7 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "CleanProfile" in smoke
     assert "Expand-Archive" in smoke
     assert '"python.exe", "python3.exe", "node.exe", "npm.cmd"' in smoke
-    assert "Clean-profile launch did not use the default LOCALAPPDATA data directory" in smoke
+    assert "Clean-profile launch did not use the expected isolated data directory" in smoke
     assert "Smoke-test downloaded ZIP on a clean Windows profile" in workflow
     assert "-ArchivePath" in workflow
     assert "-CleanProfile" in workflow
@@ -143,6 +158,14 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "MutexName" in native_launcher
     assert "StartTimeoutMilliseconds = 60000" in native_launcher
     assert "Do not call the unbounded WaitForExit()" in native_launcher
+    assert "PrivilegesRequired=lowest" in installer_script
+    assert "AppMutex=Local\\Pi_zaya.WindowsLauncher" in installer_script
+    assert "SignedUninstaller=yes" in installer_script
+    assert "uninstall_preserves_user_data" in installer_builder
+    assert "Get-PiZayaAuthenticodeState" in installer_builder
+    assert "In-place installer upgrade removed user data" in installer_smoke
+    assert "Uninstaller removed Pi_zaya user data" in installer_smoke
+    assert "A real Pi_zaya installation already exists" in installer_smoke
 
 
 def test_browser_gates_retain_first_failure_diagnostics() -> None:

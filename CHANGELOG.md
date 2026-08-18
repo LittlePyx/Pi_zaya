@@ -2,6 +2,18 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.9] - 2026-08-18
+
+### Added
+
+- Add a standard per-user Windows installer with Start menu integration, an optional desktop shortcut, in-place upgrades, and a normal uninstaller; system Python, Node.js, and administrator privileges are not required.
+- Add an Authenticode-ready release path for the native launcher, installer, and uninstaller. A trusted certificate can be supplied through protected CI secrets; without one, beta artifacts are explicitly recorded as unsigned instead of implying trust.
+
+### Changed
+
+- Publish the installer alongside the portable ZIP, each with an independent SHA-256 checksum and machine-readable manifest.
+- Preserve `%LOCALAPPDATA%\Pi_zaya` across installer upgrades and uninstall. The Windows gate now installs from a clean profile, exercises the embedded runtime, performs an in-place reinstall, uninstalls, and verifies that user data remains.
+
 ## [0.1.0-beta.8] - 2026-08-18
 
 ### Added
