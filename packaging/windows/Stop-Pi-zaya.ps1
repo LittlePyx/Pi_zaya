@@ -43,6 +43,8 @@ if (-not $actualExecutable.Equals($recordedExecutable, [StringComparison]::Ordin
 }
 
 Stop-Process -Id $process.Id
-[void]$process.WaitForExit(10000)
+if (-not $process.WaitForExit(10000)) {
+    throw "Pi-zaya process $($process.Id) did not stop within 10 seconds; its process record was preserved."
+}
 Remove-Item -LiteralPath $processInfoPath -Force -ErrorAction SilentlyContinue
 Write-Host "Pi-zaya has stopped."

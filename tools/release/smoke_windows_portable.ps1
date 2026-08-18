@@ -16,6 +16,7 @@ $archiveExtractRoot = ""
 $cleanProfileRoot = ""
 $dataRoot = ""
 $launchAttempted = $false
+$portBlocker = $null
 $explicitDataDir = [bool]$DataDir
 $ownsDataDir = -not $explicitDataDir
 $environmentNames = @(
@@ -88,7 +89,7 @@ try {
         $bundle = [IO.Path]::GetFullPath($BundleRoot)
     }
 
-    foreach ($required in @("VERSION", "LICENSE", "release-manifest.json", "README-PORTABLE.md", "README-中文.md", "Start-Pi-zaya.cmd", "Stop-Pi-zaya.cmd", "Start-Pi-zaya.ps1", "Stop-Pi-zaya.ps1", "web\dist\index.html")) {
+    foreach ($required in @("VERSION", "LICENSE", "release-manifest.json", "README-PORTABLE.md", "README-中文.md", "Pi_zaya.exe", "Pi_zaya.ico", "Start-Pi-zaya.cmd", "Stop-Pi-zaya.cmd", "Start-Pi-zaya.ps1", "Stop-Pi-zaya.ps1", "web\dist\index.html")) {
         if (-not (Test-Path -LiteralPath (Join-Path $bundle $required))) {
             throw "Portable bundle is missing $required"
         }
@@ -100,6 +101,12 @@ try {
     }
     if ([bool]$manifest.source_dirty -and -not $AllowDirty) {
         throw "Portable bundle was built from a dirty source tree."
+    }
+    if ($manifest.entrypoint -ne "Pi_zaya.exe" -or $manifest.fallback_entrypoint -ne "Start-Pi-zaya.cmd") {
+        throw "Portable bundle does not declare the native launcher and command fallback."
+    }
+    if ($manifest.launcher -ne "native_windows_tray") {
+        throw "Portable bundle does not declare the expected native tray launcher."
     }
     if ($CleanProfile -and $manifest.python_runtime -ne "embedded") {
         throw "Clean-profile acceptance requires the embedded Python runtime."
@@ -153,17 +160,51 @@ try {
         Assert-GeneratedTempPath $dataRoot "Generated smoke data directory"
     }
 
-    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
-    $listener.Start()
-    $port = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
-    $listener.Stop()
-
-    $startArgs = @{ Port = $port; NoBrowser = $true }
+    # Hold the preferred port open while the launcher starts. This verifies that
+    # the packaged entrypoint automatically selects another loopback port rather
+    # than hanging or failing when the default/configured port is occupied.
+    $portBlocker = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    $portBlocker.Start()
+    $occupiedPort = ([Net.IPEndPoint]$portBlocker.LocalEndpoint).Port
+    $env:KB_SERVER_PORT = [string]$occupiedPort
     if ($explicitDataDir -or -not $CleanProfile) {
-        $startArgs.DataDir = $dataRoot
+        $env:KB_APP_DATA_DIR = $dataRoot
     }
     $launchAttempted = $true
-    & (Join-Path $bundle "Start-Pi-zaya.ps1") @startArgs
+    $launcherInfo = [Diagnostics.ProcessStartInfo]::new()
+    $launcherInfo.FileName = Join-Path $bundle "Pi_zaya.exe"
+    $launcherInfo.WorkingDirectory = $bundle
+    $launcherInfo.UseShellExecute = $false
+    $launcherInfo.CreateNoWindow = $true
+    [void]$launcherInfo.ArgumentList.Add("--no-browser")
+    [void]$launcherInfo.ArgumentList.Add("--no-tray")
+    $launcherProcess = [Diagnostics.Process]::new()
+    $launcherProcess.StartInfo = $launcherInfo
+    if (-not $launcherProcess.Start()) {
+        throw "Native launcher process did not start."
+    }
+    if (-not $launcherProcess.WaitForExit(65000)) {
+        $launcherProcess.Kill()
+        throw "Native launcher did not finish its bounded startup within 65 seconds."
+    }
+    if ($launcherProcess.ExitCode -ne 0) {
+        throw "Native launcher failed with exit code $($launcherProcess.ExitCode)."
+    }
+
+    $processRecordPath = Join-Path $dataRoot "runtime\server-process.json"
+    if (-not (Test-Path -LiteralPath $processRecordPath)) {
+        throw "Native launcher did not write its process record to the user data directory."
+    }
+    $processRecord = Get-Content -LiteralPath $processRecordPath -Raw | ConvertFrom-Json
+    $port = [int]$processRecord.port
+    if ($port -lt 1 -or $port -gt 65535) {
+        throw "Native launcher recorded an invalid port '$port'."
+    }
+    if ($port -eq $occupiedPort) {
+        throw "Native launcher did not avoid the occupied preferred port $occupiedPort."
+    }
+    $portBlocker.Stop()
+    $portBlocker = $null
 
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 10
     $build = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/app/version" -TimeoutSec 10
@@ -174,9 +215,6 @@ try {
     if ($health.version -ne $expectedVersion) { throw "Health version '$($health.version)' did not match '$expectedVersion'." }
     if ($build.version -ne $expectedVersion) { throw "Build version '$($build.version)' did not match '$expectedVersion'." }
     if ($frontPage.StatusCode -ne 200) { throw "Frontend root returned HTTP $($frontPage.StatusCode)." }
-    if (-not (Test-Path -LiteralPath (Join-Path $dataRoot "runtime\server-process.json"))) {
-        throw "Launcher did not write its process record to the user data directory."
-    }
     if ($CleanProfile) {
         $expectedDataRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA "Pi_zaya"))
         if (-not $dataRoot.Equals($expectedDataRoot, [StringComparison]::OrdinalIgnoreCase)) {
@@ -191,6 +229,10 @@ try {
 }
 finally {
     $stopError = $null
+    if ($portBlocker) {
+        $portBlocker.Stop()
+        $portBlocker = $null
+    }
     if ($launchAttempted -and $bundle) {
         try {
             $stopArgs = @{}

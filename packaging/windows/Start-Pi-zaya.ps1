@@ -11,6 +11,41 @@ $version = (Get-Content -LiteralPath (Join-Path $appRoot "VERSION") -Raw).Trim()
 $manifestPath = Join-Path $appRoot "release-manifest.json"
 $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
 
+function Test-LoopbackPortAvailable([int]$CandidatePort) {
+    if ($CandidatePort -lt 1 -or $CandidatePort -gt 65535) {
+        return $false
+    }
+    $listener = $null
+    try {
+        $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, $CandidatePort)
+        $listener.Server.ExclusiveAddressUse = $true
+        $listener.Start()
+        return $true
+    }
+    catch {
+        return $false
+    }
+    finally {
+        if ($listener) {
+            $listener.Stop()
+        }
+    }
+}
+
+function Get-AvailableLoopbackPort([int]$PreferredPort) {
+    if (Test-LoopbackPortAvailable $PreferredPort) {
+        return $PreferredPort
+    }
+    $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+    try {
+        $listener.Start()
+        return ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+    }
+    finally {
+        $listener.Stop()
+    }
+}
+
 if (-not $DataDir) {
     if ($env:KB_APP_DATA_DIR) {
         $DataDir = $env:KB_APP_DATA_DIR
@@ -42,10 +77,8 @@ else {
     throw "The bundled Python runtime is missing or incomplete. Re-download the release ZIP."
 }
 
-if ($Port -le 0) {
-    $Port = if ($env:KB_SERVER_PORT) { [int]$env:KB_SERVER_PORT } else { 8000 }
-}
-if ($Port -lt 1 -or $Port -gt 65535) {
+$preferredPort = if ($Port -gt 0) { $Port } elseif ($env:KB_SERVER_PORT) { [int]$env:KB_SERVER_PORT } else { 8000 }
+if ($preferredPort -lt 1 -or $preferredPort -gt 65535) {
     throw "Port must be between 1 and 65535."
 }
 
@@ -91,6 +124,12 @@ if (Test-Path -LiteralPath $processInfoPath) {
     Remove-Item -LiteralPath $processInfoPath -Force -ErrorAction SilentlyContinue
 }
 
+$Port = Get-AvailableLoopbackPort $preferredPort
+if ($Port -ne $preferredPort) {
+    Write-Host "Port $preferredPort is unavailable; Pi-zaya selected loopback port $Port."
+}
+$env:KB_SERVER_PORT = [string]$Port
+
 $stdoutPath = Join-Path $logsDir "server-stdout.log"
 $stderrPath = Join-Path $logsDir "server-stderr.log"
 $server = Start-Process `
@@ -114,7 +153,8 @@ $processInfo | ConvertTo-Json | Set-Content -LiteralPath $processInfoPath -Encod
 $healthUrl = "http://127.0.0.1:$Port/api/health"
 $appUrl = "http://127.0.0.1:$Port/"
 $ready = $false
-for ($attempt = 0; $attempt -lt 60; $attempt++) {
+$readinessTimer = [Diagnostics.Stopwatch]::StartNew()
+while ($readinessTimer.Elapsed.TotalSeconds -lt 45) {
     if ($server.HasExited) {
         break
     }
@@ -130,6 +170,7 @@ for ($attempt = 0; $attempt -lt 60; $attempt++) {
         Start-Sleep -Milliseconds 500
     }
 }
+$readinessTimer.Stop()
 
 if (-not $ready) {
     if (-not $server.HasExited) {

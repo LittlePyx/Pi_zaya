@@ -2,6 +2,18 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.8] - 2026-08-18
+
+### Added
+
+- Add a small native `Pi_zaya.exe` Windows launcher with the product icon, single-instance behavior, a system-tray menu, direct access to logs and user data, and bounded Chinese startup errors.
+- Let the portable launcher automatically select another loopback port when the preferred port is occupied, with bounded startup and confirmed safe-stop behavior.
+
+### Changed
+
+- Make `Pi_zaya.exe` the primary portable-package entrypoint while retaining the start and stop command scripts as diagnostic fallbacks.
+- Exercise the native launcher and an intentionally occupied preferred port in the packaged clean-profile smoke gate before release publication.
+
 ## [0.1.0-beta.7] - 2026-08-18
 
 ### Added

@@ -20,11 +20,13 @@ entry.
 
 ## Downloadable Windows beta
 
-The current published release is [`v0.1.0-beta.6`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.6),
-and the next release engineering target is `v0.1.0-beta.7`. Both use a Windows
+The current published release is [`v0.1.0-beta.7`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.7),
+and the next release engineering target is `v0.1.0-beta.8`. Both use a Windows
 x64 portable ZIP with a bundled Python runtime and prebuilt React frontend. End
-users extract the ZIP and run `Start-Pi-zaya.cmd`; Node.js and system Python are
-not required.
+users extract the ZIP and run `Pi_zaya.exe`; it opens the local app in the
+default browser, remains available from the system tray, and selects another
+loopback port if the preferred port is occupied. Node.js and system Python are
+not required. The command launchers remain available as diagnostic fallbacks.
 User databases, PDFs, converted Markdown, preferences, backups, and logs live
 under `%LOCALAPPDATA%\Pi_zaya`, so replacing the application folder preserves
 the library. See `docs/RELEASE_RUNBOOK.md` for build, smoke, checksum, and

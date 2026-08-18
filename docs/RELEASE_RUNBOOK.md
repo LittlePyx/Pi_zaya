@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.7`, delivered as a self-contained Windows x64 portable ZIP. `v0.1.0-beta.6` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
+This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.8`, delivered as a self-contained Windows x64 portable ZIP. `v0.1.0-beta.7` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
 
 ## Current release decision
 
@@ -21,7 +21,7 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - Network binding: desktop launcher uses `127.0.0.1` only.
 - Integrity: every ZIP has an adjacent SHA-256 file and JSON artifact manifest.
 - License: MIT; `LICENSE` must be present both in the repository and inside the ZIP.
-- Entry/exit: `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd`.
+- Entry/exit: native `Pi_zaya.exe` with a system-tray safe-exit action; `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain diagnostic fallbacks.
 
 Development mode is unchanged: repository-local databases and preferences remain the default unless `KB_RELEASE_MODE=1` or `KB_APP_DATA_DIR` is explicitly set. There is no implicit migration of existing development data.
 
@@ -38,7 +38,7 @@ The following fast build uses the current system Python only to validate staging
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.7-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.8-windows-x64 `
   -AllowDirty
 ```
 
@@ -61,15 +61,15 @@ cd ..
   -KeepStage
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.7-windows-x64.zip `
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip `
   -CleanProfile
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.7-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.7-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.8-windows-x64.zip.sha256
 ```
 
 ## Tag release
@@ -78,7 +78,7 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.7-windows-x64.zip.sha256
 2. Update `VERSION`, both frontend version fields, and `CHANGELOG.md`.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.7`.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.8`.
 6. The tag run repeats the complete backend, frontend, research, conversion, browser, package, and packaged-runtime gates on Windows.
 7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
 8. Only after those checks pass does the workflow create a GitHub prerelease and attach the ZIP, checksum, and artifact manifest.
@@ -89,6 +89,8 @@ Do not move or overwrite a tag after it has been pushed. If a tagged workflow fa
 
 `v0.1.0-beta.7` adds an explicit Chinese portable-package guide plus safe provider/model discovery. Ambiguous credentials are never sprayed across provider endpoints; live catalog calls have a short timeout and zero retries, and both built-in model choices and free-form model IDs remain available after failure.
 
+`v0.1.0-beta.8` makes a small native `Pi_zaya.exe` the primary Windows entrypoint. It keeps a single tray instance, opens the local browser surface, exposes log/data/open/exit actions, delegates safe backend lifecycle to the bounded PowerShell launchers, and retains the command files as diagnostic fallbacks. The launch path now detects an occupied preferred loopback port and selects another local port. The packaged-runtime smoke must invoke the EXE itself with no tray/browser, hold the preferred port open, require a different recorded port, and preserve the existing clean-profile health/version/settings/React/safe-stop checks.
+
 ## Clean-machine acceptance
 
 The formal Windows workflow automates the clean-start portion before any asset can be published: it verifies the ZIP checksum, extracts that ZIP to a fresh temporary location, replaces the process profile and `%LOCALAPPDATA%`, removes Python and Node.js from `PATH`, clears inherited provider credentials, starts only the bundled runtime, checks the health/version/settings/React surfaces, confirms the default data path and missing-key state, and stops through the packaged stop command.
@@ -96,12 +98,12 @@ The formal Windows workflow automates the clean-start portion before any asset c
 The following hands-on workflow remains required before promotion beyond beta because it exercises real provider credentials, representative papers, user interaction, and a second physical or virtual Windows account that has neither Python nor Node.js on `PATH`:
 
 1. Verify SHA-256, then extract the whole ZIP.
-2. Double-click `Start-Pi-zaya.cmd` and confirm the browser opens the library page.
+2. Double-click `Pi_zaya.exe`, confirm the browser opens the library page, and confirm the Pi_zaya system-tray menu can reopen it.
 3. Configure provider credentials in Settings and restart once to prove preferences survive.
 4. Upload two representative PDFs, run concurrent conversion, cancel one document, and retry it.
 5. Confirm each document reports its own terminal outcome; induce or use a fixture for index retry without reconversion.
 6. Ask a grounded question, open a citation in the reader, build and export a small evidence matrix and research brief.
-7. Run `Stop-Pi-zaya.cmd`, replace the app folder with the same-version test build, restart, and confirm the library persists under `%LOCALAPPDATA%\Pi_zaya`.
+7. Exit through the Pi_zaya system-tray menu, replace the app folder with the same-version test build, restart, and confirm the library persists under `%LOCALAPPDATA%\Pi_zaya`; separately retain `Stop-Pi-zaya.cmd` as a diagnostic fallback.
 8. Inspect `%LOCALAPPDATA%\Pi_zaya\logs` and confirm no API keys are printed.
 
 Record the Windows version, package SHA-256, result, and known exceptions in the release notes.
@@ -167,7 +169,20 @@ The local mechanics artifact was built with `-AllowDirty` and has SHA-256 `540aa
 - the Windows ZIP contains the explicit root-level `README-中文.md`, and the packaged smoke gate now requires it;
 - embedded ZIP clean-profile mechanics: checksum verification, fresh extraction, runtime-free `PATH`, isolated profile, cleared credential environment, default `%LOCALAPPDATA%\Pi_zaya`, health/version/settings/React checks, and packaged safe stop all pass.
 
-The final local beta.7 mechanics artifact was rebuilt after the save-race fix with `-AllowDirty` and has SHA-256 `97eb1163f530e4295bd8d83295358b05a0715e759ff38a4e92f846dea122e01b`; it is not distributable. A formal untagged Windows preflight must rebuild from the clean beta.7 commit and repeat every gate before an immutable tag is created.
+The final local beta.7 mechanics artifact was rebuilt after the save-race fix with `-AllowDirty` and has SHA-256 `97eb1163f530e4295bd8d83295358b05a0715e759ff38a4e92f846dea122e01b`; it is not distributable. The subsequent normal CI, clean untagged Windows preflight, immutable tag CI, formal Windows tag workflow, and published-asset checksum/manifest/Chinese-README verification all passed. The published beta.7 ZIP has SHA-256 `e637c80ac7669fba4729113efc739800bbca5215642c00a3a67f5092b2b211ce`.
+
+### 2026-08-18 beta.8 native-launcher acceptance
+
+- `Pi_zaya.exe` compiles as a 36 KB Windows GUI launcher with the Pi_zaya icon, product version `0.1.0-beta.8`, and file version `0.1.0.8`;
+- the launcher keeps one tray instance, reopens the existing app on a second launch, exposes open/log/data/exit actions, caps startup at 60 seconds, and waits for an in-progress startup before honoring safe exit;
+- the PowerShell fallback caps readiness at 45 seconds, selects another loopback port when the preferred port is occupied, and preserves the process record if safe stop cannot confirm process exit within 10 seconds;
+- the system-runtime package smoke invokes the EXE with a deliberately occupied preferred port, verifies the different recorded port plus health/version/settings/React surfaces, and safely stops the backend;
+- backend unit: 4,444 passed, 41 skipped; backend sanity: 272 passed, 2 skipped; Ruff and release-foundation contract checks: pass;
+- frontend lint/build: pass; complete browser smoke: 134 passed, 2 skipped; core citation/library regressions: 113 passed; ordinary-user surface isolation: 4 passed;
+- research QA 56-case fixture, version A/B, comparison 5, comparison candidates 5, project status 5, project journey, grounded replay 6, reviewed replay 5, and converter quality 13: pass;
+- the embedded CPython 3.10.11 ZIP passes `pip check` and the same EXE-driven clean-profile archive smoke with Python/Node removed from `PATH`, inherited provider keys cleared, isolated `%LOCALAPPDATA%`, an occupied preferred port, and packaged safe stop.
+
+The local beta.8 mechanics artifact has SHA-256 `56512c889ddda7fccaa04f3a5b3c23ff83daa0e90937137bdb187129c9714942`. Its manifest correctly records `source_dirty=true`, so it is not distributable. A clean beta.8 commit must still pass normal CI and an untagged Windows preflight before an immutable tag may be created.
 
 ## Promotion gates after beta
 

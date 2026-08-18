@@ -84,6 +84,115 @@ function Copy-RuntimeTree([string]$Source, [string]$Destination) {
     }
 }
 
+function New-LauncherIcon([string]$SourcePng, [string]$DestinationIcon) {
+    Add-Type -AssemblyName System.Drawing
+    $sourceImage = [Drawing.Image]::FromFile($SourcePng)
+    $canvas = [Drawing.Bitmap]::new(256, 256, [Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [Drawing.Graphics]::FromImage($canvas)
+    $pngStream = [IO.MemoryStream]::new()
+    try {
+        $graphics.Clear([Drawing.Color]::Transparent)
+        $graphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $scale = [Math]::Min(224.0 / $sourceImage.Width, 224.0 / $sourceImage.Height)
+        $width = [int][Math]::Round($sourceImage.Width * $scale)
+        $height = [int][Math]::Round($sourceImage.Height * $scale)
+        $left = [int][Math]::Floor((256 - $width) / 2.0)
+        $top = [int][Math]::Floor((256 - $height) / 2.0)
+        $graphics.DrawImage($sourceImage, $left, $top, $width, $height)
+        $canvas.Save($pngStream, [Drawing.Imaging.ImageFormat]::Png)
+        $pngBytes = $pngStream.ToArray()
+    }
+    finally {
+        $pngStream.Dispose()
+        $graphics.Dispose()
+        $canvas.Dispose()
+        $sourceImage.Dispose()
+    }
+
+    $fileStream = [IO.File]::Create($DestinationIcon)
+    $writer = [IO.BinaryWriter]::new($fileStream)
+    try {
+        # ICONDIR followed by one 256x256 PNG-compressed image entry.
+        $writer.Write([uint16]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]1)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([byte]0)
+        $writer.Write([uint16]1)
+        $writer.Write([uint16]32)
+        $writer.Write([uint32]$pngBytes.Length)
+        $writer.Write([uint32]22)
+        $writer.Write($pngBytes)
+    }
+    finally {
+        $writer.Dispose()
+        $fileStream.Dispose()
+    }
+}
+
+function Build-WindowsLauncher([string]$DestinationExe, [string]$DestinationIcon) {
+    $sourcePath = Join-Path $repoRoot "packaging\windows\PiZayaLauncher.cs"
+    $logoPath = Join-Path $repoRoot "assets\pi_logo.png"
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        throw "Windows launcher source is missing: $sourcePath"
+    }
+    if (-not (Test-Path -LiteralPath $logoPath -PathType Leaf)) {
+        throw "Windows launcher logo is missing: $logoPath"
+    }
+    $frameworkRoot = Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319"
+    $compiler = Join-Path $frameworkRoot "csc.exe"
+    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+        $frameworkRoot = Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319"
+        $compiler = Join-Path $frameworkRoot "csc.exe"
+    }
+    if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) {
+        throw "The Windows .NET Framework C# compiler is required to build Pi_zaya.exe."
+    }
+
+    New-LauncherIcon $logoPath $DestinationIcon
+    $coreVersion = ($version -split '[-+]')[0]
+    $coreParts = @($coreVersion -split '\.')
+    $revision = 0
+    if ($version -match '-[^+]*?(?<revision>\d+)(?:\+.*)?$') {
+        $revision = [int]$Matches.revision
+    }
+    $assemblyVersion = "$($coreParts[0]).$($coreParts[1]).$($coreParts[2]).0"
+    $fileVersion = "$($coreParts[0]).$($coreParts[1]).$($coreParts[2]).$revision"
+    $versionSource = Join-Path (Split-Path -Parent $DestinationExe) ".PiZayaLauncherVersion.cs"
+    @"
+[assembly: System.Reflection.AssemblyVersion("$assemblyVersion")]
+[assembly: System.Reflection.AssemblyFileVersion("$fileVersion")]
+[assembly: System.Reflection.AssemblyInformationalVersion("$version")]
+"@ | Set-Content -LiteralPath $versionSource -Encoding UTF8
+    $compilerArgs = @(
+        "/nologo",
+        "/target:winexe",
+        "/optimize+",
+        "/platform:anycpu",
+        "/warn:4",
+        "/warnaserror+",
+        "/out:$DestinationExe",
+        "/win32icon:$DestinationIcon",
+        "/reference:$(Join-Path $frameworkRoot 'System.dll')",
+        "/reference:$(Join-Path $frameworkRoot 'System.Core.dll')",
+        "/reference:$(Join-Path $frameworkRoot 'System.Drawing.dll')",
+        "/reference:$(Join-Path $frameworkRoot 'System.Windows.Forms.dll')",
+        $sourcePath,
+        $versionSource
+    )
+    try {
+        & $compiler @compilerArgs
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $DestinationExe -PathType Leaf)) {
+            throw "Compiling the native Windows launcher failed."
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $versionSource -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Copy-RuntimeTree (Join-Path $repoRoot "api") (Join-Path $stageRoot "api")
 Copy-RuntimeTree (Join-Path $repoRoot "kb") (Join-Path $stageRoot "kb")
 # The React product still shares framework-neutral citation/Markdown helpers
@@ -112,6 +221,7 @@ Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\Start-Pi-zaya.cmd
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\Stop-Pi-zaya.cmd") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\README-PORTABLE.md") -Destination $stageRoot
 Copy-Item -LiteralPath (Join-Path $repoRoot "packaging\windows\README-中文.md") -Destination $stageRoot
+Build-WindowsLauncher (Join-Path $stageRoot "Pi_zaya.exe") (Join-Path $stageRoot "Pi_zaya.ico")
 
 $pythonVersion = (Get-Content -LiteralPath (Join-Path $repoRoot ".python-version") -Raw).Trim()
 $runtimeKind = $PythonRuntime.ToLowerInvariant()
@@ -166,8 +276,11 @@ $manifest = [ordered]@{
     dependencies_lock = if ($PythonRuntime -eq "Embedded") { "requirements-release.txt" } else { "" }
     frontend_prebuilt = $true
     user_data_default = '%LOCALAPPDATA%\Pi_zaya'
-    entrypoint = "Start-Pi-zaya.cmd"
+    entrypoint = "Pi_zaya.exe"
+    fallback_entrypoint = "Start-Pi-zaya.cmd"
     stop_command = "Stop-Pi-zaya.cmd"
+    launcher = "native_windows_tray"
+    launcher_runtime = "windows_dotnet_framework_4"
     commit = [string]$commit
     source_dirty = [bool]$sourceDirty
     built_at = $builtAt

@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.7"
-    assert release_tag(version) == "v0.1.0-beta.7"
+    assert version == "0.1.0-beta.8"
+    assert release_tag(version) == "v0.1.0-beta.8"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -77,15 +77,19 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     workflow = (root / ".github" / "workflows" / "release-windows.yml").read_text(encoding="utf-8")
     builder_path = root / "tools" / "release" / "build_windows_portable.ps1"
     smoke_path = root / "tools" / "release" / "smoke_windows_portable.ps1"
+    native_launcher_path = root / "packaging" / "windows" / "PiZayaLauncher.cs"
     builder = builder_path.read_text(encoding="utf-8")
     smoke = smoke_path.read_text(encoding="utf-8")
     launcher = (root / "packaging" / "windows" / "Start-Pi-zaya.ps1").read_text(encoding="utf-8")
+    stopper = (root / "packaging" / "windows" / "Stop-Pi-zaya.ps1").read_text(encoding="utf-8")
+    native_launcher = native_launcher_path.read_text(encoding="utf-8")
     chinese_readme_path = root / "packaging" / "windows" / "README-中文.md"
     chinese_readme = chinese_readme_path.read_text(encoding="utf-8")
     ignore_lines = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
 
     assert builder_path.is_file()
     assert smoke_path.is_file()
+    assert native_launcher_path.is_file()
     assert "/release/" in ignore_lines
     assert "release/" not in ignore_lines
     assert "tags:" in workflow
@@ -102,10 +106,20 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "source_dirty" in builder
     assert chinese_readme_path.is_file()
     assert '"packaging\\windows\\README-中文.md"' in builder
+    assert "Build-WindowsLauncher" in builder
+    assert "AssemblyInformationalVersion" in builder
+    assert '"Pi_zaya.exe"' in builder
+    assert 'entrypoint = "Pi_zaya.exe"' in builder
+    assert 'fallback_entrypoint = "Start-Pi-zaya.cmd"' in builder
     assert '"README-中文.md"' in smoke
+    assert '"Pi_zaya.exe"' in smoke
+    assert "WaitForExit(65000)" in smoke
+    assert "occupied preferred port" in smoke
     assert "配置 API Key 和模型" in chinese_readme
     assert "不会被发送给多家服务" in chinese_readme
     assert "不会一直卡在加载状态" in chinese_readme
+    assert "系统托盘" in chinese_readme
+    assert "Pi_zaya.exe" in chinese_readme
     assert '"LICENSE"' in smoke
     assert 'manifest.license -ne "MIT"' in smoke
     assert "manifest.source_dirty" in smoke
@@ -121,7 +135,14 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "Copyright \\(c\\) [^\\r\\n]+ LittlePyx" in workflow
     assert 'KB_RELEASE_MODE = "1"' in launcher
     assert 'KB_SERVER_HOST = "127.0.0.1"' in launcher
+    assert "Get-AvailableLoopbackPort" in launcher
+    assert "Elapsed.TotalSeconds -lt 45" in launcher
     assert "streamlit run" not in launcher.lower()
+    assert "did not stop within 10 seconds" in stopper
+    assert "NotifyIcon" in native_launcher
+    assert "MutexName" in native_launcher
+    assert "StartTimeoutMilliseconds = 60000" in native_launcher
+    assert "Do not call the unbounded WaitForExit()" in native_launcher
 
 
 def test_browser_gates_retain_first_failure_diagnostics() -> None:
