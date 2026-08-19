@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.10`, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.9` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.10` is the current published downloadable beta, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. The next release engineering target has not been selected, and `v0.1.0-beta.5` was the first published downloadable beta.
 
 ## Current release decision
 
@@ -263,6 +263,17 @@ skipped, sanity 274 passed with two skipped, Agent runtime 5/5, converter qualit
 core browser 113/113, public-surface 4/4, and every existing research fixture
 and replay gate. The complete browser sequence passed in one fail-fast run after
 the scheduler code was removed.
+
+### 2026-08-19 beta.10 publication acceptance
+
+- the immutable annotated tag `v0.1.0-beta.10` points to commit `fd4519ec9ace7987819422d1c13bf8157e6b234e`, whose source tree is clean and whose canonical/backend/frontend version contract is `0.1.0-beta.10`;
+- normal main-branch CI run `32234230467` and the complete untagged Windows preflight run `32235026219` passed on that exact commit before the tag was created;
+- formal Windows tag run `32236592990` repeated every backend, research, conversion, frontend, clean-profile ZIP, installer, in-place upgrade, uninstall, data-preservation, checksum, and signature-declaration gate before publishing the prerelease;
+- the independent tag CI run `32236592953` initially reached its 20-minute Ubuntu job limit while installing Playwright, before any browser test ran. Its failed job was rerun on the same immutable tag without changing code, workers, tests, assertions, or timeouts; the second attempt passed the complete CI summary;
+- the published ZIP is 94,813,511 bytes with SHA-256 `95d95589d3412644cf30805d1f0488c2b30971295354f400ad314b8158051712`;
+- the published Setup is 60,875,545 bytes with SHA-256 `dcd2c717e2624e7d2a47a4c9bb4a9fc6f2fcb991e0e5aca636d5651549c41f15`;
+- both published manifests record commit `fd4519ec9ace`, `source_dirty=false`, and `license=MIT`. No trusted signing certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned` rather than implying publisher trust;
+- the GitHub prerelease contains exactly the ZIP, Setup, their two adjacent SHA-256 files, and their two machine-readable manifests.
 
 ## Promotion gates after beta
 

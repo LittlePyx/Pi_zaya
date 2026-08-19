@@ -20,15 +20,15 @@ entry.
 
 ## Downloadable Windows beta
 
-The current published release is [`v0.1.0-beta.9`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.9),
-and the next release engineering target is `v0.1.0-beta.10`. The target keeps
-the standard current-user Windows installer alongside the portable ZIP and adds
-guided first-run success plus recoverable PDF conversion jobs. Both packages have
-a bundled Python runtime and prebuilt React frontend, so Node.js, system Python,
-and administrator privileges are not required. The installed Start menu entry
-or portable `Pi_zaya.exe` opens the local app in the default browser, remains
-available from the system tray, and selects another loopback port if the
-preferred port is occupied. The command launchers remain diagnostic fallbacks.
+The current published release is [`v0.1.0-beta.10`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.10).
+It keeps the standard current-user Windows installer alongside the portable ZIP
+and adds guided first-run success plus recoverable PDF conversion jobs. Both
+packages have a bundled Python runtime and prebuilt React frontend, so Node.js,
+system Python, and administrator privileges are not required. The installed
+Start menu entry or portable `Pi_zaya.exe` opens the local app in the default
+browser, remains available from the system tray, and selects another loopback
+port if the preferred port is occupied. The command launchers remain diagnostic
+fallbacks.
 User databases, PDFs, converted Markdown, preferences, backups, and logs live
 under `%LOCALAPPDATA%\Pi_zaya`, so replacing the application folder preserves
 the library. See `docs/RELEASE_RUNBOOK.md` for build, smoke, checksum, and
