@@ -72,6 +72,42 @@ def test_version_is_consistent_across_frontend_manifests() -> None:
     assert lock["packages"][""]["license"] == "MIT"
 
 
+def test_public_download_docs_are_bilingual_and_asset_specific() -> None:
+    root = Path(__file__).resolve().parents[2]
+    version = read_app_version()
+    english_readme = (root / "README.md").read_text(encoding="utf-8")
+    chinese_readme_path = root / "README.zh-CN.md"
+    chinese_readme = chinese_readme_path.read_text(encoding="utf-8")
+    package_guide = (root / "packaging" / "windows" / "README-中文.md").read_text(
+        encoding="utf-8"
+    )
+    release_notes_path = root / "docs" / "releases" / f"v{version}.md"
+    release_notes = release_notes_path.read_text(encoding="utf-8")
+    expected_installer = f"Pi_zaya-v{version}-windows-x64-setup.exe"
+    expected_archive = f"Pi_zaya-v{version}-windows-x64.zip"
+
+    assert chinese_readme_path.is_file()
+    assert release_notes_path.is_file()
+    assert "[简体中文](README.zh-CN.md)" in english_readme
+    assert "[English](README.md)" in chinese_readme
+    assert "Source development quick start" in english_readme
+    assert "Windows installer or portable ZIP do **not** need Python" in english_readme
+    assert expected_installer in english_readme
+    assert expected_archive in english_readme
+    assert expected_installer in chinese_readme
+    assert expected_archive in chinese_readme
+    assert "*.manifest.json" in package_guide
+    assert "Source code" in package_guide
+    assert "setup.exe.sha256" in package_guide
+    assert "## 中文下载说明" in release_notes
+    assert "## English download guide" in release_notes
+    assert expected_installer in release_notes
+    assert expected_archive in release_notes
+    assert "*.sha256" in release_notes
+    assert "*.manifest.json" in release_notes
+    assert "GitHub 自动生成的 Source code" in release_notes
+
+
 def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     root = Path(__file__).resolve().parents[2]
     workflow = (root / ".github" / "workflows" / "release-windows.yml").read_text(encoding="utf-8")
@@ -109,6 +145,10 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "WINDOWS_SIGNING_CERT_BASE64" in workflow
     assert "Pyrsys B\\.V\\." in workflow
     assert "--prerelease" in workflow
+    assert "PI_ZAYA_RELEASE_NOTES" in workflow
+    assert "docs/releases/v$version.md" in workflow
+    assert "--notes-file" in workflow
+    assert "--generate-notes" not in workflow
     assert "PythonRuntime Embedded" in workflow
     assert "requirements-file: requirements-release.txt" in workflow
     assert 'PYTHONUTF8: "1"' in workflow
@@ -118,6 +158,7 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "AllowDirty" in builder
     assert "source_dirty" in builder
     assert chinese_readme_path.is_file()
+    assert '"README.zh-CN.md"' in builder
     assert '"packaging\\windows\\README-中文.md"' in builder
     assert "Build-WindowsLauncher" in builder
     assert "Invoke-PiZayaAuthenticodeSign" in builder
@@ -127,6 +168,9 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert 'entrypoint = "Pi_zaya.exe"' in builder
     assert 'fallback_entrypoint = "Start-Pi-zaya.cmd"' in builder
     assert '"README-中文.md"' in smoke
+    assert '"README.zh-CN.md"' in smoke
+    assert '"README.zh-CN.md"' in installer_builder
+    assert '"README.zh-CN.md"' in installer_smoke
     assert '"Pi_zaya.exe"' in smoke
     assert "WaitForExit(65000)" in smoke
     assert "occupied preferred port" in smoke

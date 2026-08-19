@@ -89,7 +89,7 @@ try {
         $bundle = [IO.Path]::GetFullPath($BundleRoot)
     }
 
-    foreach ($required in @("VERSION", "LICENSE", "release-manifest.json", "README-PORTABLE.md", "README-中文.md", "Pi_zaya.exe", "Pi_zaya.ico", "Start-Pi-zaya.cmd", "Stop-Pi-zaya.cmd", "Start-Pi-zaya.ps1", "Stop-Pi-zaya.ps1", "web\dist\index.html")) {
+    foreach ($required in @("VERSION", "LICENSE", "release-manifest.json", "README.md", "README.zh-CN.md", "README-PORTABLE.md", "README-中文.md", "Pi_zaya.exe", "Pi_zaya.ico", "Start-Pi-zaya.cmd", "Stop-Pi-zaya.cmd", "Start-Pi-zaya.ps1", "Stop-Pi-zaya.ps1", "web\dist\index.html")) {
         if (-not (Test-Path -LiteralPath (Join-Path $bundle $required))) {
             throw "Portable bundle is missing $required"
         }

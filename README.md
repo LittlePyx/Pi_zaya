@@ -1,5 +1,7 @@
 # Pi_zaya
 
+English | [简体中文](README.zh-CN.md)
+
 Pi_zaya is a local-first, evidence-grounded research agent for academic PDFs. It
 helps users read papers, retrieve evidence, trace citations, compare papers,
 generate verifiable answers, turn a project's literature basket into a
@@ -21,27 +23,39 @@ entry.
 ## Downloadable Windows beta
 
 The current published release is [`v0.1.0-beta.10`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.10).
-It keeps the standard current-user Windows installer alongside the portable ZIP
-and adds guided first-run success plus recoverable PDF conversion jobs. Both
-packages have a bundled Python runtime and prebuilt React frontend, so Node.js,
-system Python, and administrator privileges are not required. The installed
+
+### Choose the right download
+
+| Release file | Who should use it | How to use it |
+|---|---|---|
+| [`Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.10/Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe) | Recommended for most Windows users | Verify its checksum, run Setup, then open Pi_zaya from the Start menu or optional desktop shortcut. It installs for the current user without administrator privileges. |
+| [`Pi_zaya-v0.1.0-beta.10-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.10/Pi_zaya-v0.1.0-beta.10-windows-x64.zip) | Portable use, removable folders, or troubleshooting | Verify its checksum, extract the entire ZIP into a normal folder, then double-click `Pi_zaya.exe`. Do not run it inside the ZIP preview. |
+| `*.sha256` | Anyone verifying a download | This is a text checksum file, not an application. Compare it with `Get-FileHash <download> -Algorithm SHA256`. |
+| `*.manifest.json` | Auditors and advanced users | This is machine-readable build provenance, commit, license, package type, and signing status. It is not an application. |
+| GitHub-generated “Source code” archives | Developers only | These contain repository source and are not ready-to-run Windows packages. Use the installer or portable ZIP unless you intend to build from source. |
+
+Both application packages include an embedded Python runtime and prebuilt React
+frontend, so Node.js, system Python, and npm are not required. The installed
 Start menu entry or portable `Pi_zaya.exe` opens the local app in the default
-browser, remains available from the system tray, and selects another loopback
-port if the preferred port is occupied. The command launchers remain diagnostic
-fallbacks.
+browser and remains available from the system tray. If the preferred loopback
+port is occupied, the launcher selects another local port automatically.
+
 User databases, PDFs, converted Markdown, preferences, backups, and logs live
-under `%LOCALAPPDATA%\Pi_zaya`, so replacing the application folder preserves
-the library. See `docs/RELEASE_RUNBOOK.md` for build, smoke, checksum, and
-clean-machine acceptance details.
+under `%LOCALAPPDATA%\Pi_zaya`, separate from the installed or extracted program
+folder. In-place installation, uninstall, and portable-folder replacement do
+not delete the library. Read the packaged `README-中文.md` or the repository
+[Chinese Windows guide](packaging/windows/README-中文.md) for API/model setup,
+conversion recovery, updating, uninstalling, and checksum instructions.
 
 The source and release artifacts are available under the MIT License. The
 published beta passed the complete Windows packaging and packaged-runtime gates.
 PDF conversion jobs are persisted in the local library database. If Pi_zaya is
 stopped during conversion, the Library shows an interrupted task after restart
 and waits for the user to continue it; completed page-cache artifacts are reused.
-Automatic updates are not implemented. Unless the release manifest says `signed: true` and Windows validates the named
-publisher, the installer and launcher are unsigned. These boundaries keep the
-release explicitly beta rather than a general-availability desktop product.
+Automatic updates are not implemented. Unless the release manifest says
+`signed: true` and Windows validates the named publisher, the installer and
+launcher are unsigned. These boundaries keep the release explicitly beta rather
+than a general-availability desktop product.
 
 ## Problem
 
@@ -320,7 +334,10 @@ Content-Type: application/json
 Supported `query_scope` values are `current_paper`, `basket`, and `library`.
 Default chat behavior is unchanged when `agent_mode` is omitted or false.
 
-## Quick Start
+## Source development quick start
+
+This section is for contributors running the repository source. Users of the
+Windows installer or portable ZIP do **not** need Python, Node.js, or npm.
 
 Requirements:
 

@@ -95,7 +95,7 @@ try {
 
     Invoke-SetupInstall
     $installed = $true
-    foreach ($required in @("Pi_zaya.exe", "README-中文.md", "LICENSE", "runtime\python\python.exe", "web\dist\index.html", "unins000.exe")) {
+    foreach ($required in @("Pi_zaya.exe", "README.md", "README.zh-CN.md", "README-中文.md", "LICENSE", "runtime\python\python.exe", "web\dist\index.html", "unins000.exe")) {
         if (-not (Test-Path -LiteralPath (Join-Path $installRoot $required) -PathType Leaf)) {
             throw "Installed application is missing $required"
         }

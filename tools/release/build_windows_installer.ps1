@@ -27,7 +27,7 @@ if (-not (Test-Path -LiteralPath $stage -PathType Container)) {
     throw "Portable staging directory was not found: $stage"
 }
 
-$requiredFiles = @("VERSION", "LICENSE", "release-manifest.json", "README-中文.md", "Pi_zaya.exe", "Pi_zaya.ico", "runtime\python\python.exe", "web\dist\index.html")
+$requiredFiles = @("VERSION", "LICENSE", "release-manifest.json", "README.md", "README.zh-CN.md", "README-中文.md", "Pi_zaya.exe", "Pi_zaya.ico", "runtime\python\python.exe", "web\dist\index.html")
 foreach ($required in $requiredFiles) {
     if (-not (Test-Path -LiteralPath (Join-Path $stage $required) -PathType Leaf)) {
         throw "Installer staging directory is missing $required"

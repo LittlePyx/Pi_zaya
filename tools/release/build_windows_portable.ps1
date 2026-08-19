@@ -210,6 +210,7 @@ Copy-RuntimeTree $distRoot (Join-Path $stageRoot "web\dist")
 foreach ($relativePath in @(
     "VERSION",
     "README.md",
+    "README.zh-CN.md",
     "CHANGELOG.md",
     ".env.production.example",
     "requirements.txt",

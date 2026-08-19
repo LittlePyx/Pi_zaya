@@ -47,7 +47,12 @@ jobs:
           if ($env:GITHUB_EVENT_NAME -eq "push" -and $env:GITHUB_REF_NAME -ne "v$version") {
             throw "Tag '$env:GITHUB_REF_NAME' must exactly match VERSION as 'v$version'."
           }
+          $releaseNotes = "docs/releases/v$version.md"
+          if (-not (Test-Path -LiteralPath $releaseNotes -PathType Leaf)) {
+            throw "Reviewed bilingual release notes are required at '$releaseNotes'."
+          }
           "PI_ZAYA_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PI_ZAYA_RELEASE_NOTES=$releaseNotes" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -255,7 +260,7 @@ jobs:
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe.sha256",
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.manifest.json"
           )
-          gh release create $tag @assets --verify-tag --prerelease --generate-notes --title $title
+          gh release create $tag @assets --verify-tag --prerelease --notes-file $env:PI_ZAYA_RELEASE_NOTES --title $title
 
       - name: Remove imported code-signing certificate
         if: always()

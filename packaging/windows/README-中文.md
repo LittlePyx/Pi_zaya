@@ -10,6 +10,16 @@ Pi_zaya 是一个面向学术 PDF 的本地知识库工具，支持 PDF 转换�
 
 当前仍是测试版。如果 Windows 显示“未知发布者”，说明该 Release 没有受信任的代码签名；请只从 Pi_zaya 官方 GitHub Release 下载并核对 SHA-256。只有安装器 manifest 中 `signed` 为 `true`、且 Windows 显示的发布者与 Release 说明一致时，才应视为已签名版本。
 
+### Release 文件分别有什么用
+
+| 文件名形式 | 用途 |
+|---|---|
+| `Pi_zaya-版本-windows-x64-setup.exe` | 推荐普通用户下载的 Windows 安装器。核对 SHA-256 后运行安装向导。 |
+| `Pi_zaya-版本-windows-x64.zip` | 免安装便携包。核对 SHA-256 后完整解压，再运行其中的 `Pi_zaya.exe`。 |
+| `*.sha256` | 对应安装器或 ZIP 的文本校验文件，不是软件，不能双击安装。 |
+| `*.manifest.json` | 机器可读的版本、源码提交、许可证、包类型和签名状态，不是软件。 |
+| GitHub 自动生成的 Source code `.zip` / `.tar.gz` | 供开发者从源码构建，不是带内置运行时的 Windows 成品。普通用户不要用它代替安装器或便携 ZIP。 |
+
 ## 二、启动软件
 
 1. 安装版：从开始菜单或桌面快捷方式打开 Pi_zaya。便携版：将 ZIP **完整解压**到普通文件夹，再双击 `Pi_zaya.exe`，不要在压缩包预览窗口中直接运行。
@@ -79,6 +89,9 @@ Get-FileHash .\Pi_zaya-版本-windows-x64.zip -Algorithm SHA256
 Get-FileHash .\Pi_zaya-版本-windows-x64-setup.exe -Algorithm SHA256
 ```
 
-输出应与 `.zip.sha256` 中的值完全一致。如果不一致，请不要运行该软件包并重新下载。
+ZIP 输出应与 `.zip.sha256` 中的值完全一致，安装器输出应与
+`setup.exe.sha256` 中的值完全一致。也可以查看相邻的 manifest，确认其中的
+`version`、`commit`、`source_dirty`、`license` 和签名字段与 Release 说明一致。
+如果任一校验值不一致，请不要运行该软件包并重新下载。
 
 Pi_zaya 桌面模式只监听 `127.0.0.1`，不会自动作为公网服务开放。软件使用 MIT 许可证，完整条款见程序目录中的 `LICENSE`。

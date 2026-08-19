@@ -13,6 +13,7 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - Canonical version: root `VERSION`, valid Semantic Versioning without a leading `v`.
 - Git tag: exactly `v` plus `VERSION`.
 - Frontend version: `web/package.json` and the lockfile must match `VERSION`.
+- Release notes: `docs/releases/v<VERSION>.md`, reviewed bilingual Markdown that explains every attached asset before a tag can publish.
 - Platform: Windows x64 current-user installer plus portable ZIP.
 - Runtime: official CPython embeddable distribution at the version in `.python-version`, with backend dependencies installed into the package.
 - Dependencies: exact Windows runtime versions in `requirements-release.txt`; the built package records the resolved set in `THIRD_PARTY_PACKAGES.txt` and must pass `pip check`.
@@ -89,7 +90,7 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe.sha256
 ## Tag release
 
 1. Confirm the MIT `LICENSE` and copyright line are still correct.
-2. Update `VERSION`, both frontend version fields, and `CHANGELOG.md`.
+2. Update `VERSION`, both frontend version fields, `CHANGELOG.md`, and the reviewed bilingual `docs/releases/v<VERSION>.md` download guide.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
 5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.10`.
