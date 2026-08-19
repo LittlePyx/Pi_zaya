@@ -1,15 +1,15 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.10` is the current published downloadable beta, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. The next release engineering target is the patch candidate described below, and `v0.1.0-beta.5` was the first published downloadable beta.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.11` is the current published downloadable beta, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
 
-The next patch candidate temporarily withholds the project evidence-matrix
+The current beta temporarily withholds the project evidence-matrix
 workspace and its matrix-dependent brief, gap, and project-status entrances
 from ordinary builds while their synthesis quality contract is revised. The
 implementation, saved records, APIs, exports, and full internal regression
 suite remain present. Internal browser gates explicitly use
 `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; downloadable builds must leave it
-unset. This candidate must advance to a new immutable prerelease version and
-must not overwrite `v0.1.0-beta.10`.
+unset. The immutable `v0.1.0-beta.11` tag advances `v0.1.0-beta.10` and must
+never be moved or overwritten.
 
 ## Current release decision
 
@@ -285,6 +285,17 @@ the scheduler code was removed.
 - the published Setup is 60,875,545 bytes with SHA-256 `dcd2c717e2624e7d2a47a4c9bb4a9fc6f2fcb991e0e5aca636d5651549c41f15`;
 - both published manifests record commit `fd4519ec9ace`, `source_dirty=false`, and `license=MIT`. No trusted signing certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned` rather than implying publisher trust;
 - the GitHub prerelease contains exactly the ZIP, Setup, their two adjacent SHA-256 files, and their two machine-readable manifests.
+
+### 2026-08-20 beta.11 publication acceptance
+
+- the immutable annotated tag `v0.1.0-beta.11` points to commit `a80c4c37144f52ff6e4f6524b840d462388f1ca3`, whose source tree is clean and whose canonical/backend/frontend version contract is `0.1.0-beta.11`;
+- normal main-branch CI run `32269444566` initially reached its 20-minute Ubuntu job limit while the Playwright dependency installer waited on the Ubuntu package mirror, before any browser test ran. Only the failed frontend job was rerun on the same commit; its complete frontend gates and CI summary passed. The complete untagged Windows preflight run `32272653921` then passed on that exact commit before the tag was created;
+- formal Windows tag run `32274511583` repeated every backend, research, conversion, frontend, clean-profile ZIP, installer, in-place upgrade, uninstall, data-preservation, checksum, and signature-declaration gate before publishing the prerelease at `2026-08-19T16:30:56Z`;
+- the independent tag CI run `32274511524` encountered the same 20-minute Ubuntu package-mirror limit while installing Playwright, before any browser test ran. Only its failed frontend job was rerun on the same immutable tag without changing code, workers, tests, assertions, or timeouts; the second attempt passed the complete CI summary;
+- the published ZIP is 94,823,315 bytes with SHA-256 `7aa849277c693efa7e30916a12ddb5359e9efc9c32ee96b92713810bb8018801`;
+- the published Setup is 60,874,584 bytes with SHA-256 `46e42c87ee2e5b9b17540614a63468f3b0edc5701d09837a1dbc63e9657dfb10`;
+- both published manifests record commit `a80c4c37144f`, `source_dirty=false`, `license=MIT`, and the embedded Python runtime. No trusted signing certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned` rather than implying publisher trust;
+- the GitHub prerelease contains exactly the ZIP, Setup, their two adjacent SHA-256 files, and their two machine-readable manifests. All six assets were independently downloaded after publication, and both artifact hashes matched their adjacent checksum files.
 
 ## Promotion gates after beta
 
