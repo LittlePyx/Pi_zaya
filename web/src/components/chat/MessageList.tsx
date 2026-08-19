@@ -176,6 +176,7 @@ import { EvidenceMatrixWorkspace } from './EvidenceMatrixWorkspace'
 import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
 import { ResearchGapWorkspace } from './ResearchGapWorkspace'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
+import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../../utils/featureFlags'
 
 const { Text } = Typography
 const SHELF_BACKEND_PERSIST_MS = 320
@@ -2189,9 +2190,15 @@ export function MessageList({
       }}
       onOpenMessage={openMessageFromShelfItem}
       onUseSelectedAsContext={onResearchContextPackChange ? useSelectedShelfItemsAsContext : undefined}
-      onOpenEvidenceMatrix={shelfProjectReady ? (items) => { void openEvidenceMatrixWorkspace(items) } : undefined}
-      onOpenResearchBrief={shelfProjectReady ? (items) => { void openResearchBriefWorkspace(items) } : undefined}
-      onOpenResearchGaps={shelfProjectReady ? openResearchGapWorkspace : undefined}
+      onOpenEvidenceMatrix={EVIDENCE_MATRIX_WORKSPACE_ENABLED && shelfProjectReady
+        ? (items) => { void openEvidenceMatrixWorkspace(items) }
+        : undefined}
+      onOpenResearchBrief={EVIDENCE_MATRIX_WORKSPACE_ENABLED && shelfProjectReady
+        ? (items) => { void openResearchBriefWorkspace(items) }
+        : undefined}
+      onOpenResearchGaps={EVIDENCE_MATRIX_WORKSPACE_ENABLED && shelfProjectReady
+        ? openResearchGapWorkspace
+        : undefined}
       onRemove={(key) => {
         const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
         if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
@@ -2673,7 +2680,7 @@ export function MessageList({
         S={S}
       />
       <ResearchBriefWorkspace
-        open={researchBriefOpen}
+        open={EVIDENCE_MATRIX_WORKSPACE_ENABLED && researchBriefOpen}
         projectId={String(shelfProjectId || '').trim()}
         activeConvId={activeConvId}
         seedItems={researchBriefSeedItems}
@@ -2683,7 +2690,7 @@ export function MessageList({
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
       />
       <ResearchGapWorkspace
-        open={researchGapOpen}
+        open={EVIDENCE_MATRIX_WORKSPACE_ENABLED && researchGapOpen}
         projectId={String(shelfProjectId || '').trim()}
         onClose={() => setResearchGapOpen(false)}
         onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
@@ -2695,36 +2702,38 @@ export function MessageList({
           setResearchBriefInitialId(briefId)
           setResearchBriefOpen(true)
         }}
-        onOpenMatrix={(matrixId) => {
+        onOpenMatrix={EVIDENCE_MATRIX_WORKSPACE_ENABLED ? (matrixId) => {
           setResearchGapOpen(false)
           setEvidenceMatrixSeedItems(shelfItems)
           setEvidenceMatrixInitialId(matrixId)
           setEvidenceMatrixOpen(true)
-        }}
+        } : undefined}
       />
-      <EvidenceMatrixWorkspace
-        open={evidenceMatrixOpen}
-        projectId={String(shelfProjectId || '').trim()}
-        activeConvId={activeConvId}
-        seedItems={evidenceMatrixSeedItems}
-        initialMatrixId={evidenceMatrixInitialId}
-        onClose={() => setEvidenceMatrixOpen(false)}
-        onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
-        onUseForBrief={(matrix) => {
-          setEvidenceMatrixOpen(false)
-          setResearchBriefSourceMatrixId(matrix.id)
-          setResearchBriefSeedItems(evidenceMatrixSeedItems)
-          setResearchBriefInitialId('')
-          setResearchBriefOpen(true)
-        }}
-        onOpenBrief={(briefId, matrixId) => {
-          setEvidenceMatrixOpen(false)
-          setResearchBriefSeedItems(evidenceMatrixSeedItems)
-          setResearchBriefSourceMatrixId(matrixId)
-          setResearchBriefInitialId(briefId)
-          setResearchBriefOpen(true)
-        }}
-      />
+      {EVIDENCE_MATRIX_WORKSPACE_ENABLED ? (
+        <EvidenceMatrixWorkspace
+          open={evidenceMatrixOpen}
+          projectId={String(shelfProjectId || '').trim()}
+          activeConvId={activeConvId}
+          seedItems={evidenceMatrixSeedItems}
+          initialMatrixId={evidenceMatrixInitialId}
+          onClose={() => setEvidenceMatrixOpen(false)}
+          onOpenEvidence={onOpenReader ? openResearchBriefEvidence : undefined}
+          onUseForBrief={(matrix) => {
+            setEvidenceMatrixOpen(false)
+            setResearchBriefSourceMatrixId(matrix.id)
+            setResearchBriefSeedItems(evidenceMatrixSeedItems)
+            setResearchBriefInitialId('')
+            setResearchBriefOpen(true)
+          }}
+          onOpenBrief={(briefId, matrixId) => {
+            setEvidenceMatrixOpen(false)
+            setResearchBriefSeedItems(evidenceMatrixSeedItems)
+            setResearchBriefSourceMatrixId(matrixId)
+            setResearchBriefInitialId(briefId)
+            setResearchBriefOpen(true)
+          }}
+        />
+      ) : null}
       {renderedShelfNode}
     </>
   )

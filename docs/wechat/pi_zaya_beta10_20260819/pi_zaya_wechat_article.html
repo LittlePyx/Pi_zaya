@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>我做了一个能把答案定位回论文原文的研究助手：Pi_zaya</title>
+</head>
+<body style="margin:0;background:#edf2f7;color:#24324a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;">
+  <!-- 微信公众号正文从这里开始；关键样式均使用 inline style，便于复制到公众号编辑器。 -->
+  <section style="box-sizing:border-box;width:100%;max-width:677px;margin:0 auto;background:#ffffff;overflow:hidden;">
+    <section style="padding:22px 24px 30px;background:linear-gradient(145deg,#f7fbff 0%,#edf6ff 62%,#ffffff 100%);border-bottom:1px solid #dce7f2;">
+      <section style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:38px;">
+        <section style="display:flex;align-items:center;gap:11px;">
+          <span style="display:inline-flex;width:48px;height:48px;align-items:center;justify-content:center;border-radius:15px;background:#ffffff;box-shadow:0 8px 24px rgba(35,65,105,.12);"><img src="assets/pi_logo.png" alt="Pi_zaya 产品 Logo" style="display:block;width:30px;height:30px;object-fit:contain;"></span>
+          <span style="display:inline-block;"><strong style="display:block;color:#233b63;font-size:20px;line-height:1.2;letter-spacing:.2px;">Pi_zaya</strong><span style="display:block;margin-top:4px;color:#6c7d91;font-size:11px;line-height:1.2;letter-spacing:1.3px;">ACADEMIC RESEARCH WORKSPACE</span></span>
+        </section>
+        <section style="text-align:right;"><img src="assets/team_logo.png" alt="P&amp;I Lab Logo" style="display:block;width:104px;height:36px;object-fit:contain;object-position:right center;"><span style="display:block;margin-top:3px;color:#7f8fa1;font-size:10px;letter-spacing:.8px;">BUILT BY P&amp;I LAB</span></section>
+      </section>
+      <span style="display:inline-block;margin-bottom:14px;padding:5px 10px;border:1px solid #9fc3e8;border-radius:999px;background:#ffffff;color:#356b9d;font-size:12px;line-height:1.4;letter-spacing:.5px;">首次公开 · v0.1.0-beta.10</span>
+      <h1 style="margin:0;color:#1f3659;font-size:34px;line-height:1.28;letter-spacing:-.8px;">我做了一个能把答案<br>定位回论文原文的研究助手</h1>
+      <p style="margin:18px 0 0;color:#52657d;font-size:17px;line-height:1.9;">从 PDF 文库、跨文献问答，到原文核查与研究材料整理：Pi_zaya 不只负责“回答论文”，它更在意每句话从哪里来、还能怎样继续用。</p>
+    </section>
+
+    <section style="padding:30px 24px 0;">
+      <p style="margin:0;color:#344b64;font-size:16px;line-height:2;">读论文时，我经常遇到同一种困境：资料越来越多，真正需要的不是又一段流畅总结，而是快速弄清楚——<strong>这个结论来自哪篇论文？原文在哪一页？不同方法是否在相同条件下比较？</strong></p>
+      <p style="margin:16px 0 0;color:#344b64;font-size:16px;line-height:2;">答案、PDF、摘录和写作笔记散落在不同窗口里，回头核对一次，常常比得到答案本身更费时间。</p>
+      <section style="margin-top:22px;padding:19px 20px;border-left:4px solid #4587c7;border-radius:0 12px 12px 0;background:#f2f7fc;"><p style="margin:0;color:#274563;font-size:16px;line-height:1.9;"><strong>所以，我做了 Pi_zaya。</strong><br>它用本地论文库回答问题，并把回答关联到论文、章节、页码和原文摘录。</p></section>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <p style="margin:0 0 8px;color:#4c88bd;font-size:12px;font-weight:700;letter-spacing:2px;">01 / BUILD A LIBRARY</p>
+      <h2 style="margin:0;color:#203754;font-size:25px;line-height:1.45;">把 PDF 建成可检索的本地文献库</h2>
+      <p style="margin:14px 0;color:#465b72;font-size:16px;line-height:1.95;">导入 PDF 后，Pi_zaya 会自动将论文转换为便于 AI 检索和引用的结构化 Markdown，尽量保留标题层级、页码、公式、图片和参考文献。转换完成并通过质量检查后，论文会加入本地文献库，可以按单篇论文或整个文献库提问。</p>
+      <p style="margin:0 0 18px;color:#465b72;font-size:16px;line-height:1.95;">每篇论文的转换和入库状态都可以直接查看。结构或索引不满足条件的论文会显示“需要重转”，完成重转或修复后才能用于检索。</p>
+      <section style="display:flex;gap:10px;margin:0 0 18px;"><span style="display:inline-block;padding:6px 10px;border-radius:8px;background:#eaf8f0;color:#21734a;font-size:12px;">✓ 可用于问答</span><span style="display:inline-block;padding:6px 10px;border-radius:8px;background:#fff1f0;color:#b5453e;font-size:12px;">! 需要重转</span></section>
+      <img src="assets/02_library_quality.png" alt="Pi_zaya 文献管理实拍：转换状态、质量门禁与入库状态" style="display:block;width:100%;height:auto;border:1px solid #d9e3ed;border-radius:13px;box-shadow:0 12px 28px rgba(32,55,84,.11);">
+      <p style="margin:10px 3px 0;color:#7a8999;font-size:12px;line-height:1.7;text-align:center;">实际文献库：可查看 PDF 是否完成转换、是否已经入库，以及能否用于问答。</p>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <p style="margin:0 0 8px;color:#4c88bd;font-size:12px;font-weight:700;letter-spacing:2px;">02 / A REAL QUESTION</p>
+      <h2 style="margin:0;color:#203754;font-size:25px;line-height:1.45;">先看一次真实问题：为什么单光子成像需要专门建模噪声？</h2>
+      <p style="margin:14px 0 18px;color:#465b72;font-size:16px;line-height:1.95;">下面不是宣传页里的示意文本，而是 Pi_zaya 对本地论文库的一次实际问答。它把散粒噪声、固定模式噪声、暗计数、后脉冲、串扰和死时间噪声拆开说明，并保留了对应的泊松分布公式。</p>
+      <img src="assets/04_grounded_qa.png" alt="Pi_zaya 真实问答实拍：单光子成像噪声机制与泊松分布公式" style="display:block;width:100%;height:auto;border:1px solid #d9e3ed;border-radius:13px;box-shadow:0 12px 28px rgba(32,55,84,.11);">
+      <p style="margin:10px 3px 0;color:#7a8999;font-size:12px;line-height:1.7;text-align:center;">真实回答片段：同时列出物理机制、公式及其对重建假设的影响。</p>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <p style="margin:0 0 8px;color:#4c88bd;font-size:12px;font-weight:700;letter-spacing:2px;">03 / BACK TO THE PAPER</p>
+      <h2 style="margin:0;color:#203754;font-size:25px;line-height:1.45;">每条回答都能定位到论文原文</h2>
+      <p style="margin:14px 0 18px;color:#465b72;font-size:16px;line-height:1.95;">展开回答依据，可以看到对应论文、章节、页码和 DOI。点击“定位”，阅读器会打开由 PDF 转换得到的 Markdown 正文，并直接跳到支持当前回答的段落。标题层级、页码和公式等结构会保留，相关句子同时高亮。</p>
+      <img src="assets/05_reader_locate.png" alt="Pi_zaya 原文定位实拍：回答依据与高亮原文并排显示" style="display:block;width:100%;height:auto;border:1px solid #d9e3ed;border-radius:13px;box-shadow:0 12px 28px rgba(32,55,84,.11);">
+      <p style="margin:10px 3px 0;color:#7a8999;font-size:12px;line-height:1.7;text-align:center;">实际定位画面：右侧是转换后的 Markdown 正文，保留章节与页码并高亮当前证据。</p>
+      <section style="margin-top:18px;padding:16px 18px;border-radius:12px;background:#f7f9fc;border:1px solid #e2e8f0;"><p style="margin:0;color:#52677d;font-size:14px;line-height:1.85;">我的目标不是让读者“相信这个回答”，而是让核查成本足够低：看完结论，顺手就能回到原文。</p></section>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <p style="margin:0 0 8px;color:#4c88bd;font-size:12px;font-weight:700;letter-spacing:2px;">04 / FOLLOW THE REFERENCES</p>
+      <h2 style="margin:0;color:#203754;font-size:25px;line-height:1.45;">一篇论文还会指向它的上游方法和前人工作</h2>
+      <p style="margin:14px 0 18px;color:#465b72;font-size:16px;line-height:1.95;">研究问题经常不是“这篇论文说了什么”，而是“这个方法是谁提出的”“作者沿用了哪项前人工作”。当问题涉及方法来源、研究沿革或相关工作时，Pi_zaya 可以沿论文中的参考编号继续追踪上游文献。</p>
+      <img src="assets/upstream_reference_card.png" alt="Pi_zaya 文内参考实拍：显示上游论文、引用语境、原文位置与 DOI" style="display:block;width:100%;height:auto;border:1px solid #d9e3ed;border-radius:13px;box-shadow:0 12px 28px rgba(32,55,84,.11);">
+      <p style="margin:10px 3px 0;color:#7a8999;font-size:12px;line-height:1.7;text-align:center;">实际运行画面：关于 ADMM 的追问打开了对应上游论文，并保留“当前论文如何引用它”的语境。</p>
+      <p style="margin:18px 0 0;color:#465b72;font-size:16px;line-height:1.95;">卡片把作者、年份、DOI、被引情况、文中位置和参考文献条目放在一起。你可以继续围绕它阅读，也可以把它加入研究摘录篮。</p>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <p style="margin:0 0 8px;color:#4c88bd;font-size:12px;font-weight:700;letter-spacing:2px;">05 / KEEP THE USEFUL PART</p>
+      <h2 style="margin:0;color:#203754;font-size:25px;line-height:1.45;">把文献、摘录和引用语境保存到项目</h2>
+      <p style="margin:14px 0 18px;color:#465b72;font-size:16px;line-height:1.95;">研究摘录篮不是一个只有标题的收藏夹。展开卡片后，可以看到摘要、引用语境、标签、DOI 和它在当前问题中的作用；选中的文献还可以直接成为下一轮问答的范围。</p>
+      <img src="assets/basket_expanded_card.png" alt="Pi_zaya 研究摘录篮实拍：展开显示文献摘要、引用语境、标签和 DOI" style="display:block;width:100%;height:auto;border:1px solid #d9e3ed;border-radius:13px;box-shadow:0 12px 28px rgba(32,55,84,.11);">
+      <p style="margin:10px 3px 0;color:#7a8999;font-size:12px;line-height:1.7;text-align:center;">实际项目画面：左侧组织 introduction，右侧展开一篇已筛选文献，摘要与引用语境没有在收藏后丢失。</p>
+      <p style="margin:18px 0 0;color:#465b72;font-size:16px;line-height:1.95;">项目中保存的材料可以直接用于后续问答，也可以导出引用清单和本机快照，继续服务于阅读整理与研究写作。</p>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <p style="margin:0 0 8px;color:#4c88bd;font-size:12px;font-weight:700;letter-spacing:2px;">WHO IS IT FOR</p>
+      <h2 style="margin:0;color:#203754;font-size:24px;line-height:1.45;">它更适合这些研究场景</h2>
+      <section style="margin-top:17px;border:1px solid #e0e8f0;border-radius:14px;overflow:hidden;">
+        <p style="margin:0;padding:14px 17px;background:#f8fafc;color:#465b72;font-size:15px;line-height:1.8;border-bottom:1px solid #e6edf3;">大量阅读 PDF，需要快速找到结论和原文位置</p>
+        <p style="margin:0;padding:14px 17px;color:#465b72;font-size:15px;line-height:1.8;border-bottom:1px solid #e6edf3;">写 related work，希望理清方法来源与引用关系</p>
+        <p style="margin:0;padding:14px 17px;background:#f8fafc;color:#465b72;font-size:15px;line-height:1.8;border-bottom:1px solid #e6edf3;">做方法比较，需要核对实验条件、指标和结论边界</p>
+        <p style="margin:0;padding:14px 17px;color:#465b72;font-size:15px;line-height:1.8;">希望文库和研究材料优先保存在自己的电脑上</p>
+      </section>
+      <p style="margin:18px 0 0;color:#52657a;font-size:15px;line-height:1.9;">它不会替代研究者判断，也不能保证每一篇复杂 PDF 都完美转换。它做的，是把来源、缺失和不确定性更早地暴露出来，让判断建立在更容易核查的材料上。</p>
+    </section>
+
+    <section style="padding:42px 24px 0;">
+      <section style="padding:22px 20px;border-radius:16px;background:#203a5d;color:#ffffff;box-shadow:0 16px 34px rgba(27,52,83,.18);">
+        <p style="margin:0 0 8px;color:#9bc6ed;font-size:12px;font-weight:700;letter-spacing:2px;">DOWNLOAD</p>
+        <h2 style="margin:0;font-size:24px;line-height:1.45;color:#ffffff;">Windows 公测版已经可以下载</h2>
+        <p style="margin:12px 0 0;color:#c8d9ea;font-size:14px;line-height:1.8;">当前发布版本为 Windows x64。两种成品均内置运行环境，无需另装 Python 或 Node.js，并附中文版 README。</p>
+        <section style="margin-top:18px;padding:15px;border-radius:11px;background:rgba(255,255,255,.09);"><p style="margin:0;color:#ffffff;font-size:15px;line-height:1.8;"><strong>推荐大多数用户：安装版</strong><br><span style="color:#c8d9ea;">下载 Setup，按安装向导完成后，从开始菜单或桌面快捷方式打开。</span></p><p style="margin:13px 0 0;"><a href="https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.11/Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe" style="display:inline-block;padding:9px 15px;border-radius:999px;background:#ffffff;color:#24466c;font-size:13px;font-weight:700;text-decoration:none;">直接下载安装版（Setup）</a></p></section>
+        <section style="margin-top:10px;padding:15px;border-radius:11px;background:rgba(255,255,255,.09);"><p style="margin:0;color:#ffffff;font-size:15px;line-height:1.8;"><strong>免安装或用于排障：便携 ZIP</strong><br><span style="color:#c8d9ea;">完整解压后，双击 <code style="font-family:Consolas,monospace;font-size:12px;">Pi_zaya.exe</code>；不要在压缩包预览窗口里直接运行。</span></p><p style="margin:13px 0 0;"><a href="https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.11/Pi_zaya-v0.1.0-beta.11-windows-x64.zip" style="display:inline-block;padding:9px 15px;border-radius:999px;background:#ffffff;color:#24466c;font-size:13px;font-weight:700;text-decoration:none;">直接下载便携版（ZIP）</a></p></section>
+        <p style="margin:15px 0 0;color:#c8d9ea;font-size:13px;line-height:1.75;">首次使用需要配置自己的模型 API Key。公测版安装器暂未进行商业代码签名；请只从项目 Release 下载，并使用随附的 SHA-256 文件核对完整性。</p>
+        <p style="margin:17px 0 0;text-align:center;"><a href="https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.11" style="display:inline-block;padding:11px 20px;border:1px solid rgba(255,255,255,.48);border-radius:999px;background:transparent;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;">查看完整 Release 与使用说明</a></p>
+      </section>
+    </section>
+
+    <section style="margin:38px 24px 0;padding:25px 21px;border-radius:16px;background:linear-gradient(145deg,#edf6ff,#f8fbff);text-align:center;">
+      <img src="assets/pi_logo.png" alt="Pi_zaya Logo" style="display:block;width:43px;height:43px;object-fit:contain;margin:0 auto 12px;">
+      <h2 style="margin:0;color:#203b60;font-size:23px;line-height:1.45;">让每一次 AI 回答，都能回到论文</h2>
+      <p style="margin:12px auto 0;max-width:535px;color:#566b82;font-size:15px;line-height:1.9;">这是 Pi_zaya 的第一次公开介绍，也只是一个开始。欢迎下载试用，也欢迎告诉我：<strong>你处理文献时，最费时间的环节是什么？</strong></p>
+    </section>
+
+    <footer style="margin-top:36px;padding:24px;background:#f6f9fc;border-top:1px solid #e2e9f0;text-align:center;">
+      <section style="display:flex;align-items:center;justify-content:center;gap:16px;"><img src="assets/pi_logo.png" alt="Pi_zaya 产品 Logo" style="display:block;width:30px;height:30px;object-fit:contain;"><span style="display:inline-block;width:1px;height:28px;background:#cfdae5;"></span><img src="assets/team_logo.png" alt="P&amp;I Lab Logo" style="display:block;width:96px;height:32px;object-fit:contain;"></section>
+      <p style="margin:13px 0 0;color:#7b8b9d;font-size:11px;line-height:1.7;letter-spacing:.6px;">Pi_zaya × P&amp;I Lab<br>文中产品图片均来自 2026-08-19 本地端到端实际运行画面</p>
+    </footer>
+  </section>
+</body>
+</html>

@@ -250,6 +250,8 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
         ):
             continue
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
+        if body.endswith("-") and len(words) >= 4:
+            return True
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
             return True
         if (
@@ -1379,7 +1381,20 @@ class PDFConverter:
                 in_references = True
                 if not has_heading:
                     page_text = _trim_pdf_page_text_to_first_reference(page_text)
-            elif not has_heading and not has_reference_block:
+            elif (
+                not has_heading
+                and not has_reference_block
+                and len(
+                    {
+                        int(match.group(1))
+                        for match in re.finditer(
+                            r"(?m)^\s*\[\s*(\d{1,4})\s*]\s+\S",
+                            str(page_text or ""),
+                        )
+                        if _pdf_is_plausible_reference_number(match.group(1))
+                    }
+                ) < 3
+            ):
                 break
             page_text = _drop_pdf_reference_running_lines(page_text)
             page_text = trim_reference_publisher_tail(page_text)

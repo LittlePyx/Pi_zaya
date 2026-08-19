@@ -1,6 +1,15 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.10` is the current published downloadable beta, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. The next release engineering target has not been selected, and `v0.1.0-beta.5` was the first published downloadable beta.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.10` is the current published downloadable beta, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. The next release engineering target is the patch candidate described below, and `v0.1.0-beta.5` was the first published downloadable beta.
+
+The next patch candidate temporarily withholds the project evidence-matrix
+workspace and its matrix-dependent brief, gap, and project-status entrances
+from ordinary builds while their synthesis quality contract is revised. The
+implementation, saved records, APIs, exports, and full internal regression
+suite remain present. Internal browser gates explicitly use
+`VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; downloadable builds must leave it
+unset. This candidate must advance to a new immutable prerelease version and
+must not overwrite `v0.1.0-beta.10`.
 
 ## Current release decision
 
@@ -28,6 +37,7 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - Entry/exit: native `Pi_zaya.exe` with a system-tray safe-exit action; `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain diagnostic fallbacks.
 - Conversion durability: the conversion ledger lives in `library.sqlite3`, never stores API keys, preserves validated page-cache artifacts, and requires an explicit Continue action after a restart. A missing source PDF or vision credential stays in an actionable blocked recovery state rather than retrying in a loop.
 - Conversion concurrency: the downloadable product always submits pages in source order and uses a shared automatic provider-inflight ceiling of eight. No alternate page scheduler, adaptive page-budget branch, or text-local vision bypass is included. Higher ceilings remain explicit operator experiments and must not be enabled in a formal artifact without repeating the converter speed and structural-quality gates.
+- Evidence workspace surface: ordinary downloadable builds leave `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE` unset, so the matrix workspace and its dependent brief/gap/status entrances are absent. Internal tests set it to `1` and must keep the existing evidence workflow assertions passing while the redesign proceeds.
 
 Development mode is unchanged: repository-local databases and preferences remain the default unless `KB_RELEASE_MODE=1` or `KB_APP_DATA_DIR` is explicitly set. There is no implicit migration of existing development data.
 
@@ -44,7 +54,7 @@ The following fast build uses the current system Python only to validate portabl
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.10-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.11-windows-x64 `
   -AllowDirty
 ```
 
@@ -67,24 +77,24 @@ cd ..
   -KeepStage
 
 .\tools\release\build_windows_installer.ps1 `
-  -StageRoot .\release\Pi_zaya-v0.1.0-beta.10-windows-x64 `
+  -StageRoot .\release\Pi_zaya-v0.1.0-beta.11-windows-x64 `
   -InnoSetupCompiler "C:\Program Files\Inno Setup 7\ISCC.exe"
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.10-windows-x64.zip `
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.11-windows-x64.zip `
   -CleanProfile
 
 .\tools\release\smoke_windows_installer.ps1 `
-  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe
+  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.10-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.10-windows-x64.zip.sha256
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.11-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.11-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe.sha256
 ```
 
 ## Tag release
@@ -93,7 +103,7 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe.sha256
 2. Update `VERSION`, both frontend version fields, `CHANGELOG.md`, and the reviewed bilingual `docs/releases/v<VERSION>.md` download guide.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.10`.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.11`.
 6. The tag run repeats the complete backend, frontend, research, conversion, browser, portable-package, installer, and packaged-runtime gates on Windows.
 7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
 8. The workflow also silently installs into an isolated directory, repeats the runtime checks without system Python or Node.js, performs an in-place reinstall, uninstalls, and proves that the separate user-data sentinel remains.
@@ -128,7 +138,7 @@ The following hands-on workflow remains required before promotion beyond beta be
 3. Configure provider credentials in Settings and restart once to prove preferences survive.
 4. Upload two representative PDFs and run concurrent conversion. Exit Pi_zaya while one is active, restart, confirm it is shown as interrupted rather than converting, then explicitly continue it and verify the completed-page reuse count. Cancel and retry the other document.
 5. Confirm each document reports its own terminal outcome; induce or use a fixture for index retry without reconversion. Reopen the library and confirm the resumed document appears only once in the document, reference, and structured indexes.
-6. Ask a grounded question, open a citation in the reader, build and export a small evidence matrix and research brief.
+6. Ask a grounded question, open a citation in the reader, and confirm the ordinary downloadable build exposes no evidence-matrix, research-brief, research-gap, or project-research-status entry. Separately run the unchanged internal evidence workflow browser gate with `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`.
 7. Exit through the Pi_zaya system-tray menu, install the next test build over the installed version, restart, and confirm the library persists under `%LOCALAPPDATA%\Pi_zaya`. Then uninstall and confirm the same data remains. For the portable path, replace the app folder and separately retain `Stop-Pi-zaya.cmd` as a diagnostic fallback.
 8. Inspect `%LOCALAPPDATA%\Pi_zaya\logs` and confirm no API keys are printed.
 

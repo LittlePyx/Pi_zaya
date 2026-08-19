@@ -204,6 +204,13 @@ def _reference_map_has_short_truncated_entries(ref_map: dict[int, str]) -> bool:
         ):
             continue
         words = re.findall(r"[A-Za-z][A-Za-z'\-]*", body)
+        # A bibliography entry that reaches the next PDF page can be much
+        # longer than the compact-entry heuristic below while still ending in
+        # a converter-owned line-wrap hyphen (for example ``view syn-``).
+        # Treat that terminal hyphen as sufficient evidence of truncation so
+        # the source-backed reference rebuild gets a chance to join the tail.
+        if body.endswith("-") and len(words) >= 4:
+            return True
         if len(body) <= 32 and len(words) <= 5 and re.search(r"\bet\s+al\.?$", body, flags=re.IGNORECASE):
             return True
         if (
@@ -250,7 +257,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 14
+CONVERSION_QUALITY_RULES_VERSION = 15
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
@@ -2759,6 +2766,11 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
                 int(item.get("segment_start") or 0),
                 int(item.get("segment_end") or 0),
             )
+    references_heading = re.search(
+        r"(?mi)^#{1,6}\s+(?:References|Bibliography)\s*$",
+        str(text or ""),
+    )
+    references_offset = int(references_heading.start()) if references_heading else -1
     inferred_offsets: dict[int, int] = {}
     try:
         inferred_offsets = _page_marker_offsets_from_pdf_text(str(text or ""), path, snap_to_line_start=False)
@@ -2849,8 +2861,26 @@ def _source_page_coverage_quality(text: str, pdf_path: Path | None) -> dict[str,
             if local_segment:
                 local_tokens = _rare_source_tokens(local_segment)
                 local_coverage = len(page_tokens.intersection(local_tokens)) / max(1, len(page_tokens))
-            wrap_damage = _source_page_wrapped_word_damage(page_text, local_segment)
-            prose_omission = _source_page_prose_omission_damage(page_block_texts, local_segment)
+            marker_start = int(marker_segments.get(page_no, (-1, -1))[0])
+            within_references = bool(
+                references_offset >= 0
+                and marker_start >= references_offset
+            )
+            # Bibliography pages intentionally normalize line wraps, author
+            # accents, venue punctuation, and page ranges. Generic prose-gap
+            # diagnostics misclassify those changes as missing prose. Reference
+            # numbering, continuity, and terminal-hyphen checks provide the
+            # source-specific quality contract for these pages instead.
+            wrap_damage = (
+                {}
+                if within_references
+                else _source_page_wrapped_word_damage(page_text, local_segment)
+            )
+            prose_omission = (
+                {}
+                if within_references
+                else _source_page_prose_omission_damage(page_block_texts, local_segment)
+            )
             if bool(wrap_damage.get("text_corruption")):
                 corrupted_pages.append(
                     {
@@ -4381,6 +4411,23 @@ def _pdf_page_has_reference_block_text(text: str) -> bool:
     return len(consecutive_reference_chain_positions(numbers)) >= 3
 
 
+def _pdf_reference_continuation_page_has_signal(text: str) -> bool:
+    """Accept dense numbered pages after a References section has started.
+
+    Two-column PDF text can omit a few entries from the stricter bibliographic
+    signal detector even though the raw page still contains many bracketed
+    reference starts. Once a prior page has established the References section,
+    three plausible numbered starts are enough to continue collecting pages.
+    """
+
+    numbers = [
+        int(match.group(1))
+        for match in re.finditer(r"(?m)^\s*\[\s*(\d{1,4})\s*]\s+\S", str(text or ""))
+        if _is_plausible_reference_number(match.group(1))
+    ]
+    return len(set(numbers)) >= 3
+
+
 def _trim_pdf_page_text_to_first_reference(text: str) -> str:
     raw = str(text or "").replace("\r\n", "\n").replace("\r", "\n")
     lines = raw.split("\n")
@@ -4819,6 +4866,62 @@ def _recover_source_prose_omissions_from_pdf_text(
     return fixed, fixed != text
 
 
+def _novel_source_recovery_prose(fallback_body: str, current_body: str) -> str:
+    """Keep only source prose that is not already represented on the page.
+
+    A corrupted page may still have trustworthy figures, captions, tables, and
+    prose. Appending the complete PDF text fallback duplicates all of those
+    structures in the reader and retrieval index. PDF text blocks are already
+    separated by blank lines, so retain acknowledgements/funding plus eligible
+    prose blocks whose ordered token sequence is not covered by the converted
+    page. Short labels, flattened tables, and repeated captions remain backed
+    by the existing structured Markdown and are intentionally omitted here.
+    """
+
+    current_tokens = _source_prose_tokens(current_body)
+    kept: list[str] = []
+    for raw_block in re.split(r"\n\s*\n", str(fallback_body or "")):
+        block = str(raw_block or "").strip()
+        if not block:
+            continue
+        block_tokens = _source_prose_tokens(block)
+        if not block_tokens:
+            continue
+        special_prose = bool(
+            re.match(
+                r"^\s*(?:acknowledg(?:e)?ments?|funding|author\s+details?)\b",
+                block,
+                flags=re.IGNORECASE,
+            )
+        )
+        if not special_prose:
+            if _SOURCE_PROSE_BLOCK_SKIP_RE.match(block):
+                continue
+            alpha_chars = sum(char.isalpha() for char in block)
+            alnum_chars = sum(char.isalnum() for char in block)
+            substantial_prose = bool(
+                len(block_tokens) >= SOURCE_PAGE_MIN_RARE_TOKENS
+                and alpha_chars / max(1, alnum_chars) >= 0.70
+                and re.search(r"[.!?](?:\s|$)", block)
+            )
+            if not _eligible_source_prose_block(block) and not substantial_prose:
+                continue
+        longest = difflib.SequenceMatcher(
+            a=block_tokens,
+            b=current_tokens,
+            autojunk=False,
+        ).find_longest_match(0, len(block_tokens), 0, len(current_tokens)).size
+        covered_ratio = float(longest) / max(1, len(block_tokens))
+        # Only discard near-exact duplicates. A long paragraph with one
+        # converter omission can have high overall overlap while the longest
+        # stable span is materially shorter; that source block is the evidence
+        # needed to repair the page and must remain available.
+        if covered_ratio >= 0.95:
+            continue
+        kept.append(block)
+    return "\n\n".join(kept).strip()
+
+
 def _recover_corrupted_source_pages_from_pdf_text(
     md_text: str,
     md_path: Path,
@@ -4902,11 +5005,16 @@ def _recover_corrupted_source_pages_from_pdf_text(
             )
             if prior_recovery:
                 current_body = current_body[: prior_recovery.start()].rstrip()
+            recovery_body = (
+                _novel_source_recovery_prose(fallback_body, current_body)
+                if has_structured_evidence
+                else fallback_body
+            )
             replacement_parts = [
                 f"<!-- kb_page: {page_no} -->",
                 current_body,
-                f"<!-- kb_source_recovery: {page_no} -->",
-                fallback_body,
+                f"<!-- kb_source_recovery: {page_no} -->" if recovery_body else "",
+                recovery_body,
             ]
         replacement = "\n\n".join(part for part in replacement_parts if part).strip() + "\n\n"
         fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
@@ -5204,7 +5312,11 @@ def _extract_pdf_reference_markdown(pdf_path: Path) -> tuple[str, int]:
                     )
                     if heading_match:
                         page_text = page_text[heading_match.start() :]
-            elif not has_heading and not has_reference_block:
+            elif (
+                not has_heading
+                and not has_reference_block
+                and not _pdf_reference_continuation_page_has_signal(page_text)
+            ):
                 break
             page_text = _drop_pdf_reference_running_lines(page_text)
             page_text = trim_reference_publisher_tail(page_text)
@@ -5549,7 +5661,21 @@ def _backfill_references_from_pdf_text(md_text: str, md_path: Path, source_pdf_p
     before_missing = set(_reference_map_missing_numbers(before_map))
     references_md, recovered_count = _extract_pdf_reference_markdown(pdf_path) if pdf_path else ("", 0)
     cached_references_md, cached_count = _extract_cached_reference_markdown(md_path)
-    if cached_count >= max(5, recovered_count):
+    recovered_truncated = _reference_map_has_short_truncated_entries(
+        extract_references_map_from_md(references_md)
+    )
+    cached_truncated = _reference_map_has_short_truncated_entries(
+        extract_references_map_from_md(cached_references_md)
+    )
+    if (
+        cached_count >= 5
+        and cached_count > recovered_count
+        and not cached_truncated
+    ) or (
+        cached_count == recovered_count
+        and recovered_truncated
+        and not cached_truncated
+    ):
         references_md, recovered_count = cached_references_md, cached_count
     recovered_map = extract_references_map_from_md(references_md)
     recovered_missing = set(_reference_map_missing_numbers(recovered_map))

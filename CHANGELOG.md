@@ -2,6 +2,22 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.11] - 2026-08-19
+
+### Changed
+
+- Temporarily withhold the project evidence-matrix workspace and its matrix-dependent research brief, research gap, and project-status entrances from ordinary downloadable builds while the synthesis quality contract is redesigned. Existing APIs and saved data remain intact, and internal regression builds continue to exercise the complete workflow.
+- Remove the evidence-matrix section and screenshots from the first public product article so the launch story only advertises surfaces that meet the current user-facing quality bar.
+
+### Fixed
+
+- Recover multi-page bibliographies more reliably when two-column PDF extraction weakens reference-block signals or leaves a terminal line-wrap hyphen.
+- Preserve trustworthy figures, tables, captions, and existing prose while source-backed repair adds only genuinely missing page prose, avoiding duplicated structured content in repaired Markdown.
+
+### Quality
+
+- Add an explicit release-isolation browser gate proving that ordinary builds expose none of the temporarily withheld entry points, while the unchanged internal evidence-workflow suite remains enabled and passing.
+
 ## [0.1.0-beta.10] - 2026-08-19
 
 ### Added

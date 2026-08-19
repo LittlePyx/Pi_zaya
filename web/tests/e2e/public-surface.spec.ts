@@ -453,6 +453,7 @@ test.beforeAll(() => {
     VITE_ENABLE_INTERNAL_ROUTES: '0',
     VITE_SHOW_USER_QUALITY_DIAGNOSTICS: '0',
     VITE_SHOW_INTERNAL_SETTINGS: '0',
+    VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE: '0',
   }
   for (const [name, value] of Object.entries(expected)) {
     if (process.env[name] !== value) {

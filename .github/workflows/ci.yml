@@ -62,6 +62,7 @@ jobs:
           VITE_ENABLE_AUTH_GATE: "1"
           VITE_ALLOW_LOCAL_AUTH_GATE: "1"
           VITE_PRIVATE_INSTANCE_AUTH: "0"
+          VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE: "1"
         run: npm run test:e2e:smoke
 
       - name: Run core citation and library E2E regressions
@@ -85,6 +86,12 @@ jobs:
           VITE_SHOW_USER_QUALITY_DIAGNOSTICS: "0"
           VITE_SHOW_INTERNAL_SETTINGS: "0"
         run: npm run test:e2e:public-surface
+
+      - name: Check evidence workspace release isolation
+        working-directory: web
+        env:
+          PW_WORKERS: "1"
+        run: npm run test:e2e:evidence-workspace-hidden
 
       - name: Retain frontend E2E failure diagnostics
         if: failure()

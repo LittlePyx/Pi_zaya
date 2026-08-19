@@ -7,6 +7,7 @@ process.env.VITE_SHOW_INTERNAL_SETTINGS = '0'
 process.env.VITE_ENABLE_AUTH_GATE = '0'
 process.env.VITE_ALLOW_LOCAL_AUTH_GATE = '0'
 process.env.VITE_PRIVATE_INSTANCE_AUTH = '0'
+process.env.VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE = '0'
 
 const requestedArgs = process.argv.slice(2)
 process.argv = [

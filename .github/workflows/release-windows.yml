@@ -104,6 +104,7 @@ jobs:
           VITE_ENABLE_AUTH_GATE: "1"
           VITE_ALLOW_LOCAL_AUTH_GATE: "1"
           VITE_PRIVATE_INSTANCE_AUTH: "0"
+          VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE: "1"
 
       - name: Run core citation and library E2E regressions
         working-directory: web
@@ -130,6 +131,13 @@ jobs:
           VITE_ENABLE_INTERNAL_ROUTES: "0"
           VITE_SHOW_USER_QUALITY_DIAGNOSTICS: "0"
           VITE_SHOW_INTERNAL_SETTINGS: "0"
+
+      - name: Check evidence workspace release isolation
+        working-directory: web
+        shell: pwsh
+        run: npm run test:e2e:evidence-workspace-hidden
+        env:
+          PW_WORKERS: "1"
 
       - name: Retain frontend E2E failure diagnostics
         if: failure()

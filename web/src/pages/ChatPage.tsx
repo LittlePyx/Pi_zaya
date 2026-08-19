@@ -35,11 +35,13 @@ import { chatApi, type ProjectResearchStatusAction, type QueryScope } from '../a
 import type { CiteShelfItem } from '../components/chat/citationState'
 import { useT } from '../i18n'
 import { internalDebugBrowserEnabled } from '../utils/internalDebug'
+import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../utils/featureFlags'
 
 const { Text } = Typography
 
 const HISTORY_PAGE_SIZE = 24
 const LIVE_WINDOW = 16
+const HIDDEN_PROJECT_ACTION_TARGETS = EVIDENCE_MATRIX_WORKSPACE_ENABLED ? [] : ['evidence_matrix']
 
 function loadChatDebugPanelEnabled() {
   return internalDebugBrowserEnabled()
@@ -362,6 +364,7 @@ export default function ChatPage() {
     if (!projectId) return
     beginProjectJourney(projectId)
     if (action.target === 'evidence_matrix') {
+      if (!EVIDENCE_MATRIX_WORKSPACE_ENABLED) return
       await launchProjectMatrix(
         projectId,
         action.matrix_id,
@@ -558,7 +561,7 @@ export default function ChatPage() {
   })
   const chatComposer = (
     <>
-      {projectJourneyId && !projectStatusId ? (
+      {EVIDENCE_MATRIX_WORKSPACE_ENABLED && projectJourneyId && !projectStatusId ? (
         <div className="kb-project-journey-resume" data-testid="project-journey-resume">
           <div className="kb-project-journey-resume-copy">
             <span>{S.project_journey_active}</span>
@@ -886,14 +889,15 @@ export default function ChatPage() {
         />
       ) : null}
       <ProjectActionCenter
-        open={Boolean(projectStatusId)}
+        open={EVIDENCE_MATRIX_WORKSPACE_ENABLED && Boolean(projectStatusId)}
         projectId={projectStatusId}
         projectName={projectStatusName}
         onClose={closeProjectStatus}
         onAction={handleProjectStatusAction}
+        hiddenActionTargets={HIDDEN_PROJECT_ACTION_TARGETS}
       />
       <ResearchGapWorkspace
-        open={Boolean(projectGapId)}
+        open={EVIDENCE_MATRIX_WORKSPACE_ENABLED && Boolean(projectGapId)}
         projectId={projectGapId}
         onClose={() => setProjectGapId('')}
         onOpenEvidence={openProjectEvidence}
@@ -901,31 +905,33 @@ export default function ChatPage() {
           const projectId = projectGapId
           void launchProjectBrief(projectId, matrixId, briefId)
         }}
-        onOpenMatrix={(matrixId) => {
+        onOpenMatrix={EVIDENCE_MATRIX_WORKSPACE_ENABLED ? (matrixId) => {
           const projectId = projectGapId
           void launchProjectMatrix(projectId, matrixId)
-        }}
+        } : undefined}
       />
-      <EvidenceMatrixWorkspace
-        open={Boolean(projectMatrixLaunch)}
-        projectId={projectMatrixLaunch?.projectId || ''}
-        activeConvId={activeConvId}
-        seedItems={projectMatrixLaunch?.seedItems || []}
-        initialMatrixId={projectMatrixLaunch?.matrixId || ''}
-        initialTab={projectMatrixLaunch?.tab || 'matrix'}
-        onClose={() => setProjectMatrixLaunch(null)}
-        onOpenEvidence={openProjectEvidence}
-        onUseForBrief={(matrix) => {
-          const projectId = projectMatrixLaunch?.projectId || ''
-          void launchProjectBrief(projectId, matrix.id)
-        }}
-        onOpenBrief={(briefId, matrixId) => {
-          const projectId = projectMatrixLaunch?.projectId || ''
-          void launchProjectBrief(projectId, matrixId, briefId)
-        }}
-      />
+      {EVIDENCE_MATRIX_WORKSPACE_ENABLED ? (
+        <EvidenceMatrixWorkspace
+          open={Boolean(projectMatrixLaunch)}
+          projectId={projectMatrixLaunch?.projectId || ''}
+          activeConvId={activeConvId}
+          seedItems={projectMatrixLaunch?.seedItems || []}
+          initialMatrixId={projectMatrixLaunch?.matrixId || ''}
+          initialTab={projectMatrixLaunch?.tab || 'matrix'}
+          onClose={() => setProjectMatrixLaunch(null)}
+          onOpenEvidence={openProjectEvidence}
+          onUseForBrief={(matrix) => {
+            const projectId = projectMatrixLaunch?.projectId || ''
+            void launchProjectBrief(projectId, matrix.id)
+          }}
+          onOpenBrief={(briefId, matrixId) => {
+            const projectId = projectMatrixLaunch?.projectId || ''
+            void launchProjectBrief(projectId, matrixId, briefId)
+          }}
+        />
+      ) : null}
       <ResearchBriefWorkspace
-        open={Boolean(projectBriefLaunch)}
+        open={EVIDENCE_MATRIX_WORKSPACE_ENABLED && Boolean(projectBriefLaunch)}
         projectId={projectBriefLaunch?.projectId || ''}
         activeConvId={activeConvId}
         seedItems={projectBriefLaunch?.seedItems || []}

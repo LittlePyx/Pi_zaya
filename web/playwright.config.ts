@@ -75,6 +75,7 @@ export default defineConfig({
           VITE_ENABLE_INTERNAL_DEBUG: process.env.VITE_ENABLE_INTERNAL_DEBUG || '1',
           VITE_ENABLE_INTERNAL_ROUTES: process.env.VITE_ENABLE_INTERNAL_ROUTES || '1',
           VITE_SHOW_USER_QUALITY_DIAGNOSTICS: process.env.VITE_SHOW_USER_QUALITY_DIAGNOSTICS || '0',
+          VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE: process.env.VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE || '1',
         },
       },
   projects: [

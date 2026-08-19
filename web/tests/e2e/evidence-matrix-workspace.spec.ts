@@ -558,6 +558,19 @@ async function openEvidenceMatrixWorkspace(page: Page) {
   return dialog
 }
 
+test('ordinary build with the matrix workspace disabled exposes no matrix entry', async ({ page }) => {
+  test.skip(process.env.VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE !== '0')
+  await installBackend(page)
+  await page.goto(`/?conversation=${CONVERSATION.id}`)
+
+  await expect(page.getByText('The selected evidence is ready.')).toBeVisible()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  await expect(page.getByTestId('citation-shelf-open-evidence-matrix')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-open-research-brief')).toHaveCount(0)
+  await expect(page.getByTestId('citation-shelf-open-research-gaps')).toHaveCount(0)
+  await expect(page.getByRole('dialog', { name: 'Project evidence matrices' })).toHaveCount(0)
+})
+
 test('project basket becomes a persistent cell-audited evidence matrix', async ({ page }) => {
   const backend = await installBackend(page)
   await page.goto(`/?conversation=${CONVERSATION.id}`)

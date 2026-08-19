@@ -21,6 +21,7 @@ interface Props {
   projectName?: string
   onClose: () => void
   onAction: (action: ProjectResearchStatusAction) => void | Promise<void>
+  hiddenActionTargets?: string[]
 }
 
 function numeric(value: unknown): number {
@@ -48,6 +49,7 @@ export function ProjectActionCenter({
   projectName = '',
   onClose,
   onAction,
+  hiddenActionTargets = [],
 }: Props) {
   const S = useT()
   const [status, setStatus] = useState<ProjectResearchStatus | null>(null)
@@ -122,8 +124,13 @@ export function ProjectActionCenter({
     ]
   }, [S, status])
 
+  const action = status?.recommended_action
+  const visibleAction = action && !hiddenActionTargets.includes(String(action.target || ''))
+    ? action
+    : null
+
   const runPrimaryAction = async () => {
-    const action = status?.recommended_action
+    const action = visibleAction
     if (!action) return
     if (action.code === 'refresh_project_status') {
       await refresh()
@@ -137,12 +144,11 @@ export function ProjectActionCenter({
     }
   }
 
-  const action = status?.recommended_action
-  const actionLabel = action
-    ? S[`project_status_action_${action.code}`] || action.code
+  const actionLabel = visibleAction
+    ? S[`project_status_action_${visibleAction.code}`] || visibleAction.code
     : ''
-  const actionReason = action
-    ? S[`project_status_reason_${action.reason}`] || action.reason
+  const actionReason = visibleAction
+    ? S[`project_status_reason_${visibleAction.reason}`] || visibleAction.reason
     : ''
   const readiness = status?.readiness || 'needs_review'
   const totalMs = numeric(status?.phase_timings_ms?.total).toFixed(1)
@@ -187,27 +193,27 @@ export function ProjectActionCenter({
             />
           ) : null}
 
-          {action ? (
+          {visibleAction ? (
             <section className="kb-project-status-primary" data-testid="project-status-primary-action">
               <div className="kb-project-status-eyebrow">{S.project_status_next_action}</div>
               <div className="kb-project-status-primary-title">{actionLabel}</div>
               <div className="kb-project-status-primary-reason">{actionReason}</div>
               <div className="kb-project-status-primary-meta">
-                {action.gap_count > 0 ? (
-                  <Tag color="orange">{S.project_status_gap_count.replace('{n}', String(action.gap_count))}</Tag>
+                {visibleAction.gap_count > 0 ? (
+                  <Tag color="orange">{S.project_status_gap_count.replace('{n}', String(visibleAction.gap_count))}</Tag>
                 ) : null}
-                {action.candidate_count > 0 ? (
-                  <Tag color="blue">{S.project_status_candidate_count.replace('{n}', String(action.candidate_count))}</Tag>
+                {visibleAction.candidate_count > 0 ? (
+                  <Tag color="blue">{S.project_status_candidate_count.replace('{n}', String(visibleAction.candidate_count))}</Tag>
                 ) : null}
-                {action.matrix_title ? <Tag>{action.matrix_title}</Tag> : null}
-                {action.brief_title ? <Tag>{action.brief_title}</Tag> : null}
+                {visibleAction.matrix_title ? <Tag>{visibleAction.matrix_title}</Tag> : null}
+                {visibleAction.brief_title ? <Tag>{visibleAction.brief_title}</Tag> : null}
               </div>
               <Button
                 type="primary"
                 icon={<RightOutlined />}
                 loading={acting}
                 onClick={() => { void runPrimaryAction() }}
-                data-testid={`project-status-action-${action.code}`}
+                data-testid={`project-status-action-${visibleAction.code}`}
               >
                 {actionLabel}
               </Button>

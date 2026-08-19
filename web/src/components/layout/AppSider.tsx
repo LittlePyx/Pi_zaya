@@ -34,6 +34,7 @@ import {
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useT } from '../../i18n'
+import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../../utils/featureFlags'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import type { Conversation, Project } from '../../api/chat'
@@ -304,7 +305,9 @@ function ProjectSection({
             trigger={['click']}
             menu={{
               items: [
-                { key: 'status', icon: <FundProjectionScreenOutlined />, label: S.project_status_menu },
+                ...(EVIDENCE_MATRIX_WORKSPACE_ENABLED
+                  ? [{ key: 'status', icon: <FundProjectionScreenOutlined />, label: S.project_status_menu }]
+                  : []),
                 { key: 'rename', icon: <EditOutlined />, label: S.rename_project },
                 { key: 'delete', icon: <DeleteOutlined />, label: S.delete_project, danger: true },
               ],

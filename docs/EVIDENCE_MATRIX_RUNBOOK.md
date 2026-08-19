@@ -4,6 +4,14 @@ Updated: 2026-08-10
 
 ## Purpose
 
+> Temporary release-surface status (2026-08-19): the evidence-matrix
+> workspace and its matrix-dependent research brief, research gap, and project
+> status entry points are hidden from ordinary builds. Existing APIs, stored
+> records, exports, and regressions remain intact. Internal testing must set
+> `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`. Do not restore the ordinary-user
+> entry until the revised multi-source synthesis, field relevance, Markdown
+> cleaning, and usability gates have passed.
+
 The project evidence matrix turns selected local papers into a durable,
 reviewable comparison before synthesis. Each paper has cells for method,
 dataset or experiment, metric, key result, and limitation, plus manual notes.

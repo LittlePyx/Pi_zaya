@@ -46,6 +46,13 @@ The app expects the FastAPI backend at `http://127.0.0.1:8000/` during local
 development. From the repository root, `.\run_new.ps1 -StopExisting` starts both
 the backend and frontend with the expected ports.
 
+The project evidence-matrix workspace and its dependent research brief, gap,
+and project-status entry points are temporarily withheld from ordinary builds
+while their synthesis quality contract is being revised. The backend APIs and
+saved records remain compatible. Internal regression runs enable the preserved
+workspace explicitly with `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; do not set
+that flag in a downloadable build until the revised acceptance gate passes.
+
 ## Research Agent Mode
 
 The composer has a compact `Normal` / `Agent` toggle. When enabled for a turn,

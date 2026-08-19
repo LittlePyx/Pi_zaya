@@ -407,6 +407,66 @@ def test_source_recovery_replaces_corrupted_reference_page_without_duplication(
     assert "<!-- kb_source_recovery: 2 -->" in repaired
 
 
+def test_source_recovery_keeps_only_novel_prose_next_to_structured_evidence(
+    monkeypatch,
+    tmp_path: Path,
+):
+    from kb.converter import quality_repair
+
+    pdf_path = tmp_path / "structured-page.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7\nfixture")
+    md_path = tmp_path / "structured-page.en.md"
+    conclusion = (
+        "This conclusion explains the recovered scene representation and confirms "
+        "stable multi-view reconstruction across every evaluated scientific dataset."
+    )
+    acknowledgement = (
+        "Acknowledgements. This work was supported by the Example Research Foundation "
+        "and the Institute for Reliable Scientific Imaging."
+    )
+    original = "\n\n".join(
+        [
+            "<!-- kb_page: 1 -->",
+            "![Figure 1](./assets/page_1_fig_1.png)",
+            "**Figure 1.** Qualitative evaluations of the reconstructed scenes.",
+            "| Method | Score |\n| --- | --- |\n| Ours | 0.95 |",
+            conclusion,
+        ]
+    )
+
+    monkeypatch.setattr(
+        quality_repair,
+        "_source_page_coverage_quality",
+        lambda *_args, **_kwargs: {"source_page_text_corruption_pages": [{"page": 1}]},
+    )
+    monkeypatch.setattr(
+        quality_repair,
+        "_pdf_page_fallback_markdown",
+        lambda *_args, **_kwargs: "\n\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "Figure 1. Qualitative evaluations of the reconstructed scenes.",
+                "Method Score Ours 0.95",
+                conclusion,
+                acknowledgement,
+            ]
+        ),
+    )
+
+    repaired, changed = quality_repair._recover_corrupted_source_pages_from_pdf_text(
+        original,
+        md_path,
+        pdf_path,
+    )
+
+    assert changed is True
+    assert repaired.count(conclusion) == 1
+    assert repaired.count("Qualitative evaluations of the reconstructed scenes") == 1
+    assert "Method Score Ours 0.95" not in repaired
+    assert repaired.count(acknowledgement) == 1
+    assert "<!-- kb_source_recovery: 1 -->" in repaired
+
+
 def test_postprocess_rechecks_source_recovery_even_without_active_corruption_issue(
     monkeypatch,
     tmp_path: Path,
@@ -3509,6 +3569,36 @@ def test_short_reference_detector_accepts_compact_journal_article_records() -> N
     refs[8] = "[8] S. An, W. Zhao, A. Zhai, G. Zhang, D. Wang, Laser Photonics Rev. 2401101."
 
     assert _reference_map_has_short_truncated_entries(refs) is False
+
+
+def test_short_reference_detector_rejects_long_cross_page_hyphen_tail() -> None:
+    from kb.converter.quality_repair import _reference_map_has_short_truncated_entries
+
+    refs = {
+        idx: f"[{idx}] Author {idx}. Journal of Tests 2024, {idx}, {1000 + idx}."
+        for idx in range(1, 9)
+    }
+    refs[6] = (
+        "[6] Ben Mildenhall, Pratul Srinivasan, Matthew Tancik, Jonathan Barron, "
+        "Ravi Ramamoorthi, and Ren Ng. Neural radiance fields for view syn-"
+    )
+
+    assert _reference_map_has_short_truncated_entries(refs) is True
+
+
+def test_reference_continuation_page_accepts_dense_nonconsecutive_starts() -> None:
+    from kb.converter.quality_repair import _pdf_reference_continuation_page_has_signal
+
+    page_text = "\n".join(
+        [
+            "thesis. Communications of the ACM, 65(1):99-106, 2021.",
+            "[27] First Author. A complete journal reference, 2022.",
+            "[29] Second Author. Another complete conference reference, 2023.",
+            "[32] Third Author. A final complete proceedings reference, 2024.",
+        ]
+    )
+
+    assert _pdf_reference_continuation_page_has_signal(page_text) is True
 
 
 def test_detached_name_accents_use_safe_markdown_autofix(tmp_path: Path) -> None:

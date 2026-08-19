@@ -17,14 +17,14 @@ Agent 规划、工具调用、主张核验、引用卡片和 React 追踪界面�
 ## 下载 Windows 测试版
 
 当前已发布版本是
-[`v0.1.0-beta.10`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.10)。
+[`v0.1.0-beta.11`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.11)。
 
 ### 应该下载哪个文件
 
 | Release 文件 | 用途 | 使用方法 |
 |---|---|---|
-| [`Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.10/Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe) | 推荐普通 Windows 用户使用 | 先核对 SHA-256，再运行安装向导。安装后从开始菜单或可选的桌面快捷方式打开 Pi_zaya。只安装到当前用户，不需要管理员权限。 |
-| [`Pi_zaya-v0.1.0-beta.10-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.10/Pi_zaya-v0.1.0-beta.10-windows-x64.zip) | 免安装、移动目录或排查问题 | 先核对 SHA-256，把 ZIP **完整解压**到普通文件夹，再双击 `Pi_zaya.exe`。不要在压缩包预览窗口中直接运行。 |
+| [`Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.11/Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe) | 推荐普通 Windows 用户使用 | 先核对 SHA-256，再运行安装向导。安装后从开始菜单或可选的桌面快捷方式打开 Pi_zaya。只安装到当前用户，不需要管理员权限。 |
+| [`Pi_zaya-v0.1.0-beta.11-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.11/Pi_zaya-v0.1.0-beta.11-windows-x64.zip) | 免安装、移动目录或排查问题 | 先核对 SHA-256，把 ZIP **完整解压**到普通文件夹，再双击 `Pi_zaya.exe`。不要在压缩包预览窗口中直接运行。 |
 | `*.sha256` | 校验下载是否完整 | 这是文本校验文件，不是软件。使用 `Get-FileHash` 计算对应 EXE 或 ZIP 的 SHA-256，并与文件中的值比较。 |
 | `*.manifest.json` | 查看构建来源和签名状态 | 这是机器可读的版本、提交、许可证、包类型和签名记录，不是软件。 |
 | GitHub 自动生成的 Source code 压缩包 | 开发者从源码构建 | 这不是可直接运行的 Windows 软件。普通用户请选择安装器或便携 ZIP。 |
