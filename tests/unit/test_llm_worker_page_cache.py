@@ -389,6 +389,83 @@ def test_shared_inflight_gate_releases_slot_after_provider_exception(tmp_path, m
     assert calls["count"] == 2
 
 
+def test_workers_share_cross_process_global_inflight_gate(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.setenv("KB_LLM_MAX_INFLIGHT", "2")
+    monkeypatch.setenv("KB_LLM_GLOBAL_COORDINATOR", str(tmp_path / "global-inflight"))
+    monkeypatch.setenv("KB_LLM_GLOBAL_MAX_INFLIGHT", "1")
+    monkeypatch.setenv("KB_LLM_GLOBAL_MIN_INFLIGHT", "1")
+    monkeypatch.setenv("KB_LLM_GLOBAL_REQUIRED", "1")
+    monkeypatch.setenv("KB_LLM_GLOBAL_OWNER", "test-process")
+    LLMWorker._reset_shared_llm_gate_for_tests(limit=2)
+
+    worker_a = LLMWorker(_make_cfg(tmp_path))
+    worker_b = LLMWorker(_make_cfg(tmp_path))
+    state = {"active": 0, "max_active": 0}
+    lock = threading.Lock()
+    barrier = threading.Barrier(3)
+
+    def _fake_guard_timeout(self, *, timeout_s: float, has_image_payload: bool, **kwargs):
+        del self, timeout_s, has_image_payload, kwargs
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+        time.sleep(0.1)
+        with lock:
+            state["active"] -= 1
+        return _FakeResp("ok")
+
+    monkeypatch.setattr(LLMWorker, "_client_create_with_guard_timeout", _fake_guard_timeout)
+    errors = []
+
+    def _run(worker):
+        try:
+            barrier.wait(timeout=2.0)
+            worker._llm_create(messages=[{"role": "user", "content": "hi"}], max_tokens=32)
+        except Exception as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_run, args=(worker,)) for worker in (worker_a, worker_b)]
+    for thread in threads:
+        thread.start()
+    barrier.wait(timeout=2.0)
+    for thread in threads:
+        thread.join(timeout=3.0)
+
+    assert errors == []
+    assert state["max_active"] == 1
+
+
+def test_provider_timeout_reduces_dynamic_global_limit(tmp_path, monkeypatch):
+    monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
+    monkeypatch.setenv("KB_LLM_MAX_INFLIGHT", "4")
+    monkeypatch.setenv("KB_LLM_GLOBAL_COORDINATOR", str(tmp_path / "global-inflight"))
+    monkeypatch.setenv("KB_LLM_GLOBAL_MAX_INFLIGHT", "4")
+    monkeypatch.setenv("KB_LLM_GLOBAL_MIN_INFLIGHT", "2")
+    monkeypatch.setenv("KB_LLM_GLOBAL_REQUIRED", "1")
+    monkeypatch.setenv("KB_LLM_GLOBAL_OWNER", "timeout-test")
+    LLMWorker._reset_shared_llm_gate_for_tests(limit=4)
+    worker = LLMWorker(_make_cfg(tmp_path))
+
+    def _timeout(self, *, timeout_s: float, has_image_payload: bool, **kwargs):
+        del self, timeout_s, has_image_payload, kwargs
+        raise TimeoutError("simulated provider timeout")
+
+    monkeypatch.setattr(LLMWorker, "_client_create_with_guard_timeout", _timeout)
+    with pytest.raises(TimeoutError, match="simulated provider timeout"):
+        worker._llm_create(
+            messages=[{"role": "user", "content": "first"}],
+            max_tokens=32,
+            _max_retries=0,
+        )
+
+    snapshot = worker.get_global_llm_inflight_snapshot()
+    assert snapshot["configured_limit"] == 4
+    assert snapshot["effective_limit"] == 3
+    assert snapshot["timeout_events"] == 1
+    assert snapshot["limit_reductions"] == 1
+
+
 def test_ultra_fast_vision_circuit_skips_later_requests_after_timeouts(tmp_path, monkeypatch):
     monkeypatch.setattr(LLMWorker, "_ensure_openai_class", lambda self: _FakeClient)
     monkeypatch.setenv("KB_PDF_VISION_PAGE_CACHE", "0")

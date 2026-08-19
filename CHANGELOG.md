@@ -2,6 +2,23 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.10] - 2026-08-19
+
+### Added
+
+- Add a guided first-success path that takes a new user from text-model setup through document preparation to the first grounded answer, while keeping vision setup optional and exposing the application-managed PDF and Markdown directories.
+- Persist PDF conversion jobs in the library database and surface interrupted work as an explicit, user-controlled recovery action after restart. Recovery reuses validated page-cache artifacts without storing API keys or silently spending model credits.
+
+### Changed
+
+- Share one work-conserving provider-inflight ceiling across simultaneous converter processes, keep source-order page submission, and use eight inflight vision requests by default for bounded multi-document throughput.
+- Require paired structural-quality comparison for converter performance candidates. Rejected page-scheduling, adaptive-budget, and text-local vision-bypass experiments are removed from the runtime and formal artifact.
+
+### Fixed
+
+- Keep missing source files and missing vision credentials in actionable recovery states instead of retrying in a loop or leaving a conversion permanently spinning.
+- Make recovery idempotent, preserve the task identity across restart, follow source-file renames, and prevent stale interrupted jobs from duplicating documents or indexes.
+
 ## [0.1.0-beta.9] - 2026-08-18
 
 ### Added

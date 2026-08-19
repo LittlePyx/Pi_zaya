@@ -35,8 +35,20 @@ export interface AppUpdateCheckOptions {
   cacheOnly?: boolean
 }
 
+export type OnboardingStep = 'connect_model' | 'prepare_document' | 'ask_question' | 'completed'
+
+export interface AppOnboardingStatus {
+  text_model_ready: boolean
+  imported_document_count: number
+  ready_document_count: number
+  grounded_answer_count: number
+  current_step: OnboardingStep
+  completed: boolean
+}
+
 export const appApi = {
   version: () => api.get<AppVersionPayload>('/api/app/version'),
+  onboardingStatus: () => api.get<AppOnboardingStatus>('/api/app/onboarding-status'),
   updateCheck: (options: AppUpdateCheckOptions = {}) => {
     const params = new URLSearchParams()
     if (options.refresh) params.set('refresh', 'true')

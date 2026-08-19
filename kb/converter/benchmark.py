@@ -25,6 +25,7 @@ from kb.config import load_settings
 from .config import ConvertConfig, LlmConfig
 from .llm_worker import LLMWorker
 from .pipeline import PDFConverter
+from .quality_compare import compare_markdown_quality
 
 
 VALID_SPEED_MODES = {"no_llm", "normal", "ultra_fast"}
@@ -53,31 +54,6 @@ _LAYOUT_CROP_DONE_RE = re.compile(
     r"^\[VISION_DIRECT\]\[LAYOUT\]\s+page\s+(?P<page>\d+)\s+crop\s+\d+/\d+\s+\([^)]+\)\s+done\s+\((?P<seconds>\d+(?:\.\d+)?)s,",
     flags=re.IGNORECASE,
 )
-_PAGE_BUDGET_RE = re.compile(
-    r"^\[VISION_DIRECT\]\[BUDGET\]\s+page\s+(?P<page>\d+):\s+"
-    r"class=(?P<page_class>[a-z_]+)\s+enabled=(?P<enabled>[01])\s+"
-    r"dpi=(?P<dpi>\d+)\s+base_dpi=(?P<base_dpi>\d+)\s+"
-    r"max_tokens=(?P<max_tokens>default|\d+)\s+"
-    r"density=(?P<density>[a-z_]+)\s+text_chars=(?P<text_chars>\d+)\s+"
-    r"formulas=(?P<formulas>\d+)\s+images=(?P<images>\d+)\s+visuals=(?P<visuals>\d+)\s+"
-    r"profile=(?P<profile>[a-z_]+)\s*$",
-    flags=re.IGNORECASE,
-)
-_TEXT_LOCAL_RE = re.compile(
-    r"^\[VISION_DIRECT\]\[TEXT_LOCAL\]\s+page\s+(?P<page>\d+):\s+"
-    r"accepted=(?P<accepted>[01])\s+reason=(?P<reason>[a-z_]+)\s+"
-    r"source_chars=(?P<source_chars>\d+)\s+output_chars=(?P<output_chars>\d+)\s+"
-    r"source_tokens=(?P<source_tokens>\d+)\s+output_tokens=(?P<output_tokens>\d+)\s+"
-    r"coverage=(?P<coverage>\d+(?:\.\d+)?)\s+"
-    r"bigram_coverage=(?P<bigram_coverage>\d+(?:\.\d+)?)\s+"
-    r"order_ratio=(?P<order_ratio>\d+(?:\.\d+)?)\s+"
-    r"length_ratio=(?P<length_ratio>\d+(?:\.\d+)?)\s+"
-    r"headings=(?P<headings_promoted>\d+)/(?P<heading_candidates>\d+)\s+"
-    r"elapsed=(?P<elapsed>\d+(?:\.\d+)?)\s*$",
-    flags=re.IGNORECASE,
-)
-
-
 @dataclass(frozen=True)
 class BenchmarkProfile:
     name: str
@@ -89,8 +65,6 @@ class BenchmarkProfile:
     vision_dpi: int | None = None
     vision_compress: int | None = None
     stage_timings: bool = False
-    adaptive_page_budgets: bool = False
-    text_local_fastpath: bool = False
 
 
 def _parse_bool(value: str) -> bool:
@@ -158,7 +132,6 @@ def parse_converter_log_metrics(log_path: Path) -> tuple[dict, list[dict]]:
     empty_retry_count = 0
     math_retry_count = 0
     fallback_count = 0
-
     if not Path(log_path).exists():
         return {
             "page_metric_count": 0,
@@ -180,14 +153,6 @@ def parse_converter_log_metrics(log_path: Path) -> tuple[dict, list[dict]]:
             "empty_retry_count": 0,
             "math_retry_count": 0,
             "fallback_count": 0,
-            "page_class_counts": {},
-            "adaptive_budget_pages": 0,
-            "reduced_dpi_pages": 0,
-            "token_capped_pages": 0,
-            "text_local_attempt_pages": 0,
-            "text_local_accepted_pages": 0,
-            "text_local_fallback_pages": 0,
-            "vision_calls_avoided": 0,
         }, []
 
     try:
@@ -254,52 +219,6 @@ def parse_converter_log_metrics(log_path: Path) -> tuple[dict, list[dict]]:
             row["uses_layout_crop_mode"] = 1
             continue
 
-        match = _PAGE_BUDGET_RE.match(line)
-        if match:
-            page_no = int(match.group("page"))
-            row = page_rows.setdefault(page_no, _new_page_metric(page_no))
-            max_tokens_raw = str(match.group("max_tokens") or "default").lower()
-            row.update(
-                {
-                    "page_class": str(match.group("page_class") or "unknown").lower(),
-                    "adaptive_budget_enabled": int(match.group("enabled") == "1"),
-                    "render_dpi": int(match.group("dpi")),
-                    "base_dpi": int(match.group("base_dpi")),
-                    "max_tokens_override": int(max_tokens_raw) if max_tokens_raw.isdigit() else None,
-                    "text_density": str(match.group("density") or "unknown").lower(),
-                    "text_chars": int(match.group("text_chars")),
-                    "formula_candidate_count": int(match.group("formulas")),
-                    "image_count": int(match.group("images")),
-                    "visual_rect_count": int(match.group("visuals")),
-                    "render_profile": str(match.group("profile") or "base").lower(),
-                }
-            )
-            continue
-
-        match = _TEXT_LOCAL_RE.match(line)
-        if match:
-            page_no = int(match.group("page"))
-            row = page_rows.setdefault(page_no, _new_page_metric(page_no))
-            row.update(
-                {
-                    "text_local_attempted": 1,
-                    "text_local_accepted": int(match.group("accepted") == "1"),
-                    "text_local_reason": str(match.group("reason") or "unknown").lower(),
-                    "text_local_source_chars": int(match.group("source_chars")),
-                    "text_local_output_chars": int(match.group("output_chars")),
-                    "text_local_source_tokens": int(match.group("source_tokens")),
-                    "text_local_output_tokens": int(match.group("output_tokens")),
-                    "text_local_coverage": float(match.group("coverage")),
-                    "text_local_bigram_coverage": float(match.group("bigram_coverage")),
-                    "text_local_order_ratio": float(match.group("order_ratio")),
-                    "text_local_length_ratio": float(match.group("length_ratio")),
-                    "text_local_headings_promoted": int(match.group("headings_promoted")),
-                    "text_local_heading_candidates": int(match.group("heading_candidates")),
-                    "text_local_elapsed_s": float(match.group("elapsed")),
-                }
-            )
-            continue
-
         if "[VISION_DIRECT] VL empty on page" in line and ", retry " in line:
             empty_retry_count += 1
             continue
@@ -317,18 +236,10 @@ def parse_converter_log_metrics(log_path: Path) -> tuple[dict, list[dict]]:
         row = dict(page_rows[page_no])
         row["uses_refs_column_mode"] = int(page_no in refs_column_pages or bool(row.get("uses_refs_column_mode")))
         row["uses_layout_crop_mode"] = int(page_no in layout_crop_pages or bool(row.get("uses_layout_crop_mode")))
-        if bool(row.get("is_references_page")) and not str(row.get("page_class") or "").strip():
-            row["page_class"] = "references"
         page_metrics.append(row)
 
     page_total_values = [float(row["page_total_s"]) for row in page_metrics if "page_total_s" in row]
     vision_step6_values = [float(row["step_6_vision_convert_s"]) for row in page_metrics if "step_6_vision_convert_s" in row]
-    page_class_counts: dict[str, int] = {}
-    for row in page_metrics:
-        page_class = str(row.get("page_class") or "").strip().lower()
-        if page_class:
-            page_class_counts[page_class] = int(page_class_counts.get(page_class, 0)) + 1
-
     run_metrics = {
         "page_metric_count": int(len(page_metrics)),
         "page_timed_pages": int(len(page_total_values)),
@@ -349,25 +260,6 @@ def parse_converter_log_metrics(log_path: Path) -> tuple[dict, list[dict]]:
         "empty_retry_count": int(empty_retry_count),
         "math_retry_count": int(math_retry_count),
         "fallback_count": int(fallback_count),
-        "page_class_counts": page_class_counts,
-        "adaptive_budget_pages": int(sum(int(bool(row.get("adaptive_budget_enabled"))) for row in page_metrics)),
-        "reduced_dpi_pages": int(
-            sum(
-                int(row.get("render_dpi") or 0) > 0
-                and int(row.get("render_dpi") or 0) < int(row.get("base_dpi") or 0)
-                for row in page_metrics
-            )
-        ),
-        "token_capped_pages": int(sum(row.get("max_tokens_override") is not None for row in page_metrics)),
-        "text_local_attempt_pages": int(sum(int(bool(row.get("text_local_attempted"))) for row in page_metrics)),
-        "text_local_accepted_pages": int(sum(int(bool(row.get("text_local_accepted"))) for row in page_metrics)),
-        "text_local_fallback_pages": int(
-            sum(
-                int(bool(row.get("text_local_attempted"))) and not int(bool(row.get("text_local_accepted")))
-                for row in page_metrics
-            )
-        ),
-        "vision_calls_avoided": int(sum(int(bool(row.get("text_local_accepted"))) for row in page_metrics)),
     }
     return run_metrics, page_metrics
 
@@ -395,12 +287,6 @@ def parse_profile_spec(spec: str) -> BenchmarkProfile:
     vision_dpi = _parse_optional_int(fields, "vision_dpi")
     vision_compress = _parse_optional_int(fields, "vision_compress")
     stage_timings = _parse_bool(fields["stage_timings"]) if "stage_timings" in fields else False
-    adaptive_page_budgets = (
-        _parse_bool(fields["adaptive_page_budgets"])
-        if "adaptive_page_budgets" in fields
-        else False
-    )
-    text_local_fastpath = _parse_bool(fields["text_local_fastpath"]) if "text_local_fastpath" in fields else False
 
     if not name:
         parts = [speed_mode]
@@ -412,10 +298,6 @@ def parse_profile_spec(spec: str) -> BenchmarkProfile:
             parts.append(f"inflight{max_inflight}")
         if vision_dpi is not None:
             parts.append(f"dpi{vision_dpi}")
-        if adaptive_page_budgets:
-            parts.append("adaptive")
-        if text_local_fastpath:
-            parts.append("textlocal")
         name = "-".join(parts)
 
     return BenchmarkProfile(
@@ -428,8 +310,6 @@ def parse_profile_spec(spec: str) -> BenchmarkProfile:
         vision_dpi=vision_dpi,
         vision_compress=vision_compress,
         stage_timings=bool(stage_timings),
-        adaptive_page_budgets=bool(adaptive_page_budgets),
-        text_local_fastpath=bool(text_local_fastpath),
     )
 
 
@@ -469,8 +349,6 @@ def profile_env_overrides(profile: BenchmarkProfile) -> dict[str, str | None]:
         "KB_PDF_VISION_DPI": str(profile.vision_dpi) if profile.vision_dpi is not None else None,
         "KB_PDF_VISION_COMPRESS": str(profile.vision_compress) if profile.vision_compress is not None else None,
         "KB_PDF_STAGE_TIMINGS": "1" if profile.stage_timings else "0",
-        "KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS": "1" if profile.adaptive_page_budgets else "0",
-        "KB_PDF_VISION_TEXT_LOCAL_FASTPATH": "1" if profile.text_local_fastpath else "0",
     }
 
 
@@ -660,8 +538,6 @@ def run_single_benchmark(
         "vision_dpi": profile.vision_dpi,
         "vision_compress": profile.vision_compress,
         "stage_timings": bool(profile.stage_timings),
-        "adaptive_page_budgets": bool(profile.adaptive_page_budgets),
-        "text_local_fastpath": bool(profile.text_local_fastpath),
     }
     result.update(log_metrics)
     meta_path = case_dir / "benchmark_run.json"
@@ -687,10 +563,6 @@ def summarize_runs_by_case(runs: Iterable[dict]) -> list[dict]:
         empty_retries = [float(item.get("empty_retry_count") or 0.0) for item in items]
         math_retries = [float(item.get("math_retry_count") or 0.0) for item in items]
         fallbacks = [float(item.get("fallback_count") or 0.0) for item in items]
-        text_local_attempts = [float(item.get("text_local_attempt_pages") or 0.0) for item in items]
-        text_local_accepted = [float(item.get("text_local_accepted_pages") or 0.0) for item in items]
-        text_local_fallbacks = [float(item.get("text_local_fallback_pages") or 0.0) for item in items]
-        vision_calls_avoided = [float(item.get("vision_calls_avoided") or 0.0) for item in items]
         ok_count = sum(1 for item in items if bool(item.get("ok")))
         fail_count = len(items) - ok_count
         rows.append(
@@ -711,10 +583,6 @@ def summarize_runs_by_case(runs: Iterable[dict]) -> list[dict]:
                 "avg_empty_retries": round(sum(empty_retries) / max(1, len(empty_retries)), 4),
                 "avg_math_retries": round(sum(math_retries) / max(1, len(math_retries)), 4),
                 "avg_fallbacks": round(sum(fallbacks) / max(1, len(fallbacks)), 4),
-                "avg_text_local_attempts": round(sum(text_local_attempts) / max(1, len(text_local_attempts)), 4),
-                "avg_text_local_accepted": round(sum(text_local_accepted) / max(1, len(text_local_accepted)), 4),
-                "avg_text_local_fallbacks": round(sum(text_local_fallbacks) / max(1, len(text_local_fallbacks)), 4),
-                "avg_vision_calls_avoided": round(sum(vision_calls_avoided) / max(1, len(vision_calls_avoided)), 4),
             }
         )
     return rows
@@ -734,10 +602,6 @@ def summarize_runs_by_profile(runs: Iterable[dict]) -> list[dict]:
         empty_retries = [float(item.get("empty_retry_count") or 0.0) for item in items]
         math_retries = [float(item.get("math_retry_count") or 0.0) for item in items]
         fallbacks = [float(item.get("fallback_count") or 0.0) for item in items]
-        text_local_attempts = [float(item.get("text_local_attempt_pages") or 0.0) for item in items]
-        text_local_accepted = [float(item.get("text_local_accepted_pages") or 0.0) for item in items]
-        text_local_fallbacks = [float(item.get("text_local_fallback_pages") or 0.0) for item in items]
-        vision_calls_avoided = [float(item.get("vision_calls_avoided") or 0.0) for item in items]
         ok_count = sum(1 for item in items if bool(item.get("ok")))
         unique_pdfs = sorted({str(item.get("pdf_path") or "") for item in items if str(item.get("pdf_path") or "")})
         rows.append(
@@ -756,12 +620,100 @@ def summarize_runs_by_profile(runs: Iterable[dict]) -> list[dict]:
                 "avg_empty_retries": round(sum(empty_retries) / max(1, len(empty_retries)), 4),
                 "avg_math_retries": round(sum(math_retries) / max(1, len(math_retries)), 4),
                 "avg_fallbacks": round(sum(fallbacks) / max(1, len(fallbacks)), 4),
-                "avg_text_local_attempts": round(sum(text_local_attempts) / max(1, len(text_local_attempts)), 4),
-                "avg_text_local_accepted": round(sum(text_local_accepted) / max(1, len(text_local_accepted)), 4),
-                "avg_text_local_fallbacks": round(sum(text_local_fallbacks) / max(1, len(text_local_fallbacks)), 4),
-                "avg_vision_calls_avoided": round(sum(vision_calls_avoided) / max(1, len(vision_calls_avoided)), 4),
             }
         )
+    return rows
+
+
+def compare_paired_profile_runs(
+    runs: Iterable[dict],
+    profiles: Iterable[BenchmarkProfile],
+) -> list[dict]:
+    """Compare every candidate profile with the first profile per PDF/repeat."""
+
+    profile_list = list(profiles)
+    if len(profile_list) < 2:
+        return []
+    baseline_name = str(profile_list[0].name)
+    candidate_names = [str(profile.name) for profile in profile_list[1:]]
+    indexed = {
+        (
+            str(run.get("pdf_path") or ""),
+            int(run.get("repeat") or 0),
+            str(run.get("profile") or ""),
+        ): run
+        for run in runs
+    }
+    pair_keys = sorted(
+        {
+            (pdf_path, repeat)
+            for pdf_path, repeat, profile_name in indexed
+            if profile_name == baseline_name
+        }
+    )
+    rows: list[dict] = []
+    for pdf_path, repeat in pair_keys:
+        baseline = indexed[(pdf_path, repeat, baseline_name)]
+        for candidate_name in candidate_names:
+            candidate = indexed.get((pdf_path, repeat, candidate_name))
+            base_elapsed = float(baseline.get("elapsed_s") or 0.0)
+            candidate_elapsed = float((candidate or {}).get("elapsed_s") or 0.0)
+            improvement_pct = (
+                ((base_elapsed - candidate_elapsed) / base_elapsed) * 100.0
+                if base_elapsed > 0.0 and candidate_elapsed > 0.0
+                else 0.0
+            )
+            row = {
+                "pdf_path": pdf_path,
+                "pdf_name": str(baseline.get("pdf_name") or Path(pdf_path).name),
+                "repeat": int(repeat),
+                "baseline_profile": baseline_name,
+                "candidate_profile": candidate_name,
+                "baseline_elapsed_s": round(base_elapsed, 4),
+                "candidate_elapsed_s": round(candidate_elapsed, 4),
+                "elapsed_improvement_pct": round(improvement_pct, 4),
+                "quality_comparison_available": False,
+                "quality_gate_passed": False,
+                "regression_flags": ["missing_candidate_run"] if candidate is None else [],
+            }
+            if candidate is None:
+                rows.append(row)
+                continue
+            base_md = Path(str(baseline.get("output_dir") or "")) / "output.md"
+            candidate_md = Path(str(candidate.get("output_dir") or "")) / "output.md"
+            if not bool(baseline.get("ok")) or not bool(candidate.get("ok")):
+                row["regression_flags"] = ["conversion_failed"]
+                rows.append(row)
+                continue
+            if not base_md.is_file() or not candidate_md.is_file():
+                row["regression_flags"] = ["missing_markdown_output"]
+                rows.append(row)
+                continue
+            try:
+                comparison = compare_markdown_quality(
+                    base_md.read_text(encoding="utf-8", errors="replace"),
+                    candidate_md.read_text(encoding="utf-8", errors="replace"),
+                )
+            except Exception as exc:
+                row["regression_flags"] = [f"quality_compare_failed:{type(exc).__name__}"]
+                rows.append(row)
+                continue
+            regressions = sorted(
+                key
+                for key, value in dict(comparison.get("regression_flags") or {}).items()
+                if bool(value)
+            )
+            row.update(
+                {
+                    "quality_comparison_available": True,
+                    "quality_gate_passed": not regressions,
+                    "regression_flags": regressions,
+                    "similarity_ratio": comparison.get("similarity_ratio"),
+                    "similarity_basis": comparison.get("similarity_basis"),
+                    "quality_delta": comparison.get("delta") or {},
+                }
+            )
+            rows.append(row)
     return rows
 
 
@@ -888,6 +840,12 @@ def run_benchmark_suite(
         "summary_by_case": summarize_runs_by_case(runs),
         "summary_by_profile": summarize_runs_by_profile(runs),
     }
+    if paired_profiles:
+        paired_comparisons = compare_paired_profile_runs(runs, profiles)
+        payload["paired_comparisons"] = paired_comparisons
+        payload["paired_quality_gate_passed"] = bool(paired_comparisons) and all(
+            bool(row.get("quality_gate_passed")) for row in paired_comparisons
+        )
     return payload
 
 
@@ -908,6 +866,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--paired-profiles",
         action="store_true",
         help="Run profiles next to each other per PDF/repeat and reverse their order on even repeats",
+    )
+    parser.add_argument(
+        "--fail-on-paired-quality-regression",
+        action="store_true",
+        help="Return a non-zero exit code after writing results if any paired profile loses critical quality",
     )
     parser.add_argument("--list-default-profiles", action="store_true", help="Print default profiles and exit")
     return parser
@@ -968,6 +931,11 @@ def main(argv: Optional[list[str]] = None) -> int:
     print(f"[BENCH] wrote {page_metrics_csv_path}", flush=True)
     print(f"[BENCH] wrote {case_csv_path}", flush=True)
     print(f"[BENCH] wrote {profile_csv_path}", flush=True)
+    if bool(args.paired_profiles):
+        gate_passed = bool(payload.get("paired_quality_gate_passed"))
+        print(f"[BENCH] paired quality gate: {'PASS' if gate_passed else 'FAIL'}", flush=True)
+        if bool(args.fail_on_paired_quality_regression) and not gate_passed:
+            return 2
     return 0
 
 

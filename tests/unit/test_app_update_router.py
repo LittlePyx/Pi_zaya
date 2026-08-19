@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from email.message import Message
+from pathlib import Path
+from types import SimpleNamespace
 import urllib.error
 
 from fastapi.testclient import TestClient
@@ -37,6 +39,42 @@ def test_app_version_payload_uses_current_build_info(monkeypatch):
 
     assert payload["version"] == "v2.0.0"
     assert payload["repository"] == "LittlePyx/Pi_zaya"
+
+
+def test_onboarding_status_advances_only_after_grounded_answer(monkeypatch, tmp_path: Path):
+    settings = SimpleNamespace(db_dir=tmp_path / "db", text_api_key="configured", api_key="configured")
+    store = SimpleNamespace(grounded_answer_count=lambda: 0)
+    monkeypatch.setattr(app_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_router, "load_prefs", lambda: {})
+    monkeypatch.setattr(app_router, "_list_pdf_paths_fast", lambda path: [path / "paper.pdf"])
+    monkeypatch.setattr(app_router, "load_docs_index", lambda path: {"paper": {"title": "Paper"}})
+    monkeypatch.setattr(app_router, "get_chat_store", lambda: store)
+
+    payload = app_router.get_onboarding_status()
+
+    assert payload["imported_document_count"] == 1
+    assert payload["ready_document_count"] == 1
+    assert payload["current_step"] == "ask_question"
+    assert payload["completed"] is False
+
+    store.grounded_answer_count = lambda: 1
+    completed = app_router.get_onboarding_status()
+    assert completed["current_step"] == "completed"
+    assert completed["completed"] is True
+
+
+def test_onboarding_status_keeps_model_setup_first(monkeypatch, tmp_path: Path):
+    settings = SimpleNamespace(db_dir=tmp_path / "db", text_api_key="", api_key="")
+    monkeypatch.setattr(app_router, "get_settings", lambda: settings)
+    monkeypatch.setattr(app_router, "load_prefs", lambda: {})
+    monkeypatch.setattr(app_router, "_list_pdf_paths_fast", lambda path: [])
+    monkeypatch.setattr(app_router, "load_docs_index", lambda path: {})
+    monkeypatch.setattr(app_router, "get_chat_store", lambda: SimpleNamespace(grounded_answer_count=lambda: 0))
+
+    payload = app_router.get_onboarding_status()
+
+    assert payload["current_step"] == "connect_model"
+    assert payload["completed"] is False
 
 
 def test_current_build_info_uses_version_file_without_tag(monkeypatch):

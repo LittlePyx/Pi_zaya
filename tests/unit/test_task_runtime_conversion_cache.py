@@ -30,3 +30,14 @@ def test_safe_clear_conversion_output_discards_cache_for_quality_repair(tmp_path
     task_runtime._safe_clear_conversion_output(output, tmp_path, preserve_page_cache=False)
 
     assert not output.exists()
+
+
+def test_resumed_quality_repair_preserves_completed_page_cache() -> None:
+    assert task_runtime._bg_preserve_page_cache_for_replace(
+        {"resumed": True},
+        {"action": "reconvert", "issue_codes": ["weak_structure"]},
+    ) is True
+    assert task_runtime._bg_preserve_page_cache_for_replace(
+        {"resumed": False},
+        {"action": "reconvert"},
+    ) is False

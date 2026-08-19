@@ -1,10 +1,10 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.9`, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.8` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
+This runbook governs downloadable Pi_zaya releases. The current target is `v0.1.0-beta.10`, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.9` is the latest published downloadable beta, and `v0.1.0-beta.5` was the first.
 
 ## Current release decision
 
-The project is suitable for an explicitly labeled beta release. The application can be installed or extracted and started without installing Node.js or Python. It is not yet a polished generally available desktop release because jobs are not durable across restarts and updates are manual. The Authenticode path is ready, but an artifact is considered signed only when its manifest says `signed: true` and Windows validates its trusted publisher; without configured certificate secrets, beta artifacts remain explicitly unsigned.
+The project is suitable for an explicitly labeled beta release. The application can be installed or extracted and started without installing Node.js or Python. Conversion jobs are durable across restarts: queued, running, and cancelling work from an older backend session becomes an explicit recoverable task, never a permanently spinning task. Recovery remains user-triggered so restarting the app cannot silently spend model credits. The project is not yet a polished generally available desktop release because updates remain manual. The Authenticode path is ready, but an artifact is considered signed only when its manifest says `signed: true` and Windows validates its trusted publisher; without configured certificate secrets, beta artifacts remain explicitly unsigned.
 
 The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the standard MIT terms with `Copyright (c) 2026 LittlePyx`. Formal builds and the tag workflow still require that file to be present.
 
@@ -25,6 +25,8 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - Signing: optional trusted Authenticode covers `Pi_zaya.exe`, Setup, and Uninstaller with SHA-256 plus an RFC 3161 timestamp. The release manifest records the observed status, publisher, thumbprint, and timestamp. Self-signed certificates are not release signatures.
 - License: MIT; `LICENSE` must be present both in the repository and inside the ZIP.
 - Entry/exit: native `Pi_zaya.exe` with a system-tray safe-exit action; `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain diagnostic fallbacks.
+- Conversion durability: the conversion ledger lives in `library.sqlite3`, never stores API keys, preserves validated page-cache artifacts, and requires an explicit Continue action after a restart. A missing source PDF or vision credential stays in an actionable blocked recovery state rather than retrying in a loop.
+- Conversion concurrency: the downloadable product always submits pages in source order and uses a shared automatic provider-inflight ceiling of eight. No alternate page scheduler, adaptive page-budget branch, or text-local vision bypass is included. Higher ceilings remain explicit operator experiments and must not be enabled in a formal artifact without repeating the converter speed and structural-quality gates.
 
 Development mode is unchanged: repository-local databases and preferences remain the default unless `KB_RELEASE_MODE=1` or `KB_APP_DATA_DIR` is explicitly set. There is no implicit migration of existing development data.
 
@@ -41,7 +43,7 @@ The following fast build uses the current system Python only to validate portabl
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.9-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.10-windows-x64 `
   -AllowDirty
 ```
 
@@ -64,24 +66,24 @@ cd ..
   -KeepStage
 
 .\tools\release\build_windows_installer.ps1 `
-  -StageRoot .\release\Pi_zaya-v0.1.0-beta.9-windows-x64 `
+  -StageRoot .\release\Pi_zaya-v0.1.0-beta.10-windows-x64 `
   -InnoSetupCompiler "C:\Program Files\Inno Setup 7\ISCC.exe"
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.9-windows-x64.zip `
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.10-windows-x64.zip `
   -CleanProfile
 
 .\tools\release\smoke_windows_installer.ps1 `
-  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe
+  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.9-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.9-windows-x64.zip.sha256
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.10-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.10-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.10-windows-x64-setup.exe.sha256
 ```
 
 ## Tag release
@@ -90,7 +92,7 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.9-windows-x64-setup.exe.sha256
 2. Update `VERSION`, both frontend version fields, and `CHANGELOG.md`.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.9`.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.10`.
 6. The tag run repeats the complete backend, frontend, research, conversion, browser, portable-package, installer, and packaged-runtime gates on Windows.
 7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
 8. The workflow also silently installs into an isolated directory, repeats the runtime checks without system Python or Node.js, performs an in-place reinstall, uninstalls, and proves that the separate user-data sentinel remains.
@@ -112,6 +114,8 @@ Do not move or overwrite a tag after it has been pushed. If a tagged workflow fa
 
 `v0.1.0-beta.9` adds a standard per-user installer while retaining the portable ZIP. It uses a stable AppId and active-launcher mutex for safe in-place upgrades, creates normal Windows shortcuts, and keeps program files separate from `%LOCALAPPDATA%\Pi_zaya`. The installer gate must cover clean-profile install, embedded-runtime launch, same-version reinstall, uninstall, registration cleanup, and preserved user data. The release workflow also supports trusted Authenticode signing for the launcher, Setup, and Uninstaller; unsigned beta output remains allowed only when its manifests say so explicitly.
 
+`v0.1.0-beta.10` adds a guided first-success path and durable, user-triggered conversion recovery. Interrupted work is reconciled from the library database after restart, validated page caches are reused, and missing sources or credentials remain actionable without retry loops. Concurrent conversions share one work-conserving provider-inflight ceiling while preserving source-order submission. The release excludes rejected scheduler, adaptive-budget, and text-local bypass experiments and requires paired structural-quality comparison for future speed candidates.
+
 ## Clean-machine acceptance
 
 The formal Windows workflow automates both clean-start paths before any asset can be published. It verifies the ZIP and installer checksums; exercises the extracted ZIP and the installed application from fresh temporary locations; replaces the process profile and `%LOCALAPPDATA%`; removes Python and Node.js from `PATH`; clears inherited provider credentials; starts only the bundled runtime; checks the health/version/settings/React surfaces; confirms the expected isolated data path and missing-key state; and stops safely. The installer path additionally reinstalls in place, uninstalls, removes its HKCU registration, and proves that user data was not deleted.
@@ -121,8 +125,8 @@ The following hands-on workflow remains required before promotion beyond beta be
 1. Verify SHA-256 for both artifacts. Install with Setup on one account and extract the whole ZIP on the other.
 2. Start from the Start menu or double-click `Pi_zaya.exe`, confirm the browser opens the library page, and confirm the Pi_zaya system-tray menu can reopen it.
 3. Configure provider credentials in Settings and restart once to prove preferences survive.
-4. Upload two representative PDFs, run concurrent conversion, cancel one document, and retry it.
-5. Confirm each document reports its own terminal outcome; induce or use a fixture for index retry without reconversion.
+4. Upload two representative PDFs and run concurrent conversion. Exit Pi_zaya while one is active, restart, confirm it is shown as interrupted rather than converting, then explicitly continue it and verify the completed-page reuse count. Cancel and retry the other document.
+5. Confirm each document reports its own terminal outcome; induce or use a fixture for index retry without reconversion. Reopen the library and confirm the resumed document appears only once in the document, reference, and structured indexes.
 6. Ask a grounded question, open a citation in the reader, build and export a small evidence matrix and research brief.
 7. Exit through the Pi_zaya system-tray menu, install the next test build over the installed version, restart, and confirm the library persists under `%LOCALAPPDATA%\Pi_zaya`. Then uninstall and confirm the same data remains. For the portable path, replace the app folder and separately retain `Stop-Pi-zaya.cmd` as a diagnostic fallback.
 8. Inspect `%LOCALAPPDATA%\Pi_zaya\logs` and confirm no API keys are printed.
@@ -219,9 +223,49 @@ The local beta.8 mechanics artifact has SHA-256 `56512c889ddda7fccaa04f3a5b3c23f
 
 Both local beta.9 artifacts record `source_dirty=true`, so they are mechanics proofs rather than distributable assets. A clean commit, untagged Windows preflight, and exact-tag run are still required before publication.
 
+### 2026-08-18 durable conversion recovery acceptance
+
+- `library.sqlite3` now owns a migration-safe conversion ledger with queued, running, cancelling, interrupted, blocked-recovery metadata, and terminal semantics; task payloads are allowlisted and never contain provider credentials;
+- backend startup atomically classifies work owned by older process sessions as interrupted, while repeated startup reconciliation is idempotent and cannot interrupt current-session work;
+- recovery is explicit: Continue and Continue all validate the source PDF and vision credential before requeueing the same task id. Missing prerequisites remain visible and recoverable without polling or automatic retries;
+- resumed conversions keep `.conversion_cache`, including interrupted quality-repair runs, and expose the number of completed pages available for reuse;
+- the durable terminal transition is compare-and-set and the in-memory queue rejects a second resume, so one recovery action cannot start duplicate conversion or indexing work;
+- deleting a source dismisses its interrupted recovery, while renaming a source moves the recoverable ledger path with it;
+- a spawned-process crash regression writes a running job, terminates without cleanup, restarts with a new session, and verifies recovery of the same task id and persisted page progress;
+- exact-tree backend unit: 4,468 passed, 41 skipped; backend sanity: 274 passed, 2 skipped; Ruff and `git diff --check`: pass;
+- frontend lint/build: pass; browser smoke: 136 passed, 2 skipped; core citation/library regressions: 113 passed; ordinary-user surface isolation: 4 passed;
+- Research QA fixture/full-library dry runs: 56 and 29 cases; source grounding: 41/41; grounded replay: 6/6; Agent golden contract: 10 cases, zero errors; reviewed Agent replay: 5/5;
+- paired comparison: 5/5 with zero false comparisons; comparison candidates: 5/5 with 18 discoveries and zero contract/evidence/prefill failures at `test_results/evidence_comparison_candidates/20260818_201707`;
+- project status: 5/5 at `test_results/project_research_status/20260818_201707`; project journey: 20/20 at `test_results/project_research_journey/20260818_201727`; converter quality: 13/13 at `test_results/converter_quality_eval/20260818_201705`.
+
+The complete automated release-quality gate passed on the exact working tree. A distributable build still requires a clean committed tree, clean-machine restart/resume acceptance, and the normal untagged/tagged release path.
+
+### 2026-08-19 conversion-speed boundary
+
+- the accepted two-document dynamic path remains global inflight eight, four page workers, three repair workers, and source-order page scheduling;
+- exploratory inflight 12 failed the fixed-paper quality gate, while 16 supplied no material advantage over the accepted three-repeat inflight-eight evidence, so high-core hosts no longer raise the automatic ceiling;
+- full text-density scheduling was about 24% faster across the two-paper sample but lost images/display math on all three Nature pairs;
+- a one-page, locally screened tail promotion still made Nature 6.4% slower and dropped four image links, so neither scheduler advanced to the ten-paper rollout or product default;
+- both failed scheduler implementations and every runtime/configuration entry point were removed; the older no-go adaptive page-budget and text-local bypass implementations were removed by the same quality-first audit;
+- only the rejected experiments' benchmark reports and decision records remain as historical evidence; none can be enabled through runtime, environment, benchmark, or throughput configuration;
+- paired converter benchmarks now record structural regression flags and can fail after artifact capture with `--fail-on-paired-quality-regression`.
+
+The detailed commands, raw-artifact paths, and timing tables are in
+`docs/CONVERTER_LLM_SPEED_PLAN.md`, section 27. This decision preserves the
+downloadable beta's existing conversion-quality contract; it does not claim an
+additional default speedup beyond the already accepted two-document dynamic
+coordinator.
+
+The exact-tree release gates then passed after all rejected speed branches were
+removed: backend unit 4,452 passed with 41
+skipped, sanity 274 passed with two skipped, Agent runtime 5/5, converter quality
+13/13, Ruff, frontend lint/build, browser smoke 136 with two build-mode skips,
+core browser 113/113, public-surface 4/4, and every existing research fixture
+and replay gate. The complete browser sequence passed in one fail-fast run after
+the scheduler code was removed.
+
 ## Promotion gates after beta
 
-- Persist queued/active conversion jobs and recover or honestly fail them after restart.
 - Acquire and protect a trusted public code-signing certificate before promotion beyond unsigned beta; exercise the required-signature CI branch with the real publisher identity.
 - Define an automatic or guided updater with rollback and data-schema compatibility checks.
 - Exercise backup/restore and data migration across consecutive real release versions.

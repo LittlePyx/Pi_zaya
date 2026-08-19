@@ -13,6 +13,10 @@ from typing import Any
 
 from fastapi import APIRouter
 
+from api.deps import get_chat_store, get_settings, load_prefs
+from kb.file_ops import _list_pdf_paths_fast
+from kb.library_paths import resolve_library_paths
+from kb.store import load_docs_index
 from kb.version import read_app_version
 
 router = APIRouter(prefix="/api/app", tags=["app"])
@@ -389,6 +393,39 @@ def _update_check_payload(*, force_refresh: bool = False, cache_only: bool = Fal
 @router.get("/version")
 def get_app_version():
     return _current_build_info()
+
+
+@router.get("/onboarding-status")
+def get_onboarding_status():
+    settings = get_settings()
+    paths = resolve_library_paths(settings, load_prefs())
+    imported_document_count = len(_list_pdf_paths_fast(paths.pdf_dir))
+    try:
+        ready_document_count = len(load_docs_index(Path(settings.db_dir)))
+    except Exception:
+        ready_document_count = 0
+    try:
+        grounded_answer_count = get_chat_store().grounded_answer_count()
+    except Exception:
+        grounded_answer_count = 0
+
+    text_model_ready = bool(getattr(settings, "text_api_key", "") or getattr(settings, "api_key", ""))
+    if not text_model_ready:
+        current_step = "connect_model"
+    elif ready_document_count <= 0:
+        current_step = "prepare_document"
+    elif grounded_answer_count <= 0:
+        current_step = "ask_question"
+    else:
+        current_step = "completed"
+    return {
+        "text_model_ready": text_model_ready,
+        "imported_document_count": imported_document_count,
+        "ready_document_count": ready_document_count,
+        "grounded_answer_count": grounded_answer_count,
+        "current_step": current_step,
+        "completed": current_step == "completed",
+    }
 
 
 @router.get("/update-check")

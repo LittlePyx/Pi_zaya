@@ -26,6 +26,7 @@ from .vision_circuit_breaker import (
     load_vision_circuit_policy,
     vision_circuit_failure_kind,
 )
+from .global_inflight import CrossProcessInflightLimiter, GlobalInflightLease
 from .post_processing import (
     fix_math_markdown,
     _normalize_math_for_typora,
@@ -110,6 +111,7 @@ class LLMWorker:
         # This is required before we can safely run multiple PDFs in parallel.
         self._llm_gate: _SharedInflightLimiter | None = None
         self._llm_max_inflight: int = 8
+        self._global_llm_gate: CrossProcessInflightLimiter | None = None
         self._thread_state = threading.local()
         try:
             raw = str(os.environ.get("KB_LLM_MAX_INFLIGHT", "") or "").strip()
@@ -125,6 +127,41 @@ class LLMWorker:
         except Exception:
             self._llm_gate = self._get_or_create_shared_llm_gate(8)
             self._llm_max_inflight = int(self._llm_gate.get_limit())
+        global_required = str(os.environ.get("KB_LLM_GLOBAL_REQUIRED", "0") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
+        global_coordinator = str(os.environ.get("KB_LLM_GLOBAL_COORDINATOR", "") or "").strip()
+        if global_coordinator:
+            try:
+                raw_global_limit = str(
+                    os.environ.get("KB_LLM_GLOBAL_MAX_INFLIGHT", str(self._llm_max_inflight))
+                    or str(self._llm_max_inflight)
+                ).strip()
+                global_limit = max(1, min(32, int(raw_global_limit)))
+                global_owner = str(os.environ.get("KB_LLM_GLOBAL_OWNER", "") or "").strip()
+                self._global_llm_gate = CrossProcessInflightLimiter(
+                    global_coordinator,
+                    max_limit=global_limit,
+                    owner_id=global_owner or f"pid-{os.getpid()}",
+                )
+                snapshot = self._global_llm_gate.snapshot()
+                print(
+                    "[LLM_GLOBAL] "
+                    f"coordinator=enabled limit={int(snapshot.get('effective_limit') or global_limit)}/"
+                    f"{int(snapshot.get('configured_limit') or global_limit)} owner={self._global_llm_gate.owner_id}",
+                    flush=True,
+                )
+            except Exception as exc:
+                self._global_llm_gate = None
+                if global_required:
+                    raise RuntimeError(f"global LLM inflight coordinator unavailable: {exc}") from exc
+                print(f"[WARN] Global LLM inflight coordinator disabled: {exc}", flush=True)
+        elif global_required:
+            raise RuntimeError("global LLM inflight coordinator is required but no path was provided")
         # Small in-memory caches to avoid repeated calls for identical snippets.
         # These caches live per backend process and reset on restart.
         self._cache_confirm_heading: dict[str, dict] = {}
@@ -156,6 +193,52 @@ class LLMWorker:
             return max(1, int(self._llm_max_inflight))
         except Exception:
             return 8
+
+    def get_global_llm_inflight_snapshot(self) -> dict:
+        if self._global_llm_gate is None:
+            return {}
+        try:
+            return self._global_llm_gate.snapshot()
+        except Exception:
+            return {}
+
+    def _record_global_llm_failure(self, exc: Exception) -> None:
+        gate = self._global_llm_gate
+        if gate is None:
+            return
+        failure_kind = vision_circuit_failure_kind(exc)
+        if failure_kind not in {"rate_limited", "timeout"}:
+            return
+        try:
+            before = gate.get_effective_limit()
+            state = gate.record_failure(failure_kind)
+            after = int(state.get("effective_limit") or before)
+            if after != before:
+                print(
+                    f"[LLM_GLOBAL] pressure={failure_kind} effective_limit={after}/"
+                    f"{int(state.get('configured_limit') or before)} cooldown_until="
+                    f"{float(state.get('cooldown_until') or 0.0):.3f}",
+                    flush=True,
+                )
+        except Exception as gate_exc:
+            print(f"[WARN] Global LLM pressure update skipped: {gate_exc}", flush=True)
+
+    def _record_global_llm_success(self) -> None:
+        gate = self._global_llm_gate
+        if gate is None:
+            return
+        try:
+            before = gate.get_effective_limit()
+            state = gate.record_success()
+            after = int(state.get("effective_limit") or before)
+            if after != before:
+                print(
+                    f"[LLM_GLOBAL] recovered effective_limit={after}/"
+                    f"{int(state.get('configured_limit') or after)}",
+                    flush=True,
+                )
+        except Exception as gate_exc:
+            print(f"[WARN] Global LLM recovery update skipped: {gate_exc}", flush=True)
 
     @staticmethod
     def _vision_page_budget_s(speed_mode: str) -> float:
@@ -465,19 +548,46 @@ class LLMWorker:
                         f"LLM inflight slots saturated (KB_LLM_MAX_INFLIGHT). "
                         f"Waited {sem_timeout:.1f}s for a slot. Consider increasing KB_LLM_MAX_INFLIGHT."
                     )
+                global_lease: GlobalInflightLease | None = None
                 try:
+                    if self._global_llm_gate is not None:
+                        remaining = self._remaining_vision_page_budget_s()
+                        global_timeout = sem_timeout
+                        if remaining is not None:
+                            if remaining < 1.0:
+                                raise TimeoutError(
+                                    "Vision page time budget exhausted before global provider slot acquisition"
+                                )
+                            global_timeout = min(global_timeout, max(1.0, min(60.0, remaining * 0.5)))
+                        global_lease = self._global_llm_gate.acquire(timeout=global_timeout)
+                        if global_lease is None:
+                            raise TimeoutError(
+                                "Global LLM inflight slots saturated. "
+                                f"Waited {global_timeout:.1f}s for shared provider capacity."
+                            )
                     call_timeout_s, call_hard_timeout_s = self._bound_call_to_page_budget(
                         timeout_s=timeout_s,
                         has_image_payload=has_image_payload,
                         hard_timeout_override=hard_timeout_override,
                     )
-                    return self._client_create_with_guard_timeout(
-                        timeout_s=call_timeout_s,
-                        has_image_payload=has_image_payload,
-                        hard_timeout_s_override=call_hard_timeout_s,
-                        **kwargs,
-                    )
+                    try:
+                        result = self._client_create_with_guard_timeout(
+                            timeout_s=call_timeout_s,
+                            has_image_payload=has_image_payload,
+                            hard_timeout_s_override=call_hard_timeout_s,
+                            **kwargs,
+                        )
+                    except Exception as provider_exc:
+                        self._record_global_llm_failure(provider_exc)
+                        raise
+                    self._record_global_llm_success()
+                    return result
                 finally:
+                    if global_lease is not None:
+                        try:
+                            global_lease.release()
+                        except Exception:
+                            pass
                     try:
                         self._llm_gate.release()
                     except Exception:

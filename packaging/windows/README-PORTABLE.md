@@ -13,6 +13,8 @@ The package includes its own Python runtime and prebuilt React frontend. Node.js
 
 Double-clicking `Pi_zaya.exe` again opens the already-running application instead of starting a duplicate backend. The tray menu can open Pi_zaya, the log folder, or the user-data folder, and safely stop the application. `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain available as diagnostic fallbacks.
 
+If Pi_zaya stops during PDF conversion, the Library shows the task as interrupted after restart. It never resumes paid-model work automatically. Use **Continue conversion** or **Continue all** to validate the source/API settings and reuse completed page-cache artifacts. A missing source or API key remains an actionable recovery notice instead of retrying indefinitely.
+
 ## Stop and update
 
 - Use **Exit Pi_zaya** from the system-tray menu before replacing or moving the application folder. If you used the command fallback, run `Stop-Pi-zaya.cmd`.
@@ -43,6 +45,8 @@ Pi_zaya is distributed under the MIT License. See `LICENSE` in this folder.
 软件包已经包含 Python 运行时和构建好的 React 前端，不要求用户另行安装 Node.js 或 Python。
 
 再次双击 `Pi_zaya.exe` 只会打开已经运行的页面，不会重复启动后台服务。托盘菜单可以打开 Pi_zaya、日志目录和数据目录，也可以安全退出。`Start-Pi-zaya.cmd` 与 `Stop-Pi-zaya.cmd` 继续作为诊断兜底。
+
+如果 PDF 转换过程中退出或后台异常停止，重启后“文库”会把任务显示为已中断，不会自动调用付费模型。点击“继续转换”或“全部继续”后，软件会检查源文件和 API 配置，并优先复用已完成页面；源 PDF 或 API Key 缺失时会保留明确的可恢复提示，不会无限重试。
 
 ## 停止与更新
 

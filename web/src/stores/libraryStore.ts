@@ -12,6 +12,8 @@ import {
   type LibraryMetaBatchUpdateBody,
   type LibraryMetaUpdateBody,
   type LibrarySuggestionRegenerateBody,
+  type ResumeAllConversionsResponse,
+  type ResumeConversionResponse,
 } from '../api/library'
 import { referencesApi, type ReferenceSyncStatusEvent, type ReferenceSyncStats } from '../api/references'
 import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
@@ -55,6 +57,7 @@ interface LibraryState {
     converted: number
     queued: number
     running: number
+    recoverable?: number
     reconverting: number
     quality_review: number
     quality_ready: number
@@ -66,6 +69,8 @@ interface LibraryState {
   qualityOverviewLoading: boolean
   qualityOverviewError: string
   converting: boolean
+  recoverableCount: number
+  conversionPersistenceError: string
   pendingRepairReindex: boolean
   pendingRepairRunIds: string[]
   progress: ConvertProgressState | null
@@ -90,6 +95,8 @@ interface LibraryState {
   applySuggestionAction: (body: LibrarySuggestionActionBody) => Promise<LibraryFileItem | null>
   cancelConvert: () => Promise<void>
   cancelConversionTask: (taskId: string) => Promise<CancelConversionResponse>
+  resumeConversionTask: (taskId: string) => Promise<ResumeConversionResponse>
+  resumeAllConversions: () => Promise<ResumeAllConversionsResponse>
   reindex: () => Promise<{
     ok: boolean
     stdout: string
@@ -293,6 +300,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
   qualityOverviewLoading: false,
   qualityOverviewError: '',
   converting: false,
+  recoverableCount: 0,
+  conversionPersistenceError: '',
   pendingRepairReindex: false,
   pendingRepairRunIds: [],
   progress: null,
@@ -358,6 +367,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
       fileCounts: view.counts || null,
       pdfs: files.map((item) => ({ name: item.name, path: item.path })),
       converting: queueRunning,
+      recoverableCount: numberValue(view.queue?.recoverable_count),
+      conversionPersistenceError: String(view.queue?.persistence_error || ''),
       progress: queueRunning ? queueProgress : null,
     }
     if (overviewRequestId === qualityOverviewRequestSeq) {
@@ -536,6 +547,26 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
     return res
   },
 
+  resumeConversionTask: async (taskId) => {
+    const res = await libraryApi.resumeConversionTask(taskId)
+    await get().loadFiles(get().viewScope || '200')
+    if (res.enqueued) {
+      set({ converting: true })
+      get().startProgressStream()
+    }
+    return res
+  },
+
+  resumeAllConversions: async () => {
+    const res = await libraryApi.resumeAllConversions()
+    await get().loadFiles(get().viewScope || '200')
+    if (res.enqueued > 0) {
+      set({ converting: true })
+      get().startProgressStream()
+    }
+    return res
+  },
+
   reindex: async () => {
     const res = await libraryApi.reindex()
     if (res.ok) {
@@ -565,6 +596,8 @@ export const useLibraryStore = create<LibraryState>((set, get) => ({
         )
         set((state) => ({
           converting: data.running,
+          recoverableCount: numberValue(data.recoverable_count),
+          conversionPersistenceError: String(data.persistence_error || ''),
           files: mergeActiveConversionProgress(state.files, activeTasks),
           progress: {
             total: data.total,

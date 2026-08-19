@@ -32,6 +32,7 @@ type LibraryFileRowProps = {
   onStartPaperGuide: (item: LibraryFileItem) => void
   onConvert: (item: LibraryFileItem) => void
   onCancel: (item: LibraryFileItem) => void
+  onResume: (item: LibraryFileItem) => void
   onRetry: (item: LibraryFileItem) => void
   retrying: boolean
   onOpenPdf: (name: string) => void
@@ -63,6 +64,7 @@ export function LibraryFileRow({
   onStartPaperGuide,
   onConvert,
   onCancel,
+  onResume,
   onRetry,
   retrying,
   onOpenPdf,
@@ -126,6 +128,7 @@ export function LibraryFileRow({
         onStartPaperGuide={() => onStartPaperGuide(item)}
         onConvert={() => onConvert(item)}
         onCancel={() => onCancel(item)}
+        onResume={() => onResume(item)}
         onRetry={() => onRetry(item)}
         retrying={retrying}
         onOpenPdf={() => onOpenPdf(item.name)}

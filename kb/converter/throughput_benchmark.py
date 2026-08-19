@@ -19,6 +19,7 @@ except ImportError:
 from kb.pdf_tools import run_pdf_to_md
 
 from .benchmark import parse_converter_log_metrics, temporary_env, write_csv
+from .global_inflight import load_global_inflight_snapshot
 
 
 _TIMEOUT_EVENT_RE = re.compile(
@@ -43,11 +44,11 @@ class ThroughputConfig:
     global_inflight: int = 8
     workers: int = 4
     llm_workers: int = 3
+    parallel_documents: int = 2
     repeat: int = 3
     min_throughput_improvement_pct: float = 25.0
     max_per_doc_p95_slowdown_pct: float = 15.0
-    adaptive_page_budgets: bool = False
-    text_local_fastpath: bool = False
+    dynamic_global_inflight: bool = True
 
 
 def _pdf_page_count(pdf_path: Path) -> int:
@@ -158,6 +159,8 @@ def _run_document(
     mode: str,
     repeat_index: int,
     max_active_conversions: int,
+    global_inflight_coordinator: Path | None = None,
+    global_inflight_limit: int | None = None,
     runner: Callable = run_pdf_to_md,
 ) -> tuple[dict, list[dict]]:
     # Keep the harness-owned path short. The product converter appends the full
@@ -194,6 +197,9 @@ def _run_document(
             progress_cb=_progress,
             speed_mode="normal",
             max_active_conversions=max_active_conversions,
+            global_inflight_coordinator=global_inflight_coordinator,
+            global_inflight_owner=f"{mode}-{repeat_index}-{case_id}",
+            global_inflight_limit=global_inflight_limit,
         )
     except Exception as exc:
         error = f"{type(exc).__name__}: {exc}"
@@ -222,6 +228,7 @@ def _run_document(
         "log_path": str(log_path),
         "error": error if error else ("" if ok else str(output_value or "conversion failed")),
         "max_active_conversions": int(max_active_conversions),
+        "dynamic_global_inflight": bool(global_inflight_coordinator),
         "timeout_event_count": int(timeout_event_count),
     }
     result.update(log_metrics)
@@ -411,11 +418,14 @@ def run_throughput_suite(
     runner: Callable = run_pdf_to_md,
     fail_fast: bool = False,
 ) -> dict:
-    if len(pdf_paths) != 2:
-        raise ValueError("throughput benchmark requires exactly two PDFs")
+    if len(pdf_paths) < 2:
+        raise ValueError("throughput benchmark requires at least two PDFs")
     resolved_pdfs = [Path(path).expanduser().resolve() for path in pdf_paths]
     if any(not path.is_file() for path in resolved_pdfs):
         raise FileNotFoundError("one or more throughput benchmark PDFs do not exist")
+    parallel_documents = max(2, min(4, int(config.parallel_documents or 2)))
+    if parallel_documents > len(resolved_pdfs):
+        raise ValueError("parallel document count cannot exceed the number of benchmark PDFs")
 
     experiments: list[dict] = []
     document_runs: list[dict] = []
@@ -427,8 +437,6 @@ def run_throughput_suite(
         "KB_PDF_WORKERS": str(max(1, int(config.workers))),
         "KB_PDF_LLM_WORKERS": str(max(1, int(config.llm_workers))),
         "KB_PDF_STAGE_TIMINGS": "1",
-        "KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS": "1" if config.adaptive_page_budgets else "0",
-        "KB_PDF_VISION_TEXT_LOCAL_FASTPATH": "1" if config.text_local_fastpath else "0",
     }
 
     with temporary_env(overrides):
@@ -437,6 +445,11 @@ def run_throughput_suite(
             for mode in ordered_modes:
                 print(f"[THROUGHPUT] mode={mode} run={repeat_index}/{config.repeat}", flush=True)
                 experiment_root = out_root / mode / f"run_{repeat_index:02d}"
+                global_coordinator = (
+                    experiment_root / "_global_inflight"
+                    if bool(config.dynamic_global_inflight)
+                    else None
+                )
                 experiment_t0 = time.perf_counter()
                 current_results: list[tuple[dict, list[dict]]] = []
                 if mode == "serial":
@@ -449,11 +462,13 @@ def run_throughput_suite(
                                 mode=mode,
                                 repeat_index=repeat_index,
                                 max_active_conversions=1,
+                                global_inflight_coordinator=global_coordinator,
+                                global_inflight_limit=int(config.global_inflight),
                                 runner=runner,
                             )
                         )
                 else:
-                    with ThreadPoolExecutor(max_workers=2) as executor:
+                    with ThreadPoolExecutor(max_workers=parallel_documents) as executor:
                         futures = [
                             executor.submit(
                                 _run_document,
@@ -462,7 +477,9 @@ def run_throughput_suite(
                                 case_id=f"doc_{document_index:02d}",
                                 mode=mode,
                                 repeat_index=repeat_index,
-                                max_active_conversions=2,
+                                max_active_conversions=parallel_documents,
+                                global_inflight_coordinator=global_coordinator,
+                                global_inflight_limit=int(config.global_inflight),
                                 runner=runner,
                             )
                             for document_index, pdf_path in enumerate(resolved_pdfs, start=1)
@@ -483,7 +500,27 @@ def run_throughput_suite(
                     "document_count": len(current_runs),
                     "sum_document_elapsed_s": round(sum(float(item.get("elapsed_s") or 0.0) for item in current_runs), 4),
                     "max_document_elapsed_s": round(max((float(item.get("elapsed_s") or 0.0) for item in current_runs), default=0.0), 4),
+                    "parallel_documents": 1 if mode == "serial" else parallel_documents,
+                    "dynamic_global_inflight": bool(global_coordinator),
                 }
+                global_snapshot = (
+                    load_global_inflight_snapshot(global_coordinator)
+                    if global_coordinator is not None
+                    else {}
+                )
+                if global_snapshot:
+                    experiment.update(
+                        {
+                            "global_configured_limit": _safe_int(global_snapshot, "configured_limit"),
+                            "global_effective_limit": _safe_int(global_snapshot, "effective_limit"),
+                            "global_min_effective_limit": _safe_int(global_snapshot, "min_effective_limit"),
+                            "global_pressure_events": _safe_int(global_snapshot, "pressure_events"),
+                            "global_rate_limited_events": _safe_int(global_snapshot, "rate_limited_events"),
+                            "global_timeout_events": _safe_int(global_snapshot, "timeout_events"),
+                            "global_limit_reductions": _safe_int(global_snapshot, "limit_reductions"),
+                            "global_limit_recoveries": _safe_int(global_snapshot, "limit_recoveries"),
+                        }
+                    )
                 experiments.append(experiment)
                 checkpoint = {
                     "started_at": started_at,
@@ -529,17 +566,21 @@ def run_throughput_suite(
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Benchmark serial vs two-PDF product-path conversion throughput")
-    parser.add_argument("pdfs", nargs=2, help="Exactly two fixed PDF files")
+    parser = argparse.ArgumentParser(description="Benchmark serial vs bounded multi-PDF product-path conversion throughput")
+    parser.add_argument("pdfs", nargs="+", help="Two or more fixed PDF files")
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument("--global-inflight", type=int, default=8)
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--llm-workers", type=int, default=3)
+    parser.add_argument("--parallel-documents", type=int, default=2, choices=[2, 3, 4])
     parser.add_argument("--min-throughput-improvement-pct", type=float, default=25.0)
     parser.add_argument("--max-per-doc-p95-slowdown-pct", type=float, default=15.0)
-    parser.add_argument("--adaptive-page-budgets", action="store_true")
-    parser.add_argument("--text-local-fastpath", action="store_true")
+    parser.add_argument(
+        "--static-budget-split",
+        action="store_true",
+        help="Use the legacy per-document static split instead of the dynamic global coordinator",
+    )
     parser.add_argument("--fail-fast", action="store_true")
     return parser
 
@@ -550,11 +591,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         global_inflight=max(1, min(32, int(args.global_inflight))),
         workers=max(1, int(args.workers)),
         llm_workers=max(1, int(args.llm_workers)),
+        parallel_documents=max(2, min(4, int(args.parallel_documents))),
         repeat=max(1, int(args.repeat)),
         min_throughput_improvement_pct=float(args.min_throughput_improvement_pct),
         max_per_doc_p95_slowdown_pct=float(args.max_per_doc_p95_slowdown_pct),
-        adaptive_page_budgets=bool(args.adaptive_page_budgets),
-        text_local_fastpath=bool(args.text_local_fastpath),
+        dynamic_global_inflight=not bool(args.static_budget_split),
     )
     payload = run_throughput_suite(
         pdf_paths=[Path(value) for value in args.pdfs],
@@ -576,6 +617,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         ),
         flush=True,
     )
+    if bool(args.fail_fast) and not bool(summary.get("gate_passed")):
+        return 2
     return 0
 
 

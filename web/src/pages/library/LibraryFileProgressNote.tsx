@@ -21,6 +21,7 @@ function conversionResultLabel(item: LibraryFileItem, S: Record<string, string>)
   if (result.outcome === 'cancelled') return S.lib_conversion_result_cancelled
   if (result.outcome === 'quality_blocked') return S.lib_conversion_result_quality_blocked
   if (result.outcome === 'index_failed') return S.lib_conversion_result_index_failed
+  if (result.outcome === 'interrupted') return S.lib_conversion_result_interrupted
   return S.lib_conversion_result_failed
 }
 
@@ -38,15 +39,29 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
   const itemProgressPercent = itemProgress.total > 0
     ? Math.round((itemProgress.done / Math.max(1, itemProgress.total)) * 100)
     : 0
-  const result = item.task_state === 'idle' ? item.last_conversion : null
+  const result = item.task_state === 'idle' || item.task_state === 'interrupted'
+    ? item.last_conversion
+    : null
   const resultLabel = conversionResultLabel(item, S)
   const resultType = result?.outcome === 'success'
     ? 'success'
     : result?.outcome === 'cancelled'
       ? 'secondary'
-      : result?.outcome === 'quality_blocked'
+      : result?.outcome === 'quality_blocked' || result?.outcome === 'interrupted'
         ? 'warning'
         : 'danger'
+  const recoveryCacheLabel = item.task_state === 'interrupted' && Number(item.cached_page_count || 0) > 0
+    ? S.lib_conversion_recovery_cached_pages.replace('{n}', String(Number(item.cached_page_count || 0)))
+    : ''
+  const recoveryBlockedLabel = item.task_state === 'interrupted'
+    ? (
+        item.recovery_blocked_reason === 'api_key_missing'
+          ? S.lib_conversion_recovery_blocked_api_key
+          : item.recovery_blocked_reason === 'source_missing'
+            ? S.lib_conversion_recovery_blocked_source
+            : ''
+      )
+    : ''
   const resultDuration = result && Number(result.duration_s || 0) > 0
     ? S.lib_conversion_result_duration.replace('{seconds}', formatSeconds(Number(result.duration_s || 0)))
     : ''
@@ -89,7 +104,7 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
             data-testid="library-conversion-result"
           >
             <Text type={resultType} className="text-xs">
-              {[resultLabel, resultDuration, resultTime].filter(Boolean).join(' · ')}
+              {[resultLabel, recoveryCacheLabel, recoveryBlockedLabel, resultDuration, resultTime].filter(Boolean).join(' · ')}
             </Text>
           </div>
         </Tooltip>

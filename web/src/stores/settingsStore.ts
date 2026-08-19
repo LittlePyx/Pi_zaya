@@ -156,6 +156,9 @@ interface SettingsState {
   refsCardLocale: 'auto' | 'zh' | 'en'
   pdfDir: string
   mdDir: string
+  pdfDirSource: string
+  mdDirSource: string
+  usesManagedLibraryDefaults: boolean
   uiLocale: 'zh' | 'en'
   localePreferencesRevision: number
   theme: 'light' | 'dark'
@@ -202,6 +205,9 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   refsCardLocale: 'auto',
   pdfDir: '',
   mdDir: '',
+  pdfDirSource: '',
+  mdDirSource: '',
+  usesManagedLibraryDefaults: false,
   uiLocale: 'zh',
   localePreferencesRevision: 0,
   theme: readInitialTheme(),
@@ -235,6 +241,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const data = await settingsApi.get()
       if (requestId !== settingsLoadRequestSeq) return
       const p = data.prefs || {}
+      const libraryPaths = data.library_paths
       const nextTheme = (p.theme as 'light' | 'dark') || 'dark'
       const nextUiLocale = ((p.ui_locale as 'zh' | 'en') || 'zh')
       const rawRefsCardLocale = String(p.refs_card_locale || 'auto')
@@ -272,8 +279,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         answerOutputMode: String(p.answer_output_mode || ''),
         refsCardLocale: nextRefsCardLocale,
         qualityDataSharingEnabled: Boolean(p.quality_data_sharing_enabled),
-        pdfDir: String(p.pdf_dir || ''),
-        mdDir: String(p.md_dir || ''),
+        pdfDir: String(p.pdf_dir || libraryPaths?.pdf_dir || ''),
+        mdDir: String(p.md_dir || libraryPaths?.md_dir || ''),
+        pdfDirSource: String(p.pdf_dir ? 'preference' : libraryPaths?.pdf_source || ''),
+        mdDirSource: String(p.md_dir ? 'preference' : libraryPaths?.md_source || ''),
+        usesManagedLibraryDefaults: Boolean(libraryPaths?.uses_managed_defaults),
         uiLocale: nextUiLocale,
         theme: nextTheme,
         sidebarCollapsed: Boolean(p.sidebar_collapsed),
@@ -387,8 +397,15 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       localPatch.theme = patch.theme
       persistTheme(patch.theme)
     }
-    if (patch.pdfDir !== undefined) localPatch.pdfDir = patch.pdfDir
-    if (patch.mdDir !== undefined) localPatch.mdDir = patch.mdDir
+    if (patch.pdfDir !== undefined) {
+      localPatch.pdfDir = patch.pdfDir
+      localPatch.pdfDirSource = 'preference'
+    }
+    if (patch.mdDir !== undefined) {
+      localPatch.mdDir = patch.mdDir
+      localPatch.mdDirSource = 'preference'
+    }
+    if (patch.pdfDir !== undefined || patch.mdDir !== undefined) localPatch.usesManagedLibraryDefaults = false
     if (patch.uiLocale !== undefined) localPatch.uiLocale = patch.uiLocale
     if (patch.sidebarCollapsed !== undefined) localPatch.sidebarCollapsed = patch.sidebarCollapsed
     if (patch.textBaseUrl !== undefined) localPatch.textBaseUrl = patch.textBaseUrl

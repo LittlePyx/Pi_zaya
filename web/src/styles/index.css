@@ -5,21 +5,45 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 .kb-first-run-api-guide {
-  position: absolute;
-  right: 18px;
-  bottom: 18px;
-  z-index: 40;
   display: grid;
-  width: min(430px, calc(100% - 32px));
-  gap: 12px;
-  padding: 15px;
+  flex: 0 0 auto;
+  gap: 10px;
+  margin: 12px 16px 0;
+  padding: 12px 14px;
   border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
-  border-radius: 16px;
+  border-radius: 14px;
   background:
     linear-gradient(145deg, color-mix(in srgb, var(--accent) 9%, transparent), transparent 58%),
     color-mix(in srgb, var(--panel) 97%, var(--bg));
-  box-shadow: 0 18px 48px color-mix(in srgb, #000 18%, transparent);
+  box-shadow: 0 10px 28px color-mix(in srgb, #000 10%, transparent);
   color: var(--text-main);
+}
+
+.kb-first-run-api-guide.is-collapsed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 46px;
+}
+
+.kb-first-run-api-guide-compact-copy {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.kb-first-run-api-guide-compact-copy > span {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.kb-first-run-api-guide-compact-copy > strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .kb-first-run-api-guide-head {
@@ -59,6 +83,7 @@
 
 .kb-first-run-api-guide-steps {
   display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -67,6 +92,9 @@
   grid-template-columns: 24px minmax(0, 1fr);
   align-items: start;
   gap: 8px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 56%, transparent);
+  border-radius: 10px;
 }
 
 .kb-first-run-api-guide-steps > div > span {
@@ -81,10 +109,21 @@
   font-weight: 700;
 }
 
-.kb-first-run-api-guide-steps > div > span.is-required {
+.kb-first-run-api-guide-steps > div.is-active > span {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
   background: color-mix(in srgb, var(--accent) 10%, transparent);
   color: color-mix(in srgb, var(--accent) 90%, var(--text-main));
+}
+
+.kb-first-run-api-guide-steps > div.is-active {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.kb-first-run-api-guide-steps > div.is-complete > span {
+  border-color: color-mix(in srgb, #34a853 45%, var(--border));
+  background: color-mix(in srgb, #34a853 11%, transparent);
+  color: #34a853;
 }
 
 .kb-first-run-api-guide-steps p {
@@ -113,17 +152,13 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
-.kb-first-run-api-guide-footer > div {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
 @media (max-width: 680px) {
   .kb-first-run-api-guide {
-    right: 10px;
-    bottom: 10px;
-    width: calc(100% - 20px);
+    margin: 8px 10px 0;
+  }
+
+  .kb-first-run-api-guide-steps {
+    grid-template-columns: 1fr;
   }
 
   .kb-first-run-api-guide-footer {
@@ -131,9 +166,8 @@
     flex-direction: column;
   }
 
-  .kb-first-run-api-guide-footer > div,
   .kb-first-run-api-guide-footer .ant-btn-primary {
-    flex: 1;
+    width: 100%;
   }
 }
 

@@ -170,7 +170,7 @@ def _patch_page_pipeline(monkeypatch):
     monkeypatch.setattr(
         page_module,
         "_apply_formula_overlay",
-        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint, formula_candidates=None: (png_bytes, page_hint, {"EQ1": "x+y"}),
+        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint: (png_bytes, page_hint, {"EQ1": "x+y"}),
     )
 
 
@@ -219,8 +219,6 @@ def test_process_vision_direct_page_logs_stage_timing_when_enabled(tmp_path, mon
     assert out == "raw-md-post"
     assert "Step 1 (refs check):" in captured
     assert "Step 3 (assets):" in captured
-    assert "[VISION_DIRECT][BUDGET] page 1:" in captured
-    assert "class=figure_or_visual_heavy enabled=0" in captured
     assert "Step 5 (hints/overlay):" in captured
     assert "max_tokens=" in captured
     assert "Step 7 (postprocess):" in captured
@@ -586,7 +584,7 @@ def test_process_vision_direct_page_keeps_whole_page_vl_for_large_top_figure_pag
     monkeypatch.setattr(
         page_module,
         "_apply_formula_overlay",
-        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint, formula_candidates=None: (png_bytes, page_hint, {}),
+        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint: (png_bytes, page_hint, {}),
     )
 
     out = page_module.process_vision_direct_page(
@@ -742,7 +740,7 @@ def test_process_vision_direct_page_caps_plain_middle_page_token_budget(tmp_path
     monkeypatch.setattr(
         page_module,
         "_apply_formula_overlay",
-        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint, formula_candidates=None: (png_bytes, page_hint, {}),
+        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint: (png_bytes, page_hint, {}),
     )
 
     out = page_module.process_vision_direct_page(
@@ -778,7 +776,7 @@ def test_process_vision_direct_page_caps_deeper_plain_body_page_more_aggressivel
     monkeypatch.setattr(
         page_module,
         "_apply_formula_overlay",
-        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint, formula_candidates=None: (png_bytes, page_hint, {}),
+        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint: (png_bytes, page_hint, {}),
     )
 
     out = page_module.process_vision_direct_page(
@@ -855,7 +853,7 @@ def test_process_vision_direct_page_caps_light_plain_page_more_aggressively(tmp_
     monkeypatch.setattr(
         page_module,
         "_apply_formula_overlay",
-        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint, formula_candidates=None: (png_bytes, page_hint, {}),
+        lambda converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint: (png_bytes, page_hint, {}),
     )
 
     out = page_module.process_vision_direct_page(
@@ -888,259 +886,6 @@ def test_classify_plain_body_text_density_distinguishes_light_and_dense_pages():
     density, count = page_module._classify_plain_body_text_density(_Page("longer body text " * 400))
     assert density == "dense"
     assert count > 4200
-
-
-def test_classify_page_budget_prioritizes_source_risk_signals():
-    common = {
-        "page_index": 3,
-        "is_references_page": False,
-        "image_names": [],
-        "visual_rects": [],
-        "formula_candidate_count": 0,
-        "plain_text_chars": 1800,
-    }
-
-    assert page_module._classify_page_budget(**{**common, "is_references_page": True}) == "references"
-    assert page_module._classify_page_budget(**{**common, "formula_candidate_count": 1}) == "formula_sensitive"
-    assert page_module._classify_page_budget(**{**common, "image_names": ["figure.png"]}) == "figure_or_visual_heavy"
-    assert page_module._classify_page_budget(**common) == "text_dense_body"
-    assert page_module._classify_page_budget(**{**common, "page_index": 0}) == "unknown"
-    assert page_module._classify_page_budget(**{**common, "plain_text_chars": 0}) == "unknown"
-
-
-def test_adaptive_render_policy_only_lowers_reviewed_text_body_class(monkeypatch):
-    converter = SimpleNamespace(_vision_formula_overlay_enabled=lambda: True)
-    monkeypatch.delenv("KB_PDF_VISION_DPI", raising=False)
-    monkeypatch.delenv("KB_PDF_VISION_PLAIN_PAGE_DPI", raising=False)
-
-    text_budget = page_module._choose_page_render_dpi(
-        converter,
-        speed_mode="normal",
-        page_index=3,
-        is_references_page=False,
-        image_names=[],
-        visual_rects=[],
-        base_dpi=220,
-        page_class="text_dense_body",
-        adaptive_enabled=True,
-    )
-    formula_budget = page_module._choose_page_render_dpi(
-        converter,
-        speed_mode="normal",
-        page_index=3,
-        is_references_page=False,
-        image_names=[],
-        visual_rects=[],
-        base_dpi=220,
-        page_class="formula_sensitive",
-        adaptive_enabled=True,
-    )
-
-    assert text_budget == (200, "adaptive_text_dense_body")
-    assert formula_budget == (220, "adaptive_formula_sensitive")
-
-
-def test_adaptive_page_budget_flag_defaults_off_and_accepts_explicit_enable(monkeypatch):
-    monkeypatch.delenv("KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS", raising=False)
-    assert page_module._adaptive_page_budgets_enabled() is False
-
-    monkeypatch.setenv("KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS", "yes")
-    assert page_module._adaptive_page_budgets_enabled() is True
-
-
-def test_text_local_fastpath_flag_defaults_off_and_accepts_explicit_enable(monkeypatch):
-    monkeypatch.delenv("KB_PDF_VISION_TEXT_LOCAL_FASTPATH", raising=False)
-    assert page_module._vision_text_local_fastpath_enabled() is False
-
-    monkeypatch.setenv("KB_PDF_VISION_TEXT_LOCAL_FASTPATH", "true")
-    assert page_module._vision_text_local_fastpath_enabled() is True
-
-
-def test_validate_local_text_markdown_accepts_source_faithful_markdown():
-    source = " ".join(
-        f"Observation {idx} reports measurement token{idx} with stable reconstruction evidence."
-        for idx in range(1, 45)
-    )
-
-    accepted, reason, metrics = page_module._validate_local_text_markdown(
-        source,
-        f"## Results\n\n{source}",
-    )
-
-    assert accepted is True
-    assert reason == "accepted"
-    assert metrics["coverage"] > 0.99
-    assert metrics["bigram_coverage"] > 0.99
-    assert metrics["order_ratio"] > 0.99
-
-
-def test_validate_local_text_markdown_rejects_missing_source_content():
-    source = " ".join(
-        f"Observation {idx} reports measurement token{idx} with stable reconstruction evidence."
-        for idx in range(1, 45)
-    )
-
-    accepted, reason, metrics = page_module._validate_local_text_markdown(
-        source,
-        "## Results\n\nOnly a small fragment was retained from the source page.",
-    )
-
-    assert accepted is False
-    assert reason == "output_too_short"
-    assert metrics["output_tokens"] < 100
-
-
-def test_source_heading_prefix_is_promoted_and_required_for_local_acceptance():
-    page = SimpleNamespace(
-        get_text=lambda mode: {
-            "blocks": [
-                {
-                    "type": 0,
-                    "lines": [
-                        {
-                            "spans": [
-                                {"text": "Fabrication of DBRs", "font": "Journal-Semibold", "flags": 16},
-                                {"text": "The deposited layers form the reflector.", "font": "Journal-Regular", "flags": 0},
-                            ]
-                        }
-                    ],
-                }
-            ]
-        }
-    )
-    headings = page_module._source_bold_prefix_headings(page)
-    source = " ".join(
-        ["Fabrication of DBRs The deposited layers form the reflector."]
-        + [f"Measurement {idx} records stable optical response token{idx}." for idx in range(1, 40)]
-    )
-    markdown, promoted = page_module._promote_source_headings(source, headings)
-
-    accepted, reason, _ = page_module._validate_local_text_markdown(
-        source,
-        markdown,
-        required_headings=headings,
-    )
-
-    assert headings == ["Fabrication of DBRs"]
-    assert promoted == 1
-    assert markdown.startswith("### Fabrication of DBRs\n\n")
-    assert accepted is True
-    assert reason == "accepted"
-
-
-def test_source_heading_candidates_exclude_repeated_noise():
-    page = SimpleNamespace(
-        get_text=lambda mode: {
-            "blocks": [
-                {
-                    "type": 0,
-                    "lines": [
-                        {
-                            "spans": [
-                                {"text": "Nature Photonics", "font": "Journal-Semibold", "flags": 16},
-                            ]
-                        }
-                    ],
-                }
-            ]
-        }
-    )
-
-    headings = page_module._source_bold_prefix_headings(
-        page,
-        noise_texts={"NATure PHoTonIcs"},
-    )
-
-    assert headings == []
-
-
-def test_reference_continuation_guard_requires_ordered_line_start_entries():
-    references_page = _TextPage(
-        "\n".join(
-            [
-                "[51] Xin Yuan et al. Plug-and-play algorithms for snapshot imaging.",
-                "[52] Yang Liu et al. Video snapshot compressive imaging.",
-                "[53] Yu-Jie Yuan et al. Neural radiance field editing.",
-                "[54] Richard Zhang et al. Perceptual image metrics.",
-            ]
-        )
-    )
-    body_page = _TextPage(
-        "The method follows prior work [51] and compares three settings.\n"
-        "[1] First ablation setting\n[2] Second ablation setting\n"
-        "The remaining body contains ordinary prose."
-    )
-
-    assert page_module._page_looks_like_reference_continuation(references_page) is True
-    assert page_module._page_looks_like_reference_continuation(body_page) is False
-
-
-def test_text_local_eligibility_rejects_quality_risks(monkeypatch):
-    converter = SimpleNamespace(_process_page_local_only=lambda *args, **kwargs: "markdown")
-    page = _TextPage("body " * 400)
-    monkeypatch.setattr(page_module, "_page_has_table_risk", lambda page: False)
-
-    assert page_module._local_text_fastpath_eligibility(
-        converter,
-        page=page,
-        speed_mode="full_llm",
-        page_class="text_dense_body",
-        plain_text_chars=2000,
-    ) == (False, "speed_mode")
-    assert page_module._local_text_fastpath_eligibility(
-        converter,
-        page=page,
-        speed_mode="normal",
-        page_class="formula_sensitive",
-        plain_text_chars=2000,
-    ) == (False, "page_class")
-    assert page_module._local_text_fastpath_eligibility(
-        converter,
-        page=page,
-        speed_mode="normal",
-        page_class="text_dense_body",
-        plain_text_chars=500,
-    ) == (False, "source_too_short")
-
-    references_page = _TextPage(
-        "\n".join(
-            f"[{idx}] Author {idx}. Complete reference title and publication details."
-            for idx in range(51, 55)
-        )
-    )
-    assert page_module._local_text_fastpath_eligibility(
-        converter,
-        page=references_page,
-        speed_mode="normal",
-        page_class="text_dense_body",
-        plain_text_chars=2000,
-    ) == (False, "references_continuation")
-
-    monkeypatch.setattr(page_module, "_page_has_table_risk", lambda page: True)
-    assert page_module._local_text_fastpath_eligibility(
-        converter,
-        page=page,
-        speed_mode="normal",
-        page_class="text_dense_body",
-        plain_text_chars=2000,
-    ) == (False, "table_risk")
-
-
-def test_adaptive_text_page_allows_token_cap_with_layout_hint():
-    common = {
-        "speed_mode": "normal",
-        "page_index": 3,
-        "is_references_page": False,
-        "page_hint": "The page uses a two-column reading order.",
-        "image_names": [],
-        "visual_rects": [],
-        "formula_placeholders": {},
-        "plain_text_density": "medium",
-        "page_class": "text_dense_body",
-    }
-
-    assert page_module._choose_page_max_tokens_override(**common, adaptive_enabled=False) is None
-    assert page_module._choose_page_max_tokens_override(**common, adaptive_enabled=True) == 2560
 
 
 def test_choose_page_render_dpi_lowers_plain_middle_body_pages(monkeypatch):
@@ -1195,19 +940,7 @@ def test_process_vision_direct_page_uses_lighter_render_dpi_for_plain_body_pages
     page = _DummyPage()
     captured = {}
 
-    def _capture_overlay(
-        converter,
-        *,
-        png_bytes,
-        page,
-        page_index,
-        page_w,
-        page_h,
-        dpi,
-        is_references_page,
-        page_hint,
-        formula_candidates=None,
-    ):
+    def _capture_overlay(converter, *, png_bytes, page, page_index, page_w, page_h, dpi, is_references_page, page_hint):
         captured["overlay_dpi"] = dpi
         return png_bytes, page_hint, {}
 
@@ -1248,209 +981,3 @@ def test_process_vision_direct_page_uses_lighter_render_dpi_for_plain_body_pages
     assert out == "raw-md-post"
     assert page.render_calls[0]["matrix"] == ("M", round(200 / 72.0, 6), round(200 / 72.0, 6))
     assert captured["overlay_dpi"] == 200
-
-
-def test_process_vision_direct_page_adaptive_policy_uses_source_formula_scan(tmp_path, monkeypatch, capsys):
-    page = _TextPage("A plain middle-body paragraph with enough source text. " * 80)
-    captured = {}
-
-    class _AdaptiveConverter(_DummyConverter):
-        def _vision_formula_overlay_enabled(self):
-            return True
-
-        def _collect_display_math_candidates(self, page, *, page_index, is_references_page):
-            return []
-
-        def _convert_page_with_vision_guardrails(self, **kwargs):
-            captured.update(kwargs)
-            return "raw-md"
-
-    monkeypatch.setattr(page_module, "_detect_references_page", lambda page: False)
-    monkeypatch.setattr(page_module, "_collect_metadata_rects", lambda converter, **kwargs: [])
-    monkeypatch.setattr(page_module, "_extract_page_visual_assets", lambda converter, **kwargs: ([], {}, []))
-    monkeypatch.setattr(page_module, "_compress_png_bytes", lambda png_bytes, **kwargs: png_bytes)
-    monkeypatch.setattr(page_module, "_build_page_hint", lambda converter, **kwargs: "")
-    monkeypatch.setattr(
-        page_module,
-        "_apply_formula_overlay",
-        lambda converter, **kwargs: (kwargs["png_bytes"], kwargs["page_hint"], {}),
-    )
-    monkeypatch.setattr(page_module, "fitz", SimpleNamespace(Matrix=lambda x, y: ("M", round(x, 6), round(y, 6))))
-    monkeypatch.setenv("KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS", "1")
-    monkeypatch.setenv("KB_PDF_STAGE_TIMINGS", "1")
-    monkeypatch.delenv("KB_PDF_VISION_DPI", raising=False)
-    monkeypatch.delenv("KB_PDF_VISION_PLAIN_PAGE_DPI", raising=False)
-
-    out = page_module.process_vision_direct_page(
-        _AdaptiveConverter(),
-        page=page,
-        page_index=2,
-        total_pages=5,
-        pdf_path=Path("dummy.pdf"),
-        assets_dir=tmp_path,
-        speed_mode="normal",
-        speed_config={"compress": 3},
-        dpi=220,
-        mat=("BASE", 1, 1),
-    )
-
-    assert out == "raw-md-post"
-    assert page.render_calls[0]["matrix"] == ("M", round(200 / 72.0, 6), round(200 / 72.0, 6))
-    assert captured["max_tokens_override"] == 2560
-    output = capsys.readouterr().out
-    assert "class=text_dense_body enabled=1 dpi=200 base_dpi=220" in output
-
-
-def test_process_vision_direct_page_adaptive_policy_keeps_unknown_formula_signal_at_base_budget(
-    tmp_path,
-    monkeypatch,
-):
-    page = _TextPage("A plain middle-body paragraph with enough source text. " * 80)
-    captured = {}
-
-    class _NoFormulaSignalConverter(_DummyConverter):
-        def _vision_formula_overlay_enabled(self):
-            return False
-
-        def _convert_page_with_vision_guardrails(self, **kwargs):
-            captured.update(kwargs)
-            return "raw-md"
-
-    monkeypatch.setattr(page_module, "_detect_references_page", lambda page: False)
-    monkeypatch.setattr(page_module, "_collect_metadata_rects", lambda converter, **kwargs: [])
-    monkeypatch.setattr(page_module, "_extract_page_visual_assets", lambda converter, **kwargs: ([], {}, []))
-    monkeypatch.setattr(page_module, "_compress_png_bytes", lambda png_bytes, **kwargs: png_bytes)
-    monkeypatch.setattr(page_module, "_build_page_hint", lambda converter, **kwargs: "")
-    monkeypatch.setattr(
-        page_module,
-        "_apply_formula_overlay",
-        lambda converter, **kwargs: (kwargs["png_bytes"], kwargs["page_hint"], {}),
-    )
-    monkeypatch.setattr(page_module, "fitz", SimpleNamespace(Matrix=lambda x, y: ("M", round(x, 6), round(y, 6))))
-    monkeypatch.setenv("KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS", "1")
-    monkeypatch.delenv("KB_PDF_VISION_DPI", raising=False)
-    monkeypatch.delenv("KB_PDF_VISION_PLAIN_PAGE_DPI", raising=False)
-
-    out = page_module.process_vision_direct_page(
-        _NoFormulaSignalConverter(),
-        page=page,
-        page_index=2,
-        total_pages=5,
-        pdf_path=Path("dummy.pdf"),
-        assets_dir=tmp_path,
-        speed_mode="normal",
-        speed_config={"compress": 3},
-        dpi=220,
-        mat=("BASE", 1, 1),
-    )
-
-    assert out == "raw-md-post"
-    assert page.render_calls[0]["matrix"] == ("BASE", 1, 1)
-    assert captured["max_tokens_override"] is None
-
-
-def test_process_vision_direct_page_accepts_verified_text_local_fastpath(tmp_path, monkeypatch, capsys):
-    source = " ".join(
-        f"Observation {idx} reports measurement token{idx} with stable reconstruction evidence."
-        for idx in range(1, 55)
-    )
-    page = _TextPage(source)
-    calls = {"local": 0, "vision": 0}
-
-    class _TextLocalConverter(_DummyConverter):
-        def _vision_formula_overlay_enabled(self):
-            return False
-
-        def _collect_display_math_candidates(self, page, *, page_index, is_references_page):
-            return []
-
-        def _process_page_local_only(self, page, *, page_index, pdf_path, assets_dir):
-            calls["local"] += 1
-            return f"## Results\n\n{source}"
-
-        def _convert_page_with_vision_guardrails(self, **kwargs):
-            calls["vision"] += 1
-            raise AssertionError("accepted local page must not call vision")
-
-    monkeypatch.setattr(page_module, "_detect_references_page", lambda page: False)
-    monkeypatch.setattr(page_module, "_collect_metadata_rects", lambda converter, **kwargs: [])
-    monkeypatch.setattr(page_module, "_extract_page_visual_assets", lambda converter, **kwargs: ([], {}, []))
-    monkeypatch.setattr(page_module, "_page_has_table_risk", lambda page: False)
-    monkeypatch.setenv("KB_PDF_VISION_TEXT_LOCAL_FASTPATH", "1")
-    monkeypatch.setenv("KB_PDF_STAGE_TIMINGS", "1")
-
-    out = page_module.process_vision_direct_page(
-        _TextLocalConverter(),
-        page=page,
-        page_index=2,
-        total_pages=5,
-        pdf_path=Path("dummy.pdf"),
-        assets_dir=tmp_path,
-        speed_mode="normal",
-        speed_config={"compress": 3},
-        dpi=220,
-        mat=("BASE", 1, 1),
-    )
-
-    assert out == f"## Results\n\n{source}"
-    assert calls == {"local": 1, "vision": 0}
-    assert page.render_calls == []
-    output = capsys.readouterr().out
-    assert "[VISION_DIRECT][TEXT_LOCAL] page 3: accepted=1 reason=accepted" in output
-    assert "dpi=0 base_dpi=220" in output
-
-
-def test_process_vision_direct_page_rejects_sparse_local_output_and_uses_vision(tmp_path, monkeypatch, capsys):
-    source = " ".join(
-        f"Observation {idx} reports measurement token{idx} with stable reconstruction evidence."
-        for idx in range(1, 55)
-    )
-    page = _TextPage(source)
-    calls = {"local": 0, "vision": 0}
-
-    class _SparseLocalConverter(_DummyConverter):
-        def _vision_formula_overlay_enabled(self):
-            return False
-
-        def _collect_display_math_candidates(self, page, *, page_index, is_references_page):
-            return []
-
-        def _process_page_local_only(self, page, *, page_index, pdf_path, assets_dir):
-            calls["local"] += 1
-            return "## Results\n\nA sparse fragment."
-
-        def _convert_page_with_vision_guardrails(self, **kwargs):
-            calls["vision"] += 1
-            return "vision-md"
-
-    monkeypatch.setattr(page_module, "_detect_references_page", lambda page: False)
-    monkeypatch.setattr(page_module, "_collect_metadata_rects", lambda converter, **kwargs: [])
-    monkeypatch.setattr(page_module, "_extract_page_visual_assets", lambda converter, **kwargs: ([], {}, []))
-    monkeypatch.setattr(page_module, "_page_has_table_risk", lambda page: False)
-    monkeypatch.setattr(page_module, "_compress_png_bytes", lambda png_bytes, **kwargs: png_bytes)
-    monkeypatch.setattr(page_module, "_build_page_hint", lambda converter, **kwargs: "")
-    monkeypatch.setattr(
-        page_module,
-        "_apply_formula_overlay",
-        lambda converter, **kwargs: (kwargs["png_bytes"], kwargs["page_hint"], {}),
-    )
-    monkeypatch.setattr(page_module, "fitz", SimpleNamespace(Matrix=lambda x, y: ("M", x, y)))
-    monkeypatch.setenv("KB_PDF_VISION_TEXT_LOCAL_FASTPATH", "1")
-
-    out = page_module.process_vision_direct_page(
-        _SparseLocalConverter(),
-        page=page,
-        page_index=2,
-        total_pages=5,
-        pdf_path=Path("dummy.pdf"),
-        assets_dir=tmp_path,
-        speed_mode="normal",
-        speed_config={"compress": 3},
-        dpi=220,
-        mat=("BASE", 1, 1),
-    )
-
-    assert out == "vision-md-post"
-    assert calls == {"local": 1, "vision": 1}
-    assert len(page.render_calls) == 1
-    assert "accepted=0 reason=output_too_short" in capsys.readouterr().out

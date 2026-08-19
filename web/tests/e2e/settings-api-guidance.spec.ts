@@ -79,6 +79,7 @@ async function installMinimalBackend(
     qualityCollectorMissingToken?: boolean
     qualityCollectorStatusFails?: boolean
     modelDiscoveryFallback?: boolean
+    onboardingStep?: 'connect_model' | 'prepare_document' | 'ask_question' | 'completed'
   } = {},
 ) {
   const text = provider('text', options.text)
@@ -254,6 +255,17 @@ async function installMinimalBackend(
       instructions: [],
     })
   })
+  await page.route('**/api/app/onboarding-status', async (route) => {
+    const currentStep = options.onboardingStep || (text.has_api_key ? 'completed' : 'connect_model')
+    await fulfillJson(route, {
+      text_model_ready: currentStep !== 'connect_model',
+      imported_document_count: currentStep === 'connect_model' || currentStep === 'prepare_document' ? 0 : 1,
+      ready_document_count: currentStep === 'ask_question' || currentStep === 'completed' ? 1 : 0,
+      grounded_answer_count: currentStep === 'completed' ? 1 : 0,
+      current_step: currentStep,
+      completed: currentStep === 'completed',
+    })
+  })
   await page.route('**/api/settings', async (route) => {
     if (route.request().method() === 'PATCH') {
       const raw = route.request().postData() || '{}'
@@ -325,6 +337,13 @@ async function installMinimalBackend(
       },
       readiness,
       app_readiness: appReadiness,
+      library_paths: {
+        pdf_dir: 'C:/Pi_zaya/data/pdfs',
+        md_dir: 'C:/Pi_zaya/data/markdown',
+        pdf_source: 'environment',
+        md_source: 'environment',
+        uses_managed_defaults: true,
+      },
       prefs: {
         ui_locale: 'en',
         theme: 'light',
@@ -639,10 +658,11 @@ test('text API block opens settings focused on the text provider', async ({ page
   await page.goto('/')
 
   await expect(page.getByTestId('research-context-state')).toHaveAttribute('data-research-api-block-target', 'text')
-  const alert = page.locator('.kb-chat-connection-alert')
-  await expect(alert).toBeVisible()
+  await expect(page.locator('.kb-chat-connection-alert')).toHaveCount(0)
+  const guide = page.getByTestId('first-run-api-guide')
+  await expect(guide).toBeVisible()
 
-  await alert.getByRole('button', { name: 'Open settings', exact: true }).click()
+  await guide.getByRole('button', { name: 'Configure text API key' }).click()
 
   await expect(page.locator('[data-api-target="text"]')).toHaveClass(/is-targeted/)
   await expect(page.locator('[data-api-target="vision"]')).not.toHaveClass(/is-targeted/)
@@ -659,10 +679,11 @@ test('clean first run explains model requirements and opens text settings', asyn
 
   const guide = page.getByTestId('first-run-api-guide')
   await expect(guide).toBeVisible()
-  await expect(guide).toContainText('Connect a model to get started')
-  await expect(guide).toContainText('Text model · required')
-  await expect(guide).toContainText('Vision model · recommended')
-  await expect(guide).toContainText('Library and reader tools work locally')
+  await expect(guide).toHaveAttribute('data-current-step', 'connect_model')
+  await expect(guide).toContainText('Get your first cited answer in three steps')
+  await expect(guide).toContainText('Connect a text model')
+  await expect(guide).toContainText('Import and convert a PDF')
+  await expect(guide).toContainText('Ask your first question')
 
   await guide.getByRole('button', { name: 'Configure text API key' }).click()
 
@@ -672,7 +693,7 @@ test('clean first run explains model requirements and opens text settings', asyn
   )).toBe('text')
 })
 
-test('first-run API guide dismissal persists across reloads', async ({ page }) => {
+test('first-run guide can collapse without permanently losing progress', async ({ page }) => {
   await installMinimalBackend(page, {
     text: { has_api_key: false, status: 'missing', severity: 'error' },
   })
@@ -680,14 +701,12 @@ test('first-run API guide dismissal persists across reloads', async ({ page }) =
 
   const guide = page.getByTestId('first-run-api-guide')
   await expect(guide).toBeVisible()
-  await guide.getByRole('button', { name: 'Set up later' }).last().click()
-  await expect(guide).toHaveCount(0)
+  await guide.getByRole('button', { name: 'Collapse guide' }).click()
+  await expect(guide).toContainText('1/3')
+  await expect(guide.getByRole('button', { name: 'Continue guide' })).toBeVisible()
 
   await page.reload()
-  await expect(page.getByTestId('first-run-api-guide')).toHaveCount(0)
-  await expect.poll(() => page.evaluate(() => (
-    window.localStorage.getItem('kb_first_run_api_guide_dismissed_v1')
-  ))).toBe('1')
+  await expect(page.getByTestId('first-run-api-guide')).toContainText('Get your first cited answer in three steps')
 })
 
 test('configured text model does not show the first-run API guide', async ({ page }) => {

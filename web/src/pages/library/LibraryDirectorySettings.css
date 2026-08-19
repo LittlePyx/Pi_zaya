@@ -3,6 +3,12 @@
   gap: 8px;
 }
 
+.kb-lib-dir-managed-label.ant-typography {
+  margin: 0;
+  color: var(--accent);
+  font-size: 11px;
+}
+
 .kb-lib-dir-summary-row {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) auto;

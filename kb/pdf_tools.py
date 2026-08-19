@@ -1071,6 +1071,31 @@ def open_in_explorer(path: Path) -> None:
         pass
 
 
+def _default_global_llm_inflight(active_docs_hint: int) -> int:
+    del active_docs_hint
+    # The fixed two-document product-path gate is accepted at eight shared
+    # provider requests. Larger automatic ceilings (12/16) did not improve the
+    # fixed-paper result consistently and a 12-slot probe changed a critical
+    # conversion-quality decision. Keep higher values available only through
+    # the explicit KB_LLM_MAX_INFLIGHT operator override.
+    return 8
+
+
+def _resolve_global_llm_inflight(
+    *,
+    active_docs_hint: int,
+    explicit_limit: int | None = None,
+) -> int:
+    if explicit_limit is not None:
+        return max(1, min(32, int(explicit_limit)))
+    try:
+        raw_global = str(os.environ.get("KB_LLM_MAX_INFLIGHT", "") or "").strip()
+        global_inflight = int(raw_global) if raw_global else _default_global_llm_inflight(active_docs_hint)
+    except Exception:
+        global_inflight = _default_global_llm_inflight(active_docs_hint)
+    return max(1, min(32, int(global_inflight)))
+
+
 def _split_subprocess_llm_budget(
     *,
     no_llm_mode: bool,
@@ -1078,23 +1103,6 @@ def _split_subprocess_llm_budget(
     llm_workers: int,
     max_active_docs: int | None,
 ) -> tuple[int, int, int | None, int, int]:
-    def _default_global_inflight(active_docs_hint: int) -> int:
-        cpu = max(1, int(os.cpu_count() or 1))
-        # Single-document frontend runs are still bound by the same subprocess
-        # worker defaults, so giving larger hosts the full 12-request budget
-        # improves throughput without changing OCR quality knobs.
-        if active_docs_hint <= 1:
-            if cpu >= 12:
-                return 12
-            return 8
-        # Multi-document frontend runs can share a slightly wider budget on
-        # larger hosts because the total is split before reaching child
-        # processes.
-        if cpu >= 12:
-            return 16
-        if cpu >= 8:
-            return 12
-        return 8
 
     safe_workers = max(1, int(workers or 1))
     safe_llm_workers = max(1, int(llm_workers or 1))
@@ -1102,12 +1110,7 @@ def _split_subprocess_llm_budget(
     if bool(no_llm_mode):
         return safe_workers, safe_llm_workers, None, active_docs, 0
 
-    try:
-        raw_global = str(os.environ.get("KB_LLM_MAX_INFLIGHT", "") or "").strip()
-        global_inflight = int(raw_global) if raw_global else _default_global_inflight(active_docs)
-    except Exception:
-        global_inflight = _default_global_inflight(active_docs)
-    global_inflight = max(1, min(32, int(global_inflight)))
+    global_inflight = _resolve_global_llm_inflight(active_docs_hint=active_docs)
     per_doc_inflight = max(1, global_inflight // max(1, active_docs))
 
     capped_workers = safe_workers
@@ -1137,6 +1140,9 @@ def run_pdf_to_md(
     stall_timeout_s: float | None = None,
     speed_mode: str | None = None,
     max_active_conversions: int | None = None,
+    global_inflight_coordinator: Path | str | None = None,
+    global_inflight_owner: str | None = None,
+    global_inflight_limit: int | None = None,
     retry_pages: list[int] | None = None,
     _safe_retry_attempt: int = 0,
 ) -> tuple[bool, str]:
@@ -1391,19 +1397,44 @@ def run_pdf_to_md(
     split_llm_inflight = None
     budget_active_docs = max(1, int(max_active_conversions or 1))
     budget_global_inflight = 0
+    dynamic_global_coordinator = ""
+    dynamic_global_owner = ""
+    if global_inflight_coordinator is not None and str(global_inflight_coordinator).strip():
+        dynamic_global_coordinator = str(Path(global_inflight_coordinator).expanduser().resolve())
+        dynamic_global_owner = str(global_inflight_owner or "").strip()
+        if not dynamic_global_owner:
+            dynamic_global_owner = hashlib.sha256(
+                f"{pdf_path}|{os.getpid()}|{threading.get_ident()}|{time.time_ns()}".encode(
+                    "utf-8",
+                    errors="replace",
+                )
+            ).hexdigest()[:24]
     if (not bool(no_llm)) and ui_workers > 0 and ui_llm_workers > 0:
-        (
-            ui_workers,
-            ui_llm_workers,
-            split_llm_inflight,
-            budget_active_docs,
-            budget_global_inflight,
-        ) = _split_subprocess_llm_budget(
-            no_llm_mode=bool(no_llm),
-            workers=ui_workers,
-            llm_workers=ui_llm_workers,
-            max_active_docs=max_active_conversions,
-        )
+        if dynamic_global_coordinator:
+            budget_global_inflight = _resolve_global_llm_inflight(
+                active_docs_hint=budget_active_docs,
+                explicit_limit=global_inflight_limit,
+            )
+            # Keep the document's existing page/repair worker settings. The
+            # cross-process coordinator now enforces the fixed provider ceiling
+            # at the actual request boundary and lends otherwise idle slots.
+            split_llm_inflight = min(
+                budget_global_inflight,
+                max(1, int(ui_workers) * max(1, int(ui_llm_workers))),
+            )
+        else:
+            (
+                ui_workers,
+                ui_llm_workers,
+                split_llm_inflight,
+                budget_active_docs,
+                budget_global_inflight,
+            ) = _split_subprocess_llm_budget(
+                no_llm_mode=bool(no_llm),
+                workers=ui_workers,
+                llm_workers=ui_llm_workers,
+                max_active_docs=max_active_conversions,
+            )
     if ui_workers > 0:
         args.extend(["--workers", str(ui_workers)])
     if ui_llm_workers > 0:
@@ -1463,7 +1494,9 @@ def run_pdf_to_md(
                     f"llm_workers={ui_llm_workers if ui_llm_workers > 0 else 'auto'}, "
                     f"shared_active_docs={budget_active_docs}, "
                     f"shared_global_inflight={budget_global_inflight if budget_global_inflight > 0 else 'n/a'}, "
-                    f"shared_doc_inflight={split_llm_inflight if split_llm_inflight is not None else 'n/a'}, "
+                    f"shared_doc_inflight="
+                    f"{'dynamic<=' if dynamic_global_coordinator else ''}"
+                    f"{split_llm_inflight if split_llm_inflight is not None else 'n/a'}, "
                     f"llm_timeout={ui_llm_timeout}s, llm_retries={ui_llm_retries}, "
                     f"page_stall_timeout={int(page_stall_timeout_s)}s, "
                     f"auto_page_llm_threshold={auto_page_llm_threshold}, "
@@ -1537,6 +1570,16 @@ def run_pdf_to_md(
             env["KB_PDF_RUNTIME_VISION_API_KEY"] = runtime_vision_api_key
         if split_llm_inflight is not None:
             env["KB_LLM_MAX_INFLIGHT"] = str(int(split_llm_inflight))
+        if dynamic_global_coordinator and not bool(no_llm):
+            env["KB_LLM_GLOBAL_COORDINATOR"] = dynamic_global_coordinator
+            env["KB_LLM_GLOBAL_OWNER"] = dynamic_global_owner
+            env["KB_LLM_GLOBAL_MAX_INFLIGHT"] = str(int(budget_global_inflight))
+            env["KB_LLM_GLOBAL_REQUIRED"] = "1"
+        else:
+            env.pop("KB_LLM_GLOBAL_COORDINATOR", None)
+            env.pop("KB_LLM_GLOBAL_OWNER", None)
+            env.pop("KB_LLM_GLOBAL_MAX_INFLIGHT", None)
+            env.pop("KB_LLM_GLOBAL_REQUIRED", None)
         proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -1824,6 +1867,9 @@ def run_pdf_to_md(
                     stall_timeout_s=stall_timeout_s,
                     speed_mode=speed_mode,
                     max_active_conversions=max_active_conversions,
+                    global_inflight_coordinator=global_inflight_coordinator,
+                    global_inflight_owner=global_inflight_owner,
+                    global_inflight_limit=(budget_global_inflight or global_inflight_limit),
                     retry_pages=retry_pages,
                     _safe_retry_attempt=int(_safe_retry_attempt) + 1,
                 )
@@ -1877,6 +1923,9 @@ def run_pdf_to_md(
                     stall_timeout_s=stall_timeout_s,
                     speed_mode=speed_mode,
                     max_active_conversions=max_active_conversions,
+                    global_inflight_coordinator=global_inflight_coordinator,
+                    global_inflight_owner=global_inflight_owner,
+                    global_inflight_limit=(budget_global_inflight or global_inflight_limit),
                     retry_pages=retry_pages,
                     _safe_retry_attempt=int(_safe_retry_attempt) + 1,
                 )

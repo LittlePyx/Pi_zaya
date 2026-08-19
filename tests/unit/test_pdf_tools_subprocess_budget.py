@@ -26,7 +26,7 @@ def test_split_subprocess_llm_budget_keeps_single_doc_budget(monkeypatch):
     assert global_inflight == 8
 
 
-def test_split_subprocess_llm_budget_uses_adaptive_single_doc_budget_on_large_hosts(monkeypatch):
+def test_split_subprocess_llm_budget_keeps_validated_single_doc_budget_on_large_hosts(monkeypatch):
     monkeypatch.delenv("KB_LLM_MAX_INFLIGHT", raising=False)
     monkeypatch.setattr(pdf_tools.os, "cpu_count", lambda: 16)
 
@@ -37,10 +37,10 @@ def test_split_subprocess_llm_budget_uses_adaptive_single_doc_budget_on_large_ho
         max_active_docs=1,
     )
 
-    assert (workers, llm_workers) == (4, 3)
-    assert per_doc_inflight == 12
+    assert workers * llm_workers <= 8
+    assert per_doc_inflight == 8
     assert active_docs == 1
-    assert global_inflight == 12
+    assert global_inflight == 8
 
 
 def test_split_subprocess_llm_budget_splits_global_budget_across_docs(monkeypatch):
@@ -60,7 +60,7 @@ def test_split_subprocess_llm_budget_splits_global_budget_across_docs(monkeypatc
     assert global_inflight == 8
 
 
-def test_split_subprocess_llm_budget_uses_adaptive_default_for_multi_doc_runs(monkeypatch):
+def test_split_subprocess_llm_budget_keeps_validated_default_for_multi_doc_runs(monkeypatch):
     monkeypatch.delenv("KB_LLM_MAX_INFLIGHT", raising=False)
     monkeypatch.setattr(pdf_tools.os, "cpu_count", lambda: 16)
 
@@ -71,10 +71,10 @@ def test_split_subprocess_llm_budget_uses_adaptive_default_for_multi_doc_runs(mo
         max_active_docs=2,
     )
 
-    assert workers * llm_workers <= 8
-    assert per_doc_inflight == 8
+    assert workers * llm_workers <= 4
+    assert per_doc_inflight == 4
     assert active_docs == 2
-    assert global_inflight == 16
+    assert global_inflight == 8
 
 
 def test_split_subprocess_llm_budget_leaves_no_llm_unchanged(monkeypatch):
@@ -146,6 +146,70 @@ def test_run_pdf_to_md_overrides_child_env_for_split_budget(monkeypatch, tmp_pat
     assert child_env["KB_LLM_MAX_INFLIGHT"] == "4"
 
 
+def test_run_pdf_to_md_dynamic_global_budget_keeps_workers_and_forwards_coordinator(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "tiny.pdf"
+    doc = fitz.open()
+    for _ in range(10):
+        doc.new_page()
+    doc.save(pdf_path)
+    doc.close()
+
+    monkeypatch.setenv("KB_PDF_WORKERS", "4")
+    monkeypatch.setenv("KB_PDF_LLM_WORKERS", "3")
+    monkeypatch.setenv("KB_LLM_MAX_INFLIGHT", "8")
+    captured: dict[str, object] = {}
+
+    class _FakeProc:
+        def __init__(self, *, env: dict[str, str], args: list[str]):
+            captured["env"] = dict(env)
+            captured["args"] = list(args)
+            self.stdout = io.StringIO("")
+            self.pid = 4321
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+        def terminate(self):
+            return None
+
+        def kill(self):
+            return None
+
+    monkeypatch.setattr(
+        pdf_tools.subprocess,
+        "Popen",
+        lambda args, **kwargs: _FakeProc(env=kwargs.get("env") or {}, args=list(args)),
+    )
+
+    coordinator = tmp_path / "global-inflight"
+    ok, _out = pdf_tools.run_pdf_to_md(
+        pdf_path=pdf_path,
+        out_root=tmp_path / "out",
+        no_llm=False,
+        keep_debug=False,
+        eq_image_fallback=False,
+        speed_mode="normal",
+        max_active_conversions=2,
+        global_inflight_coordinator=coordinator,
+        global_inflight_owner="task-123",
+        global_inflight_limit=8,
+    )
+
+    assert ok is True
+    child_env = dict(captured["env"])
+    child_args = list(captured["args"])
+    assert child_args[child_args.index("--workers") + 1] == "4"
+    assert child_args[child_args.index("--llm-workers") + 1] == "3"
+    assert child_env["KB_LLM_MAX_INFLIGHT"] == "8"
+    assert child_env["KB_LLM_GLOBAL_COORDINATOR"] == str(coordinator.resolve())
+    assert child_env["KB_LLM_GLOBAL_OWNER"] == "task-123"
+    assert child_env["KB_LLM_GLOBAL_MAX_INFLIGHT"] == "8"
+    assert child_env["KB_LLM_GLOBAL_REQUIRED"] == "1"
+
+
 def test_run_pdf_to_md_forwards_effective_vision_settings_to_child(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "tiny.pdf"
     doc = fitz.open()
@@ -207,7 +271,7 @@ def test_run_pdf_to_md_forwards_effective_vision_settings_to_child(monkeypatch, 
     assert child_env["KB_PDF_RUNTIME_VISION_API_KEY"] == "saved-vision-key"
 
 
-def test_run_pdf_to_md_uses_adaptive_multi_doc_budget_when_env_missing(monkeypatch, tmp_path: Path):
+def test_run_pdf_to_md_splits_validated_multi_doc_budget_when_env_missing(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "tiny.pdf"
     doc = fitz.open()
     doc.new_page()
@@ -258,10 +322,10 @@ def test_run_pdf_to_md_uses_adaptive_multi_doc_budget_when_env_missing(monkeypat
     assert ok is True
     assert str(out).endswith(str(Path("out") / "tiny"))
     child_env = dict(captured["env"])
-    assert child_env["KB_LLM_MAX_INFLIGHT"] == "8"
+    assert child_env["KB_LLM_MAX_INFLIGHT"] == "4"
 
 
-def test_run_pdf_to_md_uses_adaptive_single_doc_budget_when_env_missing(monkeypatch, tmp_path: Path):
+def test_run_pdf_to_md_uses_validated_single_doc_budget_when_env_missing(monkeypatch, tmp_path: Path):
     pdf_path = tmp_path / "ten_pages.pdf"
     doc = fitz.open()
     for _ in range(10):
@@ -315,8 +379,8 @@ def test_run_pdf_to_md_uses_adaptive_single_doc_budget_when_env_missing(monkeypa
     assert str(out).endswith(str(Path("out") / "ten_pages"))
     child_env = dict(captured["env"])
     child_args = list(captured["args"])
-    assert child_env["KB_LLM_MAX_INFLIGHT"] == "12"
-    assert "--workers" in child_args and child_args[child_args.index("--workers") + 1] == "4"
+    assert child_env["KB_LLM_MAX_INFLIGHT"] == "8"
+    assert "--workers" in child_args and child_args[child_args.index("--workers") + 1] == "2"
     assert "--llm-workers" in child_args and child_args[child_args.index("--llm-workers") + 1] == "3"
     assert "--llm-timeout" in child_args and child_args[child_args.index("--llm-timeout") + 1] == "120"
 

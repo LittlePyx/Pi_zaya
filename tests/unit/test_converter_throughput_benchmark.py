@@ -8,6 +8,7 @@ from pathlib import Path
 
 import fitz
 
+from kb.converter import throughput_benchmark as throughput_module
 from kb.converter.throughput_benchmark import ThroughputConfig, run_throughput_suite
 
 
@@ -120,7 +121,7 @@ def test_throughput_suite_pairs_modes_reverses_order_and_shares_fixed_budget(tmp
     assert (tmp_path / "results" / "serial" / "run_01" / "doc_02").is_dir()
 
 
-def test_throughput_suite_requires_exactly_two_pdfs(tmp_path: Path) -> None:
+def test_throughput_suite_requires_at_least_two_pdfs(tmp_path: Path) -> None:
     pdf_path = tmp_path / "one.pdf"
     _make_pdf(pdf_path)
 
@@ -131,6 +132,84 @@ def test_throughput_suite_requires_exactly_two_pdfs(tmp_path: Path) -> None:
             config=ThroughputConfig(repeat=1),
         )
     except ValueError as exc:
-        assert "exactly two PDFs" in str(exc)
+        assert "at least two PDFs" in str(exc)
     else:
-        raise AssertionError("expected two-PDF validation error")
+        raise AssertionError("expected minimum-PDF validation error")
+
+
+def test_throughput_suite_supports_three_document_parallel_matrix(tmp_path: Path) -> None:
+    pdf_paths = [tmp_path / f"{name}.pdf" for name in ("a", "b", "c")]
+    for pdf_path in pdf_paths:
+        _make_pdf(pdf_path)
+    lock = threading.Lock()
+    state = {"active": 0, "max_active": 0}
+    seen_max_active: set[int] = set()
+    seen_coordinators: set[str] = set()
+
+    def _fake_runner(**kwargs):
+        pdf_path = Path(kwargs["pdf_path"])
+        out_root = Path(kwargs["out_root"])
+        with lock:
+            state["active"] += 1
+            state["max_active"] = max(state["max_active"], state["active"])
+            seen_max_active.add(int(kwargs["max_active_conversions"]))
+            coordinator = kwargs.get("global_inflight_coordinator")
+            if coordinator:
+                seen_coordinators.add(str(Path(coordinator)))
+        time.sleep(0.02)
+        output_dir = out_root / pdf_path.stem
+        _write_quality(output_dir)
+        kwargs["progress_cb"](1, 1, "Finished page 1/1 (0.01s, 10 chars)")
+        with lock:
+            state["active"] -= 1
+        return True, output_dir
+
+    payload = run_throughput_suite(
+        pdf_paths=pdf_paths,
+        out_root=tmp_path / "results-three",
+        config=ThroughputConfig(
+            global_inflight=12,
+            workers=4,
+            llm_workers=3,
+            parallel_documents=3,
+            repeat=1,
+            min_throughput_improvement_pct=0.0,
+            max_per_doc_p95_slowdown_pct=100.0,
+        ),
+        runner=_fake_runner,
+        fail_fast=True,
+    )
+
+    assert state["max_active"] == 3
+    assert seen_max_active == {1, 3}
+    assert len(seen_coordinators) == 2
+    assert len(payload["document_runs"]) == 6
+    assert payload["config"]["parallel_documents"] == 3
+    assert payload["summary"]["gate_checks"]["all_runs_ok"] is True
+
+
+def test_throughput_cli_fail_fast_returns_nonzero_when_final_gate_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        throughput_module,
+        "run_throughput_suite",
+        lambda **_kwargs: {
+            "summary": {
+                "gate_passed": False,
+                "median_throughput_improvement_pct": 40.0,
+                "worst_per_doc_p95_slowdown_pct": 30.0,
+                "gate_checks": {"per_doc_p95_slowdown": False},
+            }
+        },
+    )
+
+    exit_code = throughput_module.main(
+        [
+            "a.pdf",
+            "b.pdf",
+            "--out-dir",
+            str(tmp_path / "results"),
+            "--fail-fast",
+        ]
+    )
+
+    assert exit_code == 2

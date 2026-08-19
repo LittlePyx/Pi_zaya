@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -134,6 +135,8 @@ from kb.paper_guide_answer_post_runtime import (
     _apply_paper_guide_answer_postprocess as _answer_post_apply_paper_guide_answer_postprocess,
 )
 from kb.chat_store import ChatStore
+from kb.config import load_settings
+from kb.conversion_job_store import ConversionJobStore
 from kb.file_ops import _resolve_md_output_paths
 from kb.converter.quality_gate import prepare_markdown_for_index
 from kb.converter.quality_repair import append_conversion_repair_attempt
@@ -4580,6 +4583,10 @@ if not hasattr(RUNTIME, "GEN_QUALITY_EVENTS"):
 
 _BG_STATE = RUNTIME.BG_STATE
 _BG_LOCK = RUNTIME.BG_LOCK
+_BG_SESSION_ID = f"{os.getpid()}-{uuid.uuid4().hex}"
+_BG_JOB_STORE_LOCK = threading.RLock()
+_BG_JOB_STORES: dict[str, ConversionJobStore] = {}
+_BG_RECONCILED_DB_PATHS: set[str] = set()
 
 
 def _cite_source_id(source_path: str) -> str:
@@ -7933,21 +7940,103 @@ def _gen_start_task(task: dict) -> bool:
         return False
     return True
 
+def _bg_job_store() -> ConversionJobStore:
+    db_path = Path(load_settings().library_db_path).expanduser().resolve()
+    key = os.path.normcase(str(db_path)).casefold()
+    with _BG_JOB_STORE_LOCK:
+        store = _BG_JOB_STORES.get(key)
+        if store is None:
+            store = ConversionJobStore(db_path)
+            _BG_JOB_STORES[key] = store
+        return store
+
+
+def _bg_reconcile_persisted_jobs() -> dict:
+    """Classify jobs owned by an older backend session as recoverable."""
+    try:
+        store = _bg_job_store()
+        key = os.path.normcase(str(store.db_path)).casefold()
+        with _BG_JOB_STORE_LOCK:
+            if key in _BG_RECONCILED_DB_PATHS:
+                recoverable = store.list_recoverable()
+                return {"ok": True, "reconciled": 0, "recoverable": len(recoverable)}
+            interrupted = store.reconcile_after_restart(owner_session=_BG_SESSION_ID)
+            _BG_RECONCILED_DB_PATHS.add(key)
+        RUNTIME.BG_PERSISTENCE_ERROR = ""
+        return {
+            "ok": True,
+            "reconciled": len(interrupted),
+            "recoverable": len(store.list_recoverable()),
+        }
+    except Exception as exc:
+        logger.exception("conversion_job_reconcile_failed")
+        RUNTIME.BG_PERSISTENCE_ERROR = str(exc)[:500]
+        return {
+            "ok": False,
+            "reconciled": 0,
+            "recoverable": 0,
+            "error": str(exc)[:500],
+        }
+
+
 def _bg_enqueue(task: dict) -> bool:
     if "_tid" not in task:
         task = dict(task)
         task["_tid"] = uuid.uuid4().hex
-    enqueued = bg_enqueue(_BG_STATE, _BG_LOCK, task)
-    if enqueued:
-        _bg_ensure_started()
-    return bool(enqueued)
+    _bg_reconcile_persisted_jobs()
+    store = _bg_job_store()
+    persisted = store.create_queued(task, owner_session=_BG_SESSION_ID)
+    if not persisted:
+        return False
+    try:
+        enqueued = bg_enqueue(_BG_STATE, _BG_LOCK, task)
+    except Exception:
+        store.delete_queued(str(task.get("_tid") or ""), owner_session=_BG_SESSION_ID)
+        raise
+    if not enqueued:
+        store.delete_queued(str(task.get("_tid") or ""), owner_session=_BG_SESSION_ID)
+        return False
+    _bg_ensure_started()
+    return True
 
 def _bg_remove_queued_tasks_for_pdf(pdf_path: Path) -> int:
     """
     Remove queued (not running) conversion tasks for a given PDF.
     Returns removed count.
     """
-    return bg_remove_queued_tasks_for_pdf(_BG_STATE, _BG_LOCK, pdf_path)
+    before = bg_snapshot(_BG_STATE, _BG_LOCK)
+    target_key = os.path.normcase(str(Path(pdf_path).expanduser().resolve(strict=False))).casefold()
+    task_ids = []
+    for task in list(before.get("queue") or []):
+        try:
+            task_key = os.path.normcase(
+                str(Path(str((task or {}).get("pdf") or "")).expanduser().resolve(strict=False))
+            ).casefold()
+        except Exception:
+            task_key = str((task or {}).get("pdf") or "").casefold()
+        if task_key == target_key:
+            task_ids.append(str((task or {}).get("_tid") or ""))
+    recoverable_ids: list[str] = []
+    for task in list(before.get("recoverable_tasks") or []):
+        try:
+            task_key = os.path.normcase(
+                str(Path(str((task or {}).get("pdf") or "")).expanduser().resolve(strict=False))
+            ).casefold()
+        except Exception:
+            task_key = str((task or {}).get("pdf") or "").casefold()
+        if task_key == target_key:
+            recoverable_ids.append(str((task or {}).get("task_id") or ""))
+    removed = bg_remove_queued_tasks_for_pdf(_BG_STATE, _BG_LOCK, pdf_path)
+    if removed or recoverable_ids:
+        try:
+            store = _bg_job_store()
+            for task_id in task_ids:
+                store.mark_cancelled(task_id, message="Queued conversion was removed with the source file.")
+            for task_id in recoverable_ids:
+                store.mark_cancelled(task_id, message="Interrupted conversion recovery was removed with the source file.")
+        except Exception:
+            logger.exception("conversion_job_remove_persist_failed")
+    return removed
 
 
 def _safe_rmtree_child(path_obj: Path, root_obj: Path) -> None:
@@ -7990,25 +8079,161 @@ def _safe_clear_conversion_output(path_obj: Path, root_obj: Path, *, preserve_pa
     except Exception:
         return
 
+
+def _bg_preserve_page_cache_for_replace(task: dict, repair_context: dict) -> bool:
+    """Resumed work always keeps completed pages, including interrupted repairs."""
+    return bool(task.get("resumed")) or not bool(repair_context)
+
 def _bg_cancel_all() -> None:
+    before = bg_snapshot(_BG_STATE, _BG_LOCK)
     bg_cancel_all(_BG_STATE, _BG_LOCK, "Canceling current background conversion")
+    try:
+        store = _bg_job_store()
+        for task in list(before.get("queue") or []):
+            store.mark_cancelled(
+                str((task or {}).get("_tid") or ""),
+                message="Conversion was cancelled before it started.",
+            )
+        for task in list(before.get("active_tasks") or []):
+            store.mark_cancelling(str((task or {}).get("_tid") or ""))
+    except Exception:
+        logger.exception("conversion_job_cancel_all_persist_failed")
 
 
 def _bg_cancel_task(task_id: str) -> dict:
-    return bg_cancel_task(
+    result = bg_cancel_task(
         _BG_STATE,
         _BG_LOCK,
         task_id,
         "Canceling selected background conversion",
     )
+    try:
+        store = _bg_job_store()
+        state = str(result.get("state") or "")
+        if state == "queued_removed":
+            store.mark_cancelled(task_id, message="Conversion was cancelled before it started.")
+        elif state == "cancelling":
+            store.mark_cancelling(task_id)
+        elif not bool(result.get("matched")) and store.mark_cancelled(
+            task_id,
+            message="Interrupted conversion recovery was dismissed.",
+        ):
+            return {
+                "matched": True,
+                "task_id": str(task_id or ""),
+                "state": "recovery_cancelled",
+                "removed_queued": 0,
+            }
+    except Exception:
+        logger.exception("conversion_job_cancel_persist_failed")
+    return result
 
 
 def _bg_snapshot() -> dict:
-    return bg_snapshot(_BG_STATE, _BG_LOCK)
+    snap = bg_snapshot(_BG_STATE, _BG_LOCK)
+    recovery = _bg_reconcile_persisted_jobs()
+    try:
+        store = _bg_job_store()
+        persisted_recent = store.list_recent_results(limit=50)
+        seen = {
+            str(item.get("task_id") or "")
+            for item in persisted_recent
+            if str(item.get("task_id") or "")
+        }
+        memory_recent = [
+            dict(item)
+            for item in list(snap.get("recent_tasks") or [])
+            if not str((item or {}).get("task_id") or "")
+            or str((item or {}).get("task_id") or "") not in seen
+        ]
+        snap["recent_tasks"] = (persisted_recent + memory_recent)[:50]
+        recoverable = store.list_recoverable(limit=100)
+        snap["recoverable_tasks"] = recoverable
+        snap["recoverable_count"] = len(recoverable)
+        snap["persistence_error"] = ""
+    except Exception as exc:
+        logger.exception("conversion_job_snapshot_failed")
+        snap["recoverable_tasks"] = []
+        snap["recoverable_count"] = 0
+        snap["persistence_error"] = str(exc)[:500] or str(recovery.get("error") or "")
+    return snap
 
 
 def _bg_record_task_result(**kwargs) -> dict:
     return bg_record_task_result(_BG_STATE, _BG_LOCK, **kwargs)
+
+
+def _bg_resume_task(task_id: str) -> dict:
+    tid = str(task_id or "").strip()
+    if not tid:
+        return {"matched": False, "enqueued": False, "task_id": "", "state": "not_found"}
+    _bg_reconcile_persisted_jobs()
+    store = _bg_job_store()
+    task = store.get_recoverable_task(tid)
+    if task is None:
+        if store.job_state(tid) in {"queued", "running", "cancelling"}:
+            return {"matched": True, "enqueued": False, "task_id": tid, "state": "already_busy"}
+        return {"matched": False, "enqueued": False, "task_id": tid, "state": "not_found"}
+    pdf_path = Path(str(task.get("pdf") or "")).expanduser()
+    if not pdf_path.is_file():
+        store.mark_blocked(
+            tid,
+            reason="source_missing",
+            message="The source PDF moved or is missing. Restore it before continuing.",
+        )
+        return {
+            "matched": True,
+            "enqueued": False,
+            "task_id": tid,
+            "state": "blocked",
+            "blocked_reason": "source_missing",
+        }
+    settings = load_settings()
+    if not bool(task.get("no_llm")) and not bool(settings.vision_api_key):
+        store.mark_blocked(
+            tid,
+            reason="api_key_missing",
+            message="A vision-capable API key is required before this conversion can continue.",
+        )
+        return {
+            "matched": True,
+            "enqueued": False,
+            "task_id": tid,
+            "state": "blocked",
+            "blocked_reason": "api_key_missing",
+        }
+    queued_task = store.queue_for_resume(tid, owner_session=_BG_SESSION_ID)
+    if queued_task is None:
+        return {"matched": True, "enqueued": False, "task_id": tid, "state": "already_busy"}
+    try:
+        enqueued = bg_enqueue(_BG_STATE, _BG_LOCK, queued_task)
+    except Exception:
+        store.revert_resume(tid, message="Pi_zaya could not restore the task to the local queue.")
+        raise
+    if not enqueued:
+        store.revert_resume(tid, message="This paper already has a conversion in progress.")
+        return {"matched": True, "enqueued": False, "task_id": tid, "state": "already_busy"}
+    _bg_ensure_started()
+    return {"matched": True, "enqueued": True, "task_id": tid, "state": "queued"}
+
+
+def _bg_resume_all() -> dict:
+    _bg_reconcile_persisted_jobs()
+    tasks = _bg_job_store().list_recoverable(limit=100)
+    items = [_bg_resume_task(str(task.get("task_id") or "")) for task in tasks]
+    return {
+        "ok": True,
+        "requested": len(tasks),
+        "enqueued": sum(1 for item in items if bool(item.get("enqueued"))),
+        "blocked": sum(1 for item in items if str(item.get("state") or "") == "blocked"),
+        "skipped_busy": sum(1 for item in items if str(item.get("state") or "") == "already_busy"),
+        "items": items,
+    }
+
+
+def _bg_update_recoverable_pdf_path(old_path: Path, new_path: Path) -> int:
+    _bg_reconcile_persisted_jobs()
+    return _bg_job_store().update_recoverable_pdf_path(old_path, new_path)
 
 def _bg_target_worker_count() -> int:
     try:
@@ -8020,6 +8245,33 @@ def _bg_target_worker_count() -> int:
     # Two active documents passed the fixed product-path throughput, per-document
     # latency, retry, fallback, marker, and quality gates on 2026-08-17.
     return 2
+
+
+_BG_LLM_COORDINATOR_LOCK = threading.Lock()
+
+
+def _bg_llm_coordinator_dir() -> Path:
+    """Return one shared provider-budget directory for this backend session."""
+    configured = str(os.environ.get("KB_BG_LLM_GLOBAL_COORDINATOR", "") or "").strip()
+    if configured:
+        path = Path(configured).expanduser().resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    with _BG_LLM_COORDINATOR_LOCK:
+        existing = str(getattr(RUNTIME, "BG_LLM_COORDINATOR_DIR", "") or "").strip()
+        if existing:
+            path = Path(existing).expanduser().resolve()
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        path = (
+            Path(tempfile.gettempdir())
+            / "pi_zaya"
+            / "llm-inflight"
+            / f"backend-{os.getpid()}-{uuid.uuid4().hex[:12]}"
+        ).resolve()
+        path.mkdir(parents=True, exist_ok=True)
+        RUNTIME.BG_LLM_COORDINATOR_DIR = str(path)
+        return path
 
 
 def _bg_ingest_py_path() -> Path:
@@ -8282,6 +8534,32 @@ def _bg_post_convert_quality_gate(
     return assessment
 
 
+def _bg_set_conversion_stage(stage: str, *, task_id: str) -> None:
+    bg_update_conversion_stage(_BG_STATE, _BG_LOCK, stage, task_id=task_id)
+    try:
+        _bg_job_store().update_stage(task_id, stage)
+    except Exception:
+        logger.exception("conversion_job_stage_persist_failed", extra={"task_id": task_id, "stage": stage})
+
+
+def _bg_finish_persisted_task(message: str, *, task_id: str) -> None:
+    bg_finish_task(_BG_STATE, _BG_LOCK, message, task_id=task_id)
+    try:
+        snap = bg_snapshot(_BG_STATE, _BG_LOCK)
+        result = next(
+            (
+                dict(item)
+                for item in list(snap.get("recent_tasks") or [])
+                if str((item or {}).get("task_id") or "") == str(task_id or "")
+            ),
+            None,
+        )
+        if result is not None:
+            _bg_job_store().finish(task_id, result)
+    except Exception:
+        logger.exception("conversion_job_finish_persist_failed", extra={"task_id": task_id})
+
+
 def _bg_worker_loop() -> None:
     while True:
         task = bg_begin_next_task_or_idle(_BG_STATE, _BG_LOCK)
@@ -8309,19 +8587,26 @@ def _bg_worker_loop() -> None:
         task_id = str(task.get("_tid") or "")
 
         try:
+            _bg_job_store().mark_running(task_id, owner_session=_BG_SESSION_ID)
+        except Exception:
+            logger.exception("conversion_job_start_persist_failed", extra={"task_id": task_id})
+
+        try:
             md_folder = out_root / pdf.stem
             if replace and md_folder.exists():
                 _safe_clear_conversion_output(
                     md_folder,
                     out_root,
-                    preserve_page_cache=not bool(repair_context),
+                    preserve_page_cache=_bg_preserve_page_cache_for_replace(task, repair_context),
                 )
 
             last_page_done = 0
             last_page_total = 0
+            last_progress_persisted_at = 0.0
+            last_persisted_page_done = -1
 
             def _on_progress(page_done: int, page_total: int, msg: str = "") -> None:
-                nonlocal last_page_done, last_page_total
+                nonlocal last_page_done, last_page_total, last_progress_persisted_at, last_persisted_page_done
                 try:
                     last_page_done = max(0, int(page_done or 0))
                 except Exception:
@@ -8334,6 +8619,32 @@ def _bg_worker_loop() -> None:
                     bg_update_page_progress(_BG_STATE, _BG_LOCK, page_done, page_total, msg, task_id=task_id)
                 except Exception:
                     pass
+                now = time.monotonic()
+                reuse_match = re.search(
+                    r"Reused\s+(\d+)\s*/\s*(\d+)\s+completed pages",
+                    str(msg or ""),
+                    flags=re.I,
+                )
+                should_persist = (
+                    reuse_match is not None
+                    or last_page_done != last_persisted_page_done
+                    or now - last_progress_persisted_at >= 0.75
+                )
+                if should_persist:
+                    try:
+                        _bg_job_store().update_progress(
+                            task_id,
+                            page_done=last_page_done,
+                            page_total=last_page_total,
+                            reused_page_count=(int(reuse_match.group(1)) if reuse_match else None),
+                        )
+                        last_progress_persisted_at = now
+                        last_persisted_page_done = last_page_done
+                    except Exception:
+                        logger.exception(
+                            "conversion_job_progress_persist_failed",
+                            extra={"task_id": task_id},
+                        )
 
             def _on_running_pages(pages: list[int]) -> None:
                 try:
@@ -8353,7 +8664,7 @@ def _bg_worker_loop() -> None:
 
             effective_speed_mode = speed_mode
             source_retry_done = False
-            bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "converting", task_id=task_id)
+            _bg_set_conversion_stage("converting", task_id=task_id)
             ok, out_folder = run_pdf_to_md(
                 pdf_path=pdf,
                 out_root=out_root,
@@ -8365,6 +8676,8 @@ def _bg_worker_loop() -> None:
                 cancel_cb=_should_cancel,
                 speed_mode=speed_mode,
                 max_active_conversions=_bg_target_worker_count(),
+                global_inflight_coordinator=_bg_llm_coordinator_dir(),
+                global_inflight_owner=task_id,
             )
             ok, out_folder, msg = _bg_conversion_result_message(ok, out_folder, _should_cancel)
 
@@ -8393,7 +8706,7 @@ def _bg_worker_loop() -> None:
             post_convert_quality: dict = {}
             if ok and md_exists and not _bg_cancel_requested(_should_cancel):
                 try:
-                    bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "finalizing", task_id=task_id)
+                    _bg_set_conversion_stage("finalizing", task_id=task_id)
                     _on_progress(
                         last_page_done,
                         last_page_total,
@@ -8461,7 +8774,7 @@ def _bg_worker_loop() -> None:
                         else f"quality gate: retrying conversion with {retry_speed_mode} profile"
                     ),
                 )
-                bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "retrying", task_id=task_id)
+                _bg_set_conversion_stage("retrying", task_id=task_id)
                 _clear_md_folder_for_retry(preserve_page_cache=bool(retry_pages))
                 retry_ok, retry_out_folder = run_pdf_to_md(
                     pdf_path=pdf,
@@ -8474,6 +8787,8 @@ def _bg_worker_loop() -> None:
                     cancel_cb=_should_cancel,
                     speed_mode=retry_speed_mode,
                     max_active_conversions=_bg_target_worker_count(),
+                    global_inflight_coordinator=_bg_llm_coordinator_dir(),
+                    global_inflight_owner=task_id,
                     retry_pages=retry_pages,
                 )
                 ok, out_folder, msg = _bg_conversion_result_message(
@@ -8544,7 +8859,7 @@ def _bg_worker_loop() -> None:
                 try:
                     ingest_py = _bg_ingest_py_path()
                     if ingest_py.exists() and md_exists:
-                        bg_update_conversion_stage(_BG_STATE, _BG_LOCK, "indexing", task_id=task_id)
+                        _bg_set_conversion_stage("indexing", task_id=task_id)
                         _on_progress(
                             last_page_done,
                             last_page_total,
@@ -8625,10 +8940,10 @@ def _bg_worker_loop() -> None:
 
         if bg_should_cancel(_BG_STATE, _BG_LOCK, task_id=task_id):
             msg = "CANCELLED"
-        bg_finish_task(_BG_STATE, _BG_LOCK, msg, task_id=task_id)
+        _bg_finish_persisted_task(msg, task_id=task_id)
 
 def _bg_ensure_started() -> None:
-    worker_ver = "2026-08-17.bg.task-results.v1"
+    worker_ver = "2026-08-18.bg.durable-recovery.v1"
     desired_workers = _bg_target_worker_count()
     threads = list(getattr(RUNTIME, "BG_THREADS", []) or [])
     running_ver = str(getattr(RUNTIME, "BG_WORKER_VERSION", "") or "")

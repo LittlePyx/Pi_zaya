@@ -8,6 +8,7 @@ import {
   Space,
   Card,
   Modal,
+  Alert,
 } from 'antd'
 import {
   ReloadOutlined,
@@ -26,6 +27,7 @@ import type { ReferenceSyncStats } from '../api/references'
 import { useChatStore } from '../stores/chatStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useOnboardingStore } from '../stores/onboardingStore'
 import { useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
 import {
@@ -159,6 +161,8 @@ export default function LibraryPage() {
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const llmReadiness = useSettingsStore((s) => s.llmReadiness)
+  const usesManagedLibraryDefaults = useSettingsStore((s) => s.usesManagedLibraryDefaults)
+  const onboardingStatus = useOnboardingStore((s) => s.status)
 
   const [scope, setScope] = useState('200')
   const [tabKey, setTabKey] = useState<FileTabKey>('all')
@@ -177,6 +181,8 @@ export default function LibraryPage() {
   const [qualityCaseRerunResults, setQualityCaseRerunResults] = useState<Record<string, LibraryResearchQaRerunResponse>>({})
   const [qualityFailureFilter, setQualityFailureFilter] = useState('')
   const [conversionRetryingName, setConversionRetryingName] = useState('')
+  const [conversionResumeAllRunning, setConversionResumeAllRunning] = useState(false)
+  const [firstRunAdvancedOpen, setFirstRunAdvancedOpen] = useState(false)
   const {
     directoriesConfigured,
     dirDirty,
@@ -803,6 +809,8 @@ export default function LibraryPage() {
       const result = await store.cancelConversionTask(taskId)
       if (!result.matched) {
         message.info(S.lib_msg_conversion_task_not_found)
+      } else if (result.state === 'recovery_cancelled') {
+        message.success(S.lib_msg_conversion_recovery_dismissed.replace('{name}', item.name))
       } else if (result.state === 'queued_removed') {
         message.success(S.lib_msg_conversion_queue_removed.replace('{name}', item.name))
       } else {
@@ -810,6 +818,57 @@ export default function LibraryPage() {
       }
     } catch (err) {
       message.error(err instanceof Error ? err.message : S.lib_msg_conversion_cancel_failed)
+    }
+  }
+
+  const handleResumeConversion = async (item: LibraryFileItem) => {
+    if (item.task_state !== 'interrupted' || conversionRetryingName) return
+    const taskId = String(item.task_id || '').trim()
+    if (!taskId) {
+      message.info(S.lib_msg_conversion_task_not_found)
+      return
+    }
+    setConversionRetryingName(item.name)
+    try {
+      const result = await store.resumeConversionTask(taskId)
+      if (result.enqueued) {
+        message.success(S.lib_msg_conversion_resume_enqueued.replace('{name}', item.name))
+      } else if (result.blocked_reason === 'api_key_missing') {
+        message.warning(S.lib_msg_conversion_resume_api_key)
+        openApiSettings()
+      } else if (result.blocked_reason === 'source_missing') {
+        message.warning(S.lib_msg_conversion_resume_source_missing.replace('{name}', item.name))
+      } else if (result.state === 'already_busy') {
+        message.info(S.lib_msg_conversion_already_busy.replace('{name}', item.name))
+      } else {
+        message.info(S.lib_msg_conversion_task_not_found)
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.lib_msg_conversion_resume_failed)
+      await store.loadFiles(scope)
+    } finally {
+      setConversionRetryingName('')
+    }
+  }
+
+  const handleResumeAllConversions = async () => {
+    if (conversionResumeAllRunning) return
+    setConversionResumeAllRunning(true)
+    try {
+      const result = await store.resumeAllConversions()
+      if (result.enqueued > 0) {
+        message.success(S.lib_msg_conversion_resume_all_enqueued.replace('{n}', String(result.enqueued)))
+      }
+      if (result.blocked > 0) {
+        message.warning(S.lib_msg_conversion_resume_all_blocked.replace('{n}', String(result.blocked)))
+      }
+      if (result.enqueued <= 0 && result.blocked <= 0) {
+        message.info(S.lib_msg_no_recoverable_conversion)
+      }
+    } catch (err) {
+      message.error(err instanceof Error ? err.message : S.lib_msg_conversion_resume_failed)
+    } finally {
+      setConversionResumeAllRunning(false)
     }
   }
 
@@ -1247,6 +1306,7 @@ export default function LibraryPage() {
         onStartPaperGuide={(rowItem) => { void handleStartPaperGuide(rowItem) }}
         onConvert={(rowItem) => { void handleConvertOne(rowItem) }}
         onCancel={(rowItem) => { void handleCancelConversion(rowItem) }}
+        onResume={(rowItem) => { void handleResumeConversion(rowItem) }}
         onRetry={(rowItem) => { void handleRetryConversion(rowItem) }}
         retrying={conversionRetryingName === item.name}
         onOpenPdf={(name) => { void store.openFile(name, 'pdf') }}
@@ -1274,6 +1334,7 @@ export default function LibraryPage() {
     converted: convertedFiles.length,
     queued: store.files.filter((x) => x.task_state === 'queued').length,
     running: store.files.filter((x) => x.task_state === 'running').length,
+    recoverable: store.files.filter((x) => x.task_state === 'interrupted').length,
     reconverting: 0,
     quality_review: qualityReviewCount,
     quality_ready: qualityReadyCount,
@@ -1281,8 +1342,11 @@ export default function LibraryPage() {
     index_quality_blocked: qualitySourceReadinessStats.blocked,
     index_stale: qualitySourceReadinessStats.indexStale,
   }
+  const recoverableCount = Math.max(Number(counts.recoverable || 0), store.recoverableCount)
 
   const showDirEditor = dirEditorOpen || !directoriesConfigured
+  const firstRunLibraryMode = Boolean(onboardingStatus && !onboardingStatus.completed)
+  const advancedLibraryToolsVisible = !firstRunLibraryMode || firstRunAdvancedOpen
   const workbenchStats: WorkbenchMetricItem[] = [
     { key: 'view', label: S.lib_stats_view, value: counts.total_view, tone: 'neutral' },
     { key: 'pending', label: S.lib_stats_pending, value: counts.pending, tone: counts.pending > 0 ? 'info' : 'neutral' },
@@ -1293,6 +1357,7 @@ export default function LibraryPage() {
     { key: 'source_blocked', label: S.lib_stats_quality_blocked, value: qualitySourceReadinessStats.blocked, tone: qualitySourceReadinessStats.blocked > 0 ? 'warn' : 'neutral' },
     { key: 'quality', label: S.lib_quality_report_review, value: counts.quality_review, tone: counts.quality_review > 0 ? 'warn' : 'neutral' },
   ]
+  const visibleWorkbenchStats = advancedLibraryToolsVisible ? workbenchStats : workbenchStats.slice(0, 3)
 
   const showUploadWorkbench = uploadWorkbenchOpen && uploadDrafts.length > 0
   const showTaxonomySelectAction = browseMode === 'list' && currentListItems.length > 0
@@ -1332,6 +1397,7 @@ export default function LibraryPage() {
           <LibraryDirectorySettings
             S={S}
             directoriesConfigured={directoriesConfigured}
+            usesManagedDefaults={usesManagedLibraryDefaults}
             showDirEditor={showDirEditor}
             pdfDirDraft={pdfDirDraft}
             mdDirDraft={mdDirDraft}
@@ -1346,7 +1412,7 @@ export default function LibraryPage() {
             onSaveDirs={saveDirs}
           />
 
-          {renameWorkbenchSection}
+          {advancedLibraryToolsVisible ? renameWorkbenchSection : null}
         </div>
 
         <div className="kb-lib-workbench-side">
@@ -1429,12 +1495,50 @@ export default function LibraryPage() {
           </div>
         </div>
         <Space wrap className="kb-lib-head-actions">
-          <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} type="primary" onClick={() => { void handleReindex() }}>{S.reindex_now}</Button>
-          <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} onClick={() => { void handleStartRefSync() }}>{S.lib_btn_sync_refs}</Button>
+          {advancedLibraryToolsVisible ? (
+            <>
+              <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} type="primary" onClick={() => { void handleReindex() }}>{S.reindex_now}</Button>
+              <Button className="kb-lib-head-btn" icon={<ReloadOutlined />} onClick={() => { void handleStartRefSync() }}>{S.lib_btn_sync_refs}</Button>
+            </>
+          ) : (
+            <Button className="kb-lib-head-btn" data-testid="library-show-advanced" onClick={() => setFirstRunAdvancedOpen(true)}>
+              {S.lib_first_run_show_advanced}
+            </Button>
+          )}
         </Space>
       </div>
 
-      <WorkbenchMetricStrip items={workbenchStats} className="kb-lib-summary-strip" />
+      <WorkbenchMetricStrip items={visibleWorkbenchStats} className="kb-lib-summary-strip" />
+
+      {store.conversionPersistenceError ? (
+        <Alert
+          type="error"
+          showIcon
+          data-testid="library-conversion-persistence-error"
+          message={S.lib_conversion_persistence_error_title}
+          description={S.lib_conversion_persistence_error_description}
+        />
+      ) : null}
+
+      {recoverableCount > 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          data-testid="library-conversion-recovery"
+          message={S.lib_conversion_recovery_title.replace('{n}', String(recoverableCount))}
+          description={S.lib_conversion_recovery_description}
+          action={(
+            <Button
+              type="primary"
+              loading={conversionResumeAllRunning}
+              onClick={() => { void handleResumeAllConversions() }}
+              data-testid="library-resume-all-conversions"
+            >
+              {S.lib_btn_resume_all_conversions}
+            </Button>
+          )}
+        />
+      ) : null}
 
       {preparationWorkbench}
       {uploadWorkbenchCard}
@@ -1459,7 +1563,7 @@ export default function LibraryPage() {
         onStopConvert={store.cancelConvert}
       />
 
-      <LibraryLegacyConvertCard
+      {advancedLibraryToolsVisible ? <LibraryLegacyConvertCard
         S={S}
         scope={scope}
         fileKeyword={fileKeyword}
@@ -1486,9 +1590,9 @@ export default function LibraryPage() {
         onRefresh={() => store.loadFiles(scope)}
         onConvertPending={handleConvertPending}
         onStopConvert={store.cancelConvert}
-      />
+      /> : null}
 
-      {showRefSyncCard && store.refSync ? (
+      {advancedLibraryToolsVisible && showRefSyncCard && store.refSync ? (
         <LibraryRefSyncCard
           title={S.lib_card_refsync}
           message={refSyncDisplayMessage}
@@ -1505,7 +1609,7 @@ export default function LibraryPage() {
         />
       ) : null}
 
-      {QUALITY_DIAGNOSTICS_VISIBLE && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
+      {advancedLibraryToolsVisible && QUALITY_DIAGNOSTICS_VISIBLE && (qualityReportStats.converted > 0 || qualityReportStats.assessed > 0) ? (
         <LibraryQualityCenter
           open={qualityCenterOpen}
           tone={qualityCenterView.tone}
@@ -1619,7 +1723,7 @@ export default function LibraryPage() {
       ) : null}
 
       <LibraryQualityHistoryPanel
-        visible={QUALITY_DIAGNOSTICS_VISIBLE && qualityCenterOpen}
+        visible={advancedLibraryToolsVisible && QUALITY_DIAGNOSTICS_VISIBLE && qualityCenterOpen}
         S={S}
         records={qualityRepairHistoryList}
         stats={qualityRepairHistoryStats}
@@ -1633,7 +1737,7 @@ export default function LibraryPage() {
         onOpenRecord={(name) => focusQualityHistoryNames([name])}
       />
 
-      <LibraryTaxonomyToolbar
+      {advancedLibraryToolsVisible ? <LibraryTaxonomyToolbar
         S={S}
         browseMode={browseMode}
         visibleCount={visibleAll.length}
@@ -1671,9 +1775,9 @@ export default function LibraryPage() {
         onToggleOnlySuggested={() => setOnlySuggested((value) => !value)}
         onToggleOnlyQualityIssues={() => setOnlyQualityIssues((value) => !value)}
         onClearQualityHistoryFocus={() => setQualityHistoryFocusNames([])}
-      />
+      /> : null}
 
-      <LibraryBatchSelectionBar
+      {advancedLibraryToolsVisible ? <LibraryBatchSelectionBar
         visible={browseMode === 'list'}
         S={S}
         selectedCount={selectedLibraryCount}
@@ -1685,7 +1789,7 @@ export default function LibraryPage() {
         onClearSelection={clearLibrarySelection}
         onRepairSelectedQuality={() => { void handleRepairSelectedQuality() }}
         onOpenBatchEditor={openBatchEditor}
-      />
+      /> : null}
 
       {browseMode === 'list' ? (
         <Tabs

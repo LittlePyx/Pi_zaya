@@ -61,6 +61,129 @@ def test_library_cancel_conversion_supports_task_scope_and_legacy_cancel_all(mon
     assert calls == [("task", "task-one"), ("all", "")]
 
 
+def test_library_resume_conversion_routes_delegate_without_automatic_restart(monkeypatch):
+    from api.routers import library as library_router
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        library_router,
+        "_bg_resume_task",
+        lambda task_id: calls.append(task_id) or {
+            "matched": True,
+            "enqueued": True,
+            "task_id": task_id,
+            "state": "queued",
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_bg_resume_all",
+        lambda: {
+            "ok": True,
+            "requested": 2,
+            "enqueued": 1,
+            "blocked": 1,
+            "skipped_busy": 0,
+            "items": [],
+        },
+    )
+    client = TestClient(app)
+
+    one = client.post("/api/library/convert/resume", json={"task_id": "recover-one"})
+    all_tasks = client.post("/api/library/convert/resume-all")
+
+    assert one.status_code == 200
+    assert one.json()["state"] == "queued"
+    assert one.json()["task_id"] == "recover-one"
+    assert all_tasks.status_code == 200
+    assert all_tasks.json()["enqueued"] == 1
+    assert all_tasks.json()["blocked"] == 1
+    assert calls == ["recover-one"]
+
+
+def test_library_files_exposes_interrupted_recoverable_task(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "markdown"
+    pdf_dir.mkdir()
+    md_dir.mkdir()
+    pdf = pdf_dir / "recover.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+
+    class FakeStore:
+        def list_records_by_paths(self, paths):
+            return {}
+
+    interrupted_result = {
+        "task_id": "recover-task",
+        "name": pdf.name,
+        "pdf": str(pdf),
+        "outcome": "interrupted",
+        "operation": "conversion",
+        "message": "Conversion was interrupted when Pi_zaya stopped.",
+        "detail": "",
+        "retry_action": "resume",
+        "replace": True,
+        "speed_mode": "balanced",
+        "started_at": 10.0,
+        "finished_at": 20.0,
+        "duration_s": 10.0,
+        "page_done": 4,
+        "page_total": 10,
+    }
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "_load_docs_index_state", lambda: {})
+    monkeypatch.setattr(
+        library_router,
+        "_bg_snapshot",
+        lambda: {
+            "running": False,
+            "current": "",
+            "queue": [],
+            "active_tasks": [],
+            "recent_tasks": [interrupted_result],
+            "recoverable_count": 1,
+            "recoverable_tasks": [
+                {
+                    "task_id": "recover-task",
+                    "name": pdf.name,
+                    "pdf": str(pdf),
+                    "state": "interrupted",
+                    "message": "Conversion was interrupted when Pi_zaya stopped.",
+                    "blocked_reason": "",
+                    "replace": True,
+                    "speed_mode": "balanced",
+                    "no_llm": False,
+                    "page_done": 4,
+                    "page_total": 10,
+                    "cached_page_count": 4,
+                    "reused_page_count": 0,
+                    "attempt": 1,
+                }
+            ],
+        },
+    )
+
+    response = TestClient(app).get("/api/library/files", params={"scope": "all"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    item = payload["items"][0]
+    assert item["task_state"] == "interrupted"
+    assert item["status"] == "interrupted"
+    assert item["category"] == "pending"
+    assert item["task_id"] == "recover-task"
+    assert item["cached_page_count"] == 4
+    assert item["last_conversion"]["outcome"] == "interrupted"
+    assert item["last_conversion"]["retry_action"] == "resume"
+    assert payload["counts"]["recoverable"] == 1
+    assert payload["queue"]["running"] is False
+    assert payload["queue"]["recoverable_count"] == 1
+
+
 def test_quality_repair_plan_uses_fresh_report_escalation():
     from api.routers import library as library_router
 

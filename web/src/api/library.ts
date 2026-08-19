@@ -31,9 +31,32 @@ export interface ConvertProgress {
   running_page_count?: number
   last: string
   recent_tasks?: ConversionTaskResult[]
+  recoverable_count?: number
+  recoverable_tasks?: RecoverableConversionTask[]
+  persistence_error?: string
 }
 
-export type ConversionOutcome = 'success' | 'cancelled' | 'conversion_failed' | 'quality_blocked' | 'index_failed'
+export type ConversionOutcome = 'success' | 'cancelled' | 'conversion_failed' | 'quality_blocked' | 'index_failed' | 'interrupted'
+
+export interface RecoverableConversionTask {
+  task_id: string
+  name: string
+  pdf: string
+  state: 'interrupted'
+  message: string
+  blocked_reason: '' | 'source_missing' | 'api_key_missing' | string
+  replace: boolean
+  speed_mode: string
+  no_llm: boolean
+  page_done: number
+  page_total: number
+  reused_page_count: number
+  cached_page_count: number
+  attempt: number
+  created_at: number
+  updated_at: number
+  interrupted_at: number
+}
 
 export interface ConversionTaskResult {
   task_id: string
@@ -43,7 +66,7 @@ export interface ConversionTaskResult {
   operation: 'conversion' | 'index_retry'
   message: string
   detail: string
-  retry_action: '' | 'reconvert' | 'reindex'
+  retry_action: '' | 'reconvert' | 'reindex' | 'resume'
   replace: boolean
   speed_mode: string
   started_at: number
@@ -51,6 +74,8 @@ export interface ConversionTaskResult {
   duration_s: number
   page_done: number
   page_total: number
+  reused_page_count?: number
+  blocked_reason?: string
 }
 
 export interface CancelConversionResponse {
@@ -79,7 +104,7 @@ export interface LibraryFileItem {
   index_chunk_exists?: boolean
   quality_gate?: Record<string, unknown> | null
   category: 'pending' | 'converted'
-  task_state: 'idle' | 'queued' | 'running'
+  task_state: 'idle' | 'queued' | 'running' | 'interrupted'
   status: string
   task_id?: string
   replace_task: boolean
@@ -88,6 +113,11 @@ export interface LibraryFileItem {
   cur_page_total: number
   cur_page_msg: string
   conversion_stage: ConversionStage
+  recoverable?: boolean
+  cached_page_count?: number
+  reused_page_count?: number
+  recovery_message?: string
+  recovery_blocked_reason?: string
   last_conversion?: ConversionTaskResult | null
   running_pages?: number[]
   running_page_count?: number
@@ -341,6 +371,7 @@ export interface LibraryFilesResponse {
     converted: number
     queued: number
     running: number
+    recoverable?: number
     reconverting: number
     quality_review: number
     quality_ready: number
@@ -359,7 +390,28 @@ export interface LibraryFilesResponse {
     done: number
     total: number
     recent_tasks?: ConversionTaskResult[]
+    recoverable_count?: number
+    recoverable_tasks?: RecoverableConversionTask[]
+    persistence_error?: string
   }
+}
+
+export interface ResumeConversionResponse {
+  ok: boolean
+  matched: boolean
+  enqueued: boolean
+  task_id: string
+  state: 'queued' | 'blocked' | 'already_busy' | 'not_found' | string
+  blocked_reason?: string
+}
+
+export interface ResumeAllConversionsResponse {
+  ok: boolean
+  requested: number
+  enqueued: number
+  blocked: number
+  skipped_busy: number
+  items: ResumeConversionResponse[]
 }
 
 export interface RenameSuggestionItem {
@@ -1234,6 +1286,13 @@ export const libraryApi = {
   cancelConversionTask: (taskId: string) => api.post<CancelConversionResponse>(
     '/api/library/convert/cancel',
     { task_id: taskId },
+  ),
+  resumeConversionTask: (taskId: string) => api.post<ResumeConversionResponse>(
+    '/api/library/convert/resume',
+    { task_id: taskId },
+  ),
+  resumeAllConversions: () => api.post<ResumeAllConversionsResponse>(
+    '/api/library/convert/resume-all',
   ),
   reindexFile: (pdfName: string) => api.post<{
     ok: boolean

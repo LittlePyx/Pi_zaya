@@ -526,7 +526,10 @@ If the change touches prompt, retry, or page typing:
 
 - add comparison-oriented unit tests
 
-## 16. Immediate Next Task
+## 16. Historical Next Task (Superseded)
+
+This pre-benchmark plan is retained for chronology. Its adaptive `dpi / token`
+candidate was later rejected and removed as recorded in sections 20 and 27.
 
 The next step should not be another large refactor and should not be another
 round of simply raising worker counts.
@@ -537,7 +540,7 @@ The immediate next execution step should be:
 2. run the `4 / 8 / 12 / 16` sweep and lock `normal-max`
 3. implement the first conservative version of page-adaptive `dpi / token`
 
-Only after those three steps are done should the next speed decision be made.
+The later decision records, not this historical checklist, govern current work.
 
 ## 17. Decision Rules
 
@@ -558,13 +561,14 @@ The key conclusion for this phase is clear:
 
 - refactoring has already created enough room for performance work
 - the main bottleneck is single-page `vision convert`
-- the highest-value next speed gains will come from adaptive per-page VL cost
-  control, not from unlimited worker growth
+- the highest-value next speed gains must reduce VL work without changing
+  structural output; neither unlimited worker growth nor rejected page-local
+  shortcuts qualify
 - the correct order is:
   - improve benchmark structure
-  - land adaptive page budgets
-  - tighten retry and references guardrails
-  - revisit concurrency only after request cost comes down
+  - make image/formula/reference restoration deterministic
+  - require paired structural-quality comparison for every speed candidate
+  - revisit request count or concurrency only when those gates stay green
 
 All future `LLM / vision_direct` optimization should follow this plan and use
 first-run real-library benchmark results as the main decision source.
@@ -643,15 +647,20 @@ Start now with Phase X1:
 3. keep real-PDF validation to one document per run until the shared limiter is
    proven stable
 
-## 20. 2026-08-17 Conservative Page-Budget Slice
+## 20. 2026-08-17 Conservative Page-Budget Slice (Archived No-Go)
 
-The first class-aware budget slice is implemented behind
-`KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS=0`. The default remains disabled until a
-fixed first-run real-PDF A/B passes the complete conversion and downstream
-source-grounding gates.
+This section is a historical decision record, not current configuration
+guidance. The class-aware implementation, environment variable, benchmark
+fields, structured budget logs, and dedicated tests were removed on 2026-08-19
+after the no-go result. `KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS` is no longer a
+supported setting.
 
-The local classifier uses only signals already available during conversion and
-assigns one of:
+The first class-aware budget slice was implemented behind a default-off
+`KB_PDF_VISION_ADAPTIVE_PAGE_BUDGETS` flag while it was evaluated against the
+complete conversion and downstream source-grounding gates.
+
+The local classifier used only signals already available during conversion and
+assigned one of:
 
 1. `references`;
 2. `text_dense_body`;
@@ -659,36 +668,28 @@ assigns one of:
 4. `formula_sensitive`;
 5. `unknown`.
 
-Risk signals take precedence. First pages, textless/scan-like pages, pages whose
-formula signal cannot be computed, references pages, formula-sensitive pages,
-and visual pages retain the current render budget. Only an ordinary body page
-with a successfully checked empty formula-candidate set may use the lower plain-
-page DPI. Existing token caps remain restricted to normal-mode body pages with
-no figure or formula payload. When the adaptive flag is enabled, a source-
-verified text-only page may keep a layout-order hint and still receive the text
-budget; with the flag disabled, the legacy page-hint restriction is unchanged.
-An explicit `KB_PDF_VISION_DPI` continues to override adaptive rendering.
+Risk signals took precedence. First pages, textless/scan-like pages, pages whose
+formula signal could not be computed, references pages, formula-sensitive pages,
+and visual pages retained the current render budget. Only an ordinary body page
+with a successfully checked empty formula-candidate set could use the lower
+plain-page DPI. Existing token caps remained restricted to normal-mode body
+pages with no figure or formula payload. When the adaptive flag was enabled, a
+source-verified text-only page could keep a layout-order hint and still receive
+the text budget; with the flag disabled, the legacy page-hint restriction was
+unchanged. An explicit `KB_PDF_VISION_DPI` overrode adaptive rendering.
 
-With `stage_timings=1`, every full-page VL conversion emits a structured
-`[VISION_DIRECT][BUDGET]` record. The benchmark parser persists page class,
+With `stage_timings=1`, every full-page VL conversion emitted a structured
+`[VISION_DIRECT][BUDGET]` record. The benchmark parser persisted page class,
 chosen/base DPI, token override, density, formula/image/visual counts, render
 profile, per-run class distribution, adaptive-page count, reduced-DPI count,
 and token-capped count.
 
-Use paired profiles on the same first-run PDFs:
+The paired-profile command used for this experiment is intentionally omitted
+because its removed profile fields are no longer accepted. The raw artifact
+path below remains the authoritative audit record.
 
-```powershell
-python tools\benchmark_converter.py <pdf-or-fixed-sample-dir> `
-  --profile "name=normal-control,speed_mode=normal,llm_page_workers=8,max_inflight=8,stage_timings=1,adaptive_page_budgets=0" `
-  --profile "name=normal-adaptive,speed_mode=normal,llm_page_workers=8,max_inflight=8,stage_timings=1,adaptive_page_budgets=1" `
-  --out-dir tmp\benchmarks\adaptive_page_budget_ab
-```
-
-This implementation is not itself a performance acceptance. Do not enable it
-by default or claim a latency improvement until the fixed real-library sample
-meets the Section 14 targets, the hard/manual conversion checks pass, source
-validation remains green, and the unchanged Research QA gates pass on the exact
-candidate code.
+This implementation was not itself a performance acceptance and did not meet
+the fixed real-library target below.
 
 ### 20.1 Real-PDF Decision Record
 
@@ -703,8 +704,8 @@ vision provider. Results are stored under
 | control | 127.64 s | 52,189 | 7 | 3 | 0 / 0 | 0 |
 | adaptive | 134.98 s | 54,219 | 5 | 5 | 0 / 0 | 0 |
 
-The adaptive profile was 5.7% slower, so this slice is a performance **no-go**
-and remains disabled by default. Both outputs retained all 18 page markers.
+The adaptive profile was 5.7% slower, so this slice was a performance **no-go**
+and was later removed. Both outputs retained all 18 page markers.
 The adaptive output contained five display-math blocks versus none in the
 control output, consistent with its deliberate decision to restore 220 DPI on
 two formula-sensitive pages that the legacy heuristic rendered at 200 DPI.
@@ -717,21 +718,24 @@ run before the final benchmark-fairness patch; they are not acceptance runs.
 Their mixed timing direction reinforces that single provider timings must not
 be presented as a latency win.
 
-Keep the classifier, feature flag, structured metrics, and benchmark plumbing
-for the next experiment. The next speed candidate should avoid a VL call on a
-strictly source-verified text-only page and validate the local/layout-aware
-result, rather than micro-adjusting DPI and maximum output tokens on a VL call
-that still has to run.
+The classifier, feature flag, structured metrics, and benchmark plumbing were
+subsequently removed. The experiment remains documented only to prevent the
+same rejected change from being reintroduced without new quality evidence.
 
-## 21. 2026-08-17 Verified Text-Only Local Fast Path
+## 21. 2026-08-17 Verified Text-Only Local Fast Path (Archived No-Go)
 
-The next slice is implemented behind
-`KB_PDF_VISION_TEXT_LOCAL_FASTPATH=0`. It is independent of adaptive page
-budgets, so a paired benchmark can change only whether a verified text page
-bypasses the full-page vision call.
+This section is also historical. The local text bypass, validation helpers,
+environment variable, benchmark fields/log parsing, and dedicated tests were
+removed on 2026-08-19 after the corpus gate found candidate-only quality
+regressions. `KB_PDF_VISION_TEXT_LOCAL_FASTPATH` is no longer supported.
 
-A page is considered only in normal mode and only when all of the following are
-true:
+The next slice was implemented behind a default-off
+`KB_PDF_VISION_TEXT_LOCAL_FASTPATH` flag. It was independent of adaptive page
+budgets, so its paired benchmark changed only whether a verified text page
+bypassed the full-page vision call.
+
+A page was considered only in normal mode and only when all of the following
+were true:
 
 1. it is not the first page or a references page;
 2. the source-backed formula scan ran successfully and found no formula;
@@ -740,32 +744,27 @@ true:
 5. the source dictionary has no table-risk signal; and
 6. the converter exposes the no-remote-call local page pipeline.
 
-The local result is accepted only when it contains at least 84% of source word
+The local result was accepted only when it contained at least 84% of source word
 occurrences, 68% of adjacent source-word pairs, 62% sequence similarity, and a
 normalized length ratio between 0.72 and 1.35. Incomplete markers, replacement
 characters, control characters, insufficient source/output tokens, or a
-missing source-backed heading reject the result. Rejected output is discarded
-and conversion continues through the unchanged VL path.
+missing source-backed heading rejected the result. Rejected output was
+discarded and conversion continued through the unchanged VL path.
 
-Bold/semibold source prefixes are promoted to Markdown headings before
+Bold/semibold source prefixes were promoted to Markdown headings before
 validation. Repeated header/footer strings from the converter's existing
-global noise scan are excluded, preventing journal mastheads from becoming
+global noise scan were excluded, preventing journal mastheads from becoming
 required document headings.
 
-Each attempted page emits `[VISION_DIRECT][TEXT_LOCAL]` with the decision,
+Each attempted page emitted `[VISION_DIRECT][TEXT_LOCAL]` with the decision,
 reason, source/output sizes, word and bigram coverage, order and length ratios,
-heading promotion counts, and local elapsed time. Benchmark run metrics include
-attempted, accepted, rejected, and avoided-VL-call counts; these are also
+heading promotion counts, and local elapsed time. Benchmark run metrics included
+attempted, accepted, rejected, and avoided-VL-call counts; these were also
 aggregated into the case/profile CSV summaries.
 
-Use a paired profile with adaptive budgets held off:
-
-```powershell
-python tools\benchmark_converter.py <fixed-pdf> `
-  --profile "name=normal-control,speed_mode=normal,llm_page_workers=8,max_inflight=8,stage_timings=1,adaptive_page_budgets=0,text_local_fastpath=0" `
-  --profile "name=normal-text-local,speed_mode=normal,llm_page_workers=8,max_inflight=8,stage_timings=1,adaptive_page_budgets=0,text_local_fastpath=1" `
-  --out-dir tmp\benchmarks\text_local_fastpath_ab
-```
+The paired-profile command used for this experiment is intentionally omitted
+because its removed profile fields are no longer accepted. The raw artifact
+paths in sections 21.1 and 22 remain the audit evidence.
 
 ### 21.1 Real-PDF Results and Rollout Decision
 
@@ -792,13 +791,10 @@ paired control's page 3, the final local page had slightly higher source-word
 and bigram coverage; total wall time did not improve because seven VL pages
 still fit in one concurrent batch.
 
-This slice passes functional acceptance: an accepted page avoids its VL call,
-unsafe/weak pages fall back, and a document with enough pages to remove a VL
-batch materially improves. Keep the flag opt-in for controlled rollout rather
-than changing the production default from two papers. The next rollout gate is
-a repeated multi-paper corpus run that reports both median wall time and
-accepted-page source metrics; no threshold should be relaxed to increase the
-acceptance count.
+This slice passed the narrow functional check: an accepted page avoided its VL
+call and unsafe/weak pages fell back. It did not authorize production use; the
+repeated multi-paper gate in section 22 was required and ultimately rejected
+the feature. No acceptance threshold was relaxed.
 
 ## 22. 2026-08-17 Repeated 10-Paper Text-Local Rollout Gate
 
@@ -877,10 +873,10 @@ path. A post-guard cold run is stored under
 issues, and avoided no VL call.
 
 The rollout decision is therefore **no-go for default enablement**.
-`KB_PDF_VISION_TEXT_LOCAL_FASTPATH` remains `0` by default and remains available
-only as an explicit opt-in experiment. The post-gate reference guard can only
-reduce optimized coverage, so it cannot invalidate the conservative no-go
-decision. Do not increase acceptance by weakening content or risk thresholds.
+The post-gate reference guard could only reduce optimized coverage, so it did
+not invalidate the conservative no-go decision. The implementation and its
+entry points were later removed; do not reintroduce it by weakening content or
+risk thresholds.
 
 ### 22.2 Exact-Code Release Gates
 
@@ -931,8 +927,8 @@ a second limiter:
 - background concurrency is bounded to 1--4 active documents;
 - `tools/benchmark_converter_throughput.py` exercises the real
   `kb.pdf_tools.run_pdf_to_md` subprocess path with exactly two PDFs;
-- serial and parallel modes use the same global inflight budget, workers, model
-  settings, and experimental feature flags;
+- serial and parallel modes use the same global inflight budget, workers, and
+  model settings;
 - odd repeats run serial first and even repeats run parallel first;
 - every experiment checkpoints document, page, paired, and quality metrics;
 - harness-owned case directories use short stable IDs so long paper titles do
@@ -942,7 +938,8 @@ The fixed acceptance run is stored at
 `tmp/tp_ab_0817a/throughput_results.json`. It used the 18-page Nature perovskite
 laser paper and the 8-page Nature Photonics single-pixel imaging paper, three
 paired repeats, `KB_LLM_MAX_INFLIGHT=8`, four page workers, three LLM workers,
-and both experimental page-budget and text-local fast paths disabled.
+with the rejected page-budget and text-local implementations absent from the
+current product tree.
 
 | Repeat | Serial elapsed | Parallel elapsed | Throughput improvement |
 |---:|---:|---:|---:|
@@ -964,8 +961,8 @@ The two-document product-path gate is a **go**. Background conversion now
 defaults to `KB_BG_CONVERT_MAX_ACTIVE=2`; operators can set it to `1` when the
 lowest single-document latency is more important than queue throughput. The
 global provider budget remains fixed and is divided across active documents.
-Adaptive page budgets and the text-local fast path remain separately disabled
-by default; this decision does not override their earlier no-go results.
+Adaptive page budgets and the text-local fast path were later removed; this
+decision does not override their earlier no-go results.
 
 ### 23.2 Exact-Code Release Gates
 
@@ -1135,3 +1132,242 @@ unchanged release suite passed on the exact working tree:
   `test_results/project_research_status/20260817_202018`;
 - continuous project journey: 20/20 at
   `test_results/project_research_journey/20260817_202044`.
+
+## 26. 2026-08-18 Work-Conserving Cross-Process Inflight Budget
+
+The accepted two-document path in section 23 protects the provider by dividing
+one fixed budget evenly between converter child processes. That static split is
+safe, but it leaves capacity idle when only one document has ready model work,
+when a sibling is rendering or post-processing, or after one sibling finishes.
+
+This slice adds an explicit cross-process coordinator without changing the
+`normal` conversion profile, render DPI policy, token policy, prompts, retries,
+page cache, repair logic, or post-convert quality gate:
+
+- the background workers in one backend session share a coordinator directory;
+- every real provider call acquires an OS-backed file-lock slot, so unused slots
+  can be borrowed by another document and a crashed process releases its slots;
+- waiting document owners receive a best-effort fair share before an active
+  owner can borrow more capacity;
+- provider HTTP 429 and provider timeout failures reduce the shared effective
+  limit while already-running calls drain naturally;
+- after the cooldown, consecutive successes restore capacity one slot at a
+  time;
+- coordinator initialization is required on the product path: failure is
+  surfaced instead of silently multiplying provider concurrency;
+- direct CLI conversion and callers that do not pass a coordinator keep the
+  accepted legacy static-split behavior.
+
+The throughput harness now enables the dynamic coordinator by default, records
+its pressure/recovery counters, accepts two to four fixed PDFs, and exposes
+`--parallel-documents 2|3|4`. Use `--static-budget-split` for a compatibility
+control. The rejected adaptive page-budget and text-local fast-path options are
+not exposed by this harness.
+
+Example three-document gate:
+
+```powershell
+python tools/benchmark_converter_throughput.py `
+  <paper-a.pdf> <paper-b.pdf> <paper-c.pdf> `
+  --parallel-documents 3 `
+  --global-inflight 8 `
+  --workers 4 `
+  --llm-workers 3 `
+  --repeat 3 `
+  --out-dir tmp\throughput_dynamic_3doc `
+  --fail-fast
+```
+
+The rollout decision remains subject to the unchanged gates from section 23:
+at least 25% paired median throughput improvement, no more than 15% worst
+per-document p95 slowdown, no added timeout/retry/fallback events, exact page
+markers, and no critical quality regression. Unit and structural release-gate
+results for the exact implementation are recorded only after they complete.
+
+### 26.1 Two-Document Acceptance Run
+
+The fixed two-paper gate is stored at
+`tmp/tp_dynamic_0818a/throughput_results.json`. It used the same Nature and
+Nature Photonics PDFs, three paired repeats, global inflight eight, four page
+workers, and three repair workers. The historical page-budget/text-local
+experiments are not part of the current harness.
+
+| Repeat | Serial elapsed | Dynamic parallel elapsed | Throughput improvement |
+|---:|---:|---:|---:|
+| 1 | 238.90 s | 123.84 s | 48.16% |
+| 2 | 226.10 s | 116.18 s | 48.62% |
+| 3 | 221.58 s | 115.83 s | 47.73% |
+
+The paired median improvement was **48.16%**. Worst per-document p95 slowdown
+was **2.30%**. All 12 document conversions completed; parallel mode added zero
+timeouts, retries, or fallbacks; coordinator pressure/reduction counters stayed
+at zero; page markers were exact; and every paired critical-quality comparison
+passed. The dynamic two-document path is therefore a **go**.
+
+### 26.2 Three-Document Boundary Run
+
+The one-repeat three-paper pressure run is stored at
+`tmp/tp_dynamic_3doc_0818_smoke/throughput_results.json`. It added the 10-page
+Science Advances foveated-imaging paper while retaining the same fixed global
+budget of eight.
+
+Total wall time improved from 358.27 to 180.75 seconds (49.55%), and all three
+outputs kept exact markers with no critical quality regression. The run is
+nevertheless a **no-go** for a default of three active documents: worst
+per-document slowdown was 44.03% and parallel mode added four internal
+slot/page-budget timeout events. Accordingly `KB_BG_CONVERT_MAX_ACTIVE`
+continues to default to `2`; three or four active documents remain explicit
+operator experiments, not release defaults.
+
+### 26.3 Exact-Code Release Gates
+
+After accepting the two-document path and retaining the three-document no-go
+boundary, the unchanged release gates passed on the exact working tree:
+
+- Ruff and `git diff --check`: pass;
+- backend unit: 4,457 passed, 41 skipped;
+- backend sanity: 272 passed, 2 skipped;
+- visible Agent answer runtime: 5/5;
+- frontend ESLint and production build: pass;
+- browser smoke: 135 passed, 2 private-build skips;
+- core citation/library browser regressions: 113/113;
+- ordinary-user public-surface isolation: 4/4;
+- Research QA fixture/full-library dry runs: 56 and 29 cases;
+- source grounding: 41/41;
+- grounded replay: 6/6;
+- Agent golden contract: 10 cases, zero errors;
+- reviewed Agent replay: 5/5;
+- version A/B fixture: 34 QA cases and three project journeys;
+- paired comparison: 5/5 with zero false comparisons;
+- comparison candidates: 5/5, 18 discoveries, zero contract/evidence/prefill
+  failures at `test_results/evidence_comparison_candidates/20260818_183837`;
+- project status: 5/5 at
+  `test_results/project_research_status/20260818_183835`;
+- continuous project journey: 20/20 at
+  `test_results/project_research_journey/20260818_183858`;
+- converter quality: 13/13 at
+  `test_results/converter_quality_eval/20260818_183601`.
+
+## 27. 2026-08-19 Inflight Calibration and Page-Scheduling Boundary
+
+This slice tested whether the accepted converter could go faster without
+changing its prompt, render, token, retry, repair, or post-convert quality
+contract. The fixed product path used the same Nature and Nature Photonics
+papers, cold page caches, four page workers, three repair workers, and the
+configured `qwen3-vl-plus` vision model.
+
+### 27.1 Shared-inflight calibration
+
+One exploratory paired serial/two-document run was made at each candidate
+ceiling. The raw reports are stored in:
+
+- `tmp/tp_budget8_0819_probe/throughput_results.json`;
+- `tmp/tp_budget12_0819_probe/throughput_results.json`;
+- `tmp/tp_budget16_0819_probe/throughput_results.json`.
+
+| Shared inflight | Serial | Parallel | Improvement | Worst per-doc p95 slowdown | Quality gate |
+|---:|---:|---:|---:|---:|:---:|
+| 8 | 264.66 s | 142.12 s | 46.30% | 6.75% | pass |
+| 12 | 236.38 s | 135.91 s | 42.50% | 11.65% | **fail** |
+| 16 | 255.14 s | 140.52 s | 44.92% | 11.33% | pass in one probe |
+
+Inflight 12 changed the Nature parallel output from no recommended quality
+action to `autofix` with `reference_index_truncated`. Inflight 16 supplied only
+a 1.1% parallel-wall-time improvement over eight in a single probe and was
+slower in serial than 12; that is not enough evidence to replace the already
+accepted three-repeat inflight-eight result in section 26.1.
+
+The automatic product ceiling is therefore eight on every host and for both
+single- and multi-document runs. Operators can still request a higher ceiling
+explicitly with `KB_LLM_MAX_INFLIGHT`; 12 and 16 are experiments, not release
+defaults.
+
+### 27.2 Rejected page-scheduling experiments
+
+The first candidate sorted all pages by source text density. Its three-repeat
+paired report is stored at
+`tmp/benchmarks/page_scheduler_ab_0819_two_paper/benchmark_results.json`.
+Average wall time fell from 171.79 to 130.24 seconds (24.18%), with no retries
+or fallbacks. It nevertheless failed the unchanged structural quality gate:
+
+- all three Nature Photonics pairs had no critical regression;
+- all three Nature pairs lost an image or a display-math block relative to
+  their paired control.
+
+A second candidate made only one bounded change. It kept the first three source
+pages, promoted at most one later dense page into the fourth first-wave slot,
+and admitted that page only after local checks found no formula candidate,
+visual region, table risk, or reference-page risk. The preflight cost was
+0.22-0.64 seconds. Its exploratory report is stored at
+`tmp/benchmarks/page_scheduler_safe_probe_0819/benchmark_results.json`.
+
+| Paper | Profiled source | Safe tail | Change | Critical quality |
+|---|---:|---:|---:|:---:|
+| Nature Photonics | 176.96 s | 128.82 s | 27.21% faster | pass |
+| Nature | 167.69 s | 178.43 s | 6.41% slower | **fail: 4 image links dropped** |
+
+The safe candidate is also a no-go. The ten-paper rollout was intentionally
+not started after the fixed sensitive sample failed. Reordering even a locally
+safe text page can change concurrent provider timing enough to vary another
+vision response, so a scheduler cannot be called quality-neutral under the
+current model contract.
+
+Both implementations were removed after the no-go decision, including their
+runtime setting, converter branch, preflight, log parsing, benchmark CLI fields,
+and dedicated tests. The product now has no alternate page scheduler and always
+submits missing pages in source order. The reports remain only as rejection
+evidence. A future scheduling attempt must first make critical image/formula/
+reference restoration deterministic and then pass the same fixed-paper,
+three-repeat, and ten-paper gates before any implementation can re-enter the
+product tree.
+
+The same quality-first cleanup also removed the older no-go adaptive page-
+budget and text-local bypass implementations described in sections 20-22.
+Their runtime branches, environment variables, benchmark/profile/throughput
+options, experiment-only log parsing, validation helpers, and dedicated tests
+are absent. Their raw benchmark directories remain historical rejection
+evidence only. The supported path retains the established source-order vision
+conversion, normal plain-page budget behavior, shared inflight ceiling of
+eight, and paired structural-quality comparison.
+
+### 27.3 Benchmark quality enforcement
+
+Paired converter benchmarks now compare every candidate against the first
+profile for the same PDF and repeat using the existing Markdown structural
+quality contract. `benchmark_results.json` records each comparison, regression
+flags, similarity, and quality deltas. The optional
+`--fail-on-paired-quality-regression` switch writes all artifacts and then
+returns a non-zero exit code when any critical paired regression is found.
+This prevents a large timing improvement from being accepted without its
+corresponding quality decision.
+
+### 27.4 Exact-code release gates
+
+After removing page scheduling plus the older adaptive-budget/text-local no-go
+implementations, fixing the automatic inflight ceiling at eight, and retaining
+paired benchmark quality enforcement, the complete unchanged gates passed on
+the exact working tree:
+
+- Ruff and `git diff --check`: pass;
+- backend unit: 4,452 passed, 41 skipped;
+- backend sanity: 274 passed, 2 skipped;
+- visible Agent answer runtime: 5/5;
+- frontend ESLint and production build: pass;
+- browser smoke clean full rerun: 136 passed, 2 build-mode skips;
+- core citation/library browser regressions: 113/113;
+- ordinary-user public-surface isolation: 4/4;
+- Research QA fixture: 56 cases, 41 source-grounded;
+- version A/B fixture: 34 QA cases and three project journeys;
+- paired comparison: 5/5;
+- comparison candidates: 5/5;
+- project research status: 5/5;
+- continuous project journey fixture: pass with 18 comparison candidates and
+  six exact confirmation signatures;
+- grounded replay: 6/6;
+- reviewed Agent replay: 5/5;
+- converter quality: 13/13.
+
+After all rejected speed code and its dedicated tests were removed, the required
+138-case browser smoke completed cleanly in the same gate run; no retry or
+timeout change was needed. The focused converter/benchmark regression set also
+passed 58/58.

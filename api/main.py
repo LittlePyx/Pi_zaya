@@ -18,11 +18,16 @@ from api.routers import auth, chat, evidence_matrices, generate, library, mainte
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 from kb.config import load_settings
 from kb.retriever_cache import warm_retriever_async
+from kb.task_runtime import _bg_reconcile_persisted_jobs
 from kb.user_issue_store import start_remote_outbox_worker
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    try:
+        _bg_reconcile_persisted_jobs()
+    except Exception:
+        pass
     try:
         start_remote_outbox_worker(user_issues._issue_db_path())
     except Exception:

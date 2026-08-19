@@ -628,7 +628,7 @@ export default function ChatPage() {
     </>
   )
   const apiConnectionAlertTarget = researchContext.api.connectionAlertTarget
-  const connectionAlert = (
+  const connectionAlert = apiConnectionAlertTarget === 'text' && !settings.hasTextApiKey ? null : (
     <ChatConnectionAlert
       labels={S}
       researchContext={researchContext}

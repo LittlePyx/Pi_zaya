@@ -44,6 +44,9 @@ from kb.task_runtime import (
     _bg_ensure_started,
     _bg_remove_queued_tasks_for_pdf,
     _bg_record_task_result,
+    _bg_resume_all,
+    _bg_resume_task,
+    _bg_update_recoverable_pdf_path,
 )
 from kb.file_ops import (
     _list_pdf_paths_fast,
@@ -84,6 +87,7 @@ from kb.converter.figure_assets import (
 )
 from kb.converter.structured_index_batch import rebuild_structured_indices_for_root
 from kb.library_store import LibraryStore
+from kb.library_paths import resolve_library_paths
 from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
@@ -168,15 +172,11 @@ def _suggestion_basis_meta(suggestion: PdfMetaSuggestion, *, venue: str, year: s
 
 
 def _pdf_dir() -> Path:
-    prefs = load_prefs()
-    s = get_settings()
-    return Path(prefs.get("pdf_dir") or os.environ.get("KB_PDF_DIR") or str(Path(s.db_dir).parent / "pdfs")).expanduser().resolve()
+    return resolve_library_paths(get_settings(), load_prefs()).pdf_dir
 
 
 def _md_dir() -> Path:
-    prefs = load_prefs()
-    s = get_settings()
-    return Path(prefs.get("md_dir") or os.environ.get("KB_MD_DIR") or str(Path(s.db_dir).parent / "md_output")).expanduser().resolve()
+    return resolve_library_paths(get_settings(), load_prefs()).md_dir
 
 
 def _library_store() -> LibraryStore:
@@ -1167,9 +1167,10 @@ def _compact_recent_tasks(snap: dict) -> list[dict]:
         "conversion_failed",
         "quality_blocked",
         "index_failed",
+        "interrupted",
     }
     allowed_operations = {"conversion", "index_retry"}
-    allowed_retry_actions = {"", "reconvert", "reindex"}
+    allowed_retry_actions = {"", "reconvert", "reindex", "resume"}
     items: list[dict] = []
     for task in list((snap or {}).get("recent_tasks") or [])[:50]:
         if not isinstance(task, dict):
@@ -1199,6 +1200,39 @@ def _compact_recent_tasks(snap: dict) -> list[dict]:
             "duration_s": max(0.0, float(task.get("duration_s") or 0.0)),
             "page_done": max(0, int(task.get("page_done") or 0)),
             "page_total": max(0, int(task.get("page_total") or 0)),
+            "reused_page_count": max(0, int(task.get("reused_page_count") or 0)),
+            "blocked_reason": str(task.get("blocked_reason") or "")[:80],
+        })
+    return items
+
+
+def _compact_recoverable_tasks(snap: dict) -> list[dict]:
+    items: list[dict] = []
+    for task in list((snap or {}).get("recoverable_tasks") or [])[:100]:
+        if not isinstance(task, dict):
+            continue
+        task_id = str(task.get("task_id") or "").strip()
+        pdf = str(task.get("pdf") or "").strip()
+        if not task_id or not pdf:
+            continue
+        items.append({
+            "task_id": task_id,
+            "name": str(task.get("name") or Path(pdf).name),
+            "pdf": pdf,
+            "state": "interrupted",
+            "message": str(task.get("message") or "")[:500],
+            "blocked_reason": str(task.get("blocked_reason") or "")[:80],
+            "replace": bool(task.get("replace", False)),
+            "speed_mode": str(task.get("speed_mode") or "balanced")[:40],
+            "no_llm": bool(task.get("no_llm", False)),
+            "page_done": max(0, int(task.get("page_done") or 0)),
+            "page_total": max(0, int(task.get("page_total") or 0)),
+            "reused_page_count": max(0, int(task.get("reused_page_count") or 0)),
+            "cached_page_count": max(0, int(task.get("cached_page_count") or 0)),
+            "attempt": max(1, int(task.get("attempt") or 1)),
+            "created_at": float(task.get("created_at") or 0.0),
+            "updated_at": float(task.get("updated_at") or 0.0),
+            "interrupted_at": float(task.get("interrupted_at") or 0.0),
         })
     return items
 
@@ -1303,6 +1337,32 @@ def _build_task_maps_from_snapshot(snap: dict) -> tuple[dict[str, dict], dict[st
         if task_name:
             _merge_task_map_entry(by_name, task_name, info)
 
+    for task in _compact_recoverable_tasks(snap):
+        task_pdf = str(task.get("pdf") or "").strip()
+        if not task_pdf:
+            continue
+        task_name = str(task.get("name") or Path(task_pdf).name).strip()
+        info = {
+            "queued": False,
+            "running": False,
+            "recoverable": True,
+            "replace": bool(task.get("replace", False)),
+            "queue_pos": 0,
+            "task_id": str(task.get("task_id") or ""),
+            "cur_page_done": max(0, int(task.get("page_done") or 0)),
+            "cur_page_total": max(0, int(task.get("page_total") or 0)),
+            "conversion_stage": "",
+            "cached_page_count": max(0, int(task.get("cached_page_count") or 0)),
+            "reused_page_count": max(0, int(task.get("reused_page_count") or 0)),
+            "recovery_message": str(task.get("message") or "")[:500],
+            "recovery_blocked_reason": str(task.get("blocked_reason") or "")[:80],
+        }
+        key = _normalized_path_key(task_pdf)
+        if key and key not in by_path:
+            by_path[key] = dict(info)
+        if task_name and task_name not in by_name:
+            by_name[task_name] = dict(info)
+
     current_name = str((snap or {}).get("current") or "").strip()
     if bool((snap or {}).get("running")) and current_name:
         current_replace = bool((snap or {}).get("cur_task_replace", False))
@@ -1345,6 +1405,7 @@ def _library_file_item(
         result = named_result if isinstance(named_result, dict) else None
     queued = bool((info or {}).get("queued"))
     running = bool((info or {}).get("running"))
+    recoverable = bool((info or {}).get("recoverable"))
     replace_task = bool((info or {}).get("replace"))
     queue_pos = int((info or {}).get("queue_pos") or 0)
     cur_page_done = int((info or {}).get("cur_page_done") or 0)
@@ -1356,16 +1417,18 @@ def _library_file_item(
         (info or {}).get("conversion_stage"),
         fallback="converting" if running else ("queued" if queued else ""),
     )
-    task_state = "running" if running else ("queued" if queued else "idle")
+    task_state = "running" if running else ("queued" if queued else ("interrupted" if recoverable else "idle"))
     queued_or_running = bool(queued or running)
     reconverting = bool(replace_task and queued_or_running)
-    category = "converted" if (md_exists and (not reconverting) and (not queued_or_running)) else "pending"
+    category = "converted" if (md_exists and (not reconverting) and (not queued_or_running) and (not recoverable)) else "pending"
     conversion_quality = _conversion_quality_summary(md_main) if md_exists else None
     md_index = _library_markdown_index_state(md_main if md_exists else None, docs_index_state)
     if task_state == "running":
         status = "running_reconvert" if replace_task else "running"
     elif task_state == "queued":
         status = "queued_reconvert" if replace_task else "queued"
+    elif task_state == "interrupted":
+        status = "interrupted"
     else:
         status = "converted" if category == "converted" else "pending"
     return {
@@ -1389,6 +1452,11 @@ def _library_file_item(
         "running_pages": running_pages,
         "running_page_count": running_page_count,
         "conversion_stage": conversion_stage,
+        "recoverable": bool(recoverable),
+        "cached_page_count": max(0, int((info or {}).get("cached_page_count") or 0)),
+        "reused_page_count": max(0, int((info or {}).get("reused_page_count") or 0)),
+        "recovery_message": str((info or {}).get("recovery_message") or "")[:500],
+        "recovery_blocked_reason": str((info or {}).get("recovery_blocked_reason") or "")[:80],
         "last_conversion": dict(result) if isinstance(result, dict) else None,
         "paper_category": str((meta_rec or {}).get("paper_category") or ""),
         "reading_status": str((meta_rec or {}).get("reading_status") or ""),
@@ -1438,6 +1506,7 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
     converted = sum(1 for item in items if str(item.get("category") or "") == "converted")
     queued = sum(1 for item in items if str(item.get("task_state") or "") == "queued")
     running = sum(1 for item in items if str(item.get("task_state") or "") == "running")
+    recoverable = sum(1 for item in items if str(item.get("task_state") or "") == "interrupted")
     reconverting = sum(1 for item in items if bool(item.get("replace_task")) and str(item.get("task_state") or "") in {"queued", "running"})
     quality_review = sum(1 for item in items if bool(((item.get("conversion_quality") or {}) if isinstance(item.get("conversion_quality"), dict) else {}).get("has_review_issue")))
     quality_ready = sum(1 for item in items if str(((item.get("conversion_quality") or {}) if isinstance(item.get("conversion_quality"), dict) else {}).get("status") or "") == "good")
@@ -1457,6 +1526,7 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
             "converted": int(converted),
             "queued": int(queued),
             "running": int(running),
+            "recoverable": int(recoverable),
             "reconverting": int(reconverting),
             "quality_review": int(quality_review),
             "quality_ready": int(quality_ready),
@@ -1475,6 +1545,9 @@ def _collect_library_files(*, pdf_dir: Path, md_dir: Path, scope: str = "200") -
             "total": int(snap.get("total", 0) or 0),
             "active_tasks": _compact_active_tasks(snap),
             "recent_tasks": _compact_recent_tasks(snap),
+            "recoverable_count": int(snap.get("recoverable_count") or 0),
+            "recoverable_tasks": _compact_recoverable_tasks(snap),
+            "persistence_error": str(snap.get("persistence_error") or "")[:500],
         },
     }
 
@@ -5722,6 +5795,11 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
             lib_store.set_citation_meta(dest_pdf, citation_meta)
         except Exception:
             pass
+    if renamed:
+        try:
+            _bg_update_recoverable_pdf_path(src_pdf, dest_pdf)
+        except Exception:
+            pass
 
     return {
         "ok": True,
@@ -6488,6 +6566,9 @@ async def convert_status():
             "active_count": int(snap.get("active_count", len(active_tasks)) or 0),
             "active_tasks": public_active_tasks,
             "recent_tasks": _compact_recent_tasks(snap),
+            "recoverable_count": int(snap.get("recoverable_count") or 0),
+            "recoverable_tasks": _compact_recoverable_tasks(snap),
+            "persistence_error": str(snap.get("persistence_error") or "")[:500],
             "cur_page_done": snap.get("cur_page_done", 0),
             "cur_page_total": snap.get("cur_page_total", 0),
             "cur_page_msg": "",
@@ -6501,6 +6582,24 @@ async def convert_status():
 
 class CancelConvertBody(BaseModel):
     task_id: str = ""
+
+
+class ResumeConvertBody(BaseModel):
+    task_id: str
+
+
+@router.post("/convert/resume", dependencies=[Depends(require_management_api)])
+def resume_convert(body: ResumeConvertBody):
+    result = _bg_resume_task(body.task_id)
+    return {
+        "ok": bool(result.get("matched")),
+        **result,
+    }
+
+
+@router.post("/convert/resume-all", dependencies=[Depends(require_management_api)])
+def resume_all_conversions():
+    return _bg_resume_all()
 
 
 @router.post("/convert/cancel", dependencies=[Depends(require_management_api)])

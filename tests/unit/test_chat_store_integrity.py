@@ -15,6 +15,30 @@ def test_chat_store_rejects_message_for_missing_conversation(tmp_path: Path):
         store.append_message("missing-conversation", "user", "hello")
 
 
+def test_grounded_answer_count_requires_nonempty_refs_for_latest_user_message(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("first answer")
+    user_msg_id = store.append_message(conv_id, "user", "What is the method?")
+    store.append_message(conv_id, "assistant", "A draft without sources.")
+    assert store.grounded_answer_count() == 0
+
+    assert store.upsert_message_refs(
+        user_msg_id=user_msg_id,
+        conv_id=conv_id,
+        prompt="What is the method?",
+        prompt_sig="sig",
+        hits=[{"source": "paper.en.md", "page": 2}],
+        scores=[1.0],
+        used_query="method",
+        used_translation=False,
+    ) is True
+    assert store.grounded_answer_count() == 1
+
+    store.append_message(conv_id, "user", "A follow-up with no sources?")
+    store.append_message(conv_id, "assistant", "This answer should not inherit old sources.")
+    assert store.grounded_answer_count() == 1
+
+
 def test_chat_store_rejects_source_binding_for_missing_conversation(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
 

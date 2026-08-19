@@ -3454,6 +3454,32 @@ class ChatStore:
             except Exception:
                 return 0
 
+    def grounded_answer_count(self) -> int:
+        """Count assistant answers paired with a non-empty retrieval reference set."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS answer_count
+                FROM messages AS assistant
+                WHERE assistant.role = 'assistant'
+                  AND length(trim(assistant.content)) > 0
+                  AND EXISTS (
+                    SELECT 1
+                    FROM message_refs AS refs
+                    WHERE refs.conv_id = assistant.conv_id
+                      AND refs.user_msg_id = (
+                        SELECT MAX(user_message.id)
+                        FROM messages AS user_message
+                        WHERE user_message.conv_id = assistant.conv_id
+                          AND user_message.role = 'user'
+                          AND user_message.id < assistant.id
+                      )
+                      AND trim(refs.hits_json) NOT IN ('', '[]', '{}', 'null')
+                  )
+                """
+            ).fetchone()
+        return int(row["answer_count"] or 0) if row else 0
+
     def update_message_content(self, message_id: int, content: str, *, touch_conversation: bool = False) -> bool:
         mid = int(message_id or 0)
         if mid <= 0:

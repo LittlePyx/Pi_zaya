@@ -18,6 +18,7 @@ from api.deps import get_settings, load_prefs, save_prefs
 from api.internal_access import management_api_allowed, require_management_api
 from api.security import auth_token_configured, management_auth_required, management_token_configured, request_is_authenticated
 from kb.file_ops import _pick_directory_dialog
+from kb.library_paths import resolve_library_paths
 from kb.maintenance import latest_restore_review_state
 from kb.model_catalog import (
     fallback_models,
@@ -688,6 +689,7 @@ def get_all_settings(request: Request = None):
     s = get_settings()
     prefs = load_prefs()
     has_management_access = bool(request is not None and management_api_allowed(request))
+    library_paths = resolve_library_paths(s, prefs)
     return {
         "model": s.model,
         "base_url": s.base_url,
@@ -699,6 +701,7 @@ def get_all_settings(request: Request = None):
             reveal_paths=has_management_access,
         ),
         "db_dir": str(s.db_dir) if has_management_access else "",
+        "library_paths": library_paths.public_payload(reveal_paths=has_management_access),
         "prefs": _public_prefs(prefs, include_paths=has_management_access),
     }
 

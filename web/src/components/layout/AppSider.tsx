@@ -1060,12 +1060,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
         </Modal>
       </Sider>
 
-      <Content className={`kb-app-content relative ${loc.pathname === '/' ? 'overflow-hidden' : 'overflow-auto'} min-h-0 bg-[var(--bg)]`}>
+      <Content className="kb-app-content relative flex min-h-0 flex-col overflow-hidden bg-[var(--bg)]">
         <FirstRunApiGuide
-          visible={settingsLoaded && !hasTextApiKey}
+          visible={settingsLoaded}
+          hasTextApiKey={hasTextApiKey}
           onConfigure={() => openSettingsDrawer('text')}
+          onOpenLibrary={() => nav('/library')}
+          onAskQuestion={() => nav('/')}
         />
-        {children}
+        <div className={`min-h-0 flex-1 ${loc.pathname === '/' ? 'overflow-hidden' : 'overflow-auto'}`}>
+          {children}
+        </div>
       </Content>
     </Layout>
   )

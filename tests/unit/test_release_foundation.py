@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.9"
-    assert release_tag(version) == "v0.1.0-beta.9"
+    assert version == "0.1.0-beta.10"
+    assert release_tag(version) == "v0.1.0-beta.10"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -144,6 +144,10 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "Expand-Archive" in smoke
     assert '"python.exe", "python3.exe", "node.exe", "npm.cmd"' in smoke
     assert "Clean-profile launch did not use the expected isolated data directory" in smoke
+    assert "/api/app/onboarding-status" in smoke
+    assert "Clean-profile onboarding did not start at text-model setup" in smoke
+    assert "Clean-profile PDF directory did not use the application-managed default" in smoke
+    assert "Clean-profile Markdown directory did not use the application-managed default" in smoke
     assert "Smoke-test downloaded ZIP on a clean Windows profile" in workflow
     assert "-ArchivePath" in workflow
     assert "-CleanProfile" in workflow

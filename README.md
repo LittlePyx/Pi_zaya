@@ -20,9 +20,10 @@ entry.
 
 ## Downloadable Windows beta
 
-The current published release is [`v0.1.0-beta.8`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.8),
-and the next release engineering target is `v0.1.0-beta.9`. The target publishes
-a standard current-user Windows installer alongside the portable ZIP. Both have
+The current published release is [`v0.1.0-beta.9`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.9),
+and the next release engineering target is `v0.1.0-beta.10`. The target keeps
+the standard current-user Windows installer alongside the portable ZIP and adds
+guided first-run success plus recoverable PDF conversion jobs. Both packages have
 a bundled Python runtime and prebuilt React frontend, so Node.js, system Python,
 and administrator privileges are not required. The installed Start menu entry
 or portable `Pi_zaya.exe` opens the local app in the default browser, remains
@@ -35,8 +36,10 @@ clean-machine acceptance details.
 
 The source and release artifacts are available under the MIT License. The
 published beta passed the complete Windows packaging and packaged-runtime gates.
-Background jobs remain process-local and automatic updates are not implemented.
-Unless the release manifest says `signed: true` and Windows validates the named
+PDF conversion jobs are persisted in the local library database. If Pi_zaya is
+stopped during conversion, the Library shows an interrupted task after restart
+and waits for the user to continue it; completed page-cache artifacts are reused.
+Automatic updates are not implemented. Unless the release manifest says `signed: true` and Windows validates the named
 publisher, the installer and launcher are unsigned. These boundaries keep the
 release explicitly beta rather than a general-availability desktop product.
 
@@ -60,6 +63,7 @@ web context.
 | Capability | What it provides |
 |---|---|
 | Anchored PDF conversion | Converts PDFs to Markdown while preserving page markers, sections, figures, formulas, and source anchors. |
+| Restart-safe conversion | Persists queued and active conversion jobs, offers explicit recovery after restart, and reuses completed page-cache artifacts without automatically spending model credits. |
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |

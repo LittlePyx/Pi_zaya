@@ -10,6 +10,7 @@ type LibraryFileActionsProps = {
   onStartPaperGuide: () => void
   onConvert: () => void
   onCancel: () => void
+  onResume: () => void
   onRetry: () => void
   retrying: boolean
   onOpenPdf: () => void
@@ -24,6 +25,7 @@ export function LibraryFileActions({
   onStartPaperGuide,
   onConvert,
   onCancel,
+  onResume,
   onRetry,
   retrying,
   onOpenPdf,
@@ -31,7 +33,8 @@ export function LibraryFileActions({
   onDelete,
 }: LibraryFileActionsProps) {
   const showPrimaryConvertAction = !item.md_exists
-  const conversionBusy = item.task_state !== 'idle'
+  const conversionBusy = item.task_state === 'queued' || item.task_state === 'running'
+  const recoveryAvailable = item.task_state === 'interrupted'
   const conversionCancelling = item.conversion_stage === 'cancelling'
   const retryAction = conversionBusy ? '' : String(item.last_conversion?.retry_action || '')
 
@@ -51,7 +54,20 @@ export function LibraryFileActions({
           {S.lib_btn_read}
         </Button>
       ) : null}
-      {conversionBusy ? (
+      {recoveryAvailable ? (
+        <Button
+          className="kb-lib-file-action-link is-accent"
+          type="text"
+          size="small"
+          icon={<ReloadOutlined />}
+          loading={retrying}
+          disabled={retrying || !item.task_id}
+          onClick={onResume}
+          data-testid="library-resume-conversion"
+        >
+          {S.lib_btn_resume_conversion}
+        </Button>
+      ) : conversionBusy ? (
         <Button
           className="kb-lib-file-action-link"
           type="text"
@@ -98,6 +114,9 @@ export function LibraryFileActions({
               ...(item.md_exists
                 ? [{ key: 'reconvert', label: S.lib_btn_reconvert, disabled: item.task_state !== 'idle', icon: <ReloadOutlined /> }]
                 : []),
+              ...(recoveryAvailable
+                ? [{ key: 'dismiss-recovery', label: S.lib_btn_dismiss_conversion_recovery, danger: true, icon: <StopOutlined /> }]
+                : []),
               { key: 'open-md', label: S.lib_btn_open_md, disabled: !item.md_exists },
               { type: 'divider' as const },
               { key: 'delete', label: S.lib_btn_delete, danger: true, disabled: item.task_state !== 'idle', icon: <DeleteOutlined /> },
@@ -109,6 +128,10 @@ export function LibraryFileActions({
               }
               if (key === 'open-md') {
                 onOpenMarkdown()
+                return
+              }
+              if (key === 'dismiss-recovery') {
+                onCancel()
                 return
               }
               if (key === 'delete') {

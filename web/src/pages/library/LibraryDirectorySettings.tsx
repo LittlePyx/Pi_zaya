@@ -10,6 +10,7 @@ type LibraryDirectoryOpenTarget = 'pdf_dir' | 'md_dir'
 type LibraryDirectorySettingsProps = {
   S: Record<string, string>
   directoriesConfigured: boolean
+  usesManagedDefaults?: boolean
   showDirEditor: boolean
   pdfDirDraft: string
   mdDirDraft: string
@@ -27,6 +28,7 @@ type LibraryDirectorySettingsProps = {
 export function LibraryDirectorySettings({
   S,
   directoriesConfigured,
+  usesManagedDefaults = false,
   showDirEditor,
   pdfDirDraft,
   mdDirDraft,
@@ -45,6 +47,7 @@ export function LibraryDirectorySettings({
       <div className="kb-lib-section-head">
         <div className="kb-lib-section-copy">
           <Text className="kb-lib-section-title">{S.lib_section_dir}</Text>
+          {usesManagedDefaults ? <Text className="kb-lib-dir-managed-label">{S.lib_dir_managed_default}</Text> : null}
         </div>
         {directoriesConfigured ? (
           <Button className="kb-lib-action-quiet" onClick={onToggleEditor}>

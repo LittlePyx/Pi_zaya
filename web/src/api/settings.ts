@@ -103,6 +103,14 @@ export interface AuthStatusPayload {
   production: boolean
 }
 
+export interface LibraryPathsPayload {
+  pdf_dir: string
+  md_dir: string
+  pdf_source: 'preference' | 'environment' | 'default' | string
+  md_source: 'preference' | 'environment' | 'default' | string
+  uses_managed_defaults: boolean
+}
+
 export interface SettingsPayload {
   model: string
   base_url: string
@@ -111,6 +119,7 @@ export interface SettingsPayload {
   readiness?: LlmReadinessPayload
   app_readiness?: AppReadinessPayload
   db_dir: string
+  library_paths?: LibraryPathsPayload
   prefs: Record<string, unknown>
 }
 

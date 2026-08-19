@@ -209,6 +209,7 @@ try {
     $health = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/health" -TimeoutSec 10
     $build = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/app/version" -TimeoutSec 10
     $settings = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/settings" -TimeoutSec 10
+    $onboarding = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/app/onboarding-status" -TimeoutSec 10
     $frontPage = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -TimeoutSec 10 -UseBasicParsing
     $expectedVersion = (Get-Content -LiteralPath (Join-Path $bundle "VERSION") -Raw).Trim()
     if ($health.status -ne "ok") { throw "Health endpoint did not return ok." }
@@ -227,6 +228,19 @@ try {
         }
         if ([bool]$settings.has_api_key) {
             throw "Clean-profile launch unexpectedly inherited a text-model API key."
+        }
+        if ([string]$onboarding.current_step -ne "connect_model" -or [bool]$onboarding.completed) {
+            throw "Clean-profile onboarding did not start at text-model setup."
+        }
+        $expectedPdfDir = [IO.Path]::GetFullPath((Join-Path $expectedDataRoot "pdfs"))
+        $expectedMarkdownDir = [IO.Path]::GetFullPath((Join-Path $expectedDataRoot "markdown"))
+        $actualPdfDir = [IO.Path]::GetFullPath([string]$settings.library_paths.pdf_dir)
+        $actualMarkdownDir = [IO.Path]::GetFullPath([string]$settings.library_paths.md_dir)
+        if (-not $actualPdfDir.Equals($expectedPdfDir, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Clean-profile PDF directory did not use the application-managed default."
+        }
+        if (-not $actualMarkdownDir.Equals($expectedMarkdownDir, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "Clean-profile Markdown directory did not use the application-managed default."
         }
     }
     $mode = if ($CleanProfile) { "Clean-profile archive" } else { "Portable" }
