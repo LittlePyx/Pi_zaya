@@ -679,9 +679,67 @@ def test_reindex_file_retries_only_target_index(
     assert calls["ingest"]["md_main"] == md
     assert calls["ingest"]["db_dir"] == db_dir
     assert calls["ingest"]["rebuild_structured_indices"] is True
+    assert calls["ingest"]["allow_blocked_quality"] is False
     assert calls["record"]["operation"] == "index_retry"
     assert calls["record"]["outcome"] == expected_outcome
     assert calls["record"]["detail"] == str(ingest_result.get("error") or "")
+
+
+def test_reindex_file_passes_explicit_quality_override_and_returns_audit_state(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True)
+    md = md_dir / "paper" / "paper.en.md"
+    md.parent.mkdir(parents=True)
+    pdf = pdf_dir / "paper.pdf"
+    pdf.write_bytes(b"%PDF-1.4 test")
+    md.write_text("<!-- kb_page: 1 -->\n# Paper\n", encoding="utf-8")
+    calls: dict[str, object] = {}
+
+    def fake_ingest(**kwargs):
+        calls["ingest"] = kwargs
+        return {
+            "ready": True,
+            "quality_override_applied": True,
+            "quality_gate": {
+                "indexable": True,
+                "override_applied": True,
+                "blocking_issue_codes": ["source_text_loss"],
+            },
+        }
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(library_router, "_ingest_markdown_incremental", fake_ingest)
+    monkeypatch.setattr(
+        library_router,
+        "_bg_record_task_result",
+        lambda **kwargs: {**kwargs, "message": "Index retry completed."},
+    )
+    monkeypatch.setattr(
+        library_router,
+        "append_conversion_repair_attempt",
+        lambda *args, **kwargs: calls.setdefault("audit", kwargs),
+    )
+
+    response = TestClient(app).post(
+        "/api/library/reindex/file",
+        json={"pdf_name": pdf.name, "allow_blocked_quality": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["quality_override_requested"] is True
+    assert payload["quality_override_applied"] is True
+    assert calls["ingest"]["allow_blocked_quality"] is True
+    assert calls["audit"]["event"] == "quality_override_confirmed"
+    assert calls["audit"]["issue_codes"] == ["source_text_loss"]
 
 
 def test_convert_status_ignores_stale_total_without_active_or_queue(monkeypatch):

@@ -114,6 +114,47 @@ def test_chunk_quality_annotation_marks_only_unreliable_pages_as_non_evidence() 
     assert annotated[1]["meta"]["conversion_quality_page_issue_codes"] == ["missing_wrapped_word_prefixes"]
 
 
+def test_ingest_allows_explicitly_confirmed_markdown_with_auditable_warning(tmp_path: Path):
+    repo_root = Path(__file__).resolve().parents[2]
+    db_dir = tmp_path / "db"
+    md_path = tmp_path / "confirmed.en.md"
+    md_path.write_text(
+        _good_markdown().replace(
+            "## Method",
+            "## Method\n\n![Reviewed figure](assets/missing-reviewed-figure.png)",
+        ),
+        encoding="utf-8",
+    )
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "ingest.py",
+            "--src",
+            str(md_path),
+            "--db",
+            str(db_dir),
+            "--no-quality-autofix",
+            "--allow-blocked-quality",
+        ],
+        cwd=repo_root,
+        text=True,
+        capture_output=True,
+        timeout=30,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    doc_id = compute_doc_id(md_path)
+    record = load_docs_index(db_dir)[doc_id]
+    chunks = load_all_chunks(db_dir)
+    assert record["index_status"] == "quality_degraded"
+    assert record["quality_gate"]["indexable"] is True
+    assert record["quality_gate"]["override_applied"] is True
+    assert "missing_images" in record["quality_gate"]["blocking_issue_codes"]
+    assert chunks
+    assert all(chunk["meta"]["conversion_quality_status"] == "degraded" for chunk in chunks)
+
+
 def test_incremental_ingest_rebuilds_unchanged_doc_when_chunk_artifact_is_missing(tmp_path: Path):
     repo_root = Path(__file__).resolve().parents[2]
     src = tmp_path / "src"

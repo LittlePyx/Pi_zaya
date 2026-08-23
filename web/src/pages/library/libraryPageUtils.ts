@@ -199,7 +199,7 @@ export type QualityRepairHistoryRecord = {
   updatedAt: number
 }
 
-export type SourceReadinessKind = 'ready' | 'autofixed' | 'blocked' | 'review' | 'processing' | 'pending' | 'index_stale' | 'unknown'
+export type SourceReadinessKind = 'ready' | 'autofixed' | 'confirmed' | 'blocked' | 'review' | 'processing' | 'pending' | 'index_stale' | 'unknown'
 
 export interface SourceReadinessView {
   kind: SourceReadinessKind
@@ -651,6 +651,14 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
   const needsReview = conversionQualityNeedsReview(quality)
   const remainingCodes = Array.isArray(report?.remaining_issue_codes) ? report?.remaining_issue_codes || [] : []
   const indexState = normalizeTextValue(item.index_state).toLowerCase()
+  const indexStatus = normalizeTextValue(item.index_status).toLowerCase()
+  const indexQualityGate = item.quality_gate && typeof item.quality_gate === 'object'
+    ? item.quality_gate
+    : null
+  const manuallyConfirmed = indexState === 'ready'
+    && indexStatus === 'quality_degraded'
+    && indexQualityGate?.indexable === true
+    && indexQualityGate?.override_applied === true
   const hasAuthoritativeIndexState = Boolean(indexState)
   const needsQualityRepair = ['review', 'autofix'].includes(repairAction)
   const isBlocked = repairAction === 'reconvert'
@@ -676,6 +684,17 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
       detail: S.lib_source_status_pending_detail,
       action: '',
       qaReady: false,
+      blocked: false,
+    }
+  }
+  if (manuallyConfirmed) {
+    return {
+      kind: 'confirmed',
+      tone: 'review',
+      label: S.lib_source_status_confirmed,
+      detail: S.lib_source_status_confirmed_detail,
+      action: '',
+      qaReady: true,
       blocked: false,
     }
   }

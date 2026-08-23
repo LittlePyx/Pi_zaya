@@ -1294,7 +1294,7 @@ export const libraryApi = {
   resumeAllConversions: () => api.post<ResumeAllConversionsResponse>(
     '/api/library/convert/resume-all',
   ),
-  reindexFile: (pdfName: string) => api.post<{
+  reindexFile: (pdfName: string, opts?: { allowBlockedQuality?: boolean }) => api.post<{
     ok: boolean
     task_id: string
     pdf_name: string
@@ -1302,7 +1302,13 @@ export const libraryApi = {
     outcome: ConversionOutcome
     message: string
     detail: string
-  }>('/api/library/reindex/file', { pdf_name: pdfName }),
+    quality_override_requested: boolean
+    quality_override_applied: boolean
+    quality_gate?: Record<string, unknown>
+  }>('/api/library/reindex/file', {
+    pdf_name: pdfName,
+    allow_blocked_quality: Boolean(opts?.allowBlockedQuality),
+  }),
   openFile: (pdfName: string, target: 'pdf' | 'md' | 'pdf_dir' | 'md_dir' = 'pdf') =>
     api.post<{ ok: boolean; target: string; path: string }>('/api/library/file/open', {
       pdf_name: pdfName,

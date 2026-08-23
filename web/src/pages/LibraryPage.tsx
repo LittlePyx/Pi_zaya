@@ -403,7 +403,7 @@ export default function LibraryPage() {
       if (readiness.qaReady) stats.ready += 1
       if (readiness.kind === 'autofixed') stats.autofixed += 1
       if (readiness.blocked) stats.blocked += 1
-      if (readiness.kind === 'review') stats.review += 1
+      if (readiness.kind === 'review' || readiness.kind === 'confirmed') stats.review += 1
       if (readiness.kind === 'processing') stats.processing += 1
       if (readiness.kind === 'pending') stats.pending += 1
       if (readiness.kind === 'index_stale') stats.indexStale += 1
@@ -903,6 +903,43 @@ export default function LibraryPage() {
     }
   }
 
+  const handleConfirmQualityOverride = (item: LibraryFileItem) => {
+    if (item.task_state !== 'idle' || conversionRetryingName) return
+    Modal.confirm({
+      title: S.lib_quality_override_confirm_title,
+      content: (
+        <div className="kb-lib-delete-confirm">
+          <Text strong>{item.name}</Text>
+          <Text type="secondary">{S.lib_quality_override_confirm_detail}</Text>
+          <Text type="secondary">{S.lib_quality_override_confirm_safety}</Text>
+        </div>
+      ),
+      okText: S.lib_quality_override_confirm_ok,
+      cancelText: S.lib_menu_delete_cancel,
+      onOk: async () => {
+        setConversionRetryingName(item.name)
+        try {
+          const result = await libraryApi.reindexFile(item.name, { allowBlockedQuality: true })
+          await store.loadFiles(scope)
+          if (!result.ok) {
+            message.error(result.detail || S.lib_msg_quality_override_failed)
+            return
+          }
+          message.success(
+            result.quality_override_applied
+              ? S.lib_msg_quality_override_complete.replace('{name}', item.name)
+              : S.lib_msg_quality_recheck_passed.replace('{name}', item.name),
+          )
+        } catch (err) {
+          message.error(err instanceof Error ? err.message : S.lib_msg_quality_override_failed)
+          await store.loadFiles(scope)
+        } finally {
+          setConversionRetryingName('')
+        }
+      },
+    })
+  }
+
   const { recordQualityFullChainResult } = useLibraryQualityActionRecorder({
     setQualityFullChainResults,
   })
@@ -1308,6 +1345,7 @@ export default function LibraryPage() {
         onCancel={(rowItem) => { void handleCancelConversion(rowItem) }}
         onResume={(rowItem) => { void handleResumeConversion(rowItem) }}
         onRetry={(rowItem) => { void handleRetryConversion(rowItem) }}
+        onConfirmQualityOverride={handleConfirmQualityOverride}
         retrying={conversionRetryingName === item.name}
         onOpenPdf={(name) => { void store.openFile(name, 'pdf') }}
         onOpenMarkdown={(name) => { void store.openFile(name, 'md') }}

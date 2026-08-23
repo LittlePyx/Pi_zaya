@@ -168,6 +168,8 @@ test('library source readiness respects repair action precedence over quality-bl
       lib_source_status_blocked_detail: 'Reconvert detail',
       lib_source_status_review: 'Can repair',
       lib_source_status_review_detail: 'Repair detail',
+      lib_source_status_confirmed: 'User confirmed',
+      lib_source_status_confirmed_detail: 'Indexed with warnings',
       lib_source_status_unknown: 'Unknown',
       lib_source_status_unknown_detail: 'Unknown detail',
     }
@@ -226,6 +228,16 @@ test('library source readiness respects repair action precedence over quality-bl
         gateAction: 'reconvert',
         reportStale: true,
       }), S),
+      manuallyConfirmed: conversionSourceReadiness({
+        ...makeItem({ gateAction: 'reconvert' }),
+        index_state: 'ready',
+        index_status: 'quality_degraded',
+        quality_gate: {
+          action: 'reconvert',
+          indexable: true,
+          override_applied: true,
+        },
+      }, S),
     }
   })
 
@@ -235,6 +247,13 @@ test('library source readiness respects repair action precedence over quality-bl
   expect(result.gateReconvert).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
   expect(result.planNone).toMatchObject({ kind: 'index_stale', action: 'reindex', blocked: false })
   expect(result.stalePlan).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
+  expect(result.manuallyConfirmed).toMatchObject({
+    kind: 'confirmed',
+    action: '',
+    qaReady: true,
+    blocked: false,
+    label: 'User confirmed',
+  })
 })
 
 test('library running-page label uses only structured page state while converting', async ({ page }) => {
@@ -2988,6 +3007,54 @@ test('library shows a document terminal result and retries only its failed index
   await expect.poll(() => retryRequestName).toBe(paperName)
   await expect(row.getByTestId('library-conversion-result')).toContainText(/索引重试完成|Index retry completed/)
   await expect(row.getByTestId('library-retry-conversion')).toHaveCount(0)
+})
+
+test('library lets a user confirm the current Markdown after repeated quality blocking', async ({ page }) => {
+  const paperName = 'Optica-2024-Broken conversion.pdf'
+  let requestBody: { pdf_name?: string, allow_blocked_quality?: boolean } | null = null
+
+  await page.route('**/api/library/reindex/file', async (route) => {
+    requestBody = route.request().postDataJSON() as typeof requestBody
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        task_id: 'quality-confirmed-index',
+        pdf_name: paperName,
+        md_path: 'F:\\kb\\md\\broken\\broken.en.md',
+        outcome: 'success',
+        message: 'Index retry completed.',
+        detail: '',
+        quality_override_requested: true,
+        quality_override_applied: true,
+        quality_gate: {
+          status: 'degraded',
+          indexable: true,
+          override_applied: true,
+          blocking_issue_codes: ['source_text_loss'],
+        },
+      }),
+    })
+  })
+
+  await page.goto('/library')
+  const row = page.getByTestId('library-file-row').filter({ hasText: paperName })
+  await expect(row.getByTestId('library-file-source-readiness')).toContainText(/未入库：需要重转|Not indexed: reconvert/)
+  await expect(row.getByTestId('library-quality-confirm-index')).toBeVisible()
+  await row.getByTestId('library-quality-confirm-index').click()
+
+  const confirmDialog = page.locator('.ant-modal-confirm').filter({
+    hasText: /确认使用当前 Markdown 入库|Index the current Markdown/,
+  })
+  await expect(confirmDialog).toBeVisible()
+  await expect(confirmDialog.getByText(/不可靠的页面|unreliable pages/)).toBeVisible()
+  await confirmDialog.getByRole('button', { name: /确认并入库|Confirm and index/ }).click()
+
+  await expect.poll(() => requestBody).toMatchObject({
+    pdf_name: paperName,
+    allow_blocked_quality: true,
+  })
 })
 
 test('library resyncs conversion state from files snapshot after status stream failure', async ({ page }) => {

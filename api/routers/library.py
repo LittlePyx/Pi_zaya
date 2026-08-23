@@ -5882,6 +5882,7 @@ def _ingest_markdown_incremental(
     cancel_cb: Callable[[], bool] | None = None,
     ingest_proc_cb: Callable[[subprocess.Popen | None], None] | None = None,
     rebuild_structured_indices: bool = False,
+    allow_blocked_quality: bool = False,
 ) -> dict:
     ingest_py = _ingest_py_path()
     if not ingest_py.exists():
@@ -5919,6 +5920,10 @@ def _ingest_markdown_incremental(
     ]
     if rebuild_structured_indices:
         ingest_args.append("--rebuild-structured-indices")
+    if allow_blocked_quality:
+        # The user confirmed the Markdown currently on disk. Re-scan that
+        # exact file, but do not mutate it with an automatic repair first.
+        ingest_args.extend(["--no-quality-autofix", "--allow-blocked-quality"])
     proc = subprocess.Popen(
         ingest_args,
         stdout=subprocess.DEVNULL,
@@ -5962,8 +5967,18 @@ def _ingest_markdown_incremental(
             "ready": False,
             "error": (stderr_text or "ingest failed").strip()[-500:],
         }
+    quality_gate: dict = {}
+    try:
+        docs = load_docs_index(db_dir)
+        record = docs.get(compute_doc_id(md_main))
+        if isinstance(record, dict) and isinstance(record.get("quality_gate"), dict):
+            quality_gate = dict(record.get("quality_gate") or {})
+    except Exception:
+        quality_gate = {}
     return {
         "ready": True,
+        "quality_gate": quality_gate,
+        "quality_override_applied": bool(quality_gate.get("override_applied")),
     }
 
 
@@ -8484,6 +8499,7 @@ def resolve_library_guide_source(body: GuideSourceBody):
 
 class ReindexFileBody(BaseModel):
     pdf_name: str
+    allow_blocked_quality: bool = False
 
 
 @router.post("/reindex/file", dependencies=[Depends(require_management_api)])
@@ -8499,7 +8515,11 @@ def reindex_file(body: ReindexFileBody):
     auto_backup = _dangerous_auto_snapshot(
         "library_reindex_file",
         label=pdf_path.stem,
-        metadata={"pdf_name": pdf_path.name, "md_path": str(md_main)},
+        metadata={
+            "pdf_name": pdf_path.name,
+            "md_path": str(md_main),
+            "allow_blocked_quality": bool(body.allow_blocked_quality),
+        },
     )
     started_at = time.time()
     task_id = uuid.uuid4().hex
@@ -8507,9 +8527,31 @@ def reindex_file(body: ReindexFileBody):
         md_main=md_main,
         db_dir=Path(settings.db_dir).expanduser(),
         rebuild_structured_indices=True,
+        allow_blocked_quality=bool(body.allow_blocked_quality),
     )
     ready = bool(result.get("ready"))
+    quality_override_applied = bool(result.get("quality_override_applied"))
     error = str(result.get("error") or "").strip()[:500]
+    if ready and quality_override_applied:
+        try:
+            append_conversion_repair_attempt(
+                md_main,
+                event="quality_override_confirmed",
+                status="accepted",
+                action="index",
+                scope="current_markdown",
+                issue_codes=[
+                    str(item)
+                    for item in list((result.get("quality_gate") or {}).get("blocking_issue_codes") or [])
+                    if str(item or "").strip()
+                ],
+                source="library_reindex_file",
+                reason="The user inspected the current Markdown and explicitly confirmed indexing with quality warnings.",
+                detail="Indexed the current Markdown without reconversion; page-level unreliable evidence remains excluded.",
+            )
+            _clear_conversion_quality_cache(md_main)
+        except Exception:
+            pass
     terminal = _bg_record_task_result(
         task_id=task_id,
         pdf=str(pdf_path),
@@ -8530,6 +8572,9 @@ def reindex_file(body: ReindexFileBody):
         "outcome": str(terminal.get("outcome") or ""),
         "message": str(terminal.get("message") or ""),
         "detail": str(terminal.get("detail") or ""),
+        "quality_override_requested": bool(body.allow_blocked_quality),
+        "quality_override_applied": quality_override_applied,
+        "quality_gate": dict(result.get("quality_gate") or {}),
         "auto_backup": auto_backup,
     }
 

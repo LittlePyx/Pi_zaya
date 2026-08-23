@@ -35,6 +35,7 @@ type LibraryFileRowProps = {
   onResume: (item: LibraryFileItem) => void
   onRetry: (item: LibraryFileItem) => void
   retrying: boolean
+  onConfirmQualityOverride: (item: LibraryFileItem) => void
   onOpenPdf: (name: string) => void
   onOpenMarkdown: (name: string) => void
   onDelete: (item: LibraryFileItem) => void
@@ -67,6 +68,7 @@ export function LibraryFileRow({
   onResume,
   onRetry,
   retrying,
+  onConfirmQualityOverride,
   onOpenPdf,
   onOpenMarkdown,
   onDelete,
@@ -116,6 +118,8 @@ export function LibraryFileRow({
           repairRecord={qualityRepairRecord}
           onRepairQuality={() => onRepairQuality(item)}
           onReindex={onReindex}
+          onConfirmQualityOverride={() => onConfirmQualityOverride(item)}
+          qualityOverrideConfirming={retrying}
         />
 
         <LibraryFileProgressNote item={item} />

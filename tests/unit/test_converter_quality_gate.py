@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from kb.converter.quality_gate import assess_markdown_index_quality, prepare_markdown_for_index
+from kb.converter.quality_gate import (
+    assess_markdown_index_quality,
+    index_quality_document_fields,
+    prepare_markdown_for_index,
+)
 from kb.converter.quality_repair import (
     CONVERSION_QUALITY_RULES_VERSION,
     conversion_quality_result_path,
@@ -235,6 +239,38 @@ def test_quality_gate_still_blocks_document_when_every_source_page_is_corrupt(tm
     assert result["indexable"] is False
     assert result["status"] == "blocked"
     assert result["blocking_issue_codes"] == ["source_page_text_corruption"]
+
+
+def test_quality_gate_records_explicit_override_without_hiding_blocking_issues(tmp_path: Path):
+    md_path = tmp_path / "user-confirmed.en.md"
+    md_path.write_text(_good_markdown(), encoding="utf-8")
+
+    result = assess_markdown_index_quality(
+        md_path,
+        quality_result={
+            "repair_plan": {
+                "action": "reconvert",
+                "scope": "document",
+                "reason": "The automatic detector still recommends reconversion.",
+                "issue_codes": ["source_text_loss"],
+                "autofix_issue_codes": [],
+                "reconvert_issue_codes": ["source_text_loss"],
+                "review_issue_codes": [],
+            },
+            "metrics": {},
+        },
+        refresh_stale=False,
+        allow_blocked=True,
+    )
+    fields = index_quality_document_fields(result)
+
+    assert result["indexable"] is True
+    assert result["status"] == "degraded"
+    assert result["override_applied"] is True
+    assert result["blocking_issue_codes"] == ["source_text_loss"]
+    assert fields["index_status"] == "quality_degraded"
+    assert fields["quality_gate"]["override_applied"] is True
+    assert fields["quality_gate"]["blocking_issue_codes"] == ["source_text_loss"]
 
 
 def test_quality_gate_blocks_unresolved_source_page_marker_alignment(tmp_path: Path):

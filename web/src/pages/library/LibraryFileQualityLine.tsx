@@ -33,6 +33,8 @@ type LibraryFileQualityLineProps = {
   repairRecord?: QualityRepairHistoryRecord
   onRepairQuality: () => void
   onReindex: () => void
+  onConfirmQualityOverride: () => void
+  qualityOverrideConfirming: boolean
 }
 
 function sourceQualityContext(item: LibraryFileItem) {
@@ -96,6 +98,8 @@ export function LibraryFileQualityLine({
   repairRecord,
   onRepairQuality,
   onReindex,
+  onConfirmQualityOverride,
+  qualityOverrideConfirming,
 }: LibraryFileQualityLineProps) {
   const { quality, qualityReport, qualityCenter, sourceQuality } = sourceQualityContext(item)
   const finalRepairResult = String(
@@ -131,6 +135,18 @@ export function LibraryFileQualityLine({
             >
               {qualityRepairButtonLabel}
             </Button>
+            {sourceReadiness.kind === 'blocked' ? (
+              <Button
+                size="small"
+                className="kb-lib-quality-repair-btn"
+                data-testid="library-quality-confirm-index"
+                loading={qualityOverrideConfirming}
+                disabled={item.task_state !== 'idle'}
+                onClick={onConfirmQualityOverride}
+              >
+                {S.lib_btn_confirm_markdown_index}
+              </Button>
+            ) : null}
           </div>
         ) : null}
         {finalRepairResult ? (
@@ -277,17 +293,31 @@ export function LibraryFileQualityLine({
             </span>
           ) : null}
           {sourceReadinessActionAvailable ? (
-            <Button
-              size="small"
-              icon={<ReloadOutlined />}
-              className="kb-lib-quality-repair-btn"
-              data-testid="library-quality-repair"
-              loading={repairing}
-              disabled={item.task_state !== 'idle'}
-              onClick={sourceReadiness.action === 'reindex' ? onReindex : onRepairQuality}
-            >
-              {qualityRepairButtonLabel}
-            </Button>
+            <>
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                className="kb-lib-quality-repair-btn"
+                data-testid="library-quality-repair"
+                loading={repairing}
+                disabled={item.task_state !== 'idle'}
+                onClick={sourceReadiness.action === 'reindex' ? onReindex : onRepairQuality}
+              >
+                {qualityRepairButtonLabel}
+              </Button>
+              {sourceReadiness.kind === 'blocked' ? (
+                <Button
+                  size="small"
+                  className="kb-lib-quality-repair-btn"
+                  data-testid="library-quality-confirm-index"
+                  loading={qualityOverrideConfirming}
+                  disabled={item.task_state !== 'idle'}
+                  onClick={onConfirmQualityOverride}
+                >
+                  {S.lib_btn_confirm_markdown_index}
+                </Button>
+              ) : null}
+            </>
           ) : null}
         </div>
       ) : null}
