@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.11` is the current published downloadable beta, delivered as both a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.11` is the current published downloadable beta, and `v0.1.0-beta.12` is the next release candidate. Both use a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
 
 The current beta temporarily withholds the project evidence-matrix
 workspace and its matrix-dependent brief, gap, and project-status entrances
@@ -9,7 +9,8 @@ implementation, saved records, APIs, exports, and full internal regression
 suite remain present. Internal browser gates explicitly use
 `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; downloadable builds must leave it
 unset. The immutable `v0.1.0-beta.11` tag advances `v0.1.0-beta.10` and must
-never be moved or overwritten.
+never be moved or overwritten. The beta.12 candidate must advance beta.11
+through a new immutable tag only after its untagged Windows preflight passes.
 
 ## Current release decision
 
@@ -36,6 +37,7 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - License: MIT; `LICENSE` must be present both in the repository and inside the ZIP.
 - Entry/exit: native `Pi_zaya.exe` with a system-tray safe-exit action; `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain diagnostic fallbacks.
 - Conversion durability: the conversion ledger lives in `library.sqlite3`, never stores API keys, preserves validated page-cache artifacts, and requires an explicit Continue action after a restart. A missing source PDF or vision credential stays in an actionable blocked recovery state rather than retrying in a loop.
+- Conversion quality confirmation: strict blocking remains the default. A user who has inspected the current Markdown may explicitly request a fresh scan and warning-preserving index operation; the blocking codes and confirmation audit remain recorded, and detected unreliable pages remain excluded from answer evidence.
 - Conversion concurrency: the downloadable product always submits pages in source order and uses a shared automatic provider-inflight ceiling of eight. No alternate page scheduler, adaptive page-budget branch, or text-local vision bypass is included. Higher ceilings remain explicit operator experiments and must not be enabled in a formal artifact without repeating the converter speed and structural-quality gates.
 - Evidence workspace surface: ordinary downloadable builds leave `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE` unset, so the matrix workspace and its dependent brief/gap/status entrances are absent. Internal tests set it to `1` and must keep the existing evidence workflow assertions passing while the redesign proceeds.
 
@@ -54,7 +56,7 @@ The following fast build uses the current system Python only to validate portabl
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.11-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.12-windows-x64 `
   -AllowDirty
 ```
 
@@ -77,24 +79,24 @@ cd ..
   -KeepStage
 
 .\tools\release\build_windows_installer.ps1 `
-  -StageRoot .\release\Pi_zaya-v0.1.0-beta.11-windows-x64 `
+  -StageRoot .\release\Pi_zaya-v0.1.0-beta.12-windows-x64 `
   -InnoSetupCompiler "C:\Program Files\Inno Setup 7\ISCC.exe"
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.11-windows-x64.zip `
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.12-windows-x64.zip `
   -CleanProfile
 
 .\tools\release\smoke_windows_installer.ps1 `
-  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe
+  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.11-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.11-windows-x64.zip.sha256
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.12-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.12-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe.sha256
 ```
 
 ## Tag release
@@ -103,7 +105,7 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe.sha256
 2. Update `VERSION`, both frontend version fields, `CHANGELOG.md`, and the reviewed bilingual `docs/releases/v<VERSION>.md` download guide.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.11`.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.12`.
 6. The tag run repeats the complete backend, frontend, research, conversion, browser, portable-package, installer, and packaged-runtime gates on Windows.
 7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
 8. The workflow also silently installs into an isolated directory, repeats the runtime checks without system Python or Node.js, performs an in-place reinstall, uninstalls, and proves that the separate user-data sentinel remains.
@@ -296,6 +298,14 @@ the scheduler code was removed.
 - the published Setup is 60,874,584 bytes with SHA-256 `46e42c87ee2e5b9b17540614a63468f3b0edc5701d09837a1dbc63e9657dfb10`;
 - both published manifests record commit `a80c4c37144f`, `source_dirty=false`, `license=MIT`, and the embedded Python runtime. No trusted signing certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned` rather than implying publisher trust;
 - the GitHub prerelease contains exactly the ZIP, Setup, their two adjacent SHA-256 files, and their two machine-readable manifests. All six assets were independently downloaded after publication, and both artifact hashes matched their adjacent checksum files.
+
+### 2026-08-23 beta.12 candidate preparation
+
+- the strict conversion-quality gate remains the default, while a user who has inspected the current Markdown now has an explicit fresh-scan and warning-preserving indexing path after repeated conservative blocking;
+- confirmed documents retain their blocking issue codes and audit marker, and detected unreliable pages remain excluded from answer evidence;
+- the implementation commit passed the backend unit and sanity suites, converter quality 13/13, Ruff, frontend lint/build, browser smoke/core/public-surface gates, and the dedicated 20-case library-quality browser suite;
+- the beta.12 version contract, bilingual release notes, Ruff, frontend lint/build, and 11 release-foundation tests pass locally;
+- beta.12 remains an untagged release candidate until normal CI and the complete untagged Windows preflight pass on the exact clean release commit. No beta.12 download or checksum should be represented as published before that point.
 
 ## Promotion gates after beta
 

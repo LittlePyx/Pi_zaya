@@ -2,6 +2,17 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.12] - 2026-08-23
+
+### Added
+
+- Let users explicitly confirm and index the current Markdown when repeated reconversion still triggers a conservative conversion-quality rule, after a fresh scan and an explicit safety review prompt.
+
+### Changed
+
+- Keep the strict conversion-quality gate as the default path while marking a confirmed document as quality-degraded, retaining its blocking issue codes and recording the confirmation in the conversion audit trail.
+- Continue excluding detected unreliable pages from answer evidence after a document-level confirmation.
+
 ## [0.1.0-beta.11] - 2026-08-19
 
 ### Changed

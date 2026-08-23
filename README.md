@@ -22,14 +22,14 @@ entry.
 
 ## Downloadable Windows beta
 
-The current release is [`v0.1.0-beta.11`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.11).
+The current release candidate is [`v0.1.0-beta.12`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.12).
 
 ### Choose the right download
 
 | Release file | Who should use it | How to use it |
 |---|---|---|
-| [`Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.11/Pi_zaya-v0.1.0-beta.11-windows-x64-setup.exe) | Recommended for most Windows users | Verify its checksum, run Setup, then open Pi_zaya from the Start menu or optional desktop shortcut. It installs for the current user without administrator privileges. |
-| [`Pi_zaya-v0.1.0-beta.11-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.11/Pi_zaya-v0.1.0-beta.11-windows-x64.zip) | Portable use, removable folders, or troubleshooting | Verify its checksum, extract the entire ZIP into a normal folder, then double-click `Pi_zaya.exe`. Do not run it inside the ZIP preview. |
+| [`Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.12/Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe) | Recommended for most Windows users | Verify its checksum, run Setup, then open Pi_zaya from the Start menu or optional desktop shortcut. It installs for the current user without administrator privileges. |
+| [`Pi_zaya-v0.1.0-beta.12-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.12/Pi_zaya-v0.1.0-beta.12-windows-x64.zip) | Portable use, removable folders, or troubleshooting | Verify its checksum, extract the entire archive into a normal folder, then double-click `Pi_zaya.exe`. |
 | `*.sha256` | Anyone verifying a download | This is a text checksum file, not an application. Compare it with `Get-FileHash <download> -Algorithm SHA256`. |
 | `*.manifest.json` | Auditors and advanced users | This is machine-readable build provenance, commit, license, package type, and signing status. It is not an application. |
 | GitHub-generated “Source code” archives | Developers only | These contain repository source and are not ready-to-run Windows packages. Use the installer or portable ZIP unless you intend to build from source. |
