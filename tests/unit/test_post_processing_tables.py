@@ -371,3 +371,31 @@ def test_postprocess_markdown_drops_truncated_decimal_duplicate_table():
     assert "| Datasets | Indexes | AE | HSCNN | IS |" not in out
     assert out.count("| Datasets | Indexes |") == 1
     assert "| KAIST | PSNR | 26.03 | 21.06 | 28.57 | 34.87 |" in out
+
+
+def test_postprocess_markdown_prefers_complete_table_after_lossy_vision_duplicate():
+    lossy_header = "|  |  |  |  | us. | Orb | it. | Avg. | Deg. |  | Clus. | O | rbit. |  |"
+    src = "\n".join(
+        [
+            "<!-- kb_page: 17 -->",
+            lossy_header,
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| EDP- | EDP-GN<br>GNN (st | N<br>ep=120) | 0.053 0.1<br>0.586 0.2 | 44<br>53 | 0.0<br>0.7 | 26<br>05 | 0.074<br>0.515 | 0.052<br>0.141 |  | 0.093<br>0.114 | 0.<br>0. | 007<br>036 | 0.050 0.062<br>0.097 0.306 |",
+            "|  | Ours |  | 0.004 0.1 | 04 | 0.00 | 1 | 0.036 | 0.019 |  | 0.047 | 0. | 005 | 0.024 0.030 |",
+            "| Unif<br>Small<br>Unif<br>Large<br>Dec<br>No | Ta<br>orm<br>Noise<br>orm<br>Noise<br>ayed<br>ise<br>Figure | ble 5: C<br>6: Com | omparing FH<br>pare the gener | D<br>at | M with<br>ed segm | E<br>e | DP-GNN<br>ntation ma | with si<br>ps wit | m<br>h | ilar di<br>differ | ffus<br>ent n | ion step<br>oise sc | s.<br>hedule. |",
+            "",
+            "| Method | Community-small |  |  |  | Ego-small |  |  |  | Avg |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "|  | Deg. | Clus. | Orbit. | Avg. | Deg. | Clus. | Orbit. | Avg. |  |",
+            "| EDP-GNN | 0.053 | 0.144 | 0.026 | 0.074 | 0.052 | 0.093 | 0.007 | 0.050 | 0.062 |",
+            "| EDP-GNN (step=120) | 0.586 | 0.253 | 0.705 | 0.515 | 0.141 | 0.114 | 0.036 | 0.097 | 0.306 |",
+            "| Ours | **0.004** | **0.104** | **0.001** | **0.036** | **0.019** | **0.047** | **0.005** | **0.024** | **0.030** |",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert lossy_header not in out
+    assert "<br>" not in out
+    assert out.count("| Method | Community-small |") == 1
+    assert "| EDP-GNN (step=120) | 0.586 | 0.253 | 0.705 |" in out

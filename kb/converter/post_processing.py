@@ -22,6 +22,11 @@ from .post_math_rules import (
     normalize_adjacent_inline_math_superscripts,
     restore_bare_tagged_display_math,
 )
+from .page_math_boundaries import (
+    normalize_display_math_delimiter_lines,
+    repair_page_display_math_boundaries,
+    transform_markdown_pages,
+)
 from .post_references import (
     _format_references,
     _is_post_references_resume_heading_line,
@@ -1732,6 +1737,75 @@ def _repair_body_figure_reference_captions(md: str) -> str:
     return "\n".join(out)
 
 
+def _dedupe_repeated_image_targets_within_page(md: str) -> str:
+    """Keep one canonical occurrence of an identical image on a page.
+
+    Vision output can describe panel labels and then emit the same full-figure
+    asset repeatedly. Adjacent-only dedupe misses this when labels or captions
+    sit between the links. Exact targets are safe to dedupe within one physical
+    page; cross-page repetitions are preserved.
+    """
+
+    if not md:
+        return md
+    lines = md.splitlines()
+    image_re = re.compile(r"^\s*!\[([^\]]*)]\(([^)]+)\)\s*$")
+    page_re = re.compile(r"^\s*<!--\s*kb_page:\s*(\d+)\s*-->\s*$", re.IGNORECASE)
+    caption_re = re.compile(r"^\s*\*\*(?:Figure|Table)\s+[A-Za-z0-9]+\.\*\*", re.IGNORECASE)
+    panel_label_re = re.compile(
+        r"^(?:data|generated|prediction|predicted|ground\s+truth|input|output|reference)$",
+        re.IGNORECASE,
+    )
+
+    page_no = 1
+    groups: dict[tuple[int, str], list[tuple[int, int]]] = {}
+    for index, line in enumerate(lines):
+        page_match = page_re.match(line)
+        if page_match:
+            page_no = int(page_match.group(1))
+            continue
+        match = image_re.match(line)
+        if not match:
+            continue
+        alt = _normalize_text(match.group(1) or "").strip()
+        target = str(match.group(2) or "").strip().strip("<>")
+        score = 0
+        if alt and not re.fullmatch(r"(?i)(?:figure|fig\.?|table)\s*\d*[A-Za-z]?", alt):
+            score += 2
+        elif re.match(r"(?i)^(?:figure|fig\.?|table)\s*\d+[A-Za-z]?\b", alt):
+            score += 1
+        for probe in range(index + 1, min(len(lines), index + 5)):
+            candidate = lines[probe].strip()
+            if not candidate:
+                continue
+            if caption_re.match(candidate):
+                score += 3
+            break
+        groups.setdefault((page_no, target), []).append((index, score))
+
+    drop: set[int] = set()
+    for occurrences in groups.values():
+        if len(occurrences) <= 1:
+            continue
+        keep_index, _ = max(occurrences, key=lambda item: (item[1], item[0]))
+        for image_index, _ in occurrences:
+            if image_index == keep_index:
+                continue
+            drop.add(image_index)
+            previous = image_index - 1
+            while previous >= 0 and not lines[previous].strip():
+                previous -= 1
+            if previous >= 0 and panel_label_re.fullmatch(lines[previous].strip()):
+                drop.add(previous)
+
+    if not drop:
+        return md
+    fixed = "\n".join(line for index, line in enumerate(lines) if index not in drop)
+    if md.endswith("\n"):
+        fixed += "\n"
+    return fixed
+
+
 def _dedupe_nearby_repeated_captions(md: str) -> str:
     if not md:
         return md
@@ -2992,6 +3066,10 @@ def _format_references_preserving_post_reference_pages(md: str) -> str:
 
 
 def postprocess_markdown(md: str) -> str:
+    # ``$...$$^2$`` is two adjacent inline spans, not a display delimiter.
+    # Resolve that established OCR shape before scanning for page math fences.
+    md = normalize_adjacent_inline_math_superscripts(md)
+    md = normalize_display_math_delimiter_lines(md)
     md = _cleanup_noise_lines(md)
     md = _drop_standalone_journal_metadata_lines(md)
     md = _drop_ocr_placeholder_lines(md)
@@ -3003,7 +3081,12 @@ def postprocess_markdown(md: str) -> str:
     md = _split_inline_structural_heading_labels(md)
     md = restore_bare_tagged_display_math(md)
     md = normalize_adjacent_inline_math_superscripts(md)
-    md = fix_math_markdown(md)
+    # ``fix_math_markdown`` is stateful. Keep its delimiter state within each
+    # physical PDF page, then re-normalize and repair any delimiter it unwraps
+    # before later plain-text cleanup scans the document.
+    md = transform_markdown_pages(md, fix_math_markdown)
+    md = normalize_display_math_delimiter_lines(md)
+    md, _, _ = repair_page_display_math_boundaries(md, add_audit_marker=True)
     md = _normalize_math_for_typora(md)
     md = _cleanup_stray_latex_in_text(md)
     md = _fix_split_numbered_headings(md)
@@ -3032,6 +3115,7 @@ def postprocess_markdown(md: str) -> str:
     md = _move_early_references_block_to_end(md)
     md = _repair_body_figure_reference_captions(md)
     md = _normalize_figure_caption_blocks(md)
+    md = _dedupe_repeated_image_targets_within_page(md)
     md = _fill_empty_image_alt_from_following_caption(md)
     md = _tighten_image_caption_spacing(md)
     md = _dedupe_nearby_repeated_captions(md)
@@ -3047,4 +3131,5 @@ def postprocess_markdown(md: str) -> str:
     md = _restore_inline_math_connector_boundaries(md)
     md = _split_inline_heading_markers(md)
     md = _normalize_page_marker_block_spacing(md)
+    md, _, _ = repair_page_display_math_boundaries(md, add_audit_marker=True)
     return md

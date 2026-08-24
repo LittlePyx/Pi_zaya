@@ -602,3 +602,24 @@ def test_inferred_references_preserve_author_biography_page():
     assert out.index("[8] Author 8") < out.index("<!-- kb_page: 21 -->")
     assert out.index("<!-- kb_page: 21 -->") < out.index("## Author Biographies") < out.index("**Kai Song** received")
     assert postprocess_markdown(out) == out
+
+
+def test_wrapped_volume_number_is_not_promoted_to_reference_number():
+    src = "\n".join(
+        [
+            "# Complete Paper",
+            "",
+            "## References",
+            "",
+            "[13] A. Author. Earlier source. Journal of Tests, 1983.",
+            "[14] B. Author. Diffusions and stochastic processes, volume",
+            "549. Springer, 1984.",
+            "[15] C. Author. Later source. Journal of Tests, 1985.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert "[549]" not in out
+    assert "volume 549. Springer, 1984." in out
+    assert "[15] C. Author." in out

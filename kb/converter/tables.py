@@ -712,6 +712,7 @@ def _normalized_table_number(value: str) -> str:
 
 def _markdown_table_signature(lines: list[str], start: int, end: int) -> dict:
     block_lines = lines[start:end]
+    block = "\n".join(block_lines)
     rows = [
         _split_md_table_cells(line)
         for line in block_lines
@@ -733,6 +734,11 @@ def _markdown_table_signature(lines: list[str], start: int, end: int) -> dict:
         for cell in cells
         if re.fullmatch(r"(?:\*{1,2})?[+-]?\d+\.(?:\*{1,2})?", str(cell or "").strip())
     )
+    lossy_rows = sum(
+        1
+        for row in rows[1:]
+        if _collapsed_table_row_segment_count(row) >= 2 or _ambiguous_table_break_row(row)
+    )
     score = float(width * max(1, len(rows))) + float(non_empty) * 0.2
     return {
         "start": start,
@@ -741,6 +747,7 @@ def _markdown_table_signature(lines: list[str], start: int, end: int) -> dict:
         "words": words,
         "score": score,
         "truncated_decimal_cells": truncated_decimal_cells,
+        "lossy": bool(lossy_rows or markdown_table_block_is_fragmented(block)),
     }
 
 
@@ -786,7 +793,22 @@ def _nearby_duplicate_table_pairs(md: str) -> list[tuple[dict, dict]]:
                 and shared_words >= 2
                 and word_coverage >= 0.60
             )
-            if not (exact_duplicate or truncated_partial_duplicate):
+            lossy_partial_duplicate = False
+            if bool(left.get("lossy")) != bool(right.get("lossy")):
+                lossy = left if bool(left.get("lossy")) else right
+                clean = right if lossy is left else left
+                clean_numeric_coverage = _fragment_aware_numeric_coverage(
+                    clean["numbers"],
+                    lossy["numbers"],
+                )
+                lossy_partial_duplicate = bool(
+                    sum(clean["numbers"].values()) >= 6
+                    and shared_numbers >= 6
+                    and clean_numeric_coverage >= 0.90
+                    and shared_words >= 2
+                    and word_coverage >= 0.40
+                )
+            if not (exact_duplicate or truncated_partial_duplicate or lossy_partial_duplicate):
                 continue
             pairs.append((left, right))
     return pairs
@@ -875,7 +897,9 @@ def dedupe_nearby_markdown_tables(md: str) -> str:
         right_range = (int(right["start"]), int(right["end"]))
         if left_range in drop_ranges or right_range in drop_ranges:
             continue
-        if float(left["score"]) > float(right["score"]):
+        if bool(left.get("lossy")) != bool(right.get("lossy")):
+            drop_ranges.add(left_range if bool(left.get("lossy")) else right_range)
+        elif float(left["score"]) > float(right["score"]):
             drop_ranges.add(right_range)
         else:
             drop_ranges.add(left_range)

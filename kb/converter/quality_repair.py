@@ -18,6 +18,7 @@ from urllib.parse import unquote
 
 from .post_processing import postprocess_markdown
 from .post_math_rules import contains_bare_tagged_display_math, repair_inline_math_prose_boundaries_document
+from .page_math_boundaries import repair_page_display_math_boundaries
 from .post_references import _is_post_references_resume_heading_line
 from .quality_acceptance import (
     is_prose_dominant_display_math_block,
@@ -1707,7 +1708,15 @@ def _normalize_page_marker_sequence(md: str) -> tuple[str, bool]:
 
 
 def _balance_display_math(md: str) -> tuple[str, bool]:
-    lines = str(md or "").splitlines()
+    source = str(md or "")
+    page_repaired, repaired_pages, unresolved_pages = repair_page_display_math_boundaries(
+        source,
+        add_audit_marker=False,
+    )
+    if repaired_pages or unresolved_pages:
+        return page_repaired, page_repaired != source
+
+    lines = source.splitlines()
     out: list[str] = []
     in_math = False
     changed = False

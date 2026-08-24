@@ -34,23 +34,43 @@ def extract_page_figure_caption_candidates(page, *, page_dict: dict | None = Non
         bbox = b.get("bbox")
         if not bbox:
             continue
-        txt_parts: list[str] = []
+        line_parts: list[tuple[str, list[float]]] = []
         for l in b.get("lines", []) or []:
             spans = l.get("spans", []) or []
             if not spans:
                 continue
             line = "".join(str(s.get("text", "")) for s in spans)
             line = _normalize_text(line).strip()
-            if line:
-                txt_parts.append(line)
-        if not txt_parts:
+            line_bbox = l.get("bbox") or bbox
+            if line and line_bbox:
+                try:
+                    normalized_bbox = [float(x) for x in line_bbox]
+                except Exception:
+                    continue
+                line_parts.append((line, normalized_bbox))
+        if not line_parts:
             continue
-        txt = _normalize_text(" ".join(txt_parts)).strip()
+        # Vector figures sometimes put labels and the caption in one PDF text
+        # block. Locate the first caption-prefixed line instead of requiring
+        # the entire block to start with "Figure N".
+        start_index = next(
+            (index for index, (line, _) in enumerate(line_parts) if cap_start_re.match(line)),
+            0,
+        )
+        selected = line_parts[start_index:]
+        txt = _normalize_text(" ".join(line for line, _ in selected)).strip()
         if not txt:
             continue
         m = cap_start_re.match(txt)
         if not m:
             continue
+        selected_boxes = [line_bbox for _, line_bbox in selected]
+        selected_bbox = [
+            min(item[0] for item in selected_boxes),
+            min(item[1] for item in selected_boxes),
+            max(item[2] for item in selected_boxes),
+            max(item[3] for item in selected_boxes),
+        ]
         fig_ident = (m.group(1) or "").strip()
         fig_no = None
         try:
@@ -62,11 +82,63 @@ def extract_page_figure_caption_candidates(page, *, page_dict: dict | None = Non
                 "fig_no": fig_no,
                 "fig_ident": fig_ident,
                 "caption": txt,
-                "bbox": [float(x) for x in bbox],
+                "bbox": selected_bbox,
             }
         )
     out.sort(key=lambda x: (float(x["bbox"][1]), float(x["bbox"][0])))
     return out
+
+
+def expand_visual_crop_for_intersecting_caption(
+    crop_rect: "fitz.Rect",
+    *,
+    visual_rect: "fitz.Rect",
+    caption_candidates: list[dict],
+    page_w: float,
+    page_h: float,
+) -> "fitz.Rect":
+    """Avoid cutting a caption that already intersects a vector crop."""
+
+    if fitz is None:
+        return crop_rect
+    crop = fitz.Rect(crop_rect)
+    visual = fitz.Rect(visual_rect)
+    if crop.width <= 0.0 or crop.height <= 0.0 or visual.width <= 0.0 or visual.height <= 0.0:
+        return crop
+    for candidate in caption_candidates or []:
+        try:
+            caption = fitz.Rect(candidate.get("bbox"))
+        except Exception:
+            continue
+        if caption.width <= 0.0 or caption.height <= 0.0:
+            continue
+        x_overlap = _overlap_1d(
+            float(visual.x0),
+            float(visual.x1),
+            float(caption.x0),
+            float(caption.x1),
+        )
+        if x_overlap < min(float(visual.width), float(caption.width)) * 0.30:
+            continue
+        # Only extend when the current crop has already entered the caption.
+        # Captions separated by clean whitespace remain Markdown-only.
+        if float(caption.y0) > float(crop.y1) + 1.0:
+            continue
+        if float(caption.y1) <= float(crop.y1) + 1.0:
+            continue
+        if float(caption.y0) < float(visual.y0) + float(visual.height) * 0.45:
+            continue
+        if float(caption.height) > float(page_h) * 0.16:
+            continue
+        pad_x = max(2.0, float(page_w) * 0.005)
+        pad_bottom = max(3.0, float(page_h) * 0.006)
+        crop = fitz.Rect(
+            max(0.0, min(float(crop.x0), float(caption.x0) - pad_x)),
+            max(0.0, float(crop.y0)),
+            min(float(page_w), max(float(crop.x1), float(caption.x1) + pad_x)),
+            min(float(page_h), max(float(crop.y1), float(caption.y1) + pad_bottom)),
+        )
+    return crop
 
 
 def infer_visual_rects_from_caption_candidates(page, caption_candidates: list[dict]) -> list["fitz.Rect"]:
@@ -290,7 +362,10 @@ def match_figure_entries_with_captions(
     max_above_gap = max(96.0, page_h * 0.22)
 
     def _score(entry: dict, cap: dict) -> float:
-        rb = entry.get("crop_bbox") or entry.get("bbox")
+        # Match against the detected visual geometry. An expanded crop may
+        # intentionally include the caption itself, which would make the
+        # caption look deeply embedded and incorrectly reject the binding.
+        rb = entry.get("bbox") or entry.get("crop_bbox")
         cb = cap.get("bbox")
         if not rb or not cb:
             return -10_000.0

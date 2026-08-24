@@ -18,6 +18,17 @@ def test_md_analyzer_does_not_flag_numbered_section_heading_as_formula():
     )
 
 
+def test_md_analyzer_does_not_flag_appendix_subsection_heading_as_formula():
+    md = "# Title\n\n## A.9 Proofs\n\nProof details."
+
+    issues = MarkdownAnalyzer().analyze(md)
+
+    assert not any(
+        issue.category == "heading" and "looks like a formula" in issue.message
+        for issue in issues
+    )
+
+
 def test_md_analyzer_does_not_treat_caption_with_pipe_as_table():
     md = "\n".join(
         [

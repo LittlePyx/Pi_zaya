@@ -113,6 +113,27 @@ def test_summarize_conversion_quality_counts_retry_kinds_and_broken_display_math
     assert metrics.display_math_markdown_link_count == 1
 
 
+def test_summarize_conversion_quality_does_not_pair_math_across_pages(tmp_path):
+    md_path = tmp_path / "cross-page-math.md"
+    md_path.write_text(
+        "\n".join(
+            [
+                "<!-- kb_page: 1 -->",
+                "$$",
+                "x = y",
+                "<!-- kb_page: 2 -->",
+                "ordinary prose",
+                "$$",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    metrics = summarize_conversion_quality(md_path)
+
+    assert metrics.unclosed_display_math_block_count == 2
+
+
 def test_display_math_operator_notation_is_not_counted_as_markdown_link(tmp_path):
     md_path = tmp_path / "operator-notation.md"
     md_path.write_text(

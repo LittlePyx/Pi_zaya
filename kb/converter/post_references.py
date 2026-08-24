@@ -418,6 +418,21 @@ def _format_references(md: str) -> str:
     blob = re.sub(r"(?<=[\.\?\!])\s+(?=\d{1,4}\.\s+[A-Z])", "\n", blob)
     # Normalize leading markers like "1] ..." or "1. ...", but do not
     # reinterpret detached year/backref lines like "2020. 2, 5" as references.
+    def _looks_detached_volume_continuation(line: str, previous_line: str) -> bool:
+        current = str(line or "").strip()
+        previous = str(previous_line or "").strip()
+        match = re.match(r"^(\d{1,4})\.\s+(.+)$", current)
+        if not match or not previous:
+            return False
+        if not re.search(r"\b(?:volume|vol\.)\s*$", previous, re.IGNORECASE):
+            return False
+        tail = str(match.group(2) or "").strip()
+        # Typical wrapped bibliography shape: ``..., volume`` followed by
+        # ``549. Springer, 1984.``. It is a volume value and publisher tail,
+        # not reference [549]. Require a publication year to avoid hiding a
+        # genuine next entry after a malformed previous citation.
+        return bool(re.search(r"\b(?:18|19|20)\d{2}\b", tail))
+
     norm_blob_lines: list[str] = []
     for raw_blob_line in blob.splitlines():
         st = (raw_blob_line or "").strip()
@@ -428,7 +443,15 @@ def _format_references(md: str) -> str:
         if bracket_match and _is_plausible_reference_number(bracket_match.group(1)):
             st = re.sub(r"^\s*(\d+)\]\s*", r"[\1] ", st)
         dot_match = re.match(r"^\s*(\d+)\.\s+", st)
-        if dot_match and _is_plausible_reference_number(dot_match.group(1)):
+        previous_substantive = next(
+            (line for line in reversed(norm_blob_lines) if str(line or "").strip()),
+            "",
+        )
+        if (
+            dot_match
+            and _is_plausible_reference_number(dot_match.group(1))
+            and not _looks_detached_volume_continuation(st, previous_substantive)
+        ):
             st = re.sub(r"^\s*(\d+)\.\s+", r"[\1] ", st)
         norm_blob_lines.append(st)
     blob = "\n".join(norm_blob_lines)

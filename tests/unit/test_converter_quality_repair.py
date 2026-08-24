@@ -126,7 +126,7 @@ def test_repair_markdown_quality_fixes_safe_source_level_issues(tmp_path: Path):
     assert result["changed"] is True
     assert "ensure_page_anchor" in result["applied"]
     assert "figure_metadata_captions" in result["applied"]
-    assert "postprocess_markdown" in result["applied"]
+    assert "balance_display_math" in result["applied"]
     after_text = md_path.read_text(encoding="utf-8")
     assert after_text.lstrip().startswith("<!-- kb_page: 1 -->")
     assert "## Abstract" in after_text

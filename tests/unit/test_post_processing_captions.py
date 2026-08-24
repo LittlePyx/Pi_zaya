@@ -284,3 +284,26 @@ Compared with the conventional convolutional networks, the gated fusion transfor
     assert "maintains the a The workflow" not in out
     assert "maintains the Benefiting from the transformer structure" not in out
     assert "reported transformer-based network. Benefiting from the transformer structure" not in out
+
+
+def test_repeated_image_target_is_deduplicated_within_one_page():
+    target = "./assets/page_22_fig_1.png"
+    src = "\n".join(
+        [
+            "<!-- kb_page: 22 -->",
+            "Data",
+            f"![Figure 6]({target})",
+            "",
+            "Generated",
+            f"![Figure 6]({target})",
+            "",
+            f"![Figure 6 segmentation examples under three noise schedules]({target})",
+            "",
+            "**Figure 6.** Generated segmentation maps under different noise schedules.",
+        ]
+    )
+
+    out = postprocess_markdown(src)
+
+    assert out.count(target) == 1
+    assert "**Figure 6.** Generated segmentation maps under different noise schedules." in out

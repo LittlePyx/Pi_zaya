@@ -22,6 +22,7 @@ from .heuristics import (
 )
 from .layout_analysis import _detect_column_split_x, _is_frontmatter_noise_line, sort_blocks_reading_order
 from .models import TextBlock
+from .page_figure_metadata import expand_visual_crop_for_intersecting_caption
 from .text_utils import _normalize_text
 
 
@@ -473,6 +474,13 @@ def extract_text_blocks(
             page_h=H,
             is_full_width=bool(is_full_width),
             line_boxes=line_boxes,
+        )
+        cropped_rect = expand_visual_crop_for_intersecting_caption(
+            cropped_rect,
+            visual_rect=rect,
+            caption_candidates=list(caption_candidates or []),
+            page_w=W,
+            page_h=H,
         )
 
         if cropped_rect.width <= 0 or cropped_rect.height <= 0:

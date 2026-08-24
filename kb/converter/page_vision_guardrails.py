@@ -4,6 +4,11 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from .page_math_boundaries import (
+    repair_page_display_math_boundaries,
+    unclosed_display_math_pages,
+)
+
 if TYPE_CHECKING:
     import fitz
 
@@ -326,6 +331,27 @@ def convert_page_with_vision_guardrails(
         return md_retry
 
     if not converter._vision_fragment_fallback_enabled():
+        best_md = md_retry or md
+        contained_md, repaired_pages, unresolved_pages = repair_page_display_math_boundaries(
+            best_md,
+            default_page=page_index + 1,
+            add_audit_marker=True,
+        )
+        if repaired_pages and not unclosed_display_math_pages(
+            contained_md,
+            default_page=page_index + 1,
+        ):
+            print(
+                f"[VISION_DIRECT] page {page_index+1} unclosed display math repaired at page boundary",
+                flush=True,
+            )
+            return contained_md
+        if unresolved_pages:
+            print(
+                f"[VISION_DIRECT] page {page_index+1} unclosed display math contained and marked for retry",
+                flush=True,
+            )
+            return contained_md
         print(
             f"[VISION_DIRECT] fragmented math persists on page {page_index+1}, keep VL output (fallback disabled)",
             flush=True,

@@ -6,13 +6,29 @@ import os
 import re
 from pathlib import Path
 from types import SimpleNamespace
-from kb.converter.pipeline import PDFConverter
+from kb.converter.pipeline import PDFConverter, _write_markdown_quality_report
 from kb.converter.config import ConvertConfig
 from kb.converter.post_processing import postprocess_markdown
 from kb.converter.page_figure_metadata import persist_page_figure_metadata
 from kb.converter.page_image_markdown import repair_broken_image_links
 from kb.converter.models import TextBlock
 from kb.source_blocks import build_source_blocks
+
+
+def test_clean_quality_analysis_replaces_stale_report(tmp_path: Path):
+    markdown_path = tmp_path / "paper.md"
+    report_path = tmp_path / "quality_report.md"
+    markdown = "# Paper\n\n## Abstract\n\nReadable body text."
+    report_path.write_text("stale error", encoding="utf-8")
+
+    issues = _write_markdown_quality_report(
+        markdown,
+        markdown_path=markdown_path,
+        report_path=report_path,
+    )
+
+    assert issues == []
+    assert report_path.read_text(encoding="utf-8") == "✓ No quality issues detected.\n"
 
 @pytest.fixture
 def sample_pdf(tmp_path):

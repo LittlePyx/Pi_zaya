@@ -110,6 +110,10 @@ from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
 from .llm_worker import LLMWorker
 from .post_processing import postprocess_markdown
+from .page_math_boundaries import (
+    repair_page_display_math_boundaries,
+    unclosed_display_math_pages,
+)
 from .post_heading_rules import _is_common_section_heading, _parse_numbered_heading_level
 from .quality_repair import repair_markdown_text, write_conversion_quality_result
 from .md_analyzer import MarkdownAnalyzer
@@ -438,6 +442,20 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
     return len(tail_nums) >= max(5, int(len(before_nums) * 0.20))
 
 
+def _write_markdown_quality_report(
+    markdown: str,
+    *,
+    markdown_path: Path,
+    report_path: Path,
+) -> list[Any]:
+    """Replace the report on every analysis, including clean results."""
+
+    analyzer = MarkdownAnalyzer()
+    issues = list(analyzer.analyze(markdown, markdown_path))
+    report_path.write_text(analyzer.generate_report(), encoding="utf-8")
+    return issues
+
+
 class PDFConverter:
     def __init__(self, cfg: ConvertConfig):
         self.cfg = cfg
@@ -460,6 +478,24 @@ class PDFConverter:
         text = str(md or "").strip()
         if not text:
             return marker
+        # A page-local VL result can end with one missing ``$$`` delimiter.
+        # Repair/contain it before joining pages so no later page delimiter can
+        # accidentally close this page's equation and swallow intervening prose.
+        text, repaired_pages, unresolved_pages = repair_page_display_math_boundaries(
+            text,
+            default_page=int(page_index) + 1,
+            add_audit_marker=True,
+        )
+        if repaired_pages:
+            print(
+                f"[PAGE_MATH] repaired display boundary on page {int(page_index) + 1}",
+                flush=True,
+            )
+        if unresolved_pages:
+            print(
+                f"[PAGE_MATH] contained unresolved display boundary on page {int(page_index) + 1}",
+                flush=True,
+            )
         page_marker_re = re.compile(r"^\s*<!--\s*kb_page\s*:\s*\d{1,5}\s*-->\s*", flags=re.IGNORECASE)
         if page_marker_re.match(text):
             return page_marker_re.sub(f"{marker}\n\n", text, count=1).strip()
@@ -705,13 +741,14 @@ class PDFConverter:
         # Analyze quality and generate report
         if self.analyze_quality:
             try:
-                analyzer = MarkdownAnalyzer()
-                issues = analyzer.analyze(final_md, out_file)
+                report_file = save_dir / "quality_report.md"
+                issues = _write_markdown_quality_report(
+                    final_md,
+                    markdown_path=out_file,
+                    report_path=report_file,
+                )
+                print(f"Quality report saved to {report_file}")
                 if issues:
-                    report = analyzer.generate_report()
-                    report_file = save_dir / "quality_report.md"
-                    report_file.write_text(report, encoding="utf-8")
-                    print(f"Quality report saved to {report_file}")
                     print(f"Found {len(issues)} quality issues")
                 else:
                     print("[OK] No quality issues detected")
@@ -1115,6 +1152,8 @@ class PDFConverter:
         boundary_y1 = -1.0
         axis_bottom = float(r.y1)
         boundary_y0 = float(page_h) + 1.0
+        label_x0 = float(r.x0)
+        label_x1 = float(r.x1)
 
         upper_lines: list[tuple[fitz.Rect, str, float, bool, float, float]] = []
         for item in lines:
@@ -1144,6 +1183,32 @@ class PDFConverter:
                 txt = str(item[1])
             except Exception:
                 continue
+            # Keep short labels that sit inside or immediately beside a vector
+            # plot (for example "Rotate" and "Desired Exit Point"). Long
+            # adjacent-column prose and explicit captions remain outside.
+            y_ov = _overlap_1d(float(r.y0), float(r.y1), float(lb.y0), float(lb.y1))
+            y_min = max(1.0, min(float(r.height), float(lb.height)))
+            horizontal_gap = max(
+                0.0,
+                float(r.x0) - float(lb.x1),
+                float(lb.x0) - float(r.x1),
+            )
+            caption_like = bool(
+                re.match(r"^\s*(?:fig(?:ure)?\.?|table)\s*\d", txt, flags=re.IGNORECASE)
+            )
+            short_label = bool(
+                len(txt.strip()) <= 28
+                and len(re.findall(r"[A-Za-z]{2,}", txt)) <= 4
+                and not re.search(r"[.!?;:]\s*$", txt.strip())
+            )
+            if (
+                (y_ov / y_min) >= 0.35
+                and horizontal_gap <= max(18.0, float(page_w) * 0.045)
+                and short_label
+                and not caption_like
+            ):
+                label_x0 = min(label_x0, float(lb.x0))
+                label_x1 = max(label_x1, float(lb.x1))
             if float(lb.y1) <= float(r.y0) + 1.0:
                 gap_up = float(r.y0) - float(lb.y1)
                 if gap_up <= probe_up:
@@ -1240,7 +1305,7 @@ class PDFConverter:
         if axis_bottom > float(r.y1):
             pad_bottom = max(pad_bottom, axis_bottom - float(r.y1) + 2.0)
 
-        x0 = max(0.0, float(r.x0) - pad_x)
+        x0 = max(0.0, label_x0 - pad_x)
         y0 = max(0.0, float(r.y0) - pad_top)
         if boundary_y1 >= 0.0:
             y0 = max(y0, min(float(r.y0) - 2.0, boundary_y1 + 1.0))
@@ -1249,7 +1314,7 @@ class PDFConverter:
             y1 = min(y1, max(float(r.y1) + 2.0, boundary_y0 - 1.0))
         if y1 <= y0:
             y1 = min(float(page_h), y0 + max(4.0, float(r.height) * 0.4))
-        x1 = min(float(page_w), float(r.x1) + pad_x)
+        x1 = min(float(page_w), label_x1 + pad_x)
         if x1 <= x0:
             x1 = min(float(page_w), x0 + max(4.0, float(r.width) * 0.4))
         return fitz.Rect(x0, y0, x1, y1)
@@ -2061,6 +2126,13 @@ class PDFConverter:
         text = (md or "").strip()
         if not text:
             return False
+
+        # Count delimiters anywhere on the page, not only lines containing
+        # exactly ``$$``. VL commonly emits an opener after prose (``..., $$``)
+        # and then omits the final closer. That must trigger a page retry before
+        # the result is joined with the following physical page.
+        if unclosed_display_math_pages(text):
+            return True
 
         lines = text.splitlines()
         if len(lines) < 3:

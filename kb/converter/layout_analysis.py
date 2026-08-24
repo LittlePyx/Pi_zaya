@@ -324,6 +324,40 @@ def _collect_visual_rects(
                 continue
             if area > page_area * 0.92:
                 continue
+            # Some papers place an opaque white rectangle behind a vector
+            # figure. Its bbox can span the whole column and overlap adjacent
+            # body text, while the actual plotted paths have tighter drawing
+            # rectangles of their own. Treat only a single near-white filled
+            # rectangle as background; retain the real vector paths.
+            items = list(d.get("items") or [])
+            fill = d.get("fill")
+            stroke = d.get("color")
+            near_white_fill = bool(
+                isinstance(fill, (tuple, list))
+                and len(fill) >= 3
+                and all(float(channel) >= 0.97 for channel in fill[:3])
+            )
+            no_visible_stroke = bool(
+                stroke is None
+                or (
+                    isinstance(stroke, (tuple, list))
+                    and len(stroke) >= 3
+                    and all(float(channel) >= 0.97 for channel in stroke[:3])
+                )
+            )
+            single_rect_fill = bool(
+                len(items) == 1
+                and isinstance(items[0], (tuple, list))
+                and items[0]
+                and str(items[0][0]).lower() == "re"
+            )
+            if (
+                single_rect_fill
+                and near_white_fill
+                and no_visible_stroke
+                and area >= page_area * 0.02
+            ):
+                continue
             if float(r.width) < page_w * 0.12 or float(r.height) < page_h * 0.05:
                 continue
             # Skip decorative rules.

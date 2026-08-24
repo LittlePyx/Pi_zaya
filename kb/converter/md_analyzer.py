@@ -129,9 +129,12 @@ class MarkdownAnalyzer:
                 numbered_section_like = bool(
                     re.match(r"^\d+(?:\.\d+)*\.?\s+[A-Z][A-Za-z]", text)
                 )
+                appendix_section_like = bool(
+                    re.match(r"^[A-Z](?:\.\d+)+\.?\s+[A-Z][A-Za-z]", text)
+                )
                 
                 # Check if heading looks like a formula (common mistake)
-                if (not numbered_section_like) and (
+                if (not numbered_section_like) and (not appendix_section_like) and (
                    re.search(r'^\s*[A-Z]?\s*\d+\s*[a-z]', text) or \
                    re.search(r'^\s*\d+\s*[a-z]+\s*[+\-]', text) or \
                    re.search(r'^\s*[a-z]\s*\d+', text) or \

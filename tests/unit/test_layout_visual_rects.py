@@ -7,6 +7,7 @@ except Exception:  # pragma: no cover
     fitz = None
 
 from kb.converter.layout_analysis import (
+    _collect_visual_rects,
     _collect_image_rects,
     _merge_nearby_visual_rects,
     _looks_like_running_header_image_rect,
@@ -14,8 +15,10 @@ from kb.converter.layout_analysis import (
     sort_blocks_reading_order,
 )
 from kb.converter.page_figure_metadata import (
+    expand_visual_crop_for_intersecting_caption,
     extract_page_figure_caption_candidates,
     infer_visual_rects_from_caption_candidates,
+    match_figure_entries_with_captions,
 )
 from kb.converter.pipeline import PDFConverter
 from kb.converter.models import TextBlock
@@ -83,6 +86,35 @@ def test_collect_image_rects_filters_top_journal_masthead_banner():
 
     assert len(rects) == 1
     assert tuple(round(float(v), 1) for v in rects[0]) == (192.6, 392.5, 419.4, 566.1)
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_collect_visual_rects_ignores_white_vector_figure_background():
+    class _Page:
+        rect = fitz.Rect(0, 0, 612, 792)
+
+        def get_drawings(self):
+            return [
+                {
+                    "rect": fitz.Rect(275.78, 43.24, 584.54, 216.91),
+                    "type": "f",
+                    "fill": (1.0, 1.0, 1.0),
+                    "color": None,
+                    "items": [("re", fitz.Rect(275.78, 43.24, 584.54, 216.91), 1)],
+                },
+                {
+                    "rect": fitz.Rect(363.52, 72.71, 478.25, 187.44),
+                    "type": "s",
+                    "fill": None,
+                    "color": (0.57, 0.57, 0.57),
+                    "items": [("c",)],
+                },
+            ]
+
+    rects = _collect_visual_rects(_Page(), image_rects=[])
+
+    assert len(rects) == 1
+    assert tuple(round(float(v), 2) for v in rects[0]) == (363.52, 72.71, 478.25, 187.44)
 
 
 @pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
@@ -171,6 +203,32 @@ def test_extract_caption_candidates_accepts_old_ocr_fie_prefix():
 
 
 @pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_extract_caption_candidates_finds_caption_after_vector_labels_in_same_block():
+    class _Page:
+        def get_text(self, mode):
+            assert mode == "dict"
+            return {
+                "blocks": [
+                    {
+                        "bbox": (365, 126, 504, 223),
+                        "lines": [
+                            {"bbox": (475, 126, 503, 141), "spans": [{"text": "Rotate"}]},
+                            {"bbox": (365, 184, 504, 194), "spans": [{"text": "Figure 3: To sample a conditioned"}]},
+                            {"bbox": (365, 194, 504, 204), "spans": [{"text": "process, pick up a trajectory."}]},
+                        ],
+                    }
+                ]
+            }
+
+    captions = extract_page_figure_caption_candidates(_Page())
+
+    assert len(captions) == 1
+    assert captions[0]["fig_no"] == 3
+    assert captions[0]["caption"].startswith("Figure 3: To sample")
+    assert captions[0]["bbox"] == [365.0, 184.0, 504.0, 204.0]
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
 def test_caption_inferred_visual_rect_tightens_to_rendered_ink_bounds():
     doc = fitz.open()
     page = doc.new_page(width=410, height=625)
@@ -189,6 +247,56 @@ def test_caption_inferred_visual_rect_tightens_to_rendered_ink_bounds():
     assert 335 <= rect.x1 <= 355
     assert 455 <= rect.y0 <= 475
     assert 525 <= rect.y1 <= 545
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_intersecting_caption_is_fully_included_instead_of_cut_mid_line():
+    visual = fitz.Rect(363.52, 72.71, 478.25, 187.44)
+    crop = fitz.Rect(361.08, 61.62, 505.46, 193.30)
+    caption = {
+        "bbox": [365.40, 183.53, 504.00, 223.21],
+        "caption": "Figure 3: To sample a conditioned process.",
+    }
+
+    out = expand_visual_crop_for_intersecting_caption(
+        crop,
+        visual_rect=visual,
+        caption_candidates=[caption],
+        page_w=612.0,
+        page_h=792.0,
+    )
+
+    assert out.y1 >= 227.0
+    assert out.x1 >= 507.0
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_caption_matching_uses_visual_bbox_when_crop_contains_caption():
+    page = SimpleNamespace(rect=fitz.Rect(0, 0, 612, 792))
+    entries = [
+        {
+            "asset_name": "page_7_fig_1.png",
+            "bbox": [363.52, 72.71, 478.25, 187.44],
+            "crop_bbox": [361.08, 61.62, 507.06, 227.96],
+        }
+    ]
+    captions = [
+        {
+            "fig_no": 3,
+            "fig_ident": "3",
+            "caption": "Figure 3: To sample a conditioned process.",
+            "bbox": [365.40, 183.53, 504.00, 223.21],
+        }
+    ]
+
+    matched = match_figure_entries_with_captions(
+        page=page,
+        figure_entries=entries,
+        caption_candidates=captions,
+    )
+
+    assert matched[0]["fig_no"] == 3
+    assert matched[0]["caption"].startswith("Figure 3:")
 
 
 @pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
@@ -254,6 +362,29 @@ def test_expanded_visual_crop_rect_does_not_eat_body_text_above():
         line_boxes=[body_line],
     )
     assert out.y0 >= 57.0
+
+
+@pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")
+def test_expanded_visual_crop_rect_keeps_short_labels_beside_vector_plot():
+    conv = PDFConverter.__new__(PDFConverter)
+    rect = fitz.Rect(363.52, 72.71, 478.25, 187.44)
+    line_boxes = [
+        (fitz.Rect(475.43, 126.76, 503.01, 140.64), "Rotate", 10.0, False),
+        (fitz.Rect(471.13, 151.08, 501.81, 162.77), "Desired", 9.0, False),
+        (fitz.Rect(108.0, 126.55, 356.68, 140.18), "long adjacent body sentence that must stay out", 9.0, False),
+        (fitz.Rect(365.4, 183.53, 504.0, 193.59), "Figure 3: To sample a conditioned", 9.0, False),
+    ]
+
+    out = conv._expanded_visual_crop_rect(
+        rect=rect,
+        page_w=612.0,
+        page_h=792.0,
+        is_full_width=False,
+        line_boxes=line_boxes,
+    )
+
+    assert out.x0 > 350.0
+    assert out.x1 >= 505.0
 
 
 @pytest.mark.skipif(fitz is None, reason="PyMuPDF not available")

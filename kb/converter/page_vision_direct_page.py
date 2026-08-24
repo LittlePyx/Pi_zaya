@@ -16,7 +16,10 @@ from .geometry_utils import _bbox_width, _overlap_1d, _rect_area
 from .figure_assets import figure_asset_needs_refresh, resolve_figure_asset_dpi
 from .heuristics import _page_is_predominantly_references
 from .layout_analysis import _collect_visual_rects, _detect_column_split_x, page_has_full_page_image_layer
-from .page_figure_metadata import infer_visual_rects_from_caption_candidates
+from .page_figure_metadata import (
+    expand_visual_crop_for_intersecting_caption,
+    infer_visual_rects_from_caption_candidates,
+)
 from .reference_page_vl import reference_markdown_entry_count, reference_markdown_is_usable
 
 
@@ -142,6 +145,13 @@ def _extract_page_visual_assets(
                 page_h=H,
                 is_full_width=bool(is_full_width),
                 line_boxes=line_boxes,
+            )
+            cropped_rect = expand_visual_crop_for_intersecting_caption(
+                cropped_rect,
+                visual_rect=rect,
+                caption_candidates=cap_candidates,
+                page_w=W,
+                page_h=H,
             )
 
             if cropped_rect.width <= 0 or cropped_rect.height <= 0:

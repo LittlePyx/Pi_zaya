@@ -12,6 +12,7 @@ from kb.converter.post_math_rules import (
     adjacent_inline_math_superscript_hazard_count,
     legacy_numeric_superscript_citation_count,
 )
+from kb.converter.page_math_boundaries import unclosed_display_math_pages
 from kb.converter.tables import markdown_table_issue_counts
 from kb.converter.text_utils import count_mojibake
 from kb.reference_index import extract_references_map_from_md
@@ -144,15 +145,10 @@ def _page_marker_stats(md_text: str) -> tuple[int, int, int, int]:
 
 
 def _display_math_unclosed_count(md_text: str) -> int:
-    in_block = False
-    unclosed = 0
-    for raw in str(md_text or "").splitlines():
-        if not _DISPLAY_MATH_DELIMITER_RE.match(raw):
-            continue
-        in_block = not in_block
-    if in_block:
-        unclosed += 1
-    return unclosed
+    # Page-local counting prevents an opener on page N from being silently
+    # paired with a closer on page N+1. Also count delimiters placed after prose
+    # on the same line, a frequent vision-OCR failure shape.
+    return len(unclosed_display_math_pages(str(md_text or "")))
 
 
 def _display_math_blocks(md_text: str) -> list[str]:
