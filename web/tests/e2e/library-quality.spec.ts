@@ -256,6 +256,46 @@ test('library source readiness respects repair action precedence over quality-bl
   })
 })
 
+test('library targeted repair helper exposes only page-scoped reconversion locations', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const {
+      conversionTargetedRepairPageDetail,
+      conversionTargetedRepairPages,
+    } = await import('/src/pages/library/libraryPageUtils.ts')
+    const makeItem = (scope: string, retryPages: unknown[]) => ({
+      conversion_quality: {
+        conversion_report: {
+          stale: false,
+          repair_plan: {
+            action: 'reconvert',
+            scope,
+            retry_pages: retryPages,
+          },
+          source_quality: {
+            evidence_unreliable_pages: [2, 5],
+            page_evidence_profiles: [
+              { page: 2, coverage: 0.61, reason_codes: ['source_prose_omission'] },
+              { page: 5, coverage: 0.44, reason_codes: ['missing_wrapped_word_prefixes'] },
+            ],
+          },
+        },
+      },
+    })
+    const targeted = makeItem('pages', [5, 2, 5, 0, 'bad'])
+    return {
+      pages: conversionTargetedRepairPages(targeted),
+      detail: conversionTargetedRepairPageDetail(targeted),
+      documentPages: conversionTargetedRepairPages(makeItem('document', [2, 5])),
+    }
+  })
+
+  expect(result.pages).toEqual([2, 5])
+  expect(result.detail).toContain('p.2: source prose may be missing · source coverage 61%')
+  expect(result.detail).toContain('p.5: line-wrapped words may be incomplete · source coverage 44%')
+  expect(result.documentPages).toEqual([])
+})
+
 test('library running-page label uses only structured page state while converting', async ({ page }) => {
   await page.goto('/library')
   const result = await page.evaluate(async () => {
@@ -2014,12 +2054,13 @@ test.beforeEach(async ({ page }) => {
         regression_reasons: ['missing_references'],
         repair_plan: {
           action: 'reconvert',
-          scope: 'full',
+          scope: 'pages',
           speed_mode: 'ultra_fast',
           no_llm: false,
           replace: true,
           md_autofix_first: true,
           reason: 'Missing images and references block indexing',
+          retry_pages: [5, 2, 5],
           issue_codes: ['missing_images', 'missing_references'],
           reconvert_issue_codes: ['missing_images', 'missing_references'],
           autofix_issue_codes: [],
@@ -2036,6 +2077,13 @@ test.beforeEach(async ({ page }) => {
         },
         recommended_action: 'reconvert',
         needs_reconvert: true,
+        source_quality: {
+          evidence_unreliable_pages: [2, 5],
+          page_evidence_profiles: [
+            { page: 2, coverage: 0.61, reason_codes: ['source_prose_omission'] },
+            { page: 5, coverage: 0.44, reason_codes: ['missing_wrapped_word_prefixes'] },
+          ],
+        },
       },
     }
     const weakQuality = {
@@ -2630,7 +2678,9 @@ test('library page surfaces conversion quality and filters review items', async 
   await expect(broken.getByTestId('library-file-source-readiness')).toContainText('未入库')
   await expect(broken.getByTestId('library-file-quality-line')).toContainText('Missing image assets')
   await expect(broken.getByTestId('library-file-quality-line')).toContainText('refs 0')
-  await expect(broken.getByTestId('library-quality-repair')).toContainText('重转入库')
+  await expect(broken.getByTestId('library-quality-target-pages')).toContainText('2, 5')
+  await expect(broken.getByTestId('library-quality-target-pages')).toHaveAttribute('title', /p\.2: 可能遗漏原文段落 · 原文覆盖 61%/)
+  await expect(broken.getByTestId('library-quality-repair')).toContainText(/修复第 2, 5 页|Repair pages 2, 5/)
 
   await page.getByTestId('library-quality-issues-filter').click()
   await expect(page.getByTestId('library-file-row')).toHaveCount(2)

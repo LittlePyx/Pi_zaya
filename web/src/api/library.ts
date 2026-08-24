@@ -156,6 +156,7 @@ export interface ConversionRepairPlan {
   autofix_issue_codes: string[]
   review_issue_codes: string[]
   issue_actions: Array<Record<string, unknown>>
+  retry_pages?: number[]
 }
 
 export interface ConversionRepairAttempt {
@@ -217,6 +218,16 @@ export interface ConversionSourceQuality {
   references_before_body?: boolean
   abstract_autofix_likely?: boolean
   source_text_loss?: boolean
+  evidence_unreliable_pages?: number[]
+  page_evidence_profiles?: Array<{
+    page?: number
+    status?: string
+    coverage?: number
+    local_coverage?: number | null
+    source_token_count?: number
+    has_page_marker?: boolean
+    reason_codes?: string[]
+  }>
 }
 
 export interface ConversionQualityCenterSummary {

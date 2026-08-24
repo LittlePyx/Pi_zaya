@@ -8,6 +8,8 @@ import {
   conversionQualityToneClass,
   conversionRepairAttemptLabel,
   conversionSourceReadiness,
+  conversionTargetedRepairPageDetail,
+  conversionTargetedRepairPages,
   formatQualityRepairRecordSummary,
   hasConversionQualityIssue,
   libraryDocumentTypeView,
@@ -107,9 +109,16 @@ export function LibraryFileQualityLine({
   ).trim()
   const qualityNeedsRepair = hasConversionQualityIssue(item)
   const sourceReadiness = conversionSourceReadiness(item, S)
+  const targetedRepairPages = conversionTargetedRepairPages(item)
+  const targetedPageSummary = targetedRepairPages.length > 6
+    ? `${targetedRepairPages.slice(0, 6).join(', ')} +${targetedRepairPages.length - 6}`
+    : targetedRepairPages.join(', ')
+  const targetedPageDetail = conversionTargetedRepairPageDetail(item, S)
   const sourceReadinessActionAvailable = qualityNeedsRepair || sourceReadiness.action === 'reindex'
   const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
-    ? S.lib_btn_reconvert_quality
+    ? targetedRepairPages.length > 0
+      ? S.lib_btn_repair_target_pages.replace('{pages}', targetedPageSummary)
+      : S.lib_btn_reconvert_quality
     : sourceReadiness.action === 'reindex'
       ? S.lib_btn_refresh_index
       : S.lib_btn_repair_quality
@@ -124,6 +133,15 @@ export function LibraryFileQualityLine({
       <>
         {sourceReadinessActionAvailable ? (
           <div className="kb-lib-quality-line" data-testid="library-file-quality-action-line">
+            {targetedRepairPages.length > 0 ? (
+              <span
+                className="kb-lib-quality-issue is-warning"
+                data-testid="library-quality-target-pages"
+                title={targetedPageDetail || qualityReport?.repair_plan?.reason || ''}
+              >
+                {S.lib_quality_target_pages.replace('{pages}', targetedPageSummary)}
+              </span>
+            ) : null}
             <Button
               size="small"
               icon={<ReloadOutlined />}
@@ -169,7 +187,7 @@ export function LibraryFileQualityLine({
   const latestQualityRepairAttemptStatus = normalizeTextValue(latestQualityRepairAttempt?.status).toLowerCase()
   const latestQualityRepairAttemptLabel = conversionRepairAttemptLabel(latestQualityRepairAttempt, S)
   const latestQualityRepairAttemptTone =
-    ['success', 'resolved', 'ready', 'autofixed', 'fixed'].includes(latestQualityRepairAttemptStatus)
+    ['success', 'resolved', 'ready', 'accepted', 'autofixed', 'fixed'].includes(latestQualityRepairAttemptStatus)
       ? 'is-success'
       : ['error', 'failed', 'blocked'].includes(latestQualityRepairAttemptStatus)
         ? 'is-error'
@@ -272,6 +290,15 @@ export function LibraryFileQualityLine({
               data-testid="library-file-source-quality-issues"
             >
               {qualityCenterIssueLabels.join(' / ')}
+            </span>
+          ) : null}
+          {targetedRepairPages.length > 0 ? (
+            <span
+              className="kb-lib-quality-issue is-warning"
+              data-testid="library-quality-target-pages"
+              title={targetedPageDetail || qualityRepairPlan?.reason || ''}
+            >
+              {S.lib_quality_target_pages.replace('{pages}', targetedPageSummary)}
             </span>
           ) : null}
           {qualityReport?.needs_reconvert ? (

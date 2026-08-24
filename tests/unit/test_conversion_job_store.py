@@ -31,7 +31,9 @@ def _task(tmp_path: Path, *, task_id: str = "task-1", no_llm: bool = False) -> d
         "speed_mode": "balanced",
         "repair_context": {
             "action": "reconvert",
+            "scope": "pages",
             "issue_codes": ["weak_structure"],
+            "retry_pages": [5, 3, 5],
         },
         # Unknown fields, especially credentials, must never enter the ledger.
         "api_key": "do-not-persist-this-secret",
@@ -55,6 +57,7 @@ def test_conversion_job_store_migrates_existing_library_db_without_credentials(t
     assert {"pdf_files", "conversion_jobs"}.issubset(tables)
     assert row is not None and row[0] == "task-1"
     assert json.loads(str(row[1]))["issue_codes"] == ["weak_structure"]
+    assert json.loads(str(row[1]))["retry_pages"] == [3, 5]
     assert b"do-not-persist-this-secret" not in db_path.read_bytes()
 
 

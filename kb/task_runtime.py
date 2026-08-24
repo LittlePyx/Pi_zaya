@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -8081,8 +8082,101 @@ def _safe_clear_conversion_output(path_obj: Path, root_obj: Path, *, preserve_pa
 
 
 def _bg_preserve_page_cache_for_replace(task: dict, repair_context: dict) -> bool:
-    """Resumed work always keeps completed pages, including interrupted repairs."""
-    return bool(task.get("resumed")) or not bool(repair_context)
+    """Keep healthy page artifacts for resumed and page-targeted repairs."""
+    return (
+        bool(task.get("resumed"))
+        or bool(_bg_targeted_retry_pages(repair_context))
+        or not bool(repair_context)
+    )
+
+
+def _bg_targeted_retry_pages(repair_context: dict | None) -> list[int]:
+    context = repair_context if isinstance(repair_context, dict) else {}
+    if str(context.get("scope") or "").strip().lower() != "pages":
+        return []
+    return sorted(
+        {
+            int(item)
+            for item in list(context.get("retry_pages") or [])
+            if str(item or "").isdigit() and int(item) > 0
+        }
+    )[:500]
+
+
+def _bg_create_targeted_repair_backup(md_folder: Path) -> Path:
+    """Snapshot the current conversion output before a page-targeted rewrite."""
+    source = Path(md_folder)
+    if not source.is_dir():
+        raise FileNotFoundError(f"targeted repair source is missing: {source}")
+    backup_root = Path(tempfile.mkdtemp(prefix="kb_targeted_repair_"))
+    try:
+        shutil.copytree(source, backup_root / "output")
+    except Exception:
+        shutil.rmtree(backup_root, ignore_errors=True)
+        raise
+    return backup_root
+
+
+def _bg_restore_targeted_repair_backup(
+    md_folder: Path,
+    out_root: Path,
+    backup_root: Path,
+) -> None:
+    backup = Path(backup_root) / "output"
+    if not backup.is_dir():
+        raise FileNotFoundError(f"targeted repair backup is missing: {backup}")
+    _safe_clear_conversion_output(Path(md_folder), Path(out_root), preserve_page_cache=False)
+    Path(md_folder).parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(backup, Path(md_folder))
+
+
+def _bg_discard_targeted_repair_backup(backup_root: Path | None) -> None:
+    if backup_root is not None:
+        shutil.rmtree(Path(backup_root), ignore_errors=True)
+
+
+def _quality_assessment_unreliable_pages(assessment: dict | None) -> set[int]:
+    payload = assessment if isinstance(assessment, dict) else {}
+    pages = list(payload.get("evidence_unreliable_pages") or [])
+    quality_result = payload.get("quality_result") if isinstance(payload.get("quality_result"), dict) else {}
+    source_quality = quality_result.get("source_quality") if isinstance(quality_result.get("source_quality"), dict) else {}
+    pages.extend(list(source_quality.get("evidence_unreliable_pages") or []))
+    return {
+        int(item)
+        for item in pages
+        if str(item or "").isdigit() and int(item) > 0
+    }
+
+
+def _bg_targeted_repair_acceptance(
+    before: dict | None,
+    after: dict | None,
+    retry_pages: list[int],
+) -> tuple[bool, str]:
+    """Accept a targeted rewrite only when the requested pages become reliable."""
+    previous = before if isinstance(before, dict) else {}
+    current = after if isinstance(after, dict) else {}
+    if not current or current.get("enabled") is False:
+        return False, "targeted repair could not run the conversion quality gate"
+    if not bool(current.get("indexable")):
+        return False, "targeted repair still fails the conversion quality gate"
+    unresolved = sorted(set(retry_pages).intersection(_quality_assessment_unreliable_pages(current)))
+    if unresolved:
+        return False, f"targeted page(s) still unreliable: {', '.join(str(page) for page in unresolved)}"
+    previous_blockers = {
+        str(item or "").strip().lower()
+        for item in list(previous.get("blocking_issue_codes") or [])
+        if str(item or "").strip()
+    }
+    current_blockers = {
+        str(item or "").strip().lower()
+        for item in list(current.get("blocking_issue_codes") or [])
+        if str(item or "").strip()
+    }
+    new_blockers = sorted(current_blockers - previous_blockers)
+    if new_blockers:
+        return False, f"targeted repair introduced blocking issue(s): {', '.join(new_blockers)}"
+    return True, "targeted pages passed the fresh conversion quality gate"
 
 def _bg_cancel_all() -> None:
     before = bg_snapshot(_BG_STATE, _BG_LOCK)
@@ -8580,6 +8674,9 @@ def _bg_worker_loop() -> None:
         speed_mode = str(task.get("speed_mode", "balanced"))
         repair_context = task.get("repair_context") if isinstance(task.get("repair_context"), dict) else {}
         repair_run_id = str((repair_context or {}).get("repair_run_id") or "").strip()
+        initial_retry_pages = _bg_targeted_retry_pages(repair_context)
+        targeted_backup_root: Path | None = None
+        targeted_before_quality: dict = {}
         if speed_mode == "ultra_fast":
             # Keep VL/LLM path in ultra_fast; converter itself handles speed/quality tradeoff.
             # Forcing no_llm here causes a dramatic quality drop that does not match UI semantics.
@@ -8593,6 +8690,24 @@ def _bg_worker_loop() -> None:
 
         try:
             md_folder = out_root / pdf.stem
+            if initial_retry_pages and (not replace or not md_folder.exists()):
+                # A page-scoped run is safe only when the existing output/cache can
+                # supply every healthy page. Fall back to a full conversion if that
+                # prerequisite disappeared after the repair plan was created.
+                initial_retry_pages = []
+            if replace and initial_retry_pages and md_folder.exists():
+                _, existing_md_main, existing_md = _resolve_md_output_paths(out_root, pdf)
+                if existing_md:
+                    try:
+                        targeted_before_quality = prepare_markdown_for_index(
+                            existing_md_main,
+                            auto_repair=False,
+                            allow_blocked=False,
+                            source_pdf_path=pdf,
+                        )
+                    except Exception:
+                        targeted_before_quality = {}
+                targeted_backup_root = _bg_create_targeted_repair_backup(md_folder)
             if replace and md_folder.exists():
                 _safe_clear_conversion_output(
                     md_folder,
@@ -8663,8 +8778,8 @@ def _bg_worker_loop() -> None:
                 )
 
             effective_speed_mode = speed_mode
-            source_retry_done = False
-            _bg_set_conversion_stage("converting", task_id=task_id)
+            source_retry_done = bool(initial_retry_pages)
+            _bg_set_conversion_stage("retrying" if initial_retry_pages else "converting", task_id=task_id)
             ok, out_folder = run_pdf_to_md(
                 pdf_path=pdf,
                 out_root=out_root,
@@ -8678,6 +8793,7 @@ def _bg_worker_loop() -> None:
                 max_active_conversions=_bg_target_worker_count(),
                 global_inflight_coordinator=_bg_llm_coordinator_dir(),
                 global_inflight_owner=task_id,
+                retry_pages=initial_retry_pages,
             )
             ok, out_folder, msg = _bg_conversion_result_message(ok, out_folder, _should_cancel)
 
@@ -8700,7 +8816,11 @@ def _bg_worker_loop() -> None:
                     source=str(repair_context.get("source") or "background_conversion"),
                     reason=str(repair_context.get("reason") or ""),
                     detail=msg,
-                    extra={"replace": replace, "no_llm": no_llm},
+                    extra={
+                        "replace": replace,
+                        "no_llm": no_llm,
+                        "retry_pages": initial_retry_pages,
+                    },
                 )
 
             post_convert_quality: dict = {}
@@ -8725,6 +8845,64 @@ def _bg_worker_loop() -> None:
                         msg = f"OK+QUALITY_REPAIRED: {out_folder}"
                 except Exception:
                     post_convert_quality = {}
+
+            if targeted_backup_root is not None:
+                targeted_accepted, targeted_detail = _bg_targeted_repair_acceptance(
+                    targeted_before_quality,
+                    post_convert_quality if ok and md_exists and not _bg_cancel_requested(_should_cancel) else {},
+                    initial_retry_pages,
+                )
+                if not targeted_accepted:
+                    _bg_restore_targeted_repair_backup(md_folder, out_root, targeted_backup_root)
+                    _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
+                    try:
+                        post_convert_quality = prepare_markdown_for_index(
+                            md_main,
+                            auto_repair=False,
+                            allow_blocked=False,
+                            source_pdf_path=pdf,
+                        ) if md_exists else {}
+                    except Exception:
+                        post_convert_quality = {}
+                    _bg_record_repair_attempt(
+                        md_main if md_exists else None,
+                        event="targeted_page_retry_finished",
+                        status="rolled_back",
+                        action="reconvert",
+                        scope="pages",
+                        speed_mode=speed_mode,
+                        issue_codes=list(repair_context.get("issue_codes") or []),
+                        task_id=task_id,
+                        repair_run_id=repair_run_id,
+                        source="library_quality_repair",
+                        reason=str(repair_context.get("reason") or ""),
+                        detail=f"{targeted_detail}; restored the previous conversion output.",
+                        extra={"retry_pages": initial_retry_pages},
+                    )
+                    if ok and not _bg_cancel_requested(_should_cancel):
+                        msg = (
+                            f"OK+TARGETED_REPAIR_NO_CHANGE_ROLLED_BACK: {out_folder}"
+                            if bool(post_convert_quality.get("indexable"))
+                            else f"OK+QUALITY_BLOCKED+TARGETED_REPAIR_ROLLED_BACK: {out_folder}"
+                        )
+                else:
+                    _bg_record_repair_attempt(
+                        md_main,
+                        event="targeted_page_retry_finished",
+                        status="accepted",
+                        action="reconvert",
+                        scope="pages",
+                        speed_mode=speed_mode,
+                        issue_codes=list(repair_context.get("issue_codes") or []),
+                        task_id=task_id,
+                        repair_run_id=repair_run_id,
+                        source="library_quality_repair",
+                        reason=str(repair_context.get("reason") or ""),
+                        detail=targeted_detail,
+                        extra={"retry_pages": initial_retry_pages},
+                    )
+                _bg_discard_targeted_repair_backup(targeted_backup_root)
+                targeted_backup_root = None
 
             if (
                 ok
@@ -8936,7 +9114,17 @@ def _bg_worker_loop() -> None:
                         )
                     pass
         except Exception as e:
-            msg = f"FAIL: {e}"
+            if targeted_backup_root is not None and "md_folder" in locals():
+                try:
+                    _bg_restore_targeted_repair_backup(md_folder, out_root, targeted_backup_root)
+                    msg = f"FAIL+TARGETED_REPAIR_RESTORED: {e}"
+                except Exception as restore_exc:
+                    msg = f"FAIL: {e}; targeted repair restore failed: {restore_exc}"
+                finally:
+                    _bg_discard_targeted_repair_backup(targeted_backup_root)
+                    targeted_backup_root = None
+            else:
+                msg = f"FAIL: {e}"
 
         if bg_should_cancel(_BG_STATE, _BG_LOCK, task_id=task_id):
             msg = "CANCELLED"
@@ -8997,6 +9185,7 @@ def _build_bg_task(
         "name": pdf.name,
     }
     if isinstance(repair_context, dict) and repair_context:
+        retry_pages = _bg_targeted_retry_pages(repair_context)
         task["repair_context"] = {
             "action": str(repair_context.get("action") or ""),
             "scope": str(repair_context.get("scope") or ""),
@@ -9004,6 +9193,7 @@ def _build_bg_task(
             "source": str(repair_context.get("source") or ""),
             "repair_run_id": str(repair_context.get("repair_run_id") or ""),
             "issue_codes": [str(item) for item in list(repair_context.get("issue_codes") or []) if str(item or "").strip()][:30],
+            "retry_pages": retry_pages,
         }
     return task
 

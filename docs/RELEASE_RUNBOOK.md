@@ -38,6 +38,7 @@ The owner selected the MIT License on 2026-08-18. Root `LICENSE` carries the sta
 - Entry/exit: native `Pi_zaya.exe` with a system-tray safe-exit action; `Start-Pi-zaya.cmd` and `Stop-Pi-zaya.cmd` remain diagnostic fallbacks.
 - Conversion durability: the conversion ledger lives in `library.sqlite3`, never stores API keys, preserves validated page-cache artifacts, and requires an explicit Continue action after a restart. A missing source PDF or vision credential stays in an actionable blocked recovery state rather than retrying in a loop.
 - Conversion quality confirmation: strict blocking remains the default. A user who has inspected the current Markdown may explicitly request a fresh scan and warning-preserving index operation; the blocking codes and confirmation audit remain recorded, and detected unreliable pages remain excluded from answer evidence.
+- Targeted conversion repair: a fresh page-scoped repair plan carries its exact page numbers into the durable task ledger. The worker retains validated healthy-page cache entries, snapshots the current Markdown/assets/cache, and accepts the rewrite only when the quality gate passes, every requested page is reliable, and no new blocker appears. Any failed acceptance restores the snapshot.
 - Conversion concurrency: the downloadable product always submits pages in source order and uses a shared automatic provider-inflight ceiling of eight. No alternate page scheduler, adaptive page-budget branch, or text-local vision bypass is included. Higher ceilings remain explicit operator experiments and must not be enabled in a formal artifact without repeating the converter speed and structural-quality gates.
 - Evidence workspace surface: ordinary downloadable builds leave `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE` unset, so the matrix workspace and its dependent brief/gap/status entrances are absent. Internal tests set it to `1` and must keep the existing evidence workflow assertions passing while the redesign proceeds.
 
@@ -306,6 +307,17 @@ the scheduler code was removed.
 - the implementation commit passed the backend unit and sanity suites, converter quality 13/13, Ruff, frontend lint/build, browser smoke/core/public-surface gates, and the dedicated 20-case library-quality browser suite;
 - the beta.12 version contract, bilingual release notes, Ruff, frontend lint/build, and 11 release-foundation tests pass locally;
 - beta.12 remains an untagged release candidate until normal CI and the complete untagged Windows preflight pass on the exact clean release commit. No beta.12 download or checksum should be represented as published before that point.
+
+### 2026-08-24 beta.12 targeted-repair acceptance
+
+- fresh page-scoped quality plans now preserve their diagnosed page numbers through the API queue, in-memory state, and durable conversion ledger;
+- targeted reconversion reuses validated healthy-page cache entries and snapshots the complete previous conversion output before replacing generated files;
+- a repaired result is accepted only after a fresh strict quality scan confirms every requested page is reliable and no new blocking code appears; otherwise the previous Markdown, assets, and page cache are restored and the rollback is recorded;
+- the library quality row exposes the affected pages and basic per-page diagnostic evidence without changing document-scoped repair behavior;
+- backend unit passed 4,458 with 41 skips, backend sanity passed 275 with 2 skips, and the focused conversion-task suite passed 296 with 2 skips;
+- Ruff, the visible Research Agent contract, all CI research/evidence fixture gates, reviewed replay, frontend lint/build, browser smoke (136 passed, 3 build-mode skips), core citation/library browser regressions (113/113), ordinary-user isolation (4/4), evidence-workspace release isolation (1/1), and the dedicated library-quality suite (21/21) pass locally;
+- full local converter quality passed 13/13 at `test_results/converter_quality_eval/20260824_131423`;
+- beta.12 remains untagged until normal CI and the complete untagged Windows preflight pass on the exact clean release commit.
 
 ## Promotion gates after beta
 

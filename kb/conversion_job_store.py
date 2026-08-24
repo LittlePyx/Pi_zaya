@@ -46,6 +46,13 @@ def _compact_repair_context(value: Any) -> dict[str, Any]:
         for item in list(value.get("issue_codes") or [])
         if str(item or "").strip()
     ]
+    retry_pages = sorted(
+        {
+            int(item)
+            for item in list(value.get("retry_pages") or [])
+            if str(item or "").isdigit() and int(item) > 0
+        }
+    )[:500]
     out: dict[str, Any] = {
         "action": str(value.get("action") or "")[:80],
         "scope": str(value.get("scope") or "")[:120],
@@ -53,6 +60,7 @@ def _compact_repair_context(value: Any) -> dict[str, Any]:
         "source": str(value.get("source") or "")[:120],
         "repair_run_id": str(value.get("repair_run_id") or "")[:160],
         "issue_codes": issue_codes[:30],
+        "retry_pages": retry_pages,
     }
     return {
         key: item

@@ -504,6 +504,84 @@ def test_bg_task_carries_quality_repair_context_and_resolves_ingest_script():
     assert _bg_ingest_py_path().exists()
 
 
+def test_bg_task_carries_targeted_pages_and_preserves_healthy_page_cache():
+    task = _build_bg_task(
+        pdf_path=Path("paper.pdf"),
+        out_root=Path("out"),
+        db_dir=Path("db"),
+        no_llm=False,
+        replace=True,
+        speed_mode="normal",
+        repair_context={
+            "action": "reconvert",
+            "scope": "pages",
+            "reason": "source prose is missing on two pages",
+            "source": "test",
+            "repair_run_id": "run-pages",
+            "issue_codes": ["source_page_prose_omission"],
+            "retry_pages": [5, 2, 5, 0, "bad"],
+        },
+    )
+
+    assert task["repair_context"]["retry_pages"] == [2, 5]
+    assert task_runtime._bg_targeted_retry_pages(task["repair_context"]) == [2, 5]
+    assert task_runtime._bg_preserve_page_cache_for_replace(task, task["repair_context"]) is True
+
+
+def test_targeted_repair_acceptance_requires_repaired_pages_and_no_new_blockers():
+    before = {
+        "indexable": False,
+        "blocking_issue_codes": ["source_page_prose_omission"],
+        "evidence_unreliable_pages": [2, 5],
+    }
+
+    accepted, _detail = task_runtime._bg_targeted_repair_acceptance(
+        before,
+        {"enabled": True, "indexable": True, "blocking_issue_codes": [], "evidence_unreliable_pages": []},
+        [2, 5],
+    )
+    unresolved, unresolved_detail = task_runtime._bg_targeted_repair_acceptance(
+        before,
+        {"enabled": True, "indexable": True, "blocking_issue_codes": [], "evidence_unreliable_pages": [5]},
+        [2, 5],
+    )
+    regressed, regressed_detail = task_runtime._bg_targeted_repair_acceptance(
+        before,
+        {"enabled": True, "indexable": True, "blocking_issue_codes": ["missing_images"], "evidence_unreliable_pages": []},
+        [2, 5],
+    )
+
+    assert accepted is True
+    assert unresolved is False and "5" in unresolved_detail
+    assert regressed is False and "missing_images" in regressed_detail
+
+
+def test_targeted_repair_backup_restores_markdown_assets_and_page_cache(tmp_path: Path):
+    out_root = tmp_path / "markdown"
+    md_folder = out_root / "paper"
+    cache_file = md_folder / ".conversion_cache" / "pages" / "00002" / "page.txt"
+    asset_file = md_folder / "assets" / "figure.png"
+    md_file = md_folder / "paper.en.md"
+    cache_file.parent.mkdir(parents=True)
+    asset_file.parent.mkdir(parents=True)
+    cache_file.write_text("old cached page", encoding="utf-8")
+    asset_file.write_bytes(b"old image")
+    md_file.write_text("old markdown", encoding="utf-8")
+
+    backup = task_runtime._bg_create_targeted_repair_backup(md_folder)
+    try:
+        cache_file.write_text("bad cached page", encoding="utf-8")
+        asset_file.write_bytes(b"bad image")
+        md_file.write_text("bad markdown", encoding="utf-8")
+        task_runtime._bg_restore_targeted_repair_backup(md_folder, out_root, backup)
+    finally:
+        task_runtime._bg_discard_targeted_repair_backup(backup)
+
+    assert cache_file.read_text(encoding="utf-8") == "old cached page"
+    assert asset_file.read_bytes() == b"old image"
+    assert md_file.read_text(encoding="utf-8") == "old markdown"
+
+
 def test_bg_conversion_result_treats_late_cancel_as_cancelled():
     ok, out_folder, msg = _bg_conversion_result_message(
         True,

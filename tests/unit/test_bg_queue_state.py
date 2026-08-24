@@ -98,6 +98,8 @@ def test_bg_queue_state_preserves_active_task_repair_context():
                 "source": "library_quality_repair",
                 "repair_run_id": "run-123",
                 "issue_codes": ["weak_structure"],
+                "scope": "pages",
+                "retry_pages": [4, 2, 4],
             },
         },
     )
@@ -107,6 +109,7 @@ def test_bg_queue_state_preserves_active_task_repair_context():
     active = list(snap.get("active_tasks") or [])
     assert active[0]["repair_context"]["repair_run_id"] == "run-123"
     assert active[0]["repair_context"]["issue_codes"] == ["weak_structure"]
+    assert active[0]["repair_context"]["retry_pages"] == [2, 4]
 
 
 def test_enqueue_skips_duplicate_queued_pdf():

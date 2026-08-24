@@ -348,9 +348,10 @@ def test_quality_repair_route_honors_fresh_persisted_reconvert_plan(monkeypatch,
                 "stale": False,
                 "repair_plan": {
                     "action": "reconvert",
-                    "scope": "document",
+                    "scope": "pages",
                     "issue_codes": ["source_page_marker_alignment"],
                     "reconvert_issue_codes": ["source_page_marker_alignment"],
+                    "retry_pages": [2, 5],
                     "speed_mode": "no_llm",
                     "no_llm": True,
                     "replace": True,
@@ -381,6 +382,8 @@ def test_quality_repair_route_honors_fresh_persisted_reconvert_plan(monkeypatch,
     assert item["planned_speed_mode"] == "no_llm"
     assert item["planned_no_llm"] is True
     assert queued[0]["repair_context"]["issue_codes"] == ["source_page_marker_alignment"]
+    assert queued[0]["repair_context"]["retry_pages"] == [2, 5]
+    assert item["planned_retry_pages"] == [2, 5]
 
 
 def test_quality_repair_route_keeps_exhausted_source_issue_in_review_without_pdf(monkeypatch, tmp_path: Path):

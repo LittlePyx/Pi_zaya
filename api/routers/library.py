@@ -1082,6 +1082,13 @@ def _compact_task_repair_context(value) -> dict:
         for item in list(value.get("issue_codes") or [])
         if str(item or "").strip()
     ]
+    retry_pages = sorted(
+        {
+            int(item)
+            for item in list(value.get("retry_pages") or [])
+            if str(item or "").isdigit() and int(item) > 0
+        }
+    )[:500]
     out = {
         "action": str(value.get("action") or "").strip(),
         "scope": str(value.get("scope") or "").strip(),
@@ -1089,6 +1096,7 @@ def _compact_task_repair_context(value) -> dict:
         "source": str(value.get("source") or "").strip(),
         "repair_run_id": str(value.get("repair_run_id") or "").strip(),
         "issue_codes": issue_codes[:30],
+        "retry_pages": retry_pages,
     }
     return {
         key: item
@@ -8069,7 +8077,13 @@ def repair_library_quality(body: QualityRepairBody):
                 "source": "library_quality_repair",
                 "repair_run_id": repair_run_id,
                 "issue_codes": list(active_plan.get("issue_codes") or []),
+                "retry_pages": (
+                    list(active_plan.get("retry_pages") or [])
+                    if str(active_plan.get("scope") or "").strip().lower() == "pages"
+                    else []
+                ),
             }
+            repair_payload["planned_retry_pages"] = list(repair_context.get("retry_pages") or [])[:500]
             task = _build_bg_task(
                 pdf_path=pdf_path,
                 out_root=md_d,
@@ -8100,7 +8114,11 @@ def repair_library_quality(body: QualityRepairBody):
                         source="library_quality_repair",
                         reason=str(active_plan.get("reason") or ""),
                         detail="Source reconversion was queued from conversion-quality repair planning.",
-                        extra={"replace": queue_replace, "no_llm": queue_no_llm},
+                        extra={
+                            "replace": queue_replace,
+                            "no_llm": queue_no_llm,
+                            "retry_pages": list(repair_context.get("retry_pages") or [])[:500],
+                        },
                     )
                 except Exception:
                     pass

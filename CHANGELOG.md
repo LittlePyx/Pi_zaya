@@ -2,16 +2,22 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
-## [0.1.0-beta.12] - 2026-08-23
+## [0.1.0-beta.12] - 2026-08-24
 
 ### Added
 
 - Let users explicitly confirm and index the current Markdown when repeated reconversion still triggers a conservative conversion-quality rule, after a fresh scan and an explicit safety review prompt.
+- Show the exact affected pages for page-scoped conversion repairs and start the repair directly from the document quality row.
 
 ### Changed
 
+- Reconvert only the diagnosed problem pages when page-level source evidence is available, while reusing validated cache entries for healthy pages.
 - Keep the strict conversion-quality gate as the default path while marking a confirmed document as quality-degraded, retaining its blocking issue codes and recording the confirmation in the conversion audit trail.
 - Continue excluding detected unreliable pages from answer evidence after a document-level confirmation.
+
+### Fixed
+
+- Preserve the previous Markdown, assets, and page cache before a targeted repair; automatically restore them if the fresh result still fails the gate, leaves a requested page unreliable, or introduces a new blocking issue.
 
 ## [0.1.0-beta.11] - 2026-08-19
 

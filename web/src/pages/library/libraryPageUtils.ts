@@ -625,10 +625,67 @@ export function conversionRepairAttemptLabel(
   const status = normalizeTextValue(attempt?.status).toLowerCase()
   if (status === 'queued' || status === 'running') return S.lib_quality_gate_queued
   if (status === 'autofixed' || status === 'fixed') return S.lib_quality_gate_autofixed
-  if (status === 'success' || status === 'resolved' || status === 'ready') return S.lib_quality_gate_ready
+  if (status === 'success' || status === 'resolved' || status === 'ready' || status === 'accepted') return S.lib_quality_gate_ready
+  if (status === 'rolled_back') return S.lib_quality_gate_rolled_back
   if (status === 'partial') return S.lib_quality_gate_partial
   if (status === 'blocked' || status === 'failed' || status === 'error') return S.lib_quality_gate_blocked
   return S.lib_quality_gate_tracked.replace('{status}', status || 'tracked')
+}
+
+function normalizedConversionPages(value: unknown): number[] {
+  const rows = Array.isArray(value) ? value : []
+  return Array.from(new Set(rows
+    .map((item) => Number(item))
+    .filter((item) => Number.isInteger(item) && item > 0)))
+    .sort((a, b) => a - b)
+    .slice(0, 500)
+}
+
+export function conversionTargetedRepairPages(item: LibraryFileItem): number[] {
+  const report = item.conversion_quality?.conversion_report
+  if (!report || report.stale) return []
+  const plan = report.repair_plan
+  if (
+    normalizeTextValue(plan?.action).toLowerCase() !== 'reconvert'
+    || normalizeTextValue(plan?.scope).toLowerCase() !== 'pages'
+  ) return []
+  const planned = normalizedConversionPages(plan?.retry_pages)
+  if (planned.length) return planned
+  return normalizedConversionPages(report.source_quality?.evidence_unreliable_pages)
+}
+
+export function conversionTargetedRepairPageDetail(
+  item: LibraryFileItem,
+  S?: Record<string, string>,
+): string {
+  const pages = conversionTargetedRepairPages(item)
+  if (!pages.length) return ''
+  const profiles = Array.isArray(item.conversion_quality?.conversion_report?.source_quality?.page_evidence_profiles)
+    ? item.conversion_quality?.conversion_report?.source_quality?.page_evidence_profiles || []
+    : []
+  const byPage = new Map(profiles
+    .filter((profile) => Number.isInteger(Number(profile?.page)) && Number(profile?.page) > 0)
+    .map((profile) => [Number(profile?.page), profile]))
+  const reasonLabels: Record<string, string> = {
+    empty_page_marker_segment: S?.lib_quality_page_reason_empty || 'no readable page content detected',
+    low_local_page_overlap: S?.lib_quality_page_reason_low_local_overlap || 'converted content weakly matches this page',
+    low_text_overlap: S?.lib_quality_page_reason_low_text_overlap || 'converted content weakly matches the source',
+    missing_wrapped_word_prefixes: S?.lib_quality_page_reason_wrapped_words || 'line-wrapped words may be incomplete',
+    source_prose_omission: S?.lib_quality_page_reason_prose_omission || 'source prose may be missing',
+  }
+  return pages.slice(0, 12).map((page) => {
+    const profile = byPage.get(page)
+    const reasons = normalizeTextList(profile?.reason_codes || [])
+      .map((reason) => reasonLabels[reason] || reason.replaceAll('_', ' '))
+    const coverage = Number(profile?.coverage)
+    const evidence = [
+      reasons.join(', '),
+      Number.isFinite(coverage)
+        ? `${S?.lib_quality_page_evidence_coverage || 'source coverage'} ${Math.round(coverage * 100)}%`
+        : '',
+    ].filter(Boolean).join(' · ')
+    return evidence ? `p.${page}: ${evidence}` : `p.${page}`
+  }).join('\n')
 }
 
 export function conversionSourceReadiness(item: LibraryFileItem, S: Record<string, string>): SourceReadinessView {
