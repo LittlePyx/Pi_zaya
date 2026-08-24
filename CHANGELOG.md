@@ -18,6 +18,8 @@ All notable user-facing changes are recorded here. Pi_zaya follows Semantic Vers
 ### Fixed
 
 - Preserve the previous Markdown, assets, and page cache before a targeted repair; automatically restore them if the fresh result still fails the gate, leaves a requested page unreliable, or introduces a new blocking issue.
+- Rebuild stale conversion-quality state from the current Markdown and artifacts before blocking indexing again, so an already-good conversion can recover without being trapped by an older failed scan.
+- Keep in-answer reference markers bracketed and mapped to the available citation detail when a stored anchor is stale, and provide grounded guide/relevance copy for SPAD noise-source passages without waiting for LLM polishing.
 
 ## [0.1.0-beta.11] - 2026-08-19
 

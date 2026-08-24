@@ -265,6 +265,11 @@ python server.py
 - 后台任务和共享状态必须保持线程安全。
 - 高风险操作前先创建或验证备份。
 
+## 开发与测试
+
+- 开发：LittlePyx
+- 测试：Izaya
+
 ## 许可证
 
 Pi_zaya 使用 MIT License，完整条款见 [LICENSE](LICENSE)。

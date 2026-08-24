@@ -490,6 +490,11 @@ path for portfolio use:
 6. Open the Research Agent Trace panel to show planner intent, tool calls,
    evidence matrix, evidence status, and claim verification.
 
+## Development and testing
+
+- Development: LittlePyx
+- Testing: Izaya
+
 ## License
 
 Pi_zaya is licensed under the MIT License. See `LICENSE`.
