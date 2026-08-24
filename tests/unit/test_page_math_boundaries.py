@@ -75,4 +75,3 @@ def test_postprocess_keeps_subscripts_inside_display_math_after_inline_opener() 
     assert unclosed_display_math_pages(repaired) == []
     assert r"Z_\tau = x" in repaired
     assert "Z_$" not in repaired
-

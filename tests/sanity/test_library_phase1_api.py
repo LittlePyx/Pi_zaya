@@ -1305,6 +1305,11 @@ def test_library_source_quality_route_resolves_pdf_and_md_sources(monkeypatch, t
 
 def test_library_conversion_quality_batch_route_scans_markdown(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
+    from kb.converter.quality_repair import (
+        conversion_quality_result_path,
+        load_conversion_quality_result,
+        write_conversion_quality_result,
+    )
 
     pdf_dir = tmp_path / "pdfs"
     md_dir = tmp_path / "md_output"
@@ -1331,6 +1336,35 @@ def test_library_conversion_quality_batch_route_scans_markdown(monkeypatch, tmp_
         encoding="utf-8",
     )
 
+    # Reproduce the user-facing failure mode: the Markdown on disk is already
+    # healthy, while an older persisted decision still says that the source
+    # must be reconverted.  A source scan must replace that decision from the
+    # current Markdown instead of carrying the old block forward forever.
+    stale_block = write_conversion_quality_result(
+        md,
+        allow_source_pdf_inference=False,
+    )
+    stale_block["repair_plan"] = {
+        "action": "reconvert",
+        "scope": "pages",
+        "issue_codes": ["source_text_loss"],
+        "reconvert_issue_codes": ["source_text_loss"],
+        "autofix_issue_codes": [],
+        "review_issue_codes": [],
+        "retry_pages": [1],
+    }
+    stale_block["recommended_action"] = "reconvert"
+    stale_block["needs_reconvert"] = True
+    stale_block["auto_repair"]["remaining_issue_codes"] = ["source_text_loss"]
+    stale_block["source_quality"] = {
+        "source_text_loss": True,
+        "evidence_unreliable_pages": [1],
+    }
+    conversion_quality_result_path(md).write_text(
+        json.dumps(stale_block, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
     monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
     monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
 
@@ -1346,7 +1380,16 @@ def test_library_conversion_quality_batch_route_scans_markdown(monkeypatch, tmp_
     assert payload["target_count"] == 1
     assert payload["scanned"] == 1
     assert payload["failed"] == 0
-    assert sum(int(payload.get(key) or 0) for key in ("ready", "autofix", "reconvert", "review", "unknown")) == 1
+    assert payload["ready"] == 1
+    assert payload["reconvert"] == 0
+    assert payload["changed"] == 0
+
+    refreshed = load_conversion_quality_result(md)
+    assert refreshed["repair_plan"]["action"] == "none"
+    assert refreshed["repair_plan"]["issue_codes"] == []
+    assert refreshed["recommended_action"] == "none"
+    assert refreshed["needs_reconvert"] is False
+    assert refreshed["source_quality"].get("source_text_loss") is not True
 
 
 def test_library_reader_locate_quality_events_feed_overview(monkeypatch, tmp_path: Path):

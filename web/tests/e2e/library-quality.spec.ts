@@ -3059,12 +3059,115 @@ test('library shows a document terminal result and retries only its failed index
   await expect(row.getByTestId('library-retry-conversion')).toHaveCount(0)
 })
 
-test('library lets a user confirm the current Markdown after repeated quality blocking', async ({ page }) => {
+test('library rechecks current Markdown once and clears a stale quality block without reconversion', async ({ page }) => {
   const paperName = 'Optica-2024-Broken conversion.pdf'
   let requestBody: { pdf_name?: string, allow_blocked_quality?: boolean } | null = null
+  let currentMarkdownPassed = false
+  let fileRequests = 0
+  let repairRequests = 0
+  let reindexRequests = 0
+
+  await page.unroute('**/api/library/files**')
+  await page.route('**/api/library/files**', async (route) => {
+    fileRequests += 1
+    const conversionQuality = currentMarkdownPassed
+      ? {
+          status: 'good',
+          label: 'Ready',
+          score: 96,
+          summary: 'Ready | Q96 | 8 pages | 24 refs | 3 figures | 6 math',
+          has_review_issue: false,
+          issues: [],
+          metrics: { page_markers: 8, references: 24, figures: 3, display_math: 4, inline_math: 2 },
+          conversion_report: {
+            available: true,
+            stale: false,
+            recommended_action: 'none',
+            needs_reconvert: false,
+            remaining_issue_codes: [],
+            repair_plan: { action: 'none', issue_codes: [] },
+            quality_center: { status: 'ready', action: 'none', message: 'Current Markdown passed the fresh scan.' },
+          },
+        }
+      : {
+          status: 'error',
+          label: 'Needs repair',
+          score: 38,
+          summary: 'An older quality result still blocks this Markdown',
+          has_review_issue: true,
+          issues: [{ code: 'source_text_loss', label: 'Source text loss', severity: 'error', count: 1 }],
+          metrics: { page_markers: 8, references: 24, figures: 3, display_math: 4, inline_math: 2 },
+          conversion_report: {
+            available: true,
+            stale: false,
+            recommended_action: 'reconvert',
+            needs_reconvert: true,
+            remaining_issue_codes: ['source_text_loss'],
+            repair_plan: {
+              action: 'reconvert',
+              scope: 'pages',
+              issue_codes: ['source_text_loss'],
+              retry_pages: [3],
+            },
+            quality_center: { status: 'reconvert', action: 'reconvert', message: 'Older source scan requires review.' },
+          },
+        }
+    const item = {
+      ...baseItem,
+      name: paperName,
+      path: `F:\\kb\\pdfs\\${paperName}`,
+      md_exists: true,
+      md_path: 'F:\\kb\\md\\broken\\broken.en.md',
+      md_folder: 'F:\\kb\\md\\broken',
+      category: 'converted',
+      index_state: currentMarkdownPassed ? 'ready' : 'quality_blocked',
+      index_status: currentMarkdownPassed ? 'ready' : 'quality_blocked',
+      index_ready: currentMarkdownPassed,
+      index_doc_id: 'quality-recheck-doc',
+      index_num_chunks: currentMarkdownPassed ? 8 : 0,
+      index_chunk_exists: currentMarkdownPassed,
+      quality_gate: currentMarkdownPassed
+        ? { status: 'good', action: 'none', indexable: true, override_applied: false }
+        : { status: 'blocked', action: 'reconvert', indexable: false, override_applied: false },
+      conversion_quality: conversionQuality,
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [item],
+        counts: {
+          total_view: 1,
+          total_all: 1,
+          pending: 0,
+          converted: 1,
+          queued: 0,
+          running: 0,
+          reconverting: 0,
+          quality_review: currentMarkdownPassed ? 0 : 1,
+          quality_ready: currentMarkdownPassed ? 1 : 0,
+          index_quality_blocked: currentMarkdownPassed ? 0 : 1,
+        },
+        truncated: false,
+        scope: '200',
+        queue: { running: false, active_count: 0, active_tasks: [], current: '', done: 0, total: 0 },
+      }),
+    })
+  })
+
+  await page.route('**/api/library/quality/repair', async (route) => {
+    repairRequests += 1
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'The fresh Markdown check must not enqueue reconversion.' }),
+    })
+  })
 
   await page.route('**/api/library/reindex/file', async (route) => {
+    reindexRequests += 1
     requestBody = route.request().postDataJSON() as typeof requestBody
+    currentMarkdownPassed = true
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -3077,12 +3180,12 @@ test('library lets a user confirm the current Markdown after repeated quality bl
         message: 'Index retry completed.',
         detail: '',
         quality_override_requested: true,
-        quality_override_applied: true,
+        quality_override_applied: false,
         quality_gate: {
-          status: 'degraded',
+          status: 'good',
           indexable: true,
-          override_applied: true,
-          blocking_issue_codes: ['source_text_loss'],
+          override_applied: false,
+          blocking_issue_codes: [],
         },
       }),
     })
@@ -3105,6 +3208,12 @@ test('library lets a user confirm the current Markdown after repeated quality bl
     pdf_name: paperName,
     allow_blocked_quality: true,
   })
+  await expect(row.getByTestId('library-file-source-readiness')).toContainText(/可用于问答|Ready for Q&A/)
+  await expect(row.getByTestId('library-quality-confirm-index')).toHaveCount(0)
+  await expect(row.getByTestId('library-quality-repair')).toHaveCount(0)
+  expect(reindexRequests).toBe(1)
+  expect(repairRequests).toBe(0)
+  expect(fileRequests).toBeGreaterThanOrEqual(2)
 })
 
 test('library resyncs conversion state from files snapshot after status stream failure', async ({ page }) => {
