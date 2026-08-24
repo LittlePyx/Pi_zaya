@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.11` is the current published downloadable beta, and `v0.1.0-beta.12` is the next release candidate. Both use a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.12` is the current published downloadable beta. No later release candidate has been designated. The release uses a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
 
 The current beta temporarily withholds the project evidence-matrix
 workspace and its matrix-dependent brief, gap, and project-status entrances
@@ -8,9 +8,9 @@ from ordinary builds while their synthesis quality contract is revised. The
 implementation, saved records, APIs, exports, and full internal regression
 suite remain present. Internal browser gates explicitly use
 `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; downloadable builds must leave it
-unset. The immutable `v0.1.0-beta.11` tag advances `v0.1.0-beta.10` and must
-never be moved or overwritten. The beta.12 candidate must advance beta.11
-through a new immutable tag only after its untagged Windows preflight passes.
+unset. The immutable `v0.1.0-beta.12` tag advances `v0.1.0-beta.11`; neither
+tag may ever be moved or overwritten. Every later candidate must use a new
+version and pass its own untagged Windows preflight before tagging.
 
 ## Current release decision
 
@@ -306,7 +306,7 @@ the scheduler code was removed.
 - confirmed documents retain their blocking issue codes and audit marker, and detected unreliable pages remain excluded from answer evidence;
 - the implementation commit passed the backend unit and sanity suites, converter quality 13/13, Ruff, frontend lint/build, browser smoke/core/public-surface gates, and the dedicated 20-case library-quality browser suite;
 - the beta.12 version contract, bilingual release notes, Ruff, frontend lint/build, and 11 release-foundation tests pass locally;
-- beta.12 remains an untagged release candidate until normal CI and the complete untagged Windows preflight pass on the exact clean release commit. No beta.12 download or checksum should be represented as published before that point.
+- at this preparation checkpoint, beta.12 remained an untagged release candidate pending normal CI and the complete untagged Windows preflight on the exact clean release commit. No beta.12 download or checksum was represented as published before that point.
 
 ### 2026-08-24 beta.12 targeted-repair acceptance
 
@@ -317,7 +317,18 @@ the scheduler code was removed.
 - backend unit passed 4,458 with 41 skips, backend sanity passed 275 with 2 skips, and the focused conversion-task suite passed 296 with 2 skips;
 - Ruff, the visible Research Agent contract, all CI research/evidence fixture gates, reviewed replay, frontend lint/build, browser smoke (136 passed, 3 build-mode skips), core citation/library browser regressions (113/113), ordinary-user isolation (4/4), evidence-workspace release isolation (1/1), and the dedicated library-quality suite (21/21) pass locally;
 - full local converter quality passed 13/13 at `test_results/converter_quality_eval/20260824_131423`;
-- beta.12 remains untagged until normal CI and the complete untagged Windows preflight pass on the exact clean release commit.
+- at this targeted-repair checkpoint, beta.12 remained untagged pending normal CI and the complete untagged Windows preflight on the exact clean release commit.
+
+### 2026-08-24 beta.12 publication acceptance
+
+- the immutable annotated tag `v0.1.0-beta.12` points to commit `a6ecda9a300dbd966614839b1a1e22a2480ad4e4`, whose source tree is clean and whose canonical/backend/frontend version contract is `0.1.0-beta.12`;
+- normal main-branch CI run `32702792498` and the complete untagged Windows preflight run `32703524820` passed on that exact commit before the tag was created;
+- independent tag CI run `32708247157` and formal Windows tag run `32708247168` passed every backend, research, conversion, frontend, clean-profile ZIP, installer, in-place upgrade, uninstall, data-preservation, checksum, and signature-declaration gate;
+- the GitHub prerelease was published at `2026-08-24T09:08:49Z` with exactly six attached release assets;
+- the published ZIP is 94,836,135 bytes with SHA-256 `f45a097008a5b91d8bfa4ceef2cf4b35427bdeb3d294279253fb48cfb4a880d2`;
+- the published Setup is 60,891,858 bytes with SHA-256 `fb134b8a28229f9df470c9edd532a0daaefe490a9738b404e49f347fce843926`;
+- both published manifests record commit `a6ecda9a300d`, `source_dirty=false`, `license=MIT`, and the embedded Python runtime. No trusted certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned`;
+- all six assets were downloaded again into a fresh verification directory. Both binaries matched their adjacent checksum files, the downloaded installer reported `NotSigned`, and the ZIP contained `VERSION=0.1.0-beta.12`, `LICENSE`, `Pi_zaya.exe`, and the 3,537-character Chinese guide covering Setup, portable use, API Key configuration, SHA-256 verification, and startup.
 
 ## Promotion gates after beta
 

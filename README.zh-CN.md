@@ -16,7 +16,7 @@ Agent 规划、工具调用、主张核验、引用卡片和 React 追踪界面�
 
 ## 下载 Windows 测试版
 
-当前候选发布版本是
+当前已发布测试版是
 [`v0.1.0-beta.12`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.12)。
 
 ### 应该下载哪个文件

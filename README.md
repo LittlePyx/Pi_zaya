@@ -22,7 +22,7 @@ entry.
 
 ## Downloadable Windows beta
 
-The current release candidate is [`v0.1.0-beta.12`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.12).
+The current published beta is [`v0.1.0-beta.12`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.12).
 
 ### Choose the right download
 
