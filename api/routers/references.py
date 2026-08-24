@@ -123,7 +123,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 35
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 36
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000

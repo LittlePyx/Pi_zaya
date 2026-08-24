@@ -785,6 +785,37 @@ def test_ref_card_locale_contract_explains_perovskite_scope_boundary() -> None:
     assert sections["why"]["text"] == ui["why_line"]
 
 
+def test_ref_card_locale_contract_recovers_spad_noise_card_without_llm() -> None:
+    evidence = (
+        "As shown in Fig. 1a, the noise sources of SPAD arrays include signal-dependent "
+        "shot noise from photon incidence, fixed-pattern noise from the photon detection "
+        "efficiency, dark count rate, afterpulsing and crosstalk noise from electron "
+        "avalanche, and dead-time noise from circuit quenching."
+    )
+    ui = attach_ref_card_polish_contract(
+        {
+            "display_name": "High-resolution single-photon imaging with physics-informed deep learning.pdf",
+            "heading_path": "Methods / Noise modeling of SPAD arrays",
+            "summary_kind": "guide",
+            "render_locale": "zh",
+            "summary_line": evidence,
+            "why_line": "",
+            "primary_evidence": {"snippet": evidence},
+        }
+    )
+
+    assert all(
+        term in ui["summary_line"]
+        for term in ("散粒噪声", "固定模式噪声", "暗计数", "后脉冲", "串扰", "死时间噪声")
+    )
+    assert all(term in ui["why_line"] for term in ("SPAD", "六类噪声", "物理来源", "多源噪声模型"))
+    assert ui["summary_generation"] == "deterministic_grounded"
+    assert ui["why_generation"] == "deterministic_grounded"
+    sections = {section["id"]: section for section in ui["card_view"]["sections"]}
+    assert sections["summary"]["text"] == ui["summary_line"]
+    assert sections["why"]["text"] == ui["why_line"]
+
+
 def test_ref_card_copy_suppresses_located_quote_shell_without_grounded_replacement():
     why = (
         "“Abstract”中的原文直接支撑“频分复用并行采集”，"

@@ -484,11 +484,11 @@ const renderPacketEmptyCitationsMessages: Message[] = [
       paper_guide_contracts: {
         version: 1,
         render_packet: {
-          answer_markdown: 'The packet intentionally exposes no citation card [1].',
-          rendered_body: 'The packet intentionally exposes no citation card [1].',
-          rendered_content: 'The packet intentionally exposes no citation card [1].',
+          answer_markdown: 'The packet intentionally exposes no citation card [1](#kb-cite-stale-packet-1).',
+          rendered_body: 'The packet intentionally exposes no citation card [1](#kb-cite-stale-packet-1).',
+          rendered_content: 'The packet intentionally exposes no citation card [1](#kb-cite-stale-packet-1).',
           copy_text: 'The packet intentionally exposes no citation card [1].',
-          copy_markdown: 'The packet intentionally exposes no citation card [1].',
+          copy_markdown: 'The packet intentionally exposes no citation card [1](#kb-cite-stale-packet-1).',
           cite_details: [],
         },
       },

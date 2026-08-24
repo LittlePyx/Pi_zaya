@@ -324,6 +324,31 @@ def test_grounded_ref_why_line_handles_multi_source_spad_noise_wording() -> None
     assert not looks_generic_ref_why_line(why)
 
 
+def test_spad_noise_catalog_gets_localized_guide_and_relevance_without_llm() -> None:
+    evidence = (
+        "As shown in Fig. 1a, the noise sources of SPAD arrays include signal-dependent "
+        "shot noise from photon incidence, fixed-pattern noise from the photon detection "
+        "efficiency, dark count rate, afterpulsing and crosstalk noise from electron "
+        "avalanche, and dead-time noise from circuit quenching."
+    )
+
+    summary = build_localized_ref_summary_line(prefer_zh=True, evidence_text=evidence)
+    why = build_grounded_ref_why_line(
+        prefer_zh=True,
+        focus_terms=[],
+        heading_path="Methods / Noise modeling of SPAD arrays",
+        summary_line=evidence,
+    )
+
+    assert all(
+        term in summary
+        for term in ("散粒噪声", "固定模式噪声", "暗计数", "后脉冲", "串扰", "死时间噪声")
+    )
+    assert all(term in why for term in ("SPAD", "六类噪声", "物理来源", "多源噪声模型"))
+    assert summary != why
+    assert not looks_generic_ref_why_line(why)
+
+
 def test_grounded_ref_why_line_handles_mainstream_spd_review_wording() -> None:
     why = build_grounded_ref_why_line(
         prefer_zh=True,

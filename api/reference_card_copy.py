@@ -404,6 +404,25 @@ def build_grounded_ref_why_line(
             and re.search(r"\b(?:spad|sapd|snsdp|snsdps|sns?pd|tes|pmt)s?\b", summary_low)
         ):
             return "原文列出 SPAD、PMT、SNSPD、TES 等主流单光子探测器路线，可作为理解硬件能力、工作条件与制造瓶颈的基线。"
+        spad_noise_terms = (
+            "shot noise",
+            "fixed-pattern noise",
+            "dark count",
+            "afterpulsing",
+            "crosstalk",
+            "dead-time noise",
+        )
+        if (
+            "spad" in summary_low
+            and (
+                "noise sources of spad arrays include" in summary_low
+                or sum(term in summary_low for term in spad_noise_terms) >= 4
+            )
+        ):
+            return (
+                "该段把 SPAD 阵列的六类噪声与光子到达、像素响应、雪崩和淬灭等物理来源逐项对应，"
+                "可直接核对单光子成像为何需要多源噪声模型。"
+            )
         if (
             "spad" in summary_low
             and (
@@ -912,6 +931,25 @@ def build_localized_ref_summary_line(
         and re.search(r"\b(?:pmt|sapd|spad|sns?pd|tes)s?\b", low)
     ):
         return "该综述归纳了 PMT、SAPD、SNSPD、TES 及钙钛矿等主要单光子探测器类型。"
+    spad_noise_terms = (
+        "shot noise",
+        "fixed-pattern noise",
+        "dark count",
+        "afterpulsing",
+        "crosstalk",
+        "dead-time noise",
+    )
+    if (
+        "spad" in low
+        and (
+            "noise sources of spad arrays include" in low
+            or sum(term in low for term in spad_noise_terms) >= 4
+        )
+    ):
+        return (
+            "原文列出 SPAD 阵列的散粒噪声、固定模式噪声、暗计数、后脉冲、串扰和死时间噪声，"
+            "并说明它们分别来自光子到达、像素响应、雪崩与淬灭过程。"
+        )
     if (
         "structured illumination" in low
         and "structured detection" in low

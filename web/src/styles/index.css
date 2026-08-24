@@ -775,6 +775,14 @@ body.kb-reader-resizing .kb-reader-content {
   text-decoration: none;
 }
 
+.kb-markdown .kb-cite-link-orphan {
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1;
+  vertical-align: super;
+  white-space: nowrap;
+}
+
 .kb-markdown .kb-cite-chip {
   display: inline;
   margin: 0;

@@ -436,6 +436,8 @@ test('empty packet citation list stays authoritative when refs contain hits', as
   const assistant = page.locator('.kb-msg-bubble-assistant').last()
   await expect(assistant).toContainText('The packet intentionally exposes no citation card [1].')
   await expect(assistant.locator('.kb-cite-chip')).toHaveCount(0)
+  await expect(assistant.locator('.kb-cite-link-orphan')).toHaveText('[1]')
+  await expect(assistant.locator('.kb-cite-link-orphan')).toHaveAttribute('href', '#kb-cite-stale-packet-1')
   await expect(assistant).not.toContainText('Stale top-level source')
   await expect(page.locator('.kb-cite-pop')).toHaveCount(0)
 })

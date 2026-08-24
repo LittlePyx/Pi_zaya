@@ -2079,7 +2079,13 @@ function buildMarkdownComponents(
           </span>
         )
       }
-      const detail = key ? byAnchor.get(key) : undefined
+      const markerText = plainText(children).replace(/\s+/g, '').trim()
+      const detail = key
+        ? (
+            byAnchor.get(key)
+            || (key.startsWith('kb-cite-') ? resolvePlainCitationDetail(markerText, citationByNum) : null)
+          )
+        : undefined
       if (detail) {
         const useOccurrenceContext = duplicateCitationAnchors.has(detail.anchor)
         const tone = toneBySource?.get(sourceKey(detail))
@@ -2089,9 +2095,7 @@ function buildMarkdownComponents(
               ['--kb-cite-fg-hover' as string]: tone.fgHover,
             } as CSSProperties)
           : undefined
-        const readerMarkerText = variant === 'reader'
-          ? plainText(children).replace(/\s+/g, '').trim()
-          : ''
+        const readerMarkerText = variant === 'reader' ? markerText : ''
         const inlineLabel = variant === 'reader' && detail.isInpaper && readerMarkerText
           ? `[${readerMarkerText}]`
           : citationInlineLabel(detail, { includeSource: false })
@@ -2135,6 +2139,14 @@ function buildMarkdownComponents(
             }}
           >
             {inlineLabel}
+          </a>
+        )
+      }
+      if (key.startsWith('kb-cite-') && markerText) {
+        const orphanLabel = /^\[[^\]]+\]$/.test(markerText) ? markerText : `[${markerText}]`
+        return (
+          <a href={href} className="kb-cite-link kb-cite-link-orphan">
+            {orphanLabel}
           </a>
         )
       }
