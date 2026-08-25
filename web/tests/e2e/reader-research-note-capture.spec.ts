@@ -34,6 +34,14 @@ async function selectText(page: Page, needle: string) {
   await expect(page.getByTestId('reader-selection-bubble')).toBeVisible()
 }
 
+async function selectExistingNote(page: Page) {
+  await page.getByTestId('reader-note-target').click()
+  await page
+    .locator('.ant-select-dropdown:visible')
+    .getByText('Existing evidence note', { exact: true })
+    .click()
+}
+
 function noteRecord(overrides: Record<string, unknown> = {}) {
   return {
     id: 'note-existing',
@@ -128,15 +136,13 @@ test('existing note blocks duplicate capture and failed save keeps the full draf
   await page.goto('/__reader_test__?scenario=strict-quote')
   await selectText(page, SOURCE_SENTENCE)
   await page.getByTestId('reader-selection-note').click()
-  await page.getByTestId('reader-note-target').click()
-  await page.getByText('Existing evidence note', { exact: true }).click()
+  await selectExistingNote(page)
   await page.getByTestId('reader-note-comment').fill('First annotation')
   await page.getByTestId('reader-note-save').click()
   await expect.poll(() => patchCount).toBe(1)
 
   await page.getByTestId('reader-selection-note').click()
-  await page.getByTestId('reader-note-target').click()
-  await page.getByText('Existing evidence note', { exact: true }).click()
+  await selectExistingNote(page)
   await page.getByTestId('reader-note-save').click()
   await expect(page.getByTestId('reader-note-modal')).toContainText(/已在该笔记|already in that note/)
   expect(patchCount).toBe(1)
@@ -145,8 +151,7 @@ test('existing note blocks duplicate capture and failed save keeps the full draf
   failPatch = true
   await selectText(page, 'Conventional high-speed imaging systems often face challenges')
   await page.getByTestId('reader-selection-note').click()
-  await page.getByTestId('reader-note-target').click()
-  await page.getByText('Existing evidence note', { exact: true }).click()
+  await selectExistingNote(page)
   await page.getByTestId('reader-note-comment').fill('Keep this draft after a network failure.')
   await page.getByTestId('reader-note-save').click()
   await expect(page.getByTestId('reader-note-modal')).toBeVisible()
