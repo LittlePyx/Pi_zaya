@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.12` is the current published downloadable beta, and `v0.1.0-beta.13` is the active untagged candidate. The release uses a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.13` is the current published downloadable beta. The release uses a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
 
 The current beta temporarily withholds the project evidence-matrix
 workspace and its matrix-dependent brief, gap, and project-status entrances
@@ -8,10 +8,9 @@ from ordinary builds while their synthesis quality contract is revised. The
 implementation, saved records, APIs, exports, and full internal regression
 suite remain present. Internal browser gates explicitly use
 `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; downloadable builds must leave it
-unset. The immutable `v0.1.0-beta.12` tag advances `v0.1.0-beta.11` and must
-never be moved or overwritten. The `v0.1.0-beta.13` candidate must pass its own
-untagged Windows preflight before tagging; every later candidate must use a new
-version and repeat that sequence.
+unset. The immutable `v0.1.0-beta.13` tag advances `v0.1.0-beta.12`; neither tag
+may ever be moved or overwritten. Every later candidate must use a new version
+and pass its own untagged Windows preflight before tagging.
 
 ## Current release decision
 
@@ -341,6 +340,17 @@ the scheduler code was removed.
 - all research/evidence fixture dry runs, 6/6 grounded replay, 5/5 reviewed replay, and converter quality 13/13 pass;
 - browser smoke passed 144 with 3 build-mode skips, core citation/library regressions passed 113/113, ordinary-user isolation passed 4/4, evidence-workspace release isolation passed 1/1, and the dedicated library-quality suite passed 21/21;
 - at this checkpoint, beta.13 remains untagged pending normal CI and the complete untagged Windows preflight on the exact clean release commit. No beta.13 download, checksum, or GitHub Release is represented as published before those gates pass.
+
+### 2026-08-25 beta.13 publication acceptance
+
+- the immutable annotated tag `v0.1.0-beta.13` points to commit `9c78a7635896af0278f100b411eb4d3a4089493f`, whose source tree is clean and whose canonical/backend/frontend version contract is `0.1.0-beta.13`;
+- normal main-branch CI run `32814622401` and the complete untagged Windows preflight run `32814633046` passed on that exact commit before the tag was created;
+- independent tag CI run `32816220332` and formal Windows tag run `32816220344` passed every backend, research, conversion, frontend, clean-profile ZIP, installer, in-place upgrade, uninstall, data-preservation, checksum, and signature-declaration gate;
+- the GitHub prerelease was published at `2026-08-25T06:35:23Z` with exactly six attached release assets;
+- the published ZIP is 94,876,265 bytes with SHA-256 `ef9247b8af3856deee6b9c8ea5b2605cd0af58f77c41aa7acb571f98a75f9968`;
+- the published Setup is 60,915,035 bytes with SHA-256 `3f47e101131ff5059f5b5fc3e6bccc148482bf7828ef555434d3ad8caf334346`;
+- both published manifests record commit `9c78a7635896`, `source_dirty=false`, `license=MIT`, and the embedded Python runtime. No trusted certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned`;
+- all six assets were downloaded again into a fresh verification directory. Both binaries matched their adjacent checksum files, the downloaded installer reported `NotSigned`, and the ZIP contained `VERSION=0.1.0-beta.13`, `LICENSE`, `Pi_zaya.exe`, both Chinese guides, and no packaged user database or preferences. The packaged Windows guide is 3,781 characters and covers Setup/portable use, API Key configuration, research notes, SHA-256 verification, and startup.
 
 ## Promotion gates after beta
 

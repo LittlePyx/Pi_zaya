@@ -22,7 +22,7 @@ entry.
 
 ## Downloadable Windows beta
 
-The active Windows beta candidate is [`v0.1.0-beta.13`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.13). Its downloads become available only after the release page exists and the complete release gates pass.
+The current published Windows beta is [`v0.1.0-beta.13`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.13).
 
 ### Choose the right download
 
