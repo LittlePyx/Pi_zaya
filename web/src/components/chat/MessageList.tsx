@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { Button, Typography, message } from 'antd'
-import { ReloadOutlined, UserOutlined } from '@ant-design/icons'
+import { FileTextOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons'
 import { MarkdownRenderer } from './MarkdownRenderer'
 import { CopyBar } from './CopyBar'
 import { CitationPopover } from './CitationPopover'
@@ -102,11 +102,21 @@ import {
   readerSelectionNote,
 } from './readerShelfPayload'
 import { RefsPanel } from '../refs/RefsPanel'
-import { chatApi, type CitationShelfRecord, type Message } from '../../api/chat'
+import {
+  chatApi,
+  type CitationShelfRecord,
+  type Message,
+  type ResearchNoteRecord,
+  type ResearchNoteSourceLink,
+} from '../../api/chat'
 import { referencesApi, type ShelfMetadataRepairImpact } from '../../api/references'
 import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { basenameFromSourcePath } from '../../utils/sourcePath'
+import {
+  RESEARCH_NOTES_CHANGED_EVENT,
+  RESEARCH_NOTES_SYNC_CHANNEL,
+} from './readerResearchNoteCapture'
 import {
   cleanAssistantAnswerPresentationText,
   getMessageCiteDetailRecords,
@@ -175,6 +185,8 @@ import { EvidenceDrawer } from './EvidenceDrawer'
 import { EvidenceMatrixWorkspace } from './EvidenceMatrixWorkspace'
 import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
 import { ResearchGapWorkspace } from './ResearchGapWorkspace'
+import { ResearchNoteModal } from './ResearchNoteModal'
+import { ResearchNotesPanel } from './ResearchNotesPanel'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../../utils/featureFlags'
 
@@ -246,6 +258,9 @@ interface Props {
   shelfDockMode?: boolean
   shelfPortalTarget?: HTMLElement | null
   shelfVisible?: boolean
+  researchNotesPortalTarget?: HTMLElement | null
+  researchNotesVisible?: boolean
+  onResearchNotesStateChange?: (state: { count: number }) => void
   readerLocateResults?: Record<string, ReaderLocateResult>
   sourceQualityRefreshToken?: number
   paperGuideSourcePath?: string
@@ -309,6 +324,9 @@ export function MessageList({
   shelfDockMode = false,
   shelfPortalTarget = null,
   shelfVisible,
+  researchNotesPortalTarget = null,
+  researchNotesVisible = false,
+  onResearchNotesStateChange,
   readerLocateResults = {},
   sourceQualityRefreshToken = 0,
   paperGuideSourcePath,
@@ -319,6 +337,7 @@ export function MessageList({
   onRetryMessage,
 }: Props) {
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
+  const selectConversation = useChatStore((s) => s.selectConversation)
   const scrollRef = useRef<HTMLDivElement>(null)
   const {
     activeRequestKeyRef: activePopoverRequestKeyRef,
@@ -357,12 +376,61 @@ export function MessageList({
   const [savedShelfSnapshots, setSavedShelfSnapshots] = useState<ShelfSavedSnapshot[]>([])
   const [selectedSavedSnapshotId, setSelectedSavedSnapshotId] = useState('')
   const [shelfMessageFlashId, setShelfMessageFlashId] = useState<number | null>(null)
+  const [researchNoteOpen, setResearchNoteOpen] = useState(false)
+  const [researchNoteInitialMessageId, setResearchNoteInitialMessageId] = useState<number | null>(null)
+  const [researchNoteInitialNoteId, setResearchNoteInitialNoteId] = useState('')
+  const [researchNotes, setResearchNotes] = useState<ResearchNoteRecord[]>([])
+  const [researchNotesLoading, setResearchNotesLoading] = useState(false)
+  const researchNotesLoadSeqRef = useRef(0)
   const assistantLocatePrepCacheRef = useRef(new Map<string, AssistantLocatePrep>())
   const assistantLocatePrepPerfRef = useRef<MessageListPrepPerfEvent | null>(null)
   const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
   const S = useT()
   const shelfScopeId = shelfProjectScopeId(shelfProjectId)
   const shelfProjectReady = Boolean(String(shelfProjectId || '').trim())
+  const loadResearchNotes = useCallback(async () => {
+    const sequence = researchNotesLoadSeqRef.current + 1
+    researchNotesLoadSeqRef.current = sequence
+    setResearchNotesLoading(true)
+    try {
+      const records = await chatApi.listResearchNotes(String(shelfProjectId || '').trim() || null)
+      if (researchNotesLoadSeqRef.current !== sequence) return
+      setResearchNotes(Array.isArray(records) ? records : [])
+    } catch {
+      if (researchNotesLoadSeqRef.current !== sequence) return
+      setResearchNotes([])
+    } finally {
+      if (researchNotesLoadSeqRef.current === sequence) setResearchNotesLoading(false)
+    }
+  }, [shelfProjectId])
+  useEffect(() => {
+    void loadResearchNotes()
+    return () => {
+      researchNotesLoadSeqRef.current += 1
+    }
+  }, [loadResearchNotes])
+  useEffect(() => {
+    const refresh = () => { void loadResearchNotes() }
+    window.addEventListener(RESEARCH_NOTES_CHANGED_EVENT, refresh)
+    const channel = typeof BroadcastChannel !== 'undefined'
+      ? new BroadcastChannel(RESEARCH_NOTES_SYNC_CHANNEL)
+      : null
+    if (channel) {
+      channel.onmessage = (event) => {
+        const data = event?.data && typeof event.data === 'object'
+          ? event.data as Record<string, unknown>
+          : {}
+        if (String(data.type || '') === 'research-notes-changed') refresh()
+      }
+    }
+    return () => {
+      window.removeEventListener(RESEARCH_NOTES_CHANGED_EVENT, refresh)
+      channel?.close()
+    }
+  }, [loadResearchNotes])
+  useEffect(() => {
+    onResearchNotesStateChange?.({ count: researchNotes.length })
+  }, [onResearchNotesStateChange, researchNotes.length])
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const persistShelfBackendTimerRef = useRef<number | null>(null)
@@ -1852,6 +1920,79 @@ export function MessageList({
     }, 1400)
   }
 
+  const revealResearchNoteMessage = useCallback((targetId: number, attempt = 0) => {
+    const el = scrollRef.current
+    const target = el?.querySelector<HTMLElement>(`[data-msg-id="${targetId}"]`)
+    if (!el || !target) {
+      if (attempt < 12) {
+        window.setTimeout(() => revealResearchNoteMessage(targetId, attempt + 1), 120)
+      } else {
+        message.info(S.shelf_message_not_loaded)
+      }
+      return
+    }
+    const targetRect = target.getBoundingClientRect()
+    const containerRect = el.getBoundingClientRect()
+    el.scrollTo({
+      top: Math.max(0, targetRect.top - containerRect.top + el.scrollTop - 12),
+      behavior: 'smooth',
+    })
+    setShelfMessageFlashId(targetId)
+  }, [S.shelf_message_not_loaded])
+
+  const openResearchNoteMessage = useCallback(async (link: ResearchNoteSourceLink) => {
+    const targetId = Number(link.message_id || 0)
+    const targetConvId = String(link.conversation_id || '').trim()
+    if (!targetId || !targetConvId) {
+      message.info(S.shelf_message_missing)
+      return
+    }
+    if (targetConvId !== String(activeConvId || '').trim()) {
+      await selectConversation(targetConvId)
+    }
+    revealResearchNoteMessage(targetId)
+  }, [activeConvId, revealResearchNoteMessage, S.shelf_message_missing, selectConversation])
+
+  const openResearchNoteSource = useCallback((link: ResearchNoteSourceLink) => {
+    openReaderFromDetail({
+      title: String(link.label || link.source_name || ''),
+      sourcePath: String(link.source_path || ''),
+      sourceName: String(link.source_name || link.label || ''),
+      headingPath: String(link.heading_path || link.location_label || ''),
+      evidenceQuote: String(link.evidence_quote || ''),
+      blockId: String(link.block_id || ''),
+      anchorId: String(link.anchor_id || ''),
+      anchorKind: String(link.anchor_kind || ''),
+      pageStart: Number(link.page_start || 0),
+      pageEnd: Number(link.page_end || 0),
+      startOffset: Number(link.start_offset ?? -1),
+      endOffset: Number(link.end_offset ?? -1),
+      occurrence: Number(link.occurrence ?? -1),
+      readableIndex: Number(link.readable_index ?? -1),
+      documentOccurrence: Number(link.document_occurrence ?? -1),
+      startReadableIndex: Number(link.start_readable_index ?? -1),
+      endReadableIndex: Number(link.end_readable_index ?? -1),
+      isInpaper: true,
+    } as unknown as CiteDetail)
+  }, [openReaderFromDetail])
+
+  const upsertResearchNote = useCallback((record: ResearchNoteRecord) => {
+    setResearchNotes((current) => [
+      record,
+      ...current.filter((note) => note.id !== record.id),
+    ].sort((a, b) => Number(b.updated_at || 0) - Number(a.updated_at || 0)))
+  }, [])
+
+  const deleteResearchNote = useCallback(async (noteId: string) => {
+    try {
+      await chatApi.deleteResearchNote(noteId)
+      setResearchNotes((current) => current.filter((note) => note.id !== noteId))
+      message.success(S.research_notes_deleted)
+    } catch {
+      message.error(S.research_notes_delete_failed)
+    }
+  }, [S.research_notes_delete_failed, S.research_notes_deleted])
+
   const selectedSavedSnapshot = useMemo(
     () => savedShelfSnapshots.find((item) => item.id === selectedSavedSnapshotId) || null,
     [savedShelfSnapshots, selectedSavedSnapshotId],
@@ -2271,6 +2412,29 @@ export function MessageList({
   const renderedShelfNode = shelfDockMode
     ? (shelfPortalTarget ? createPortal(shelfNode, shelfPortalTarget) : null)
     : shelfNode
+  const researchNotesNode = (
+    <ResearchNotesPanel
+      visible={researchNotesVisible}
+      loading={researchNotesLoading}
+      notes={researchNotes}
+      onNew={() => {
+        setResearchNoteInitialMessageId(null)
+        setResearchNoteInitialNoteId('')
+        setResearchNoteOpen(true)
+      }}
+      onEdit={(noteId) => {
+        setResearchNoteInitialMessageId(null)
+        setResearchNoteInitialNoteId(noteId)
+        setResearchNoteOpen(true)
+      }}
+      onDelete={deleteResearchNote}
+      onOpenMessage={openResearchNoteMessage}
+      onOpenSource={openResearchNoteSource}
+    />
+  )
+  const renderedResearchNotesNode = researchNotesPortalTarget
+    ? createPortal(researchNotesNode, researchNotesPortalTarget)
+    : null
   const cleanGenerationPartial = generationPartial !== undefined && generationPartial !== null
     ? cleanAssistantAnswerPresentationText(generationPartial)
     : ''
@@ -2579,10 +2743,25 @@ export function MessageList({
                         onAddReferenceToShelf={addToShelf}
                       />
                       <ResearchTracePanel trace={researchTrace} />
-                      <CopyBar
-                        text={getMessageCopyTextValue(message)}
-                        markdown={getMessageCopyMarkdownValue(message)}
-                      />
+                      <div className="kb-answer-export-actions">
+                        <CopyBar
+                          text={getMessageCopyTextValue(message)}
+                          markdown={getMessageCopyMarkdownValue(message)}
+                        />
+                        <Button
+                          size="small"
+                          type="text"
+                          icon={<FileTextOutlined />}
+                          data-testid={`research-note-open-${message.id}`}
+                          onClick={() => {
+                            setResearchNoteInitialMessageId(message.id)
+                            setResearchNoteInitialNoteId('')
+                            setResearchNoteOpen(true)
+                          }}
+                        >
+                          {S.research_note_action}
+                        </Button>
+                      </div>
                       {retryPrompt ? (
                         <Button
                           className="kb-generation-retry-btn"
@@ -2735,6 +2914,19 @@ export function MessageList({
         />
       ) : null}
       {renderedShelfNode}
+      {renderedResearchNotesNode}
+      <ResearchNoteModal
+        open={researchNoteOpen}
+        initialMessageId={researchNoteInitialMessageId}
+        initialNoteId={researchNoteInitialNoteId}
+        activeConvId={activeConvId}
+        projectId={shelfProjectId}
+        messages={messages}
+        shelfItems={shelfItems}
+        notes={researchNotes}
+        onSaved={upsertResearchNote}
+        onClose={() => setResearchNoteOpen(false)}
+      />
     </>
   )
 }

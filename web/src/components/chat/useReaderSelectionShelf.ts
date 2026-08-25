@@ -30,6 +30,7 @@ export interface BuildReaderHighlightShelfPayloadOptions extends ReaderSelection
 export interface UseReaderSelectionShelfOptions extends ReaderSelectionShelfBaseOptions {
   activeHighlight: ReaderSessionHighlight | null
   onAddSelectionToShelf?: ReaderSelectionShelfAddHandler
+  onAddSelectionToResearchNote?: ReaderSelectionShelfAddHandler
   onClearSelection: (clearNative?: boolean) => void
   onCloseHighlight: () => void
   selection: string
@@ -38,8 +39,11 @@ export interface UseReaderSelectionShelfOptions extends ReaderSelectionShelfBase
 
 export interface ReaderSelectionShelfController {
   addActiveHighlightToShelf?: () => void
+  addActiveHighlightToResearchNote?: () => void
   addSelectionToShelf: () => void
+  addSelectionToResearchNote: () => void
   canAddSelectionToShelf: boolean
+  canAddSelectionToResearchNote: boolean
 }
 
 function compactOptional(value: unknown): string | undefined {
@@ -89,6 +93,7 @@ export function buildReaderSelectionShelfPayload({
     startReadableIndex: selected.startReadableIndex >= 0 ? selected.startReadableIndex : undefined,
     endReadableIndex: selected.endReadableIndex >= 0 ? selected.endReadableIndex : undefined,
     createdAt: now(),
+    captureKind: 'selection',
   }
 }
 
@@ -122,6 +127,7 @@ export function buildReaderHighlightShelfPayload({
     startReadableIndex: finiteNonNegativeOptionalNumber(item.startReadableIndex),
     endReadableIndex: finiteNonNegativeOptionalNumber(item.endReadableIndex),
     createdAt: now(),
+    captureKind: 'selection',
   }
 }
 
@@ -133,6 +139,7 @@ export function useReaderSelectionShelf({
   activeHighlight,
   now,
   onAddSelectionToShelf,
+  onAddSelectionToResearchNote,
   onClearSelection,
   onCloseHighlight,
   selection,
@@ -141,6 +148,7 @@ export function useReaderSelectionShelf({
   sourcePath,
 }: UseReaderSelectionShelfOptions): ReaderSelectionShelfController {
   const canAddSelectionToShelf = Boolean(onAddSelectionToShelf)
+  const canAddSelectionToResearchNote = Boolean(onAddSelectionToResearchNote)
 
   const addSelectionToShelf = useCallback(() => {
     if (!onAddSelectionToShelf) return
@@ -200,11 +208,72 @@ export function useReaderSelectionShelf({
     sourcePath,
   ])
 
+  const addSelectionToResearchNote = useCallback(() => {
+    if (!onAddSelectionToResearchNote) return
+    const payload = buildReaderSelectionShelfPayload({
+      activeAnchorId,
+      activeAnchorKind,
+      activeBlockId,
+      activeHeadingPath,
+      now,
+      selection,
+      selectionBubble,
+      sourceName,
+      sourcePath,
+    })
+    if (!payload) return
+    onAddSelectionToResearchNote(payload)
+  }, [
+    activeAnchorId,
+    activeAnchorKind,
+    activeBlockId,
+    activeHeadingPath,
+    now,
+    onAddSelectionToResearchNote,
+    selection,
+    selectionBubble,
+    sourceName,
+    sourcePath,
+  ])
+
+  const addActiveHighlightToResearchNote = useCallback(() => {
+    if (!onAddSelectionToResearchNote) return
+    const payload = buildReaderHighlightShelfPayload({
+      activeAnchorId,
+      activeAnchorKind,
+      activeBlockId,
+      activeHeadingPath,
+      activeHighlight,
+      now,
+      sourceName,
+      sourcePath,
+    })
+    if (!payload) return
+    onAddSelectionToResearchNote(payload)
+    onCloseHighlight()
+  }, [
+    activeAnchorId,
+    activeAnchorKind,
+    activeBlockId,
+    activeHeadingPath,
+    activeHighlight,
+    now,
+    onAddSelectionToResearchNote,
+    onCloseHighlight,
+    sourceName,
+    sourcePath,
+  ])
+
   return {
     addActiveHighlightToShelf: activeHighlight && onAddSelectionToShelf
       ? addActiveHighlightToShelf
       : undefined,
+    addActiveHighlightToResearchNote: activeHighlight && onAddSelectionToResearchNote
+      ? addActiveHighlightToResearchNote
+      : undefined,
     addSelectionToShelf,
+    addSelectionToResearchNote,
     canAddSelectionToShelf,
+    canAddSelectionToResearchNote,
   }
 }

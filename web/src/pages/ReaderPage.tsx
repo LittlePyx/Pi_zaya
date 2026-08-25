@@ -631,6 +631,7 @@ export default function ReaderPage() {
             presentation="inline"
             surface="page"
             conversationId={sessionConversationId}
+            projectId={sessionProjectId}
             messageId={session?.message_id ?? null}
             sessionHighlights={sessionHighlights}
             onAddSessionHighlight={addSessionHighlight}

@@ -2,6 +2,31 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.13] - 2026-08-25
+
+### Added
+
+- Add a persistent Research Notes workspace for creating, editing, searching, filtering, tagging, pinning, archiving, and safely deleting notes across project and paper contexts.
+- Save selected reader text, Markdown tables, equations, and figures directly into a new or existing note with a personal comment and an exact source locator.
+- Combine selected notes into an editable writing outline and export notes as Markdown or real Word documents.
+- Offer a built-in, self-authored sample paper during first use so a new user can experience conversion, question answering, and citation locating without finding a PDF first.
+
+### Changed
+
+- Show a dedicated conversion-in-progress state in the first-use guide and route the user to conversion progress instead of asking them to import another document.
+- Name Word exports from the research-note title, preserving Unicode while removing characters that Windows filenames cannot use.
+
+### Fixed
+
+- Detect an already-saved reader source range before appending it again, and keep the complete capture draft when saving fails.
+- Preserve source type, page, section, anchor, excerpt, and original Markdown/LaTeX needed to reopen a note source at the corresponding paper location.
+- Keep note updates revision-aware and create an automatic backup before a note is deleted.
+
+### Quality
+
+- Add browser coverage for selected text, tables, equations, figures, duplicate prevention, source return, workspace organization, outline composition, export, and the first-use sample-paper path.
+- Validate the reader-to-note workflow manually against a real paper containing figures, tables, formulas, and references, including persistence across an application restart.
+
 ## [0.1.0-beta.12] - 2026-08-24
 
 ### Added

@@ -1,6 +1,6 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
 
-type Phase = 'connect_model' | 'prepare_document' | 'ask_question' | 'completed'
+type Phase = 'connect_model' | 'prepare_document' | 'prepare_document_wait' | 'ask_question' | 'completed'
 
 async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({
@@ -16,6 +16,7 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
     const path = requestUrl.pathname
     const phase = getPhase()
     const hasKey = phase !== 'connect_model'
+    const apiPhase = phase === 'prepare_document_wait' ? 'prepare_document' : phase
 
     if (path === '/api/auth/status') {
       await fulfillJson(route, { required: false, configured: false, authenticated: true, env: 'test', production: false })
@@ -27,7 +28,7 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
         imported_document_count: phase === 'connect_model' || phase === 'prepare_document' ? 0 : 1,
         ready_document_count: phase === 'ask_question' || phase === 'completed' ? 1 : 0,
         grounded_answer_count: phase === 'completed' ? 1 : 0,
-        current_step: phase,
+        current_step: apiPhase,
         completed: phase === 'completed',
       })
       return
@@ -88,6 +89,20 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
       })
       return
     }
+    if (path === '/api/library/upload/inspect') {
+      const uploadBody = route.request().postDataBuffer()?.toString('latin1') || ''
+      if (uploadBody.includes('Pi_zaya-Getting-Started-Sample.pdf')) {
+        expect(uploadBody).toContain('%PDF-1.4')
+        expect(uploadBody).toContain('%%EOF')
+      }
+      await fulfillJson(route, {
+        duplicate: false,
+        suggested_stem: 'Pi_zaya-Getting-Started-Sample',
+        display_full_name: 'Pi_zaya-Getting-Started-Sample.pdf',
+        meta: {},
+      })
+      return
+    }
     if (path === '/api/references/sync/status' || path === '/api/library/convert/status') {
       await route.fulfill({ status: 200, contentType: 'text/event-stream', body: 'data: {"running":false,"done":true,"status":"idle"}\n\n' })
       return
@@ -122,12 +137,25 @@ test('clean profile progresses from model setup to the first cited answer', asyn
   await expect(page.getByText('Using application-managed default directories')).toBeVisible()
   await expect(page.getByTestId('library-show-advanced')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Update KB' })).toHaveCount(0)
+  await page.getByRole('button', { name: 'Use sample paper' }).click()
+  await expect(page.getByText('Pi_zaya-Getting-Started-Sample.pdf', { exact: true }).first()).toBeVisible()
+
+  phase = 'prepare_document_wait'
+  await page.reload()
+  await expect(guide).toHaveAttribute('data-current-step', 'prepare_document')
+  await expect(guide.getByText(/Finish converting your paper/)).toBeVisible()
+  await expect(guide.getByRole('button', { name: 'Review conversion' })).toBeVisible()
+  await expect(page.getByTestId('library-onboarding-sample')).toHaveCount(0)
 
   phase = 'ask_question'
   await page.reload()
   await expect(guide).toHaveAttribute('data-current-step', 'ask_question')
   await guide.getByRole('button', { name: 'Ask a question' }).click()
   await expect(page).toHaveURL(/\/$/)
+  const starterQuestions = page.getByTestId('first-run-questions')
+  await expect(starterQuestions).toBeVisible()
+  await starterQuestions.getByRole('button', { name: /Summarize the research question/ }).click()
+  await expect(page.getByPlaceholder('Ask something… (will search your Markdown first)')).toHaveValue(/Summarize the research question/)
 
   phase = 'completed'
   await page.reload()

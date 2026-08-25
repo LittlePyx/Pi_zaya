@@ -31,6 +31,7 @@ import {
   ApiOutlined,
   CloudDownloadOutlined,
   FundProjectionScreenOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useT } from '../../i18n'
@@ -528,7 +529,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
     }
   }, [openLinkedConversation])
 
-  const menuKey = loc.pathname === '/library' ? 'library' : 'chat'
+  const menuKey = loc.pathname === '/library'
+    ? 'library'
+    : loc.pathname === '/notes'
+      ? 'notes'
+      : 'chat'
   const normalizedKeyword = keyword.trim().toLowerCase()
   const getConversationMoveMenuItems = useCallback((currentProjectId?: string | null): MenuProps['items'] => {
     const current = String(currentProjectId || '').trim()
@@ -837,6 +842,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           items={[
             { key: 'chat', icon: <MessageOutlined />, label: S.chat, onClick: () => nav({ pathname: '/', search: conversationSearch(loc.search, activeConvId) }) },
             { key: 'library', icon: <BookOutlined />, label: S.page_library, onClick: () => nav('/library') },
+            { key: 'notes', icon: <FileTextOutlined />, label: S.page_research_notes, onClick: () => nav('/notes') },
           ]}
         />
 
@@ -1071,7 +1077,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           onOpenLibrary={() => nav('/library')}
           onAskQuestion={() => nav('/')}
         />
-        <div className={`min-h-0 flex-1 ${loc.pathname === '/' ? 'overflow-hidden' : 'overflow-auto'}`}>
+        <div className={`min-h-0 flex-1 ${loc.pathname === '/' || loc.pathname === '/notes' ? 'overflow-hidden' : 'overflow-auto'}`}>
           {children}
         </div>
       </Content>

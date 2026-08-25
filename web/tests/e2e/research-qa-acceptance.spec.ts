@@ -744,3 +744,184 @@ test('research QA contract: three-paper roadmap stays exact through refs, shelf,
     expect(csv).not.toContain('summary_quality_score')
   }
 })
+
+test('research note organizes selected answers, traceable sources, basket excerpts, and exports', async ({ page }) => {
+  test.setTimeout(120_000)
+  await installResearchQaBackend(page)
+  await page.setViewportSize({ width: 1280, height: 720 })
+  let wordExportBody: { title?: string, content_markdown?: string } | null = null
+  let persistedNote: {
+    id: string
+    project_id: string | null
+    source_conv_id: string | null
+    title: string
+    content_markdown: string
+    source_state: Record<string, unknown>
+    revision: number
+    created_at: number
+    updated_at: number
+  } | null = null
+  let researchNotePatchCount = 0
+  await page.route('**/api/chat/research-notes**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const method = request.method()
+    const noteMatch = url.pathname.match(/^\/api\/chat\/research-notes\/([^/]+)$/)
+    if (url.pathname === '/api/chat/research-notes' && method === 'GET') {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(persistedNote ? [{ ...persistedNote, content_markdown: '' }] : []) })
+      return
+    }
+    if (url.pathname === '/api/chat/research-notes' && method === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      persistedNote = {
+        id: 'note-e2e-1',
+        project_id: String(body.project_id || '') || null,
+        source_conv_id: String(body.source_conv_id || '') || null,
+        title: String(body.title || ''),
+        content_markdown: String(body.content_markdown || ''),
+        source_state: body.source_state as Record<string, unknown> || {},
+        revision: 1,
+        created_at: 1_775_000_000,
+        updated_at: 1_775_000_000,
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(persistedNote) })
+      return
+    }
+    if (noteMatch && method === 'GET' && persistedNote) {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(persistedNote) })
+      return
+    }
+    if (noteMatch && method === 'PATCH' && persistedNote) {
+      const body = request.postDataJSON() as Record<string, unknown>
+      researchNotePatchCount += 1
+      persistedNote = {
+        ...persistedNote,
+        title: String(body.title || persistedNote.title),
+        content_markdown: String(body.content_markdown || persistedNote.content_markdown),
+        source_state: body.source_state as Record<string, unknown> || persistedNote.source_state,
+        revision: persistedNote.revision + 1,
+        updated_at: persistedNote.updated_at + 1,
+      }
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(persistedNote) })
+      return
+    }
+    await route.fulfill({ status: 404, contentType: 'application/json', body: '{}' })
+  })
+  await page.route('**/api/chat/research-note/export', async (route) => {
+    wordExportBody = route.request().postDataJSON() as { title?: string, content_markdown?: string }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      headers: { 'content-disposition': 'attachment; filename="pi-zaya-research-note.docx"' },
+      body: 'docx-fixture',
+    })
+  })
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: '科研验收：SPI 与 SCINeRF' }).click()
+
+  const roadmapAssistant = page.locator('div[data-msg-id="206"]')
+  await addCitationToShelf(page, roadmapAssistant.locator('.kb-cite-chip').first())
+  await page.getByTestId('citation-shelf-close').click()
+
+  await page.getByTestId('research-note-open-204').click()
+  const modal = page.locator('.kb-research-note-modal')
+  await expect(modal).toBeVisible()
+  await expect(modal).toContainText('笔记只编排已有回答、引用与摘录，不会另外生成结论')
+  await expect(modal.locator('.kb-research-note-answer-option')).toHaveCount(3)
+  await expect(modal).toContainText('已选 1 条')
+  const modalBox = await modal.boundingBox()
+  const footerBox = await modal.locator('.kb-research-note-footer').boundingBox()
+  expect(modalBox?.y).toBeGreaterThanOrEqual(0)
+  expect((modalBox?.y || 0) + (modalBox?.height || 0)).toBeLessThanOrEqual(720)
+  expect((footerBox?.y || 0) + (footerBox?.height || 0)).toBeLessThanOrEqual(720)
+
+  const editor = modal.locator('.kb-research-note-editor')
+  await expect(editor).toContainText('ADMM 是怎么来的？')
+  await expect(editor).toContainText('#### [4] Distributed Optimization and Statistical Learning')
+  await expect(editor).toContainText('DOI: [10.1561/2200000016](https://doi.org/10.1561/2200000016)')
+  await expect(editor).toContainText('原文位置: SCINeRF / 2. Related Work')
+
+  await modal.locator('.kb-research-note-answer-option').first().locator('input').click()
+  await expect(modal).toContainText('已选 2 条')
+  await expect(editor).toContainText('深度学习给单像素成像带来的好处和坑分别是什么？')
+  await expect(editor).toContainText('#### [1] 4. Strategy and Advantages')
+
+  const basketCheckbox = modal.locator('.kb-research-note-basket-option input')
+  await expect(basketCheckbox).toBeEnabled()
+  await basketCheckbox.click()
+  await expect(editor).toContainText('## 研究摘录篮')
+  await expect(editor).toContainText('Principles and prospects for single-pixel imaging')
+
+  await modal.getByText('预览', { exact: true }).click()
+  const preview = modal.locator('.kb-research-note-preview')
+  await expect(preview).toContainText('参考文献')
+  await expect(preview).toContainText('10.1561/2200000016')
+  await expect(preview).toContainText('[4]')
+  const previewBox = await preview.boundingBox()
+  const previewFooterBox = await modal.locator('.kb-research-note-footer').boundingBox()
+  expect(previewBox?.height || 0).toBeGreaterThan(220)
+  expect((previewBox?.y || 0) + (previewBox?.height || 0)).toBeLessThanOrEqual(previewFooterBox?.y || 720)
+  expect((previewFooterBox?.y || 0) + (previewFooterBox?.height || 0)).toBeLessThanOrEqual(720)
+
+  const markdownDownloadPromise = page.waitForEvent('download')
+  await modal.getByRole('button', { name: '下载 Markdown' }).click()
+  const markdownDownload = await markdownDownloadPromise
+  expect(markdownDownload.suggestedFilename()).toBe('pi-zaya-research-note.md')
+  const markdownPath = await markdownDownload.path()
+  expect(markdownPath).not.toBeNull()
+  if (markdownPath) {
+    const markdown = await readFile(markdownPath, 'utf8')
+    expect(markdown).toContain('# 研究笔记：ADMM 是怎么来的？')
+    expect(markdown).toContain('## 研究问题 1')
+    expect(markdown).toContain('## 研究问题 2')
+    expect(markdown).toContain('## 研究摘录篮')
+    expect(markdown).toContain('## 参考文献')
+    expect(markdown).toContain('https://doi.org/10.1561/2200000016')
+  }
+
+  const wordDownloadPromise = page.waitForEvent('download')
+  await modal.getByRole('button', { name: '下载 Word' }).click()
+  const wordDownload = await wordDownloadPromise
+  expect(wordExportBody).not.toBeNull()
+  expect(wordExportBody?.title).toContain('ADMM 是怎么来的？')
+  expect(wordDownload.suggestedFilename()).toBe(`${wordExportBody?.title}.docx`)
+  expect(wordExportBody?.content_markdown).toContain('## 参考文献')
+  expect(wordExportBody?.content_markdown).toContain('## 研究摘录篮')
+
+  await modal.getByRole('button', { name: '保存到研究笔记' }).click()
+  await expect(modal).toContainText('已自动保存')
+  expect(persistedNote).not.toBeNull()
+  expect((persistedNote?.source_state.links as unknown[]).length).toBeGreaterThan(2)
+  await modal.getByRole('button', { name: /关\s*闭/ }).click()
+
+  const noteTab = page.getByRole('tab', { name: /研究笔记/ })
+  await expect(noteTab).toBeVisible()
+  await noteTab.click()
+  const notesPanel = page.getByTestId('research-notes-panel')
+  await expect(notesPanel).toBeVisible()
+  await expect(notesPanel).toContainText('研究笔记：ADMM 是怎么来的？')
+  await notesPanel.getByText(/个来源/).click()
+  await expect(notesPanel).toContainText('回答')
+  await expect(notesPanel).toContainText('原文')
+
+  await notesPanel.locator('.kb-research-note-card-main').click()
+  await expect(modal).toBeVisible()
+  const titleInput = modal.locator('.kb-research-note-title-field input')
+  await titleInput.fill('单光子成像研究进展')
+  await expect.poll(() => researchNotePatchCount).toBeGreaterThan(0)
+  await expect(modal).toContainText('已自动保存')
+  await modal.getByRole('button', { name: /关\s*闭/ }).click()
+
+  await page.getByTestId('research-note-open-206').click()
+  await expect(modal).toBeVisible()
+  await modal.locator('.kb-research-note-target-field .ant-select').click()
+  await page.getByTitle('单光子成像研究进展').click()
+  await expect(modal.locator('.kb-research-note-editor')).toContainText('我刚开始看单像素成像，想先建立主线')
+  const appendedBody = await modal.locator('.kb-research-note-editor').inputValue()
+  expect(appendedBody).toContain('## 研究问题 3')
+  expect((appendedBody.match(/^## 参考文献$/gm) || []).length).toBe(1)
+  await modal.getByRole('button', { name: /保\s*存/ }).click()
+  await expect(modal).toContainText('已自动保存')
+  expect(researchNotePatchCount).toBeGreaterThan(1)
+})

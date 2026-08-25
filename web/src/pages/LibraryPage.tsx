@@ -102,6 +102,7 @@ import { useLibraryQualityFullChainActions } from './library/useLibraryQualityFu
 import { useLibraryQualityFailureCaseActions } from './library/useLibraryQualityFailureCaseActions'
 import { dispatchOpenSettings } from '../components/layout/settingsEvents'
 import { qualityDiagnosticsVisible, qualityStatusVisible } from '../utils/qualityDiagnostics'
+import { createOnboardingSamplePdf } from '../utils/onboardingSamplePdf'
 import {
   conversionQualityStatus,
   conversionSourceReadiness,
@@ -1384,6 +1385,10 @@ export default function LibraryPage() {
 
   const showDirEditor = dirEditorOpen || !directoriesConfigured
   const firstRunLibraryMode = Boolean(onboardingStatus && !onboardingStatus.completed)
+  const showOnboardingSample = Boolean(
+    onboardingStatus?.current_step === 'prepare_document'
+    && onboardingStatus.imported_document_count <= 0,
+  )
   const advancedLibraryToolsVisible = !firstRunLibraryMode || firstRunAdvancedOpen
   const workbenchStats: WorkbenchMetricItem[] = [
     { key: 'view', label: S.lib_stats_view, value: counts.total_view, tone: 'neutral' },
@@ -1460,7 +1465,9 @@ export default function LibraryPage() {
             uploadDraftCount={uploadDrafts.length}
             showUploadWorkbench={showUploadWorkbench}
             lockedMessage={store.converting ? S.lib_upload_locked_converting : S.lib_upload_locked_refsync}
+            showOnboardingSample={showOnboardingSample}
             onAddDrafts={addDrafts}
+            onAddSample={() => addDrafts([createOnboardingSamplePdf()])}
             onToggleWorkbench={() => setUploadWorkbenchOpen((open) => !open)}
           />
 

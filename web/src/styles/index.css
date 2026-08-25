@@ -152,6 +152,62 @@
   border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
+.kb-first-run-questions {
+  display: grid;
+  width: min(680px, 100%);
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--panel) 97%, var(--accent));
+  box-shadow: 0 12px 34px color-mix(in srgb, #000 8%, transparent);
+}
+
+.kb-first-run-questions-copy {
+  display: grid;
+  gap: 3px;
+  text-align: center;
+}
+
+.kb-first-run-questions-copy strong {
+  color: var(--text-main);
+  font-size: 14px;
+}
+
+.kb-first-run-questions-copy span {
+  color: color-mix(in srgb, var(--text-main) 62%, transparent);
+  font-size: 12px;
+}
+
+.kb-first-run-question-list {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.kb-first-run-question-list button {
+  min-height: 68px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--panel) 98%, var(--accent));
+  color: var(--text-main);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: left;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.kb-first-run-question-list button:hover,
+.kb-first-run-question-list button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
+  outline: none;
+  transform: translateY(-1px);
+}
+
 @media (max-width: 680px) {
   .kb-first-run-api-guide {
     margin: 8px 10px 0;
@@ -168,6 +224,10 @@
 
   .kb-first-run-api-guide-footer .ant-btn-primary {
     width: 100%;
+  }
+
+  .kb-first-run-question-list {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1045,6 +1105,20 @@ body.kb-reader-resizing .kb-reader-content {
   top: 8px;
   right: 8px;
   z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.kb-markdown .kb-md-reader-block-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.kb-markdown .kb-md-reader-block-note {
+  border-color: color-mix(in srgb, #6b63c7 38%, var(--border));
+  color: color-mix(in srgb, #6b63c7 78%, var(--text-main));
 }
 
 .kb-markdown .kb-md-figure-shell .kb-md-reader-block-shelf-tail {

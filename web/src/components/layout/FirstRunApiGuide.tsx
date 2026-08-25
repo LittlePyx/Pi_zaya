@@ -1,4 +1,4 @@
-import { ApiOutlined, CheckOutlined, FileAddOutlined, MessageOutlined, MinusOutlined } from '@ant-design/icons'
+import { ApiOutlined, CheckOutlined, FileAddOutlined, MessageOutlined, MinusOutlined, SyncOutlined } from '@ant-design/icons'
 import { Button } from 'antd'
 import { useEffect, useMemo, useState } from 'react'
 import type { OnboardingStep } from '../../api/app'
@@ -42,6 +42,12 @@ export function FirstRunApiGuide({
   const currentStep = status?.current_step === 'completed'
     ? null
     : (status?.current_step || fallbackStep)
+  const documentPreparing = Boolean(
+    currentStep === 'prepare_document'
+    && status
+    && status.imported_document_count > 0
+    && status.ready_document_count <= 0,
+  )
 
   const steps = useMemo(() => [
     {
@@ -52,9 +58,13 @@ export function FirstRunApiGuide({
     },
     {
       key: 'prepare_document' as const,
-      icon: <FileAddOutlined />,
-      title: S.first_run_api_guide_document_title,
-      description: S.first_run_api_guide_document_desc,
+      icon: documentPreparing ? <SyncOutlined /> : <FileAddOutlined />,
+      title: documentPreparing
+        ? S.first_run_api_guide_document_wait_title
+        : S.first_run_api_guide_document_title,
+      description: documentPreparing
+        ? S.first_run_api_guide_document_wait_desc.replace('{n}', String(status?.imported_document_count || 0))
+        : S.first_run_api_guide_document_desc,
     },
     {
       key: 'ask_question' as const,
@@ -62,7 +72,7 @@ export function FirstRunApiGuide({
       title: S.first_run_api_guide_question_title,
       description: S.first_run_api_guide_question_desc,
     },
-  ], [S])
+  ], [S, documentPreparing, status?.imported_document_count])
 
   if (!visible || status?.completed || (!currentStep && loaded)) return null
   if (!currentStep) return null
@@ -77,8 +87,15 @@ export function FirstRunApiGuide({
   const actionLabel = currentStep === 'connect_model'
     ? S.first_run_api_guide_configure
     : currentStep === 'prepare_document'
-      ? S.first_run_api_guide_import
+      ? (documentPreparing ? S.first_run_api_guide_view_progress : S.first_run_api_guide_import)
       : S.first_run_api_guide_ask
+  const footerNote = currentStep === 'connect_model'
+    ? S.first_run_api_guide_local_note
+    : currentStep === 'prepare_document'
+      ? (documentPreparing
+          ? S.first_run_api_guide_conversion_note
+          : S.first_run_api_guide_sample_note)
+      : S.first_run_api_guide_question_note
 
   if (collapsed) {
     return (
@@ -129,7 +146,7 @@ export function FirstRunApiGuide({
         })}
       </div>
       <div className="kb-first-run-api-guide-footer">
-        <span>{S.first_run_api_guide_local_note}</span>
+        <span>{footerNote}</span>
         <Button type="primary" size="small" onClick={action}>
           {actionLabel}
         </Button>

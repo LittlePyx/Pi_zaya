@@ -22,6 +22,11 @@ import { useReaderHighlightActions } from './useReaderHighlightActions'
 import { useReaderHighlightMenu } from './useReaderHighlightMenu'
 import { useReaderHighlightUndoShortcut } from './useReaderHighlightUndoShortcut'
 import { useReaderEquationShelfActions } from './useReaderEquationShelfActions'
+import { ReaderResearchNoteCaptureModal } from './ReaderResearchNoteCaptureModal'
+import {
+  buildReaderResearchNoteCapture,
+  type ReaderResearchNoteCapture,
+} from './readerResearchNoteCapture'
 import { useReaderReturnToEvidence } from './useReaderReturnToEvidence'
 import { useReaderLocateResultReporting } from './useReaderLocateResultReporting'
 import {
@@ -69,6 +74,7 @@ interface Props {
   onCollapse?: () => void
   onOpenStandalone?: () => void
   conversationId?: string
+  projectId?: string | null
   messageId?: number | null
   sessionHighlights?: ReaderSessionHighlight[]
   onAddSessionHighlight?: (highlight: ReaderSessionHighlight) => void
@@ -98,6 +104,7 @@ export function PaperGuideReaderDrawer({
   onCollapse,
   onOpenStandalone,
   conversationId,
+  projectId,
   messageId,
   sessionHighlights = [],
   onAddSessionHighlight,
@@ -112,6 +119,7 @@ export function PaperGuideReaderDrawer({
   const S = useT()
   const contentRef = useRef<HTMLDivElement>(null)
   const [drawerReady, setDrawerReady] = useState(false)
+  const [researchNoteCapture, setResearchNoteCapture] = useState<ReaderResearchNoteCapture | null>(null)
   const {
     close: closeReaderCitationPopover,
     detail: citationPopoverDetail,
@@ -183,6 +191,27 @@ export function PaperGuideReaderDrawer({
     canAddBlockToShelf: canAddReaderBlockToShelf,
   } = useReaderBlockShelf({
     onAddSelectionToShelf,
+    sourceName: title,
+    sourcePath,
+  })
+  const openResearchNoteCapture = useCallback((selectionPayload: ReaderSelectionShelfPayload) => {
+    const capture = buildReaderResearchNoteCapture({
+      markdown,
+      payload: {
+        ...selectionPayload,
+        conversationId: String(conversationId || selectionPayload.conversationId || '').trim() || undefined,
+        projectId: String(projectId || selectionPayload.projectId || '').trim() || undefined,
+      },
+      readerBlocks,
+    })
+    if (!capture) return
+    setResearchNoteCapture(capture)
+  }, [conversationId, markdown, projectId, readerBlocks])
+  const {
+    addBlockToShelf: addReaderBlockToResearchNote,
+    canAddBlockToShelf: canAddReaderBlockToResearchNote,
+  } = useReaderBlockShelf({
+    onAddSelectionToShelf: openResearchNoteCapture,
     sourceName: title,
     sourcePath,
   })
@@ -371,6 +400,7 @@ export function PaperGuideReaderDrawer({
     labels: S,
     markdown,
     onAddSelectionToShelf,
+    onAddSelectionToResearchNote: openResearchNoteCapture,
     open,
     readerBlocks,
     sourceName: title,
@@ -385,14 +415,17 @@ export function PaperGuideReaderDrawer({
       onCitationClick={showReaderCitation}
       onCitationAddToShelf={addReaderCitationToShelf}
       onReaderBlockAddToShelf={canAddReaderBlockToShelf ? addReaderBlockToShelf : undefined}
+      onReaderBlockAddToResearchNote={canAddReaderBlockToResearchNote ? addReaderBlockToResearchNote : undefined}
       readerAnchors={readerAnchors}
       readerBlocks={readerBlocks}
     />
   ), [
     addReaderBlockToShelf,
+    addReaderBlockToResearchNote,
     addReaderCitationToShelf,
     citeDetails,
     canAddReaderBlockToShelf,
+    canAddReaderBlockToResearchNote,
     markdown,
     readerAnchors,
     readerBlocks,
@@ -477,8 +510,11 @@ export function PaperGuideReaderDrawer({
 
   const {
     addActiveHighlightToShelf,
+    addActiveHighlightToResearchNote,
     addSelectionToShelf,
+    addSelectionToResearchNote,
     canAddSelectionToShelf,
+    canAddSelectionToResearchNote,
   } = useReaderSelectionShelf({
     activeAnchorId,
     activeAnchorKind,
@@ -486,6 +522,7 @@ export function PaperGuideReaderDrawer({
     activeHeadingPath,
     activeHighlight: activeHighlightAction,
     onAddSelectionToShelf,
+    onAddSelectionToResearchNote: openResearchNoteCapture,
     onClearSelection: clearSelectionState,
     onCloseHighlight: closeHighlightBubble,
     selection,
@@ -627,8 +664,10 @@ export function PaperGuideReaderDrawer({
       activeHighlightFeedback={String(activeHighlightAction?.feedback || '')}
       onToggleSelectionHighlight={toggleSelectionHighlight}
       onAddSelectionToShelf={canAddSelectionToShelf ? addSelectionToShelf : undefined}
+      onAddSelectionToResearchNote={canAddSelectionToResearchNote ? addSelectionToResearchNote : undefined}
       onRemoveActiveHighlight={removeActiveHighlight}
       onAddActiveHighlightToShelf={addActiveHighlightToShelf}
+      onAddActiveHighlightToResearchNote={addActiveHighlightToResearchNote}
       onSetActiveHighlightFeedback={onUpdateSessionHighlight ? setActiveHighlightFeedback : undefined}
       onAskActiveHighlight={appendActiveHighlight}
       onAskSelection={appendSelection}
@@ -674,6 +713,13 @@ export function PaperGuideReaderDrawer({
         onStartGuide={() => {}}
         showOpenReaderAction={false}
         showStartGuideAction={false}
+      />
+      <ReaderResearchNoteCaptureModal
+        open={Boolean(researchNoteCapture)}
+        capture={researchNoteCapture}
+        conversationId={conversationId}
+        projectId={projectId}
+        onClose={() => setResearchNoteCapture(null)}
       />
     </PaperGuideReaderShell>
   )

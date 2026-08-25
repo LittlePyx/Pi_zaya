@@ -47,6 +47,89 @@ export interface Message {
   render_cache_key?: string
 }
 
+export interface ResearchNoteExportBody {
+  title: string
+  content_markdown: string
+}
+
+export interface ResearchNoteSourceLink {
+  kind: 'answer' | 'source' | string
+  label: string
+  conversation_id?: string
+  message_id?: number
+  source_path?: string
+  source_name?: string
+  heading_path?: string
+  location_label?: string
+  evidence_quote?: string
+  page_start?: number
+  page_end?: number
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  capture_id?: string
+  capture_kind?: string
+  start_offset?: number
+  end_offset?: number
+  occurrence?: number
+  readable_index?: number
+  document_occurrence?: number
+  start_readable_index?: number
+  end_readable_index?: number
+  line_start?: number
+  line_end?: number
+  asset_src?: string
+}
+
+export interface ResearchNoteSourceState {
+  version?: number
+  selected_message_ids?: number[]
+  include_shelf?: boolean
+  links?: ResearchNoteSourceLink[]
+  [key: string]: unknown
+}
+
+export interface ResearchNoteRecord {
+  id: string
+  project_id?: string | null
+  source_conv_id?: string | null
+  title: string
+  content_markdown: string
+  source_state: ResearchNoteSourceState
+  tags: string[]
+  pinned: boolean
+  archived: boolean
+  revision: number
+  created_at: number
+  updated_at: number
+}
+
+export interface ResearchNoteCreateBody extends ResearchNoteExportBody {
+  project_id?: string | null
+  source_conv_id?: string | null
+  source_state?: ResearchNoteSourceState
+  tags?: string[]
+  pinned?: boolean
+  archived?: boolean
+}
+
+export interface ResearchNoteUpdateBody {
+  expected_revision?: number
+  title?: string
+  content_markdown?: string
+  source_state?: ResearchNoteSourceState
+  project_id?: string | null
+  tags?: string[]
+  pinned?: boolean
+  archived?: boolean
+}
+
+export interface ResearchNoteListOptions {
+  scope?: 'context' | 'all'
+  query?: string
+  archived?: 'active' | 'archived' | 'all'
+}
+
 export interface RefsResponseMeta {
   serverTiming: string
   mode: string
@@ -1310,10 +1393,30 @@ function citationShelfItemsUrl(opts?: CitationShelfRequest): string {
   return url.replace('/api/chat/citation-shelf', '/api/chat/citation-shelf/items')
 }
 
-function downloadFilename(header: string | null, fallback: string): string {
+export function downloadFilename(header: string | null, fallback: string): string {
   const raw = String(header || '')
+  const encoded = raw.match(/filename\*\s*=\s*UTF-8''([^;]+)/i)?.[1]?.trim().replace(/^"|"$/g, '')
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded)
+    } catch {
+      // Fall back to the plain filename parameter below.
+    }
+  }
   const match = raw.match(/filename="?([^";]+)"?/i)
   return match?.[1] || fallback
+}
+
+export function researchNoteDownloadFilename(title: string): string {
+  const safeCharacters = Array.from(String(title || ''), (character) => (
+    character.charCodeAt(0) < 32 ? '-' : character
+  )).join('')
+  const cleaned = safeCharacters
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, ' ')
+    .replace(/^[ .-]+|[ .-]+$/g, '')
+    .slice(0, 120)
+  return `${cleaned || 'pi-zaya-research-note'}.docx`
 }
 
 async function downloadResearchBrief(briefId: string, format: ResearchBriefExportFormat) {
@@ -1350,6 +1453,31 @@ async function downloadEvidenceMatrix(matrixId: string, format: EvidenceMatrixEx
   const filename = downloadFilename(
     res.headers.get('content-disposition'),
     `evidence-matrix.${suffix}`,
+  )
+  const href = URL.createObjectURL(blob)
+  try {
+    const link = document.createElement('a')
+    link.href = href
+    link.download = filename
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+  } finally {
+    window.setTimeout(() => URL.revokeObjectURL(href), 2_000)
+  }
+}
+
+async function downloadResearchNoteDocx(body: ResearchNoteExportBody) {
+  const res = await authFetch('/api/chat/research-note/export', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw await responseError(res, 'research note export failed')
+  const blob = await res.blob()
+  const filename = downloadFilename(
+    res.headers.get('content-disposition'),
+    researchNoteDownloadFilename(body.title),
   )
   const href = URL.createObjectURL(blob)
   try {
@@ -1429,6 +1557,27 @@ export const chatApi = {
     ),
   runResearchAgent: (body: ResearchAgentRequest) =>
     api.post<ResearchAgentResponse>('/api/chat/research-agent', body),
+  listResearchNotes: (
+    projectId?: string | null,
+    limit = 100,
+    options: ResearchNoteListOptions = {},
+  ) => {
+    const params = new URLSearchParams({ limit: String(limit) })
+    if (projectId) params.set('project_id', projectId)
+    if (options.scope) params.set('scope', options.scope)
+    if (options.query) params.set('query', options.query)
+    if (options.archived) params.set('archived', options.archived)
+    return api.get<ResearchNoteRecord[]>(`/api/chat/research-notes?${params.toString()}`)
+  },
+  getResearchNote: (noteId: string) =>
+    api.get<ResearchNoteRecord>(`/api/chat/research-notes/${encodeURIComponent(noteId)}`),
+  createResearchNote: (body: ResearchNoteCreateBody) =>
+    api.post<ResearchNoteRecord>('/api/chat/research-notes', body),
+  updateResearchNote: (noteId: string, body: ResearchNoteUpdateBody) =>
+    api.patch<ResearchNoteRecord>(`/api/chat/research-notes/${encodeURIComponent(noteId)}`, body),
+  deleteResearchNote: (noteId: string) =>
+    api.delete<{ ok: boolean }>(`/api/chat/research-notes/${encodeURIComponent(noteId)}`),
+  downloadResearchNoteDocx,
   listResearchBriefs: (projectId: string, limit = 80) =>
     api.get<ResearchBriefRecord[]>(
       `/api/projects/${encodeURIComponent(projectId)}/research-briefs?limit=${encodeURIComponent(String(limit))}`,

@@ -10,7 +10,7 @@ const DESKTOP_DOCK_WIDTH_TRANSITION = 'width 160ms cubic-bezier(0.2, 0, 0, 1)'
 const RIGHT_DOCK_WIDTH_STORAGE_KEY = 'kb:chat-side-dock-width'
 const RIGHT_DOCK_COLLAPSED_STORAGE_KEY = 'kb:chat-side-dock-collapsed'
 
-export type RightDockPanel = 'timeline' | 'shelf' | 'reader'
+export type RightDockPanel = 'timeline' | 'shelf' | 'notes' | 'reader'
 
 function clampRightDockWidth(value: number) {
   if (!Number.isFinite(value)) return DESKTOP_DOCK_DEFAULT_WIDTH

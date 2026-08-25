@@ -1,5 +1,5 @@
 import type { CSSProperties, PointerEventHandler, RefObject } from 'react'
-import { BookOutlined, ClockCircleOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
+import { BookOutlined, ClockCircleOutlined, FileTextOutlined, MenuFoldOutlined, MenuUnfoldOutlined, ReadOutlined } from '@ant-design/icons'
 import { PaperGuideReaderDrawer } from './PaperGuideReaderDrawer'
 import type { CiteDetail } from './citationState'
 import type { TimelineItem } from './useChatTimeline'
@@ -27,12 +27,14 @@ interface ReaderWorkspaceDockProps {
   onToggleRightDockCollapsed: () => void
   onActivateDockPanel: (panel: RightDockPanel) => void
   citationShelfCount: number
+  researchNotesCount: number
   dockReaderAvailable: boolean
   dockTimelineAvailable: boolean
   timelineItems: TimelineItem[]
   activeTimelineUserMsgId: number | null
   onTimelineItemClick: (item: TimelineItem) => void
   setShelfDockTarget: (node: HTMLDivElement | null) => void
+  setResearchNotesDockTarget: (node: HTMLDivElement | null) => void
   readerOpen: boolean
   readerPayload: ReaderOpenPayload | null
   onCloseReader: () => void
@@ -40,6 +42,7 @@ interface ReaderWorkspaceDockProps {
   onCollapseReader: () => void
   onOpenReaderStandalone: (payload: ReaderOpenPayload | null) => void | Promise<void>
   conversationId: string
+  projectId?: string | null
   sessionHighlights: ReaderSessionHighlight[]
   onAddSessionHighlight: (highlight: ReaderSessionHighlight) => void
   onUpdateSessionHighlight: (highlight: ReaderSessionHighlight) => void
@@ -66,12 +69,14 @@ export function ReaderWorkspaceDock({
   onToggleRightDockCollapsed,
   onActivateDockPanel,
   citationShelfCount,
+  researchNotesCount,
   dockReaderAvailable,
   dockTimelineAvailable,
   timelineItems,
   activeTimelineUserMsgId,
   onTimelineItemClick,
   setShelfDockTarget,
+  setResearchNotesDockTarget,
   readerOpen,
   readerPayload,
   onCloseReader,
@@ -79,6 +84,7 @@ export function ReaderWorkspaceDock({
   onCollapseReader,
   onOpenReaderStandalone,
   conversationId,
+  projectId,
   sessionHighlights,
   onAddSessionHighlight,
   onUpdateSessionHighlight,
@@ -140,6 +146,19 @@ export function ReaderWorkspaceDock({
               <span>{S.side_dock_basket || S.shelf_title}</span>
               {citationShelfCount > 0 ? <strong>{citationShelfCount}</strong> : null}
             </button>
+            {researchNotesCount > 0 ? (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeRightDockPanel === 'notes'}
+                className={`kb-chat-side-tab ${activeRightDockPanel === 'notes' ? 'is-active' : ''}`}
+                onClick={() => onActivateDockPanel('notes')}
+              >
+                <FileTextOutlined />
+                <span>{S.side_dock_notes || S.research_notes_title}</span>
+                <strong>{researchNotesCount}</strong>
+              </button>
+            ) : null}
             {dockReaderAvailable ? (
               <button
                 type="button"
@@ -208,6 +227,9 @@ export function ReaderWorkspaceDock({
             <section className={`kb-chat-side-panel kb-chat-side-shelf ${activeRightDockPanel === 'shelf' ? 'is-active' : ''}`}>
               <div ref={setShelfDockTarget} className="kb-chat-side-shelf-host" />
             </section>
+            <section className={`kb-chat-side-panel kb-chat-side-notes ${activeRightDockPanel === 'notes' ? 'is-active' : ''}`}>
+              <div ref={setResearchNotesDockTarget} className="kb-chat-side-notes-host" />
+            </section>
             {dockReaderAvailable ? (
               <section className={`kb-chat-side-panel kb-chat-side-reader ${activeRightDockPanel === 'reader' ? 'is-active' : ''}`}>
                 <PaperGuideReaderDrawer
@@ -219,6 +241,7 @@ export function ReaderWorkspaceDock({
                   onCollapse={onCollapseReader}
                   onOpenStandalone={() => { void onOpenReaderStandalone(readerPayload) }}
                   conversationId={conversationId}
+                  projectId={projectId}
                   sessionHighlights={sessionHighlights}
                   onAddSessionHighlight={onAddSessionHighlight}
                   onUpdateSessionHighlight={onUpdateSessionHighlight}

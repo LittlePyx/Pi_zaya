@@ -8,6 +8,8 @@ export interface ReaderEquationShelfLabels {
   locate_badge_eq?: string
   reader_add_to_shelf?: string
   reader_add_to_shelf_title?: string
+  reader_add_to_note?: string
+  reader_add_to_note_title?: string
 }
 
 export interface BuildReaderEquationShelfPayloadOptions {
@@ -25,6 +27,7 @@ export interface UseReaderEquationShelfActionsOptions {
   markdown: string
   now?: () => number
   onAddSelectionToShelf?: (payload: ReaderSelectionShelfPayload) => void
+  onAddSelectionToResearchNote?: (payload: ReaderSelectionShelfPayload) => void
   open: boolean
   readerBlocks: ReaderDocBlock[]
   sourceName: string
@@ -56,6 +59,7 @@ export function buildReaderEquationShelfPayload({
     anchorId: anchorId || undefined,
     anchorKind: 'equation',
     createdAt: now(),
+    captureKind: 'equation',
   }
 }
 
@@ -65,13 +69,14 @@ export function useReaderEquationShelfActions({
   markdown,
   now,
   onAddSelectionToShelf,
+  onAddSelectionToResearchNote,
   open,
   readerBlocks,
   sourceName,
   sourcePath,
 }: UseReaderEquationShelfActionsOptions) {
   useEffect(() => {
-    if (!open || !onAddSelectionToShelf || !contentRef.current || !sourcePath) return undefined
+    if (!open || (!onAddSelectionToShelf && !onAddSelectionToResearchNote) || !contentRef.current || !sourcePath) return undefined
     const root = contentRef.current
     const equationBlocks = orderedEquationReaderBlocks(readerBlocks)
     if (equationBlocks.length <= 0) return undefined
@@ -126,13 +131,44 @@ export function useReaderEquationShelfActions({
           sourcePath,
         })
         if (!payload) return
-        onAddSelectionToShelf(payload)
+        onAddSelectionToShelf?.(payload)
       }
-      button.addEventListener('click', handleClick)
-      tail.appendChild(button)
+      if (onAddSelectionToShelf) {
+        button.addEventListener('click', handleClick)
+        tail.appendChild(button)
+      }
+      const noteButton = document.createElement('button')
+      noteButton.type = 'button'
+      noteButton.className = 'kb-md-reader-block-shelf kb-md-reader-block-note kb-md-reader-block-shelf-equation'
+      noteButton.title = labels.reader_add_to_note_title || 'Save to research note'
+      noteButton.setAttribute('aria-label', noteButton.title)
+      noteButton.setAttribute('data-testid', 'reader-block-note')
+      noteButton.setAttribute('data-kb-reader-block-kind', 'equation')
+      const noteKindSpan = kindSpan.cloneNode(true) as HTMLSpanElement
+      const noteTextSpan = textSpan.cloneNode(true) as HTMLSpanElement
+      noteTextSpan.textContent = labels.reader_add_to_note || 'Note'
+      noteButton.append(noteKindSpan, noteTextSpan)
+      const handleNoteClick = (event: Event) => {
+        event.preventDefault()
+        event.stopPropagation()
+        const payload = buildReaderEquationShelfPayload({
+          block,
+          nodeText: node.textContent || '',
+          now,
+          sourceName,
+          sourcePath,
+        })
+        if (!payload) return
+        onAddSelectionToResearchNote?.(payload)
+      }
+      if (onAddSelectionToResearchNote) {
+        noteButton.addEventListener('click', handleNoteClick)
+        tail.appendChild(noteButton)
+      }
       node.appendChild(tail)
       cleanup.push(() => {
         button.removeEventListener('click', handleClick)
+        noteButton.removeEventListener('click', handleNoteClick)
         tail.remove()
         node.classList.remove('kb-md-reader-equation-action-host')
       })
@@ -145,9 +181,12 @@ export function useReaderEquationShelfActions({
     labels.locate_badge_eq,
     labels.reader_add_to_shelf,
     labels.reader_add_to_shelf_title,
+    labels.reader_add_to_note,
+    labels.reader_add_to_note_title,
     markdown,
     now,
     onAddSelectionToShelf,
+    onAddSelectionToResearchNote,
     open,
     readerBlocks,
     sourceName,

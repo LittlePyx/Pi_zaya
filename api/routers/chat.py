@@ -12,7 +12,7 @@ from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi import File, Form, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.chat_render import enrich_messages_with_reference_render
@@ -56,6 +56,7 @@ from kb.path_safety import (
 )
 from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
+from kb.research_note import research_note_docx, research_note_filename
 from kb.task_runtime import (
     _gen_has_active_task_id,
     _is_live_assistant_text,
@@ -81,6 +82,8 @@ _CHAT_STATE_MAX_JSON_CHARS = 160_000
 _CHAT_CITATION_SHELF_MAX_ITEMS = 120
 _CHAT_CITATION_SHELF_MAX_JSON_CHARS = 260_000
 _CHAT_CITATION_SHELF_ITEM_MAX_JSON_CHARS = 40_000
+_CHAT_RESEARCH_NOTE_MAX_CHARS = 160_000
+_CHAT_RESEARCH_NOTE_SOURCE_STATE_MAX_JSON_CHARS = 240_000
 
 
 def _bounded_json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -163,6 +166,97 @@ class UpdateProjectBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     project_id: str | None = Field(None, max_length=120)
+
+
+class ResearchNoteExportBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(..., min_length=1, max_length=_CHAT_TITLE_MAX_CHARS)
+    content_markdown: str = Field(..., min_length=1, max_length=_CHAT_RESEARCH_NOTE_MAX_CHARS)
+
+    @field_validator("title", "content_markdown")
+    @classmethod
+    def _strip_required_text(cls, value: str) -> str:
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("value must not be blank")
+        return clean
+
+
+class ResearchNoteCreateBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    title: str = Field(..., min_length=1, max_length=_CHAT_TITLE_MAX_CHARS)
+    content_markdown: str = Field(..., min_length=1, max_length=_CHAT_RESEARCH_NOTE_MAX_CHARS)
+    project_id: str | None = Field(None, max_length=120)
+    source_conv_id: str | None = Field(None, max_length=120)
+    source_state: dict[str, Any] = Field(default_factory=dict)
+    tags: list[str] = Field(default_factory=list, max_length=24)
+    pinned: bool = False
+    archived: bool = False
+
+    @field_validator("title", "content_markdown")
+    @classmethod
+    def _strip_note_required_text(cls, value: str) -> str:
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("value must not be blank")
+        return clean
+
+    @field_validator("source_state")
+    @classmethod
+    def _bound_note_source_state(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return _bounded_dict(
+            value,
+            name="source_state",
+            max_json_chars=_CHAT_RESEARCH_NOTE_SOURCE_STATE_MAX_JSON_CHARS,
+        )
+
+    @field_validator("tags")
+    @classmethod
+    def _clean_note_tags(cls, value: list[str]) -> list[str]:
+        return [str(tag or "").replace("\x00", "").strip()[:48] for tag in value if str(tag or "").strip()]
+
+
+class ResearchNoteUpdateBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int | None = Field(None, ge=1)
+    title: str | None = Field(None, max_length=_CHAT_TITLE_MAX_CHARS)
+    content_markdown: str | None = Field(None, max_length=_CHAT_RESEARCH_NOTE_MAX_CHARS)
+    source_state: dict[str, Any] | None = None
+    project_id: str | None = Field(None, max_length=120)
+    tags: list[str] | None = Field(None, max_length=24)
+    pinned: bool | None = None
+    archived: bool | None = None
+
+    @field_validator("title", "content_markdown")
+    @classmethod
+    def _strip_note_optional_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("value must not be blank")
+        return clean
+
+    @field_validator("source_state")
+    @classmethod
+    def _bound_optional_note_source_state(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        return _bounded_dict(
+            value,
+            name="source_state",
+            max_json_chars=_CHAT_RESEARCH_NOTE_SOURCE_STATE_MAX_JSON_CHARS,
+        )
+
+    @field_validator("tags")
+    @classmethod
+    def _clean_optional_note_tags(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        return [str(tag or "").replace("\x00", "").strip()[:48] for tag in value if str(tag or "").strip()]
 
 
 class UpdateConversationGuideBody(BaseModel):
@@ -1136,6 +1230,116 @@ def run_chat_research_agent(body: ResearchAgentRequest) -> ResearchAgentResponse
         current_source_name=source_lock_name,
     )
     return ResearchAgentResponse.model_validate(payload)
+
+
+@router.post("/chat/research-note/export")
+def export_chat_research_note(body: ResearchNoteExportBody):
+    try:
+        content = research_note_docx(body.title, body.content_markdown)
+    except Exception as exc:
+        raise HTTPException(500, "research note export failed") from exc
+    filename = research_note_filename(body.title)
+    ascii_filename = research_note_filename(body.title.encode("ascii", "ignore").decode())
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{ascii_filename}"; '
+                f"filename*=UTF-8''{quote(filename)}"
+            ),
+        },
+    )
+
+
+@router.get("/chat/research-notes")
+def list_chat_research_notes(
+    project_id: str | None = Query(None, max_length=120),
+    limit: int = Query(100, ge=1, le=500),
+    scope: str = Query("context", pattern="^(context|all)$"),
+    query: str = Query("", max_length=240),
+    archived: str = Query("active", pattern="^(active|archived|all)$"),
+):
+    archived_filter = None if archived == "all" else archived == "archived"
+    return get_chat_store().list_research_notes(
+        project_id=project_id,
+        limit=limit,
+        scope=scope,
+        query=query,
+        archived=archived_filter,
+    )
+
+
+@router.post("/chat/research-notes")
+def create_chat_research_note(body: ResearchNoteCreateBody):
+    record = get_chat_store().create_research_note(
+        title=body.title,
+        content_markdown=body.content_markdown,
+        project_id=body.project_id,
+        source_conv_id=body.source_conv_id,
+        source_state=body.source_state,
+        tags=body.tags,
+        pinned=body.pinned,
+        archived=body.archived,
+    )
+    if record is None:
+        raise HTTPException(404, "research note scope not found")
+    return record
+
+
+@router.get("/chat/research-notes/{note_id}")
+def get_chat_research_note(note_id: str):
+    record = get_chat_store().get_research_note(note_id)
+    if record is None:
+        raise HTTPException(404, "research note not found")
+    return record
+
+
+@router.patch("/chat/research-notes/{note_id}")
+def update_chat_research_note(note_id: str, body: ResearchNoteUpdateBody):
+    fields_set = body.model_fields_set
+    mutable_fields = {
+        "title", "content_markdown", "source_state", "project_id", "tags", "pinned", "archived"
+    }
+    if not fields_set.intersection(mutable_fields):
+        raise HTTPException(400, "research note update required")
+    record, conflicted = get_chat_store().update_research_note(
+        note_id,
+        expected_revision=body.expected_revision,
+        title=body.title,
+        content_markdown=body.content_markdown,
+        source_state=body.source_state,
+        tags=body.tags,
+        pinned=body.pinned,
+        archived=body.archived,
+        project_id=body.project_id,
+        project_id_is_set="project_id" in fields_set,
+    )
+    if record is None:
+        raise HTTPException(404, "research note not found")
+    if conflicted:
+        raise HTTPException(409, "research note revision conflict")
+    return record
+
+
+@router.delete("/chat/research-notes/{note_id}")
+def delete_chat_research_note(note_id: str):
+    store = get_chat_store()
+    record = store.get_research_note(note_id)
+    if record is None:
+        raise HTTPException(404, "research note not found")
+    auto_backup = _dangerous_auto_snapshot(
+        "chat_research_note_delete",
+        label=note_id,
+        metadata={
+            "research_note_id": note_id,
+            "project_id": str(record.get("project_id") or ""),
+            "source_conv_id": str(record.get("source_conv_id") or ""),
+        },
+    )
+    if not store.delete_research_note(note_id):
+        raise HTTPException(404, "research note not found")
+    return {"ok": True, "auto_backup": auto_backup}
 
 
 @router.get("/chat/uploads/image")

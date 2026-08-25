@@ -37,6 +37,7 @@ export function buildReaderBlockShelfPayload({
 }: BuildReaderBlockShelfPayloadOptions): ReaderSelectionShelfPayload | null {
   const text = String(block?.text || '').trim()
   const cleanSourcePath = String(sourcePath || '').trim()
+  const assetSrc = compactOptional(block?.assetSrc)
   if (!text || !cleanSourcePath) return null
 
   return {
@@ -48,6 +49,7 @@ export function buildReaderBlockShelfPayload({
     anchorId: compactOptional(block?.anchorId),
     anchorKind: compactOptional(block?.anchorKind),
     createdAt: now(),
+    ...(assetSrc ? { assetSrc } : {}),
   }
 }
 

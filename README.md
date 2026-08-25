@@ -22,14 +22,14 @@ entry.
 
 ## Downloadable Windows beta
 
-The current published beta is [`v0.1.0-beta.12`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.12).
+The active Windows beta candidate is [`v0.1.0-beta.13`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.13). Its downloads become available only after the release page exists and the complete release gates pass.
 
 ### Choose the right download
 
 | Release file | Who should use it | How to use it |
 |---|---|---|
-| [`Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.12/Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe) | Recommended for most Windows users | Verify its checksum, run Setup, then open Pi_zaya from the Start menu or optional desktop shortcut. It installs for the current user without administrator privileges. |
-| [`Pi_zaya-v0.1.0-beta.12-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.12/Pi_zaya-v0.1.0-beta.12-windows-x64.zip) | Portable use, removable folders, or troubleshooting | Verify its checksum, extract the entire archive into a normal folder, then double-click `Pi_zaya.exe`. |
+| [`Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.13/Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe) | Recommended for most Windows users | Verify its checksum, run Setup, then open Pi_zaya from the Start menu or optional desktop shortcut. It installs for the current user without administrator privileges. |
+| [`Pi_zaya-v0.1.0-beta.13-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.13/Pi_zaya-v0.1.0-beta.13-windows-x64.zip) | Portable use, removable folders, or troubleshooting | Verify its checksum, extract the entire archive into a normal folder, then double-click `Pi_zaya.exe`. |
 | `*.sha256` | Anyone verifying a download | This is a text checksum file, not an application. Compare it with `Get-FileHash <download> -Algorithm SHA256`. |
 | `*.manifest.json` | Auditors and advanced users | This is machine-readable build provenance, commit, license, package type, and signing status. It is not an application. |
 | GitHub-generated “Source code” archives | Developers only | These contain repository source and are not ready-to-run Windows packages. Use the installer or portable ZIP unless you intend to build from source. |
@@ -81,6 +81,7 @@ web context.
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
+| Research notes workspace | Saves conclusions from answers and direct reader captures as editable Markdown with exact paper links. Selected text, tables, equations, and figures can be added with a personal comment and tags; duplicate source ranges are detected before append. Notes can then be organized across projects with search, paper/tag/time filters, pinning, and archiving, combined into an editable writing outline, and exported as Markdown or Word. |
 | Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. A persistent change inbox fingerprints full text separately from metadata, reports downstream row/comparison/brief/citation impact, blocks stale indexes, and refreshes only user-confirmed affected sources while preserving unaffected evidence. A high-precision candidate scan can prefill paired comparison contracts from structured metric tables, but requires human confirmation of every semantic mapping and a fresh server-side strict audit before producing any result. Explicit paired audits produce a result only after task, dataset, protocol, metric, target, value, and both source excerpts pass the comparison contract. Exports Markdown, CSV, or XLSX. |
 | Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix, audits every substantive claim, distinguishes historically verified snapshots from the latest matrix state, and turns changed fields/citations into a reviewable incremental update. Users accept or keep each affected claim, unaffected Markdown remains byte-for-byte intact, and the merged revision receives a complete evidence audit before export. |
 | Research gap queue | Aggregates explicit missing/unsupported matrix cells, non-comparable audits, stale brief lineage, and source changes into a deterministic project worklist. It reports downstream matrix/brief/citation/comparison impact. A same-source repair path can propose exact, locatable sentences from the matrix row's own freshly indexed paper. Cross-paper discovery uses a separate two-stage review: first confirm the candidate into the literature basket, then inspect a full extractive row preview before adding that paper as a new matrix source. Neither path can attribute another paper's evidence to the original row. |
@@ -469,12 +470,15 @@ Environment variables and `.env` values take precedence.
 5. Rebuild the knowledge base indexes.
 6. Ask questions from the current paper, selected literature basket, or full library.
 7. Open answer evidence/citation cards in the Reader.
-8. Add important papers to a project literature basket, generate and review its
+8. Select source text or use a table, equation, or figure action in the Reader
+   to add the exact located evidence and your comment to a new or existing
+   research note.
+9. Add important papers to a project literature basket, generate and review its
    evidence matrix, and keep honest gaps empty.
-9. Create a verified research brief from the audited matrix. If the matrix
+10. Create a verified research brief from the audited matrix. If the matrix
    changes, review the displayed affected fields/citations and update the bound
    brief from the latest verified revision before treating it as current.
-10. Export the brief with its lineage marker, or export the matrix as Markdown,
+11. Export the brief with its lineage marker, or export the matrix as Markdown,
     CSV, or XLSX.
 
 ## Demo

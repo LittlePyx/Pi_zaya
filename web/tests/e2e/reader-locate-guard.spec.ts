@@ -19,6 +19,14 @@ import {
 import { referenceSourcePathCacheKey } from '../../src/api/references'
 import { basenameFromSourcePath, cleanFileSourcePathInput, normalizeSourcePathForMatch } from '../../src/utils/sourcePath'
 import type { ReaderLocateResult, ReaderOpenPayload } from '../../src/components/chat/reader/readerTypes'
+import {
+  appendResearchNoteCapture,
+  buildReaderResearchNoteCapture,
+  buildResearchNoteCaptureSection,
+  readerCaptureSourceLink,
+  researchNoteHasCapture,
+} from '../../src/components/chat/readerResearchNoteCapture'
+import type { ResearchNoteRecord } from '../../src/api/chat'
 
 const payload: ReaderOpenPayload = {
   sourcePath: 'db/Fixture/Fixture.en.md',
@@ -103,6 +111,92 @@ test('reader locate guard accepts only the active reader request', () => {
     currentConversationId: 'conv-a',
     readerOpen: true,
   })).toBe(false)
+})
+
+test('reader note capture preserves structured markdown, page, and exact locator identity', () => {
+  const markdown = [
+    '<!-- kb_page: 4 -->',
+    '# Results',
+    '',
+    '| Metric | Value |',
+    '| --- | --- |',
+    '| PSNR | 32.4 dB |',
+  ].join('\n')
+  const capture = buildReaderResearchNoteCapture({
+    markdown,
+    payload: {
+      text: 'Metric Value PSNR 32.4 dB',
+      sourcePath: 'db/Paper/Paper.en.md',
+      sourceName: 'Paper.pdf',
+      blockId: 'tbl-results',
+      anchorId: 'a-tbl-results',
+      anchorKind: 'table',
+      captureKind: 'table',
+    },
+    readerBlocks: [{
+      doc_id: 'doc',
+      block_id: 'tbl-results',
+      anchor_id: 'a-tbl-results',
+      kind: 'table',
+      heading_path: 'Paper / Results',
+      text: 'Metric Value PSNR 32.4 dB',
+      line_start: 4,
+      line_end: 6,
+    }],
+  })
+  expect(capture).not.toBeNull()
+  expect(capture?.text).toContain('| Metric | Value |')
+  expect(capture?.pageStart).toBe(4)
+  expect(capture?.locationLabel).toBe('p. 4 · Paper / Results')
+  const link = readerCaptureSourceLink(capture!, 'conv-reader')
+  expect(link.capture_id).toBe(capture?.captureId)
+  expect(link.block_id).toBe('tbl-results')
+  expect(link.page_start).toBe(4)
+  expect(link.evidence_quote).toContain('PSNR')
+})
+
+test('reader note capture appends once and detects the same source range', () => {
+  const capture = buildReaderResearchNoteCapture({
+    markdown: '# Paper\n\nA traceable sentence.',
+    payload: {
+      text: 'A traceable sentence.',
+      sourcePath: 'db/Paper/Paper.en.md',
+      sourceName: 'Paper.pdf',
+      headingPath: 'Paper / Introduction',
+      blockId: 'p-1',
+      anchorId: 'a-p-1',
+      startOffset: 10,
+      endOffset: 31,
+      captureKind: 'selection',
+    },
+    readerBlocks: [],
+  })!
+  const section = buildResearchNoteCaptureSection(capture, 'Supports the main claim.', {
+    kinds: {
+      selection: 'Source excerpt',
+      table: 'Table excerpt',
+      equation: 'Equation excerpt',
+      figure: 'Figure excerpt',
+    },
+    location: 'Source location',
+    comment: 'My comment',
+  })
+  expect(section).toContain('> A traceable sentence.')
+  expect(section).toContain('Supports the main claim.')
+  expect(appendResearchNoteCapture('## Existing\n\nFinding.', section)).toContain('\n\n---\n\n')
+  const note: ResearchNoteRecord = {
+    id: 'note-1',
+    title: 'Note',
+    content_markdown: section,
+    source_state: { links: [readerCaptureSourceLink(capture, 'conv-reader')] },
+    tags: [],
+    pinned: false,
+    archived: false,
+    revision: 1,
+    created_at: 1,
+    updated_at: 1,
+  }
+  expect(researchNoteHasCapture(note, capture)).toBe(true)
 })
 
 test('reader anchor helpers understand Chinese equation and figure labels without mojibake', () => {

@@ -5,6 +5,7 @@ import { Button, message, Typography } from 'antd'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useChatStore } from '../stores/chatStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { useOnboardingStore } from '../stores/onboardingStore'
 import { MessageList, type ShelfActivityState } from '../components/chat/MessageList'
 import { ChatInput } from '../components/chat/ChatInput'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
@@ -72,7 +73,13 @@ export default function ChatPage() {
   const cancelGen = useChatStore((s) => s.cancelGeneration)
   const refreshActiveConversationLocale = useChatStore((s) => s.refreshActiveConversationLocale)
   const settings = useSettingsStore()
+  const onboardingStatus = useOnboardingStore((s) => s.status)
   const liveRunning = Boolean(generation)
+  const firstRunQuestions = useMemo(() => [
+    S.first_run_question_overview,
+    S.first_run_question_evidence,
+    S.first_run_question_limitations,
+  ], [S])
   const { agentMode, setAgentMode: handleAgentModeChange } = useAgentMode(activeConvId)
   const {
     readerOpen,
@@ -124,9 +131,11 @@ export default function ChatPage() {
   const [queryScope, setQueryScope] = useState<QueryScope>('library')
   const queryScopeConversationRef = useRef('')
   const [shelfActivity, setShelfActivity] = useState<ShelfActivityState>({ summary: false, repair: false, autoRepair: false, background: false, count: 0 })
+  const [researchNotesCount, setResearchNotesCount] = useState(0)
   const [debugPanelEnabled] = useState(loadChatDebugPanelEnabled)
   const debugSnapshot = useChatPerfSnapshot(debugPanelEnabled)
   const [shelfDockTarget, setShelfDockTarget] = useState<HTMLDivElement | null>(null)
+  const [researchNotesDockTarget, setResearchNotesDockTarget] = useState<HTMLDivElement | null>(null)
   const [projectMatrixLaunch, setProjectMatrixLaunch] = useState<{
     projectId: string
     matrixId: string
@@ -218,6 +227,7 @@ export default function ChatPage() {
     eventTokenRef.current += 1
     return eventTokenRef.current
   }, [])
+  const [researchNoteJump, setResearchNoteJump] = useState<{ messageId: number; token: number } | null>(null)
 
   const captureTimelineScrollTop = useCallback(() => {
     const scrollHost = splitLayoutRef.current?.querySelector<HTMLElement>('.kb-main-scroll')
@@ -248,6 +258,50 @@ export default function ChatPage() {
     nextToken: nextEventToken,
     onBeforeToggle: captureTimelineScrollTop,
   })
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const messageId = Math.floor(Number(params.get('note_message') || 0))
+    const conversationId = String(params.get('conversation') || '').trim()
+    if (!messageId || !conversationId || activeConvId !== conversationId) return
+    if (messages.some(item => Number(item.id || 0) === messageId)) {
+      setResearchNoteJump(current => current?.messageId === messageId
+        ? current
+        : { messageId, token: nextEventToken() })
+      return
+    }
+    if (messagesHasMoreBefore && !conversationLoading && !messagesLoadingMore) {
+      void loadOlderMessages()
+      return
+    }
+    if (!conversationLoading && !messagesLoadingMore && !messagesHasMoreBefore) {
+      params.delete('note_message')
+      const search = params.toString()
+      navigate({ pathname: '/', search: search ? `?${search}` : '' }, { replace: true })
+    }
+  }, [
+    activeConvId,
+    conversationLoading,
+    loadOlderMessages,
+    location.search,
+    messages,
+    messagesHasMoreBefore,
+    messagesLoadingMore,
+    navigate,
+    nextEventToken,
+  ])
+
+  const handleMessageJumpHandled = useCallback((target: { messageId: number; token: number }) => {
+    if (researchNoteJump?.messageId === target.messageId) {
+      setResearchNoteJump(null)
+      const params = new URLSearchParams(location.search)
+      params.delete('note_message')
+      const search = params.toString()
+      navigate({ pathname: '/', search: search ? `?${search}` : '' }, { replace: true })
+      return
+    }
+    handleTimelineJumpHandled(target)
+  }, [handleTimelineJumpHandled, location.search, navigate, researchNoteJump])
 
   const {
     citationShelfOpen,
@@ -532,6 +586,9 @@ export default function ChatPage() {
         : state
     ))
   }, [])
+  const handleResearchNotesStateChange = useCallback((state: { count: number }) => {
+    setResearchNotesCount(Math.max(0, Math.floor(Number(state.count || 0))))
+  }, [])
 
   const {
     dockTimelineAvailable,
@@ -554,6 +611,7 @@ export default function ChatPage() {
     timelineItemCount: timelineItems.length,
     citationShelfOpen,
     citationShelfCount,
+    researchNotesCount,
     readerOpen,
     desktopReaderEligible,
     rightDockPanel,
@@ -678,6 +736,28 @@ export default function ChatPage() {
                 </div>
               </div>
             </div>
+            {onboardingStatus?.current_step === 'ask_question' ? (
+              <section className="kb-first-run-questions" data-testid="first-run-questions">
+                <div className="kb-first-run-questions-copy">
+                  <strong>{S.first_run_questions_title}</strong>
+                  <span>{S.first_run_questions_desc}</span>
+                </div>
+                <div className="kb-first-run-question-list">
+                  {firstRunQuestions.map((question) => (
+                    <button
+                      key={question}
+                      type="button"
+                      onClick={() => {
+                        setQueryScope('library')
+                        appendReaderSelection(question)
+                      }}
+                    >
+                      {question}
+                    </button>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
           {chatComposer}
         </>
@@ -804,8 +884,8 @@ export default function ChatPage() {
                     generationAgentTrace={generation?.agentTrace}
                     generationAgentSourceSummary={generation?.agentSourceSummary}
                     generationAnswerContract={generation?.answerContract}
-                    jumpTarget={timelineJump}
-                    onJumpHandled={handleTimelineJumpHandled}
+                    jumpTarget={researchNoteJump || timelineJump}
+                    onJumpHandled={handleMessageJumpHandled}
                     trackedMessageIds={timelineTrackedMessageIds}
                     onTrackedMessageActive={handleTrackedMessageActive}
                     onOpenReader={openReader}
@@ -817,6 +897,9 @@ export default function ChatPage() {
                     shelfDockMode={showRightDock}
                     shelfPortalTarget={shelfDockTarget}
                     shelfVisible={activeRightDockPanel === 'shelf'}
+                    researchNotesPortalTarget={researchNotesDockTarget}
+                    researchNotesVisible={activeRightDockPanel === 'notes'}
+                    onResearchNotesStateChange={handleResearchNotesStateChange}
                     sourceQualityRefreshToken={sourceQualityRefreshToken}
                     paperGuideSourcePath={effectiveGuide.sourcePath}
                     paperGuideSourceName={effectiveGuide.sourceName}
@@ -845,12 +928,14 @@ export default function ChatPage() {
               onToggleRightDockCollapsed={toggleRightDockCollapsed}
               onActivateDockPanel={activateDockPanel}
               citationShelfCount={citationShelfCount}
+              researchNotesCount={researchNotesCount}
               dockReaderAvailable={dockReaderAvailable}
               dockTimelineAvailable={dockTimelineAvailable}
               timelineItems={timelineItems}
               activeTimelineUserMsgId={activeTimelineUserMsgId}
               onTimelineItemClick={jumpToTimelineItem}
               setShelfDockTarget={setShelfDockTarget}
+              setResearchNotesDockTarget={setResearchNotesDockTarget}
               readerOpen={readerOpen}
               readerPayload={readerPayload}
               onCloseReader={closeReader}
@@ -858,6 +943,7 @@ export default function ChatPage() {
               onCollapseReader={collapseRightDock}
               onOpenReaderStandalone={openReaderStandalone}
               conversationId={activeConvId || ''}
+              projectId={shelfProjectId}
               sessionHighlights={activeReaderSessionHighlights}
               onAddSessionHighlight={addReaderSessionHighlight}
               onUpdateSessionHighlight={updateReaderSessionHighlight}
@@ -878,6 +964,7 @@ export default function ChatPage() {
           onAppendSelection={appendReaderSelection}
           onOpenStandalone={() => { void openReaderStandalone(readerPayload) }}
           conversationId={activeConvId || ''}
+          projectId={shelfProjectId}
           sessionHighlights={activeReaderSessionHighlights}
           onAddSessionHighlight={addReaderSessionHighlight}
           onUpdateSessionHighlight={updateReaderSessionHighlight}

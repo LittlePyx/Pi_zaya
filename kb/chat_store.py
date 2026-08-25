@@ -16,6 +16,11 @@ MAX_PROJECT_NAME_LEN = 120
 MAX_RESEARCH_BRIEF_TITLE_LEN = 240
 MAX_RESEARCH_BRIEF_OBJECTIVE_LEN = 4_000
 MAX_RESEARCH_BRIEF_CONTENT_LEN = 160_000
+MAX_RESEARCH_NOTE_TITLE_LEN = 240
+MAX_RESEARCH_NOTE_CONTENT_LEN = 160_000
+MAX_RESEARCH_NOTE_SOURCE_STATE_LEN = 240_000
+MAX_RESEARCH_NOTE_TAGS = 24
+MAX_RESEARCH_NOTE_TAG_LEN = 48
 MAX_EVIDENCE_MATRIX_TITLE_LEN = 240
 MAX_EVIDENCE_MATRIX_OBJECTIVE_LEN = 4_000
 _SHELF_MAX_ITEM_KEYS = 80
@@ -648,6 +653,44 @@ def _research_brief_record(row: sqlite3.Row | dict, *, include_content: bool = T
     return rec
 
 
+def _research_note_record(row: sqlite3.Row | dict, *, include_content: bool = True) -> dict:
+    rec = dict(row)
+    source_state = _research_brief_json(rec.pop("source_state_json", "{}"), default={})
+    tags = _research_brief_json(rec.pop("tags_json", "[]"), default=[])
+    rec["title"] = _research_brief_text(
+        rec.get("title"),
+        limit=MAX_RESEARCH_NOTE_TITLE_LEN,
+    )
+    rec["content_markdown"] = _research_brief_text(
+        rec.get("content_markdown"),
+        limit=MAX_RESEARCH_NOTE_CONTENT_LEN,
+        multiline=True,
+    ) if include_content else ""
+    rec["source_state"] = source_state if isinstance(source_state, dict) else {}
+    rec["tags"] = _clean_research_note_tags(tags)
+    rec["pinned"] = bool(rec.get("pinned") or False)
+    rec["archived"] = bool(rec.get("archived") or False)
+    rec["revision"] = max(1, int(rec.get("revision") or 1))
+    return rec
+
+
+def _clean_research_note_tags(value: object) -> list[str]:
+    if not isinstance(value, (list, tuple, set)):
+        return []
+    tags: list[str] = []
+    seen: set[str] = set()
+    for raw in value:
+        tag = " ".join(str(raw or "").replace("\x00", "").split())[:MAX_RESEARCH_NOTE_TAG_LEN]
+        key = tag.casefold()
+        if not tag or key in seen:
+            continue
+        seen.add(key)
+        tags.append(tag)
+        if len(tags) >= MAX_RESEARCH_NOTE_TAGS:
+            break
+    return tags
+
+
 def _research_brief_update_plan_record(row: sqlite3.Row | dict) -> dict:
     rec = dict(row)
     payload = _research_brief_json(rec.pop("payload_json", "{}"), default={})
@@ -1058,6 +1101,47 @@ class ChatStore:
             )
             conn.execute(
                 """
+                CREATE TABLE IF NOT EXISTS research_notes (
+                  id TEXT PRIMARY KEY,
+                  project_id TEXT,
+                  source_conv_id TEXT,
+                  title TEXT NOT NULL,
+                  content_markdown TEXT NOT NULL DEFAULT '',
+                  source_state_json TEXT NOT NULL DEFAULT '{}',
+                  tags_json TEXT NOT NULL DEFAULT '[]',
+                  pinned INTEGER NOT NULL DEFAULT 0,
+                  archived INTEGER NOT NULL DEFAULT 0,
+                  revision INTEGER NOT NULL DEFAULT 1,
+                  created_at REAL NOT NULL,
+                  updated_at REAL NOT NULL,
+                  FOREIGN KEY(project_id) REFERENCES projects(id) ON DELETE SET NULL,
+                  FOREIGN KEY(source_conv_id) REFERENCES conversations(id) ON DELETE SET NULL
+                );
+                """
+            )
+            for migration in (
+                "ALTER TABLE research_notes ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE research_notes ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+                "ALTER TABLE research_notes ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+            ):
+                try:
+                    conn.execute(migration)
+                except sqlite3.OperationalError:
+                    pass
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_notes_project_updated "
+                "ON research_notes(project_id, updated_at DESC);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_notes_conversation_updated "
+                "ON research_notes(source_conv_id, updated_at DESC);"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_research_notes_workspace_updated "
+                "ON research_notes(archived, pinned DESC, updated_at DESC);"
+            )
+            conn.execute(
+                """
                 CREATE TABLE IF NOT EXISTS research_briefs (
                   id TEXT PRIMARY KEY,
                   project_id TEXT NOT NULL,
@@ -1412,6 +1496,268 @@ class ChatStore:
             return json.dumps(value, ensure_ascii=False, allow_nan=False, default=str)
         except Exception:
             return json.dumps(fallback, ensure_ascii=False)
+
+    def create_research_note(
+        self,
+        *,
+        title: str,
+        content_markdown: str,
+        project_id: str | None = None,
+        source_conv_id: str | None = None,
+        source_state: dict | None = None,
+        tags: list[str] | None = None,
+        pinned: bool = False,
+        archived: bool = False,
+    ) -> dict | None:
+        note_id = uuid.uuid4().hex
+        now = time.time()
+        pid = str(project_id or "").strip() or None
+        source_cid = str(source_conv_id or "").strip() or None
+        clean_title = _research_brief_text(
+            title,
+            limit=MAX_RESEARCH_NOTE_TITLE_LEN,
+        ) or "Untitled research note"
+        clean_content = _research_brief_text(
+            content_markdown,
+            limit=MAX_RESEARCH_NOTE_CONTENT_LEN,
+            multiline=True,
+        )
+        clean_source_state = _sanitize_json_state_dict(source_state or {})
+        source_state_json = self._research_brief_json_text(clean_source_state, fallback={})
+        clean_tags = _clean_research_note_tags(tags or [])
+        tags_json = self._research_brief_json_text(clean_tags, fallback=[])
+        if len(source_state_json) > MAX_RESEARCH_NOTE_SOURCE_STATE_LEN:
+            return None
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            if pid and not self._project_exists(conn, pid):
+                return None
+            if source_cid:
+                source_row = conn.execute(
+                    "SELECT project_id FROM conversations WHERE id = ?",
+                    (source_cid,),
+                ).fetchone()
+                if not source_row:
+                    return None
+                source_project_id = str(source_row["project_id"] or "").strip() or None
+                if source_project_id != pid:
+                    return None
+            conn.execute(
+                """
+                INSERT INTO research_notes (
+                  id, project_id, source_conv_id, title, content_markdown,
+                  source_state_json, tags_json, pinned, archived,
+                  revision, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    note_id,
+                    pid,
+                    source_cid,
+                    clean_title,
+                    clean_content,
+                    source_state_json,
+                    tags_json,
+                    int(bool(pinned)),
+                    int(bool(archived)),
+                    1,
+                    now,
+                    now,
+                ),
+            )
+        return {
+            "id": note_id,
+            "project_id": pid,
+            "source_conv_id": source_cid,
+            "title": clean_title,
+            "content_markdown": clean_content,
+            "source_state": clean_source_state,
+            "tags": clean_tags,
+            "pinned": bool(pinned),
+            "archived": bool(archived),
+            "revision": 1,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    def list_research_notes(
+        self,
+        *,
+        project_id: str | None = None,
+        limit: int = 100,
+        scope: str = "context",
+        query: str = "",
+        archived: bool | None = False,
+    ) -> list[dict]:
+        pid = str(project_id or "").strip() or None
+        lim = max(1, min(500, int(limit or 100)))
+        clean_scope = str(scope or "context").strip().lower()
+        if clean_scope not in {"context", "all"}:
+            clean_scope = "context"
+        clean_query = " ".join(str(query or "").replace("\x00", "").split()).casefold()[:240]
+        where: list[str] = []
+        params: list[object] = []
+        if clean_scope == "context":
+            if pid:
+                where.append("project_id = ?")
+                params.append(pid)
+            else:
+                where.append("project_id IS NULL")
+        if archived is not None:
+            where.append("archived = ?")
+            params.append(int(bool(archived)))
+        if clean_query:
+            where.append(
+                "(LOWER(title) LIKE ? OR LOWER(content_markdown) LIKE ? "
+                "OR LOWER(tags_json) LIKE ? OR LOWER(source_state_json) LIKE ?)"
+            )
+            needle = f"%{clean_query}%"
+            params.extend([needle, needle, needle, needle])
+        where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+        params.append(lim)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT id, project_id, source_conv_id, title,
+                       '' AS content_markdown, source_state_json, tags_json,
+                       pinned, archived, revision, created_at, updated_at
+                FROM research_notes
+                {where_sql}
+                ORDER BY pinned DESC, updated_at DESC, created_at DESC
+                LIMIT ?
+                """,
+                tuple(params),
+            ).fetchall()
+        return [_research_note_record(row, include_content=False) for row in rows]
+
+    def get_research_note(self, note_id: str) -> dict | None:
+        nid = str(note_id or "").strip()
+        if not nid:
+            return None
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, project_id, source_conv_id, title,
+                       content_markdown, source_state_json, tags_json,
+                       pinned, archived,
+                       revision, created_at, updated_at
+                FROM research_notes
+                WHERE id = ?
+                """,
+                (nid,),
+            ).fetchone()
+        return _research_note_record(row) if row else None
+
+    def update_research_note(
+        self,
+        note_id: str,
+        *,
+        expected_revision: int | None = None,
+        title: str | None = None,
+        content_markdown: str | None = None,
+        source_state: dict | None = None,
+        tags: list[str] | None = None,
+        pinned: bool | None = None,
+        archived: bool | None = None,
+        project_id: str | None = None,
+        project_id_is_set: bool = False,
+    ) -> tuple[dict | None, bool]:
+        nid = str(note_id or "").strip()
+        if not nid:
+            return None, False
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            row = conn.execute(
+                "SELECT * FROM research_notes WHERE id = ?",
+                (nid,),
+            ).fetchone()
+            if not row:
+                return None, False
+            current = dict(row)
+            current_revision = max(1, int(current.get("revision") or 1))
+            if expected_revision is not None and int(expected_revision) != current_revision:
+                return _research_note_record(current), True
+            next_title = current["title"]
+            next_content = current["content_markdown"]
+            next_source_state_json = current["source_state_json"]
+            next_tags_json = current.get("tags_json") or "[]"
+            next_pinned = int(bool(current.get("pinned")))
+            next_archived = int(bool(current.get("archived")))
+            next_project_id = str(current.get("project_id") or "").strip() or None
+            if title is not None:
+                next_title = _research_brief_text(
+                    title,
+                    limit=MAX_RESEARCH_NOTE_TITLE_LEN,
+                ) or "Untitled research note"
+            if content_markdown is not None:
+                next_content = _research_brief_text(
+                    content_markdown,
+                    limit=MAX_RESEARCH_NOTE_CONTENT_LEN,
+                    multiline=True,
+                )
+            if source_state is not None:
+                clean_source_state = _sanitize_json_state_dict(source_state)
+                next_source_state_json = self._research_brief_json_text(clean_source_state, fallback={})
+                if len(next_source_state_json) > MAX_RESEARCH_NOTE_SOURCE_STATE_LEN:
+                    return None, False
+            if tags is not None:
+                next_tags_json = self._research_brief_json_text(
+                    _clean_research_note_tags(tags), fallback=[]
+                )
+            if pinned is not None:
+                next_pinned = int(bool(pinned))
+            if archived is not None:
+                next_archived = int(bool(archived))
+            if project_id_is_set:
+                next_project_id = str(project_id or "").strip() or None
+                if next_project_id and not self._project_exists(conn, next_project_id):
+                    return None, False
+            next_revision = current_revision + 1
+            now = time.time()
+            conn.execute(
+                """
+                UPDATE research_notes
+                SET project_id = ?, title = ?, content_markdown = ?, source_state_json = ?,
+                    tags_json = ?, pinned = ?, archived = ?,
+                    revision = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_project_id,
+                    next_title,
+                    next_content,
+                    next_source_state_json,
+                    next_tags_json,
+                    next_pinned,
+                    next_archived,
+                    next_revision,
+                    now,
+                    nid,
+                ),
+            )
+            current.update(
+                {
+                    "project_id": next_project_id,
+                    "title": next_title,
+                    "content_markdown": next_content,
+                    "source_state_json": next_source_state_json,
+                    "tags_json": next_tags_json,
+                    "pinned": next_pinned,
+                    "archived": next_archived,
+                    "revision": next_revision,
+                    "updated_at": now,
+                }
+            )
+        return _research_note_record(current), False
+
+    def delete_research_note(self, note_id: str) -> bool:
+        nid = str(note_id or "").strip()
+        if not nid:
+            return False
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            cur = conn.execute("DELETE FROM research_notes WHERE id = ?", (nid,))
+        return cur.rowcount > 0
 
     @staticmethod
     def _insert_research_brief_revision(conn: sqlite3.Connection, record: dict) -> None:

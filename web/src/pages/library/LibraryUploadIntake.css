@@ -68,6 +68,39 @@
   font-size: 12px;
 }
 
+.kb-lib-onboarding-sample {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--kb-lib-surface));
+}
+
+.kb-lib-onboarding-sample > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.kb-lib-onboarding-sample-title.ant-typography,
+.kb-lib-onboarding-sample-desc.ant-typography {
+  margin: 0;
+}
+
+.kb-lib-onboarding-sample-title.ant-typography {
+  color: var(--text-main);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.kb-lib-onboarding-sample-desc.ant-typography {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 @media (max-width: 760px) {
   .kb-lib-upload-meta-main {
     grid-template-columns: 1fr;
@@ -76,5 +109,10 @@
 
   .kb-lib-upload-dropzone .ant-upload.ant-upload-drag {
     min-height: 136px;
+  }
+
+  .kb-lib-onboarding-sample {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

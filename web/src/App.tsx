@@ -11,6 +11,7 @@ import { authGateBuildEnabled } from './api/authGate'
 
 const ChatPage = lazy(() => import('./pages/ChatPage'))
 const LibraryPage = lazy(() => import('./pages/LibraryPage'))
+const ResearchNotesPage = lazy(() => import('./pages/ResearchNotesPage'))
 const ReaderPage = lazy(() => import('./pages/ReaderPage'))
 
 function internalRoutesEnabled() {
@@ -81,6 +82,7 @@ function App() {
             <Route path="/reader/session/:sessionId" element={<ReaderPage />} />
             <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />
             <Route path="/library" element={<AppLayout><LibraryPage /></AppLayout>} />
+            <Route path="/notes" element={<AppLayout><ResearchNotesPage /></AppLayout>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>

@@ -1211,7 +1211,8 @@
   line-height: 1.35;
 }
 
-.kb-chat-side-shelf-host {
+.kb-chat-side-shelf-host,
+.kb-chat-side-notes-host {
   display: flex;
   height: 100%;
   min-height: 0;

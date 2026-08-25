@@ -1,5 +1,5 @@
 import { Button, Upload, Typography } from 'antd'
-import { UploadOutlined } from '@ant-design/icons'
+import { BookOutlined, UploadOutlined } from '@ant-design/icons'
 import './LibraryUploadIntake.css'
 
 const { Dragger } = Upload
@@ -11,7 +11,9 @@ type LibraryUploadIntakeProps = {
   uploadDraftCount: number
   showUploadWorkbench: boolean
   lockedMessage: string
+  showOnboardingSample: boolean
   onAddDrafts: (files: File[]) => void
+  onAddSample: () => void
   onToggleWorkbench: () => void
 }
 
@@ -21,7 +23,9 @@ export function LibraryUploadIntake({
   uploadDraftCount,
   showUploadWorkbench,
   lockedMessage,
+  showOnboardingSample,
   onAddDrafts,
+  onAddSample,
   onToggleWorkbench,
 }: LibraryUploadIntakeProps) {
   return (
@@ -49,6 +53,24 @@ export function LibraryUploadIntake({
           <Text type="secondary" className="kb-lib-upload-dropzone-note">{S.lib_upload_click_hint}</Text>
         </div>
       </Dragger>
+
+      {showOnboardingSample && uploadDraftCount === 0 ? (
+        <div className="kb-lib-onboarding-sample" data-testid="library-onboarding-sample">
+          <div>
+            <Text className="kb-lib-onboarding-sample-title">{S.lib_onboarding_sample_title}</Text>
+            <Text type="secondary" className="kb-lib-onboarding-sample-desc">
+              {S.lib_onboarding_sample_desc}
+            </Text>
+          </div>
+          <Button
+            icon={<BookOutlined />}
+            disabled={uploadLocked}
+            onClick={onAddSample}
+          >
+            {S.lib_onboarding_sample_action}
+          </Button>
+        </div>
+      ) : null}
 
       {(uploadDraftCount > 0 || uploadLocked) ? (
         <div className="kb-lib-upload-meta">

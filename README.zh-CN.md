@@ -16,15 +16,16 @@ Agent 规划、工具调用、主张核验、引用卡片和 React 追踪界面�
 
 ## 下载 Windows 测试版
 
-当前已发布测试版是
-[`v0.1.0-beta.12`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.12)。
+当前 Windows 测试候选版本是
+[`v0.1.0-beta.13`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.13)。
+只有该 Release 页面已经存在且完整发布门禁通过后，下列下载链接才代表正式发布资产。
 
 ### 应该下载哪个文件
 
 | Release 文件 | 用途 | 使用方法 |
 |---|---|---|
-| [`Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.12/Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe) | 推荐普通 Windows 用户使用 | 先核对 SHA-256，再运行安装向导。安装后从开始菜单或可选的桌面快捷方式打开 Pi_zaya。只安装到当前用户，不需要管理员权限。 |
-| [`Pi_zaya-v0.1.0-beta.12-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.12/Pi_zaya-v0.1.0-beta.12-windows-x64.zip) | 免安装、移动目录或排查问题 | 先核对 SHA-256，把 ZIP **完整解压**到普通文件夹，再双击 `Pi_zaya.exe`。 |
+| [`Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.13/Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe) | 推荐普通 Windows 用户使用 | 先核对 SHA-256，再运行安装向导。安装后从开始菜单或可选的桌面快捷方式打开 Pi_zaya。只安装到当前用户，不需要管理员权限。 |
+| [`Pi_zaya-v0.1.0-beta.13-windows-x64.zip`](https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.13/Pi_zaya-v0.1.0-beta.13-windows-x64.zip) | 免安装、移动目录或排查问题 | 先核对 SHA-256，把 ZIP **完整解压**到普通文件夹，再双击 `Pi_zaya.exe`。 |
 | `*.sha256` | 校验下载是否完整 | 这是文本校验文件，不是软件。使用 `Get-FileHash` 计算对应 EXE 或 ZIP 的 SHA-256，并与文件中的值比较。 |
 | `*.manifest.json` | 查看构建来源和签名状态 | 这是机器可读的版本、提交、许可证、包类型和签名记录，不是软件。 |
 | GitHub 自动生成的 Source code 压缩包 | 开发者从源码构建 | 这不是可直接运行的 Windows 软件。普通用户请选择安装器或便携 ZIP。 |
@@ -79,6 +80,7 @@ AI 问答和研究工作流需要文本模型。复杂扫描件、公式和图�
 | 基于证据的问答 | 在本地索引中检索证据，构造 RAG 上下文并生成有来源约束的回答。 |
 | 引用追踪 | 展示回答证据、来源卡片、参考文献上下文和阅读器定位目标。 |
 | 项目文献篮 | 收集论文与摘录，维持项目研究上下文并导出引用。 |
+| 研究笔记 | 保存回答结论或从阅读器加入带精确原文位置的文字、表格、公式与图片摘录；支持批注、标签、检索、置顶、归档、回到来源、多篇组合提纲，以及 Markdown/Word 导出。 |
 | 证据矩阵 | 按项目和版本整理方法、实验、指标、结果与限制；有事实的单元格绑定同一论文的精确证据，缺失内容保持为空。 |
 | 研究简报 | 只从已核验证据矩阵生成带版本和引用审计的简报，并支持受影响内容的增量更新。 |
 | 研究缺口队列 | 汇总缺失证据、不可比较项、过期简报和来源变化，形成需要人工确认的优先工作列表。 |

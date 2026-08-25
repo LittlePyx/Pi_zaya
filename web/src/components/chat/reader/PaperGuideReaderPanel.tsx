@@ -90,8 +90,10 @@ interface PaperGuideReaderPanelProps {
   activeHighlightFeedback: string
   onToggleSelectionHighlight: () => void
   onAddSelectionToShelf?: () => void
+  onAddSelectionToResearchNote?: () => void
   onRemoveActiveHighlight: () => void
   onAddActiveHighlightToShelf?: () => void
+  onAddActiveHighlightToResearchNote?: () => void
   onSetActiveHighlightFeedback?: (feedback: 'useful' | 'needs_check') => void
   onAskActiveHighlight: () => void
   onAskSelection: () => void
@@ -155,8 +157,10 @@ export function PaperGuideReaderPanel({
   activeHighlightFeedback,
   onToggleSelectionHighlight,
   onAddSelectionToShelf,
+  onAddSelectionToResearchNote,
   onRemoveActiveHighlight,
   onAddActiveHighlightToShelf,
+  onAddActiveHighlightToResearchNote,
   onSetActiveHighlightFeedback,
   onAskActiveHighlight,
   onAskSelection,
@@ -394,6 +398,17 @@ export function PaperGuideReaderPanel({
                     {S.reader_add_to_shelf || 'Shelf'}
                   </button>
                 ) : null}
+                {onAddSelectionToResearchNote ? (
+                  <button
+                    type="button"
+                    className="kb-reader-selection-action"
+                    onClick={onAddSelectionToResearchNote}
+                    title={S.reader_add_to_note_title || 'Save this selection to a research note'}
+                    data-testid="reader-selection-note"
+                  >
+                    {S.reader_add_to_note || 'Note'}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   className="kb-reader-selection-action is-accent"
@@ -455,6 +470,17 @@ export function PaperGuideReaderPanel({
                     data-testid="reader-highlight-menu-shelf"
                   >
                     {S.reader_add_to_shelf || 'Shelf'}
+                  </button>
+                ) : null}
+                {onAddActiveHighlightToResearchNote ? (
+                  <button
+                    type="button"
+                    className="kb-reader-selection-action"
+                    onClick={onAddActiveHighlightToResearchNote}
+                    title={S.reader_add_to_note_title || 'Save this selection to a research note'}
+                    data-testid="reader-highlight-menu-note"
+                  >
+                    {S.reader_add_to_note || 'Note'}
                   </button>
                 ) : null}
                 <button

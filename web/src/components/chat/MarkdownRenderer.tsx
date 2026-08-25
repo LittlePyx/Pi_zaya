@@ -854,6 +854,7 @@ interface Props {
   inlineTextTailLocateEnabled?: boolean
   locateSurfacePolicy?: Partial<Record<LocateSurfaceKind, boolean>>
   onReaderBlockAddToShelf?: (payload: ReaderBlockShelfPayload) => void
+  onReaderBlockAddToResearchNote?: (payload: ReaderBlockShelfPayload) => void
   variant?: 'chat' | 'reader'
   readerAnchors?: ReaderDocAnchor[]
   readerBlocks?: ReaderDocBlock[]
@@ -865,6 +866,7 @@ export interface ReaderBlockShelfPayload {
   blockId?: string
   anchorId?: string
   anchorKind?: string
+  assetSrc?: string
 }
 
 type LocateSurfaceKind = 'paragraph' | 'list_item' | 'quote' | 'blockquote' | 'equation' | 'figure' | 'table'
@@ -1722,6 +1724,7 @@ function buildMarkdownComponents(
   S?: Record<string, string>,
   onImagePreview?: (src: string, alt: string) => void,
   onReaderBlockAddToShelf?: (payload: ReaderBlockShelfPayload) => void,
+  onReaderBlockAddToResearchNote?: (payload: ReaderBlockShelfPayload) => void,
 ) {
   const effectiveInlineLocateTokenPolicy = normalizeInlineLocateTokenPolicy(inlineLocateTokenPolicy)
   const effectiveLocateSurfacePolicy = normalizeLocateSurfacePolicy(locateSurfacePolicy)
@@ -1811,8 +1814,9 @@ function buildMarkdownComponents(
     anchor: ReaderAnchorToken | null,
     fallback: ReactNode | string,
     fallbackKind?: 'figure' | 'equation' | 'table',
+    assetSrc?: string,
   ) => {
-    if (variant !== 'reader' || !onReaderBlockAddToShelf) return null
+    if (variant !== 'reader' || (!onReaderBlockAddToShelf && !onReaderBlockAddToResearchNote)) return null
     const kind = normalizeReaderAnchorKind(anchor?.kind || fallbackKind || '')
     if (!['figure', 'equation', 'table'].includes(kind)) return null
     let text = String(anchor?.text || '').replace(/\s+/g, ' ').trim()
@@ -1830,29 +1834,53 @@ function buildMarkdownComponents(
         ? (S?.locate_badge_fig || 'Fig')
         : (S?.locate_badge_table || 'Tbl')
     const title = S?.reader_add_to_shelf_title || 'Add to research basket'
+    const payload: ReaderBlockShelfPayload = {
+      text: excerpt,
+      headingPath: anchor?.headingPath,
+      blockId: anchor?.blockId,
+      anchorId: anchor?.anchorId,
+      anchorKind: kind,
+      assetSrc,
+    }
     return (
-      <button
-        type="button"
-        className={`kb-md-reader-block-shelf kb-md-reader-block-shelf-${kind}`}
-        title={title}
-        aria-label={title}
-        data-testid="reader-block-shelf"
-        data-kb-reader-block-kind={kind}
-        onClick={(event) => {
-          event.preventDefault()
-          event.stopPropagation()
-          onReaderBlockAddToShelf({
-            text: excerpt,
-            headingPath: anchor?.headingPath,
-            blockId: anchor?.blockId,
-            anchorId: anchor?.anchorId,
-            anchorKind: kind,
-          })
-        }}
-      >
-        <span className="kb-md-reader-block-shelf-kind" aria-hidden="true">{kindLabel}</span>
-        <span className="kb-md-reader-block-shelf-text">{label}</span>
-      </button>
+      <span className="kb-md-reader-block-actions">
+        {onReaderBlockAddToShelf ? (
+          <button
+            type="button"
+            className={`kb-md-reader-block-shelf kb-md-reader-block-shelf-${kind}`}
+            title={title}
+            aria-label={title}
+            data-testid="reader-block-shelf"
+            data-kb-reader-block-kind={kind}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onReaderBlockAddToShelf(payload)
+            }}
+          >
+            <span className="kb-md-reader-block-shelf-kind" aria-hidden="true">{kindLabel}</span>
+            <span className="kb-md-reader-block-shelf-text">{label}</span>
+          </button>
+        ) : null}
+        {onReaderBlockAddToResearchNote ? (
+          <button
+            type="button"
+            className={`kb-md-reader-block-shelf kb-md-reader-block-note kb-md-reader-block-shelf-${kind}`}
+            title={S?.reader_add_to_note_title || 'Save to research note'}
+            aria-label={S?.reader_add_to_note_title || 'Save to research note'}
+            data-testid="reader-block-note"
+            data-kb-reader-block-kind={kind}
+            onClick={(event) => {
+              event.preventDefault()
+              event.stopPropagation()
+              onReaderBlockAddToResearchNote(payload)
+            }}
+          >
+            <span className="kb-md-reader-block-shelf-kind" aria-hidden="true">{kindLabel}</span>
+            <span className="kb-md-reader-block-shelf-text">{S?.reader_add_to_note || 'Note'}</span>
+          </button>
+        ) : null}
+      </span>
     )
   }
 
@@ -2173,7 +2201,7 @@ function buildMarkdownComponents(
       const attrs = variant === 'reader'
         ? readerAnchorAttrs(anchor)
         : undefined
-      const shelfBtn = renderReaderBlockShelfButton(anchor, figureSnippet, 'figure')
+      const shelfBtn = renderReaderBlockShelfButton(anchor, figureSnippet, 'figure', resolvedSrc)
       const imageAlt = String(alt || 'figure')
       const imageTitle = S?.reader_expand_image || 'Expand image'
       const imageNode = (
@@ -2421,6 +2449,7 @@ export function MarkdownRenderer({
   inlineTextTailLocateEnabled = false,
   locateSurfacePolicy,
   onReaderBlockAddToShelf,
+  onReaderBlockAddToResearchNote,
   variant = 'chat',
   readerAnchors,
   readerBlocks,
@@ -2482,6 +2511,7 @@ export function MarkdownRenderer({
       setImagePreviewSize(null)
     },
     onReaderBlockAddToShelf,
+    onReaderBlockAddToResearchNote,
   )
   const parsedContract = variant === 'chat' ? parseAnswerContract(renderContent) : null
   const sectionLabelMap: Record<string, string> = {

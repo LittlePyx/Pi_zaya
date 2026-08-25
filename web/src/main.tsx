@@ -8,6 +8,7 @@ import './styles/chat.css'
 import './styles/chatMessages.css'
 import './styles/library.css'
 import './styles/auth.css'
+import './styles/researchNotes.css'
 
 installUserIssueReporter()
 

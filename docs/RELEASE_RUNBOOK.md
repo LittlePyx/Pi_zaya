@@ -1,6 +1,6 @@
 # Pi_zaya Release Runbook
 
-This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.12` is the current published downloadable beta. No later release candidate has been designated. The release uses a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
+This runbook governs downloadable Pi_zaya releases. `v0.1.0-beta.12` is the current published downloadable beta, and `v0.1.0-beta.13` is the active untagged candidate. The release uses a self-contained Windows x64 current-user installer and a portable ZIP. `v0.1.0-beta.5` was the first published downloadable beta.
 
 The current beta temporarily withholds the project evidence-matrix
 workspace and its matrix-dependent brief, gap, and project-status entrances
@@ -8,9 +8,10 @@ from ordinary builds while their synthesis quality contract is revised. The
 implementation, saved records, APIs, exports, and full internal regression
 suite remain present. Internal browser gates explicitly use
 `VITE_ENABLE_EVIDENCE_MATRIX_WORKSPACE=1`; downloadable builds must leave it
-unset. The immutable `v0.1.0-beta.12` tag advances `v0.1.0-beta.11`; neither
-tag may ever be moved or overwritten. Every later candidate must use a new
-version and pass its own untagged Windows preflight before tagging.
+unset. The immutable `v0.1.0-beta.12` tag advances `v0.1.0-beta.11` and must
+never be moved or overwritten. The `v0.1.0-beta.13` candidate must pass its own
+untagged Windows preflight before tagging; every later candidate must use a new
+version and repeat that sequence.
 
 ## Current release decision
 
@@ -57,7 +58,7 @@ The following fast build uses the current system Python only to validate portabl
   -AllowDirty
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.12-windows-x64 `
+  -BundleRoot .\.runtime\release-smoke\Pi_zaya-v0.1.0-beta.13-windows-x64 `
   -AllowDirty
 ```
 
@@ -80,24 +81,24 @@ cd ..
   -KeepStage
 
 .\tools\release\build_windows_installer.ps1 `
-  -StageRoot .\release\Pi_zaya-v0.1.0-beta.12-windows-x64 `
+  -StageRoot .\release\Pi_zaya-v0.1.0-beta.13-windows-x64 `
   -InnoSetupCompiler "C:\Program Files\Inno Setup 7\ISCC.exe"
 
 .\tools\release\smoke_windows_portable.ps1 `
-  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.12-windows-x64.zip `
+  -ArchivePath .\release\Pi_zaya-v0.1.0-beta.13-windows-x64.zip `
   -CleanProfile
 
 .\tools\release\smoke_windows_installer.ps1 `
-  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe
+  -InstallerPath .\release\Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe
 ```
 
 Verify the final checksum independently:
 
 ```powershell
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.12-windows-x64.zip -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.12-windows-x64.zip.sha256
-Get-FileHash .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe -Algorithm SHA256
-Get-Content .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.13-windows-x64.zip -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.13-windows-x64.zip.sha256
+Get-FileHash .\release\Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe -Algorithm SHA256
+Get-Content .\release\Pi_zaya-v0.1.0-beta.13-windows-x64-setup.exe.sha256
 ```
 
 ## Tag release
@@ -106,7 +107,7 @@ Get-Content .\release\Pi_zaya-v0.1.0-beta.12-windows-x64-setup.exe.sha256
 2. Update `VERSION`, both frontend version fields, `CHANGELOG.md`, and the reviewed bilingual `docs/releases/v<VERSION>.md` download guide.
 3. Confirm the normal CI workflow passes on the exact commit.
 4. Manually dispatch `.github/workflows/release-windows.yml` from that untagged commit and require the complete Windows gates, package build, and packaged-runtime smoke to pass. A manual dispatch retains verified artifacts but does not create a GitHub release.
-5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.12`.
+5. Only after the untagged Windows preflight succeeds, create and push the exact tag, such as `v0.1.0-beta.13`.
 6. The tag run repeats the complete backend, frontend, research, conversion, browser, portable-package, installer, and packaged-runtime gates on Windows.
 7. The workflow verifies and extracts the final ZIP under an isolated Windows profile, checks `/api/health`, `/api/app/version`, `/api/settings`, and the React root, then stops it through the packaged stop command.
 8. The workflow also silently installs into an isolated directory, repeats the runtime checks without system Python or Node.js, performs an in-place reinstall, uninstalls, and proves that the separate user-data sentinel remains.
@@ -329,6 +330,17 @@ the scheduler code was removed.
 - the published Setup is 60,891,858 bytes with SHA-256 `fb134b8a28229f9df470c9edd532a0daaefe490a9738b404e49f347fce843926`;
 - both published manifests record commit `a6ecda9a300d`, `source_dirty=false`, `license=MIT`, and the embedded Python runtime. No trusted certificate was configured, so Setup, launcher, and Uninstaller are explicitly recorded as `NotSigned`;
 - all six assets were downloaded again into a fresh verification directory. Both binaries matched their adjacent checksum files, the downloaded installer reported `NotSigned`, and the ZIP contained `VERSION=0.1.0-beta.12`, `LICENSE`, `Pi_zaya.exe`, and the 3,537-character Chinese guide covering Setup, portable use, API Key configuration, SHA-256 verification, and startup.
+
+### 2026-08-25 beta.13 candidate acceptance
+
+- the candidate adds persistent research notes, direct reader capture for selected text, Markdown tables, equations, and figures, exact source return, duplicate-range prevention, outline composition, and Markdown/Word export with Unicode-safe title filenames;
+- a real NatCommun single-photon-imaging paper was used to add a figure, table, and equation to one note, reopen the exact paper source, reject a repeated source range, and verify that the note and its three sources survived an application restart;
+- the first-use path now offers a self-authored sample PDF and distinguishes a document that is still converting from a profile that has not imported one;
+- `git diff --check`, Ruff, frontend lint/build, and the 11 release-foundation tests pass on the candidate tree;
+- backend unit passed 4,487 with 41 skips, and backend sanity passed 280 with 2 skips;
+- all research/evidence fixture dry runs, 6/6 grounded replay, 5/5 reviewed replay, and converter quality 13/13 pass;
+- browser smoke passed 144 with 3 build-mode skips, core citation/library regressions passed 113/113, ordinary-user isolation passed 4/4, evidence-workspace release isolation passed 1/1, and the dedicated library-quality suite passed 21/21;
+- at this checkpoint, beta.13 remains untagged pending normal CI and the complete untagged Windows preflight on the exact clean release commit. No beta.13 download, checksum, or GitHub Release is represented as published before those gates pass.
 
 ## Promotion gates after beta
 

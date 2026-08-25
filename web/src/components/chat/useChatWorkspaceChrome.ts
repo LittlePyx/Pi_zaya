@@ -34,6 +34,7 @@ export function useChatWorkspaceChrome({
   timelineItemCount,
   citationShelfOpen,
   citationShelfCount,
+  researchNotesCount,
   readerOpen,
   desktopReaderEligible,
   rightDockPanel,
@@ -45,6 +46,7 @@ export function useChatWorkspaceChrome({
   timelineItemCount: number
   citationShelfOpen: boolean
   citationShelfCount: number
+  researchNotesCount: number
   readerOpen: boolean
   desktopReaderEligible: boolean
   rightDockPanel: RightDockPanel
@@ -54,23 +56,28 @@ export function useChatWorkspaceChrome({
     const timelineUiReady = !conversationLoading && timelineItemCount > 0
     const dockTimelineAvailable = timelineUiReady && timelineItemCount > 1
     const dockShelfAvailable = citationShelfOpen || citationShelfCount > 0
+    const dockNotesAvailable = researchNotesCount > 0
     const dockReaderAvailable = readerOpen
-    const showRightDock = desktopReaderEligible && (dockTimelineAvailable || dockShelfAvailable || dockReaderAvailable)
+    const showRightDock = desktopReaderEligible && (dockTimelineAvailable || dockShelfAvailable || dockNotesAvailable || dockReaderAvailable)
     const activeRightDockPanel: RightDockPanel | null = showRightDock
       ? (
         rightDockPanel === 'reader' && dockReaderAvailable
           ? 'reader'
           : rightDockPanel === 'shelf' && (dockShelfAvailable || citationShelfOpen)
             ? 'shelf'
-            : rightDockPanel === 'timeline' && dockTimelineAvailable
-              ? 'timeline'
-              : dockReaderAvailable
-                ? 'reader'
-                : dockShelfAvailable
-                  ? 'shelf'
-                  : dockTimelineAvailable
-                    ? 'timeline'
-                    : null
+            : rightDockPanel === 'notes' && dockNotesAvailable
+              ? 'notes'
+              : rightDockPanel === 'timeline' && dockTimelineAvailable
+                ? 'timeline'
+                : dockReaderAvailable
+                  ? 'reader'
+                  : dockShelfAvailable
+                    ? 'shelf'
+                    : dockNotesAvailable
+                      ? 'notes'
+                      : dockTimelineAvailable
+                        ? 'timeline'
+                        : null
       )
       : null
 
@@ -79,6 +86,7 @@ export function useChatWorkspaceChrome({
       timelineUiReady,
       dockTimelineAvailable,
       dockShelfAvailable,
+      dockNotesAvailable,
       dockReaderAvailable,
       showRightDock,
       activeRightDockPanel,
@@ -101,6 +109,7 @@ export function useChatWorkspaceChrome({
     labels.timeline_guide_pending,
     labels.timeline_guide_ready,
     readerOpen,
+    researchNotesCount,
     researchContext.guideSource.label,
     researchContext.guideSource.ready,
     researchContext.mode,

@@ -135,6 +135,8 @@ export interface ReaderSelectionShelfPayload {
   conversationId?: string
   projectId?: string
   createdAt?: number
+  captureKind?: 'selection' | 'table' | 'equation' | 'figure'
+  assetSrc?: string
 }
 
 export interface ReaderCitationShelfPayload {
