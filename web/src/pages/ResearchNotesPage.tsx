@@ -50,6 +50,15 @@ import {
   workspaceDraftMatchesRecord,
   writeResearchNoteWorkspaceDraft,
 } from './researchNoteWorkspaceDraft'
+import {
+  buildResearchNoteOutline,
+  researchNoteOutlineConversationId,
+  researchNoteOutlineHasMixedProjects,
+  researchNoteOutlineProjectId,
+  researchNoteOutlineSources,
+  researchNoteOutlineSourceState,
+  researchNoteOutlineTags,
+} from './researchNoteOutline'
 
 const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
@@ -116,14 +125,6 @@ async function copyText(value: string) {
   if (!copied) throw new Error('clipboard-copy-failed')
 }
 
-function combinedOutline(title: string, notes: ResearchNoteRecord[]): string {
-  const sections = notes.map((note, index) => {
-    const body = String(note.content_markdown || '').trim()
-    return `## ${index + 1}. ${note.title}\n\n${body}`
-  })
-  return `# ${title}\n\n${sections.join('\n\n---\n\n')}`.trim()
-}
-
 export default function ResearchNotesPage() {
   const S = useT()
   const navigate = useNavigate()
@@ -162,6 +163,9 @@ export default function ResearchNotesPage() {
   const [combineContent, setCombineContent] = useState('')
   const [combinePreview, setCombinePreview] = useState(false)
   const [combining, setCombining] = useState(false)
+  const [combineSaving, setCombineSaving] = useState(false)
+  const [combineRecords, setCombineRecords] = useState<ResearchNoteRecord[]>([])
+  const [combineProjectId, setCombineProjectId] = useState<string | null>(null)
 
   const markDirty = useCallback(() => {
     draftVersionRef.current += 1
@@ -588,14 +592,63 @@ export default function ResearchNotesPage() {
     try {
       const records = await Promise.all(ids.map(id => chatApi.getResearchNote(id)))
       const title = S.research_notes_combine_default_title
+      setCombineRecords(records)
+      setCombineProjectId(researchNoteOutlineProjectId(records))
       setCombineTitle(title)
-      setCombineContent(combinedOutline(title, records))
+      setCombineContent(buildResearchNoteOutline(title, records))
       setCombinePreview(false)
       setCombineOpen(true)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
     } finally {
       setCombining(false)
+    }
+  }
+
+  const updateCombineTitle = (nextTitle: string) => {
+    const previousHeading = `# ${combineTitle.trim()}`
+    setCombineContent(current => {
+      const lines = current.split('\n')
+      if (String(lines[0] || '').trim() !== previousHeading) return current
+      lines[0] = `# ${nextTitle.trim()}`
+      return lines.join('\n')
+    })
+    setCombineTitle(nextTitle)
+  }
+
+  const saveCombinedOutline = async () => {
+    const title = combineTitle.trim()
+    const content = combineContent.trim()
+    if (!title || !content || combineRecords.length <= 0) return
+    setCombineSaving(true)
+    try {
+      const record = await chatApi.createResearchNote({
+        title,
+        content_markdown: content,
+        project_id: combineProjectId,
+        source_conv_id: researchNoteOutlineConversationId(combineRecords),
+        source_state: researchNoteOutlineSourceState(combineRecords),
+        tags: researchNoteOutlineTags(combineRecords),
+      })
+      setArchiveView('active')
+      setQuery('')
+      setProjectFilter(ALL_FILTER)
+      setSourceFilter(ALL_FILTER)
+      setTagFilter(ALL_FILTER)
+      setTimeFilter('all')
+      setSelectedIds(new Set())
+      setNotes(current => [
+        { ...record, content_markdown: '' },
+        ...current.filter(item => item.id !== record.id && !item.archived),
+      ])
+      setCombineOpen(false)
+      applyRecord(record)
+      setEditorMode('edit')
+      message.success(S.research_notes_outline_saved)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_notes_save_failed)
+    } finally {
+      setCombineSaving(false)
     }
   }
 
@@ -617,6 +670,8 @@ export default function ResearchNotesPage() {
   }
 
   const links = noteLinks(activeNote)
+  const outlineSources = researchNoteOutlineSources(activeNote)
+  const combineHasMixedProjects = researchNoteOutlineHasMixedProjects(combineRecords)
   const statusText = saving
     ? S.research_notes_saving
     : saveIssue === 'conflict'
@@ -912,39 +967,63 @@ export default function ResearchNotesPage() {
             <p>{S.research_notes_sources_hint}</p>
           </div>
           <div className="kb-notes-sources-list kb-main-scroll">
-            {!activeNote || links.length <= 0 ? (
+            {!activeNote || (links.length <= 0 && outlineSources.length <= 0) ? (
               <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.research_notes_no_sources} />
-            ) : links.map((link, index) => (
-              <article key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`} className="kb-notes-source-card">
-                <div className="kb-notes-source-kind">
-                  {link.kind === 'answer' ? <FileTextOutlined /> : <LinkOutlined />}
-                  <span>{link.kind === 'answer' ? S.research_notes_answer_source : S.research_notes_paper_source}</span>
-                </div>
-                <strong>{link.label || link.source_name || S.research_note_untitled_source}</strong>
-                {link.location_label || link.heading_path ? (
-                  <small>{S.research_notes_source_location} · {link.location_label || link.heading_path}</small>
+            ) : (
+              <>
+                {outlineSources.length > 0 ? (
+                  <article className="kb-notes-composition-card" data-testid="research-note-outline-sources">
+                    <div className="kb-notes-source-kind">
+                      <FileTextOutlined />
+                      <span>{S.research_notes_outline_sources.replace('{n}', String(outlineSources.length))}</span>
+                    </div>
+                    <div className="kb-notes-composition-links">
+                      {outlineSources.map(source => (
+                        <Button
+                          key={source.id}
+                          type="link"
+                          data-testid={`research-note-outline-source-${source.id}`}
+                          onClick={() => { void openNote(source.id) }}
+                        >
+                          {source.title}
+                        </Button>
+                      ))}
+                    </div>
+                  </article>
                 ) : null}
-                {link.evidence_quote ? (
-                  <blockquote>
-                    <span>{S.research_notes_source_quote}</span>
-                    {link.evidence_quote}
-                  </blockquote>
-                ) : null}
-                <Button
-                  type="link"
-                  icon={<ArrowRightOutlined />}
-                  disabled={link.kind === 'answer'
-                    ? !link.conversation_id || !link.message_id
-                    : !link.source_path}
-                  onClick={() => {
-                    if (link.kind === 'answer') openAnswer(link)
-                    else void openPaper(link)
-                  }}
-                >
-                  {link.kind === 'answer' ? S.research_notes_open_answer : S.research_notes_open_paper}
-                </Button>
-              </article>
-            ))}
+                {links.map((link, index) => (
+                  <article key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`} className="kb-notes-source-card">
+                    <div className="kb-notes-source-kind">
+                      {link.kind === 'answer' ? <FileTextOutlined /> : <LinkOutlined />}
+                      <span>{link.kind === 'answer' ? S.research_notes_answer_source : S.research_notes_paper_source}</span>
+                    </div>
+                    <strong>{link.label || link.source_name || S.research_note_untitled_source}</strong>
+                    {link.location_label || link.heading_path ? (
+                      <small>{S.research_notes_source_location} · {link.location_label || link.heading_path}</small>
+                    ) : null}
+                    {link.evidence_quote ? (
+                      <blockquote>
+                        <span>{S.research_notes_source_quote}</span>
+                        {link.evidence_quote}
+                      </blockquote>
+                    ) : null}
+                    <Button
+                      type="link"
+                      icon={<ArrowRightOutlined />}
+                      disabled={link.kind === 'answer'
+                        ? !link.conversation_id || !link.message_id
+                        : !link.source_path}
+                      onClick={() => {
+                        if (link.kind === 'answer') openAnswer(link)
+                        else void openPaper(link)
+                      }}
+                    >
+                      {link.kind === 'answer' ? S.research_notes_open_answer : S.research_notes_open_paper}
+                    </Button>
+                  </article>
+                ))}
+              </>
+            )}
           </div>
         </aside>
       </section>
@@ -953,7 +1032,9 @@ export default function ResearchNotesPage() {
         open={combineOpen}
         width={920}
         title={S.research_notes_combine_title}
-        onCancel={() => setCombineOpen(false)}
+        closable={!combineSaving}
+        maskClosable={!combineSaving}
+        onCancel={() => { if (!combineSaving) setCombineOpen(false) }}
         footer={[
           <Button key="copy" icon={<CopyOutlined />} onClick={() => {
             void copyText(combineContent).then(() => message.success(S.research_notes_copied))
@@ -961,14 +1042,42 @@ export default function ResearchNotesPage() {
           <Button key="markdown" icon={<FileMarkdownOutlined />} onClick={() => {
             downloadMarkdown(`${safeFilename(combineTitle, 'research-outline')}.md`, combineContent)
           }}>{S.research_notes_export_markdown}</Button>,
-          <Button key="word" type="primary" icon={<FileWordOutlined />} onClick={() => {
+          <Button key="word" icon={<FileWordOutlined />} onClick={() => {
             void chatApi.downloadResearchNoteDocx({ title: combineTitle, content_markdown: combineContent })
               .catch(() => message.error(S.research_notes_export_failed))
           }}>{S.research_notes_export_word}</Button>,
+          <Button
+            key="save"
+            type="primary"
+            icon={<SaveOutlined />}
+            loading={combineSaving}
+            disabled={!combineTitle.trim() || !combineContent.trim() || combineRecords.length <= 0}
+            data-testid="research-note-outline-save"
+            onClick={() => { void saveCombinedOutline() }}
+          >
+            {S.research_notes_save_outline}
+          </Button>,
         ]}
       >
         <div className="kb-notes-combine-modal">
-          <Input value={combineTitle} onChange={event => setCombineTitle(event.target.value)} />
+          <Input value={combineTitle} maxLength={240} onChange={event => updateCombineTitle(event.target.value)} />
+          <div className="kb-notes-combine-project-row">
+            <label>
+              <span><FolderOutlined /> {S.research_notes_project}</span>
+              <Select
+                value={combineProjectId || UNASSIGNED_PROJECT}
+                aria-label={S.research_notes_outline_project}
+                onChange={value => setCombineProjectId(value === UNASSIGNED_PROJECT ? null : value)}
+                options={[
+                  { value: UNASSIGNED_PROJECT, label: S.research_notes_unassigned },
+                  ...projects.map(project => ({ value: project.id, label: project.name })),
+                ]}
+              />
+            </label>
+            {combineHasMixedProjects && !combineProjectId ? (
+              <small>{S.research_notes_outline_mixed_project_hint}</small>
+            ) : null}
+          </div>
           <Segmented
             value={combinePreview ? 'preview' : 'edit'}
             options={[

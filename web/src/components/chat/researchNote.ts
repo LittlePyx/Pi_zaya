@@ -76,6 +76,41 @@ function sourceTitleFromPath(value: string): string {
     .trim() || ''
 }
 
+export function researchNoteSourceLinkIdentity(link: ResearchNoteSourceLink): string {
+  if (link.kind === 'answer') {
+    return `answer:${String(link.conversation_id || '').trim()}:${Number(link.message_id || 0)}`
+  }
+  const captureId = String(link.capture_id || '').trim()
+  if (captureId) return `capture:${captureId}`
+  const sourcePath = String(link.source_path || '')
+    .trim()
+    .replace(/\\/g, '/')
+    .toLowerCase()
+  const anchor = String(link.block_id || link.anchor_id || link.heading_path || link.label || '').trim()
+  const range = [
+    link.start_offset,
+    link.end_offset,
+    link.occurrence,
+    link.start_readable_index,
+    link.end_readable_index,
+  ].map(value => Number.isFinite(Number(value)) ? String(Number(value)) : '').join(':')
+  return `source:${sourcePath}|${anchor}|${range}`
+}
+
+export function mergeResearchNoteSourceLinks(
+  ...groups: ResearchNoteSourceLink[][]
+): ResearchNoteSourceLink[] {
+  const out: ResearchNoteSourceLink[] = []
+  const seen = new Set<string>()
+  for (const link of groups.flat()) {
+    const identity = researchNoteSourceLinkIdentity(link)
+    if (seen.has(identity)) continue
+    seen.add(identity)
+    out.push(link)
+  }
+  return out.slice(0, 240)
+}
+
 function normalizeDoi(value: string): string {
   return text(value)
     .replace(/^https?:\/\/(?:dx\.)?doi\.org\//i, '')

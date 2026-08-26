@@ -1,5 +1,15 @@
 import { expect, test, type Route } from '@playwright/test'
-import { downloadFilename, researchNoteDownloadFilename } from '../../src/api/chat'
+import {
+  downloadFilename,
+  researchNoteDownloadFilename,
+  type ResearchNoteRecord,
+} from '../../src/api/chat'
+import {
+  researchNoteOutlineHasMixedProjects,
+  researchNoteOutlineProjectId,
+  researchNoteOutlineSourceState,
+  researchNoteOutlineTags,
+} from '../../src/pages/researchNoteOutline'
 import { installAppShellMocks } from './mockAppShell'
 
 const PROJECT_ID = 'project-notes'
@@ -18,10 +28,56 @@ test('research note export prefers the UTF-8 title filename', () => {
   expect(researchNoteDownloadFilename('  单光子：结果 / 对比？  ')).toBe('单光子：结果 - 对比？.docx')
 })
 
+test('outline helpers inherit a shared project and deduplicate traceable sources', () => {
+  const source = {
+    kind: 'source',
+    label: 'Shared source',
+    source_path: SOURCE_PATH,
+    block_id: 'block-shared',
+  }
+  const notes: ResearchNoteRecord[] = [
+    {
+      id: 'outline-a',
+      project_id: PROJECT_ID,
+      source_conv_id: CONVERSATION_ID,
+      title: 'Outline A',
+      content_markdown: 'A',
+      source_state: { version: 1, links: [source] },
+      tags: ['SPAD', 'Noise'],
+      pinned: false,
+      archived: false,
+      revision: 2,
+      created_at: 1,
+      updated_at: 2,
+    },
+    {
+      id: 'outline-b',
+      project_id: PROJECT_ID,
+      source_conv_id: CONVERSATION_ID,
+      title: 'Outline B',
+      content_markdown: 'B',
+      source_state: { version: 1, links: [{ ...source }] },
+      tags: ['noise', 'detector'],
+      pinned: false,
+      archived: false,
+      revision: 3,
+      created_at: 1,
+      updated_at: 3,
+    },
+  ]
+
+  expect(researchNoteOutlineProjectId(notes)).toBe(PROJECT_ID)
+  expect(researchNoteOutlineHasMixedProjects(notes)).toBe(false)
+  expect(researchNoteOutlineTags(notes)).toEqual(['SPAD', 'Noise', 'detector'])
+  expect(researchNoteOutlineSourceState(notes).links).toHaveLength(1)
+  expect(researchNoteOutlineProjectId([{ ...notes[0], project_id: null }, notes[1]])).toBeNull()
+  expect(researchNoteOutlineHasMixedProjects([{ ...notes[0], project_id: null }, notes[1]])).toBe(true)
+})
+
 test('research notes workspace edits, combines, filters, and follows traceable sources', async ({ page }) => {
   let readerPayload: Record<string, unknown> | null = null
   let wordExportBody: Record<string, unknown> | null = null
-  let records = [
+  let records: ResearchNoteRecord[] = [
     {
       id: 'note-a',
       project_id: PROJECT_ID,
@@ -62,7 +118,31 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       source_conv_id: null,
       title: 'Detector trade-off',
       content_markdown: '## Finding\n\nDynamic range constrains the detector.',
-      source_state: { version: 1, links: [] },
+      source_state: {
+        version: 1,
+        links: [
+          {
+            kind: 'source',
+            label: 'Noise modeling duplicate',
+            source_name: 'Example SPAD paper',
+            source_path: SOURCE_PATH,
+            heading_path: 'Methods / Noise modeling',
+            evidence_quote: 'Photon arrival is a stochastic process.',
+            block_id: 'block-noise',
+            page_start: 3,
+          },
+          {
+            kind: 'source',
+            label: 'Detector dynamic range',
+            source_name: 'Detector paper',
+            source_path: 'db/paper/detector.md',
+            heading_path: 'Results / Dynamic range',
+            evidence_quote: 'Dynamic range constrains the detector.',
+            block_id: 'block-detector',
+            page_start: 5,
+          },
+        ],
+      },
       tags: ['detector'],
       pinned: false,
       archived: false,
@@ -117,11 +197,11 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       const record = {
         id: `note-${records.length + 1}`,
         project_id: body.project_id as string | null || null,
-        source_conv_id: null,
+        source_conv_id: body.source_conv_id as string | null || null,
         title: String(body.title || ''),
         content_markdown: String(body.content_markdown || ''),
-        source_state: body.source_state || { version: 1, links: [] },
-        tags: [],
+        source_state: body.source_state as ResearchNoteRecord['source_state'] || { version: 1, links: [] },
+        tags: Array.isArray(body.tags) ? body.tags as string[] : [],
         pinned: false,
         archived: false,
         revision: 1,
@@ -194,7 +274,35 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   const outline = page.getByRole('dialog', { name: '组合写作提纲' })
   await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/SPAD noise evidence note/)
   await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/Detector trade-off/)
-  await outline.getByRole('button', { name: 'Close' }).click()
+  await expect(outline).toContainText('所选笔记来自不同项目')
+  await outline.getByRole('textbox').nth(0).fill('Integrated SPAD writing outline')
+  await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/^# Integrated SPAD writing outline/)
+  const noteARevisionAtComposition = records.find(record => record.id === 'note-a')?.revision
+  await page.getByTestId('research-note-outline-save').click()
+  await expect(outline).toBeHidden()
+
+  const outlineRecord = records.find(record => record.title === 'Integrated SPAD writing outline')
+  expect(outlineRecord?.project_id).toBeNull()
+  expect(outlineRecord?.tags).toEqual(['SPAD', 'noise', 'detector'])
+  expect(outlineRecord?.source_state.links).toHaveLength(3)
+  expect(outlineRecord?.source_state.composition).toEqual({
+    kind: 'research_note_outline',
+    version: 1,
+    source_notes: [
+      { id: 'note-a', title: 'SPAD noise evidence note', revision: noteARevisionAtComposition },
+      { id: 'note-b', title: 'Detector trade-off', revision: 1 },
+    ],
+  })
+  await expect(titleInput).toHaveValue('Integrated SPAD writing outline')
+  await expect(page.getByTestId('research-note-outline-sources')).toContainText('组成笔记（2）')
+  await expect(workspace.locator('.kb-notes-source-card')).toHaveCount(3)
+
+  await page.reload()
+  await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
+  await expect(titleInput).toHaveValue('Integrated SPAD writing outline')
+  await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Edited, traceable conclusion/)
+  await page.getByTestId('research-note-outline-source-note-a').click()
+  await expect(titleInput).toHaveValue('SPAD noise evidence note')
 
   await workspace.getByRole('button', { name: '打开原文' }).click()
   await expect.poll(() => readerPayload?.sourcePath).toBe(SOURCE_PATH)

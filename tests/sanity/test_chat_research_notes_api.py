@@ -159,3 +159,61 @@ def test_chat_research_notes_workspace_list_and_metadata(monkeypatch, tmp_path: 
         params={"scope": "workspace", "archived": "later"},
     )
     assert invalid_query.status_code == 422
+
+
+def test_chat_research_outline_composition_survives_store_reopen(monkeypatch, tmp_path: Path) -> None:
+    from api.routers import chat as chat_router
+
+    db_path = tmp_path / "chat.sqlite3"
+    store = ChatStore(db_path)
+    first = store.create_research_note(title="First source note", content_markdown="First finding")
+    second = store.create_research_note(title="Second source note", content_markdown="Second finding")
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/research-notes",
+        json={
+            "title": "Persistent writing outline",
+            "content_markdown": "# Persistent writing outline\n\n## 1. First source note",
+            "source_state": {
+                "version": 1,
+                "links": [
+                    {
+                        "kind": "source",
+                        "label": "Grounded source",
+                        "source_path": "db/paper/source.md",
+                        "block_id": "block-source",
+                    }
+                ],
+                "composition": {
+                    "kind": "research_note_outline",
+                    "version": 1,
+                    "source_notes": [
+                        {"id": first["id"], "title": first["title"], "revision": first["revision"]},
+                        {"id": second["id"], "title": second["title"], "revision": second["revision"]},
+                    ],
+                },
+            },
+            "tags": ["outline", "evidence"],
+        },
+    )
+    assert response.status_code == 200
+    outline_id = response.json()["id"]
+
+    reopened = ChatStore(db_path)
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: reopened)
+    restored = client.get(f"/api/chat/research-notes/{outline_id}")
+
+    assert restored.status_code == 200
+    record = restored.json()
+    assert record["tags"] == ["outline", "evidence"]
+    assert record["source_state"]["links"][0]["block_id"] == "block-source"
+    assert record["source_state"]["composition"] == {
+        "kind": "research_note_outline",
+        "version": 1,
+        "source_notes": [
+            {"id": first["id"], "title": "First source note", "revision": 1},
+            {"id": second["id"], "title": "Second source note", "revision": 1},
+        ],
+    }

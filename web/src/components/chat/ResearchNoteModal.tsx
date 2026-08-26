@@ -11,7 +11,6 @@ import {
 import type {
   Message,
   ResearchNoteRecord,
-  ResearchNoteSourceLink,
   ResearchNoteSourceState,
 } from '../../api/chat'
 import { chatApi } from '../../api/chat'
@@ -23,6 +22,7 @@ import {
   buildResearchNoteAnswers,
   buildResearchNoteBody,
   buildResearchNoteSourceLinks,
+  mergeResearchNoteSourceLinks,
   researchNoteDefaultTitle,
   type ResearchNoteLabels,
 } from './researchNote'
@@ -77,20 +77,6 @@ async function writeClipboard(value: string): Promise<void> {
   const copied = document.execCommand('copy')
   textarea.remove()
   if (!copied) throw new Error('clipboard-copy-failed')
-}
-
-function mergeLinks(existing: ResearchNoteSourceLink[], incoming: ResearchNoteSourceLink[]): ResearchNoteSourceLink[] {
-  const out: ResearchNoteSourceLink[] = []
-  const seen = new Set<string>()
-  for (const link of [...existing, ...incoming]) {
-    const identity = link.kind === 'answer'
-      ? `answer:${link.conversation_id || ''}:${Number(link.message_id || 0)}`
-      : `source:${String(link.source_path || '').toLowerCase()}|${link.block_id || link.anchor_id || link.heading_path || link.label}`
-    if (seen.has(identity)) continue
-    seen.add(identity)
-    out.push(link)
-  }
-  return out.slice(0, 240)
 }
 
 function draftKey(projectId: string | null | undefined, convId: string | null | undefined, messageId: number | null) {
@@ -205,7 +191,7 @@ export function ResearchNoteModal({
       const nextSourceState: ResearchNoteSourceState = {
         ...record.source_state,
         version: 1,
-        links: mergeLinks(existingLinks, incomingLinks),
+        links: mergeResearchNoteSourceLinks(existingLinks, incomingLinks),
       }
       setCurrentNote(record)
       setTargetValue(record.id)
@@ -328,7 +314,7 @@ export function ResearchNoteModal({
       version: 1,
       selected_message_ids: ids,
       include_shelf: withShelf,
-      links: mergeLinks(Array.isArray(current.links) ? current.links : [], links),
+      links: mergeResearchNoteSourceLinks(Array.isArray(current.links) ? current.links : [], links),
     }))
   }
 
