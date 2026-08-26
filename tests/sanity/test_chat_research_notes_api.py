@@ -201,6 +201,57 @@ def test_chat_research_outline_composition_survives_store_reopen(monkeypatch, tm
     assert response.status_code == 200
     outline_id = response.json()["id"]
 
+    latest_first, conflicted = store.update_research_note(
+        first["id"],
+        expected_revision=1,
+        content_markdown="First finding with calibrated evidence",
+    )
+    assert conflicted is False
+    assert latest_first is not None
+    refresh_response = client.patch(
+        f"/api/chat/research-notes/{outline_id}",
+        json={
+            "expected_revision": 1,
+            "content_markdown": "# Persistent writing outline\n\n## 1. First source note\n\nFirst finding with calibrated evidence",
+            "source_state": {
+                "version": 1,
+                "links": [
+                    {
+                        "kind": "source",
+                        "label": "Grounded source",
+                        "source_path": "db/paper/source.md",
+                        "block_id": "block-source",
+                    }
+                ],
+                "composition": {
+                    "kind": "research_note_outline",
+                    "version": 1,
+                    "source_notes": [
+                        {
+                            "id": first["id"],
+                            "title": first["title"],
+                            "revision": 2,
+                            "content_fingerprint": "fnv1a32:1234abcd:39",
+                            "last_refreshed_at": 1_800_000_000,
+                        },
+                        {"id": second["id"], "title": second["title"], "revision": 1},
+                    ],
+                    "refresh_history": [
+                        {
+                            "source_id": first["id"],
+                            "from_revision": 1,
+                            "to_revision": 2,
+                            "refreshed_at": 1_800_000_000,
+                            "replaced_manual_edits": True,
+                        }
+                    ],
+                },
+            },
+        },
+    )
+    assert refresh_response.status_code == 200
+    assert refresh_response.json()["revision"] == 2
+
     reopened = ChatStore(db_path)
     monkeypatch.setattr(chat_router, "get_chat_store", lambda: reopened)
     restored = client.get(f"/api/chat/research-notes/{outline_id}")
@@ -213,7 +264,22 @@ def test_chat_research_outline_composition_survives_store_reopen(monkeypatch, tm
         "kind": "research_note_outline",
         "version": 1,
         "source_notes": [
-            {"id": first["id"], "title": "First source note", "revision": 1},
+            {
+                "id": first["id"],
+                "title": "First source note",
+                "revision": 2,
+                "content_fingerprint": "fnv1a32:1234abcd:39",
+                "last_refreshed_at": 1_800_000_000,
+            },
             {"id": second["id"], "title": "Second source note", "revision": 1},
+        ],
+        "refresh_history": [
+            {
+                "source_id": first["id"],
+                "from_revision": 1,
+                "to_revision": 2,
+                "refreshed_at": 1_800_000_000,
+                "replaced_manual_edits": True,
+            }
         ],
     }

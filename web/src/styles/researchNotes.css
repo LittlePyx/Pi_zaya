@@ -305,18 +305,117 @@
   background: color-mix(in srgb, var(--primary) 5%, var(--panel));
 }
 
+.kb-notes-composition-head,
+.kb-notes-composition-source,
+.kb-notes-composition-source-actions {
+  display: flex;
+  align-items: center;
+}
+
+.kb-notes-composition-head,
+.kb-notes-composition-source { justify-content: space-between; }
+
+.kb-notes-composition-head { gap: 8px; }
+
+.kb-notes-outline-update-summary {
+  min-height: 22px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.kb-notes-composition-card > .ant-alert {
+  margin-top: 8px;
+  padding: 7px 9px;
+  font-size: 11px;
+}
+
 .kb-notes-composition-links {
   display: grid;
-  gap: 2px;
+  gap: 7px;
   margin-top: 7px;
 }
 
-.kb-notes-composition-links .ant-btn {
+.kb-notes-composition-source {
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.kb-notes-composition-source > div:first-child {
+  min-width: 0;
+  display: grid;
+}
+
+.kb-notes-composition-source > div:first-child > small {
+  padding-left: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.kb-notes-composition-source .ant-btn-link {
   height: auto;
   padding: 3px 0;
   justify-content: flex-start;
   text-align: left;
   white-space: normal;
+}
+
+.kb-notes-composition-source-actions {
+  flex: none;
+  align-items: flex-end;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.kb-notes-composition-source-actions .ant-tag { margin-inline-end: 0; }
+
+.kb-notes-outline-review {
+  display: grid;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.kb-notes-outline-review-revision {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.kb-notes-outline-review-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.kb-notes-outline-review-columns section {
+  min-width: 0;
+  border: 1px solid var(--notes-border);
+  border-radius: 9px;
+  overflow: hidden;
+}
+
+.kb-notes-outline-review-columns h3 {
+  margin: 0;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--notes-border);
+  background: color-mix(in srgb, var(--bg) 65%, var(--panel));
+  color: var(--text);
+  font-size: 12px;
+}
+
+.kb-notes-outline-review-columns pre {
+  max-height: 48vh;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .kb-notes-source-kind {
@@ -543,6 +642,7 @@
   .kb-reader-note-new-fields { grid-template-columns: 1fr; }
   .kb-reader-note-capture-card > div { flex-wrap: wrap; }
   .kb-reader-note-capture-card small { width: 100%; margin-left: 0; }
+  .kb-notes-outline-review-columns { grid-template-columns: 1fr; }
 }
 
 @media (max-width: 1260px) {

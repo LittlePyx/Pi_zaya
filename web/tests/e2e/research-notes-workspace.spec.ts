@@ -5,9 +5,14 @@ import {
   type ResearchNoteRecord,
 } from '../../src/api/chat'
 import {
+  buildResearchNoteOutline,
+  refreshResearchNoteOutlineSource,
+  researchNoteContentFingerprint,
   researchNoteOutlineHasMixedProjects,
   researchNoteOutlineProjectId,
+  researchNoteOutlineSectionHasManualEdits,
   researchNoteOutlineSourceState,
+  researchNoteOutlineSourcesFromState,
   researchNoteOutlineTags,
 } from '../../src/pages/researchNoteOutline'
 import { installAppShellMocks } from './mockAppShell'
@@ -69,7 +74,58 @@ test('outline helpers inherit a shared project and deduplicate traceable sources
   expect(researchNoteOutlineProjectId(notes)).toBe(PROJECT_ID)
   expect(researchNoteOutlineHasMixedProjects(notes)).toBe(false)
   expect(researchNoteOutlineTags(notes)).toEqual(['SPAD', 'Noise', 'detector'])
-  expect(researchNoteOutlineSourceState(notes).links).toHaveLength(1)
+  const sourceState = researchNoteOutlineSourceState(notes)
+  const markdown = buildResearchNoteOutline('Traceable outline', notes)
+  const outlineSources = researchNoteOutlineSourcesFromState(sourceState)
+  expect(sourceState.links).toHaveLength(1)
+  expect(markdown).toContain('## 1. Outline A\n\nA')
+  expect(markdown).not.toContain('kb_research_note_source')
+  expect(outlineSources[0]?.content_fingerprint).toBe(researchNoteContentFingerprint('A'))
+  expect(researchNoteOutlineSectionHasManualEdits(markdown, outlineSources, 'outline-a')).toBe(false)
+
+  const latest = {
+    ...notes[0],
+    title: 'Outline A updated',
+    content_markdown: 'Latest A evidence',
+    revision: 4,
+  }
+  const refreshed = refreshResearchNoteOutlineSource(markdown, sourceState, latest, 1_800_000_000)
+  expect(refreshed?.contentMarkdown).toContain('## 1. Outline A updated\n\nLatest A evidence')
+  expect(refreshed?.contentMarkdown).not.toContain('\n\nA\n')
+  expect(researchNoteOutlineSourcesFromState(refreshed?.sourceState)[0]).toEqual({
+    id: 'outline-a',
+    title: 'Outline A updated',
+    revision: 4,
+    content_fingerprint: researchNoteContentFingerprint('Latest A evidence'),
+    last_refreshed_at: 1_800_000_000,
+  })
+  expect((refreshed?.sourceState.composition as { refresh_history?: unknown[] }).refresh_history).toEqual([
+    {
+      source_id: 'outline-a',
+      from_revision: 2,
+      to_revision: 4,
+      refreshed_at: 1_800_000_000,
+      replaced_manual_edits: false,
+    },
+  ])
+
+  const manuallyEdited = markdown.replace('\n\nA\n', '\n\nManual outline wording\n')
+  expect(researchNoteOutlineSectionHasManualEdits(manuallyEdited, outlineSources, 'outline-a')).toBe(true)
+  expect(refreshResearchNoteOutlineSource(manuallyEdited, sourceState, latest)?.hadManualEdits).toBe(true)
+
+  const nestedHeadingNotes = [
+    { ...notes[0], content_markdown: 'A\n\n---\n\n## 2. Nested numbered heading\n\nKeep this content.' },
+    notes[1],
+  ]
+  const nestedHeadingState = researchNoteOutlineSourceState(nestedHeadingNotes)
+  const nestedHeadingMarkdown = buildResearchNoteOutline('Nested headings', nestedHeadingNotes)
+  const refreshedSecond = refreshResearchNoteOutlineSource(
+    nestedHeadingMarkdown,
+    nestedHeadingState,
+    { ...notes[1], content_markdown: 'Latest B evidence', revision: 5 },
+  )
+  expect(refreshedSecond?.contentMarkdown).toContain('## 2. Nested numbered heading\n\nKeep this content.')
+  expect(refreshedSecond?.contentMarkdown).toContain('## 2. Outline B\n\nLatest B evidence')
   expect(researchNoteOutlineProjectId([{ ...notes[0], project_id: null }, notes[1]])).toBeNull()
   expect(researchNoteOutlineHasMixedProjects([{ ...notes[0], project_id: null }, notes[1]])).toBe(true)
 })
@@ -77,6 +133,7 @@ test('outline helpers inherit a shared project and deduplicate traceable sources
 test('research notes workspace edits, combines, filters, and follows traceable sources', async ({ page }) => {
   let readerPayload: Record<string, unknown> | null = null
   let wordExportBody: Record<string, unknown> | null = null
+  let failOutlineSaves = false
   let records: ResearchNoteRecord[] = [
     {
       id: 'note-a',
@@ -181,6 +238,10 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       const index = records.findIndex(item => item.id === noteId)
       const body = request.postDataJSON() as Record<string, unknown>
       const current = records[index]
+      if (failOutlineSaves && current?.title === 'Integrated SPAD writing outline') {
+        await fulfillJson(route, { detail: 'temporary outline save failure' }, 503)
+        return
+      }
       records[index] = {
         ...current,
         ...body,
@@ -289,9 +350,20 @@ test('research notes workspace edits, combines, filters, and follows traceable s
     kind: 'research_note_outline',
     version: 1,
     source_notes: [
-      { id: 'note-a', title: 'SPAD noise evidence note', revision: noteARevisionAtComposition },
-      { id: 'note-b', title: 'Detector trade-off', revision: 1 },
+      {
+        id: 'note-a',
+        title: 'SPAD noise evidence note',
+        revision: noteARevisionAtComposition,
+        content_fingerprint: expect.any(String),
+      },
+      {
+        id: 'note-b',
+        title: 'Detector trade-off',
+        revision: 1,
+        content_fingerprint: expect.any(String),
+      },
     ],
+    refresh_history: [],
   })
   await expect(titleInput).toHaveValue('Integrated SPAD writing outline')
   await expect(page.getByTestId('research-note-outline-sources')).toContainText('组成笔记（2）')
@@ -301,10 +373,101 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
   await expect(titleInput).toHaveValue('Integrated SPAD writing outline')
   await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Edited, traceable conclusion/)
-  await page.getByTestId('research-note-outline-source-note-a').click()
-  await expect(titleInput).toHaveValue('SPAD noise evidence note')
 
-  await workspace.getByRole('button', { name: '打开原文' }).click()
+  const outlineEditor = workspace.locator('.kb-notes-editor-body textarea')
+  const outlineBeforeManualEdit = await outlineEditor.inputValue()
+  await outlineEditor.fill(outlineBeforeManualEdit.replace(
+    'Edited, traceable conclusion.',
+    'Manual outline wording that must not be replaced silently.',
+  ))
+  await expect.poll(() => records.find(record => record.id === outlineRecord?.id)?.content_markdown)
+    .toContain('Manual outline wording')
+
+  const sourceIndex = records.findIndex(record => record.id === 'note-a')
+  const sourceBeforeUpdate = records[sourceIndex]
+  records[sourceIndex] = {
+    ...sourceBeforeUpdate,
+    title: 'SPAD noise evidence note · revised',
+    content_markdown: '## Finding\n\nUpdated source conclusion with calibrated evidence.',
+    source_state: {
+      ...sourceBeforeUpdate.source_state,
+      links: [
+        ...(sourceBeforeUpdate.source_state.links || []),
+        {
+          kind: 'source',
+          label: 'Calibration appendix',
+          source_path: 'db/paper/calibration.md',
+          block_id: 'block-calibration',
+        },
+      ],
+    },
+    revision: sourceBeforeUpdate.revision + 1,
+    updated_at: sourceBeforeUpdate.updated_at + 10,
+  }
+
+  await page.getByRole('button', { name: '检查来源笔记更新' }).click()
+  await expect(page.getByTestId('research-note-outline-update-summary')).toContainText('1 个来源有更新')
+  await expect(page.getByTestId('research-note-outline-status-note-a')).toContainText(
+    `来源修订 ${noteARevisionAtComposition} → ${records[sourceIndex].revision}`,
+  )
+  await page.getByTestId('research-note-outline-review-note-a').click()
+  const updateReview = page.getByTestId('research-note-outline-review-dialog')
+  await expect(updateReview).toContainText('Manual outline wording that must not be replaced silently.')
+  await expect(updateReview).toContainText('Updated source conclusion with calibrated evidence.')
+  await expect(updateReview).toContainText('已有手工修改')
+  failOutlineSaves = true
+  await page.getByTestId('research-note-outline-apply-refresh').click()
+
+  await expect(page.getByTestId('research-note-save-state')).toContainText('保存失败')
+  const durableRefreshDraft = await page.evaluate(noteId => {
+    const raw = localStorage.getItem(`kb:research-note-workspace-draft:${noteId}`)
+    return raw ? JSON.parse(raw) as Record<string, unknown> : null
+  }, String(outlineRecord?.id || ''))
+  expect(durableRefreshDraft?.contentMarkdown).toContain('Updated source conclusion with calibrated evidence.')
+  expect(durableRefreshDraft?.sourceState).toEqual(expect.objectContaining({
+    composition: expect.objectContaining({
+      refresh_history: [expect.objectContaining({ source_id: 'note-a', replaced_manual_edits: true })],
+    }),
+  }))
+
+  await page.reload()
+  await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
+  await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Updated source conclusion with calibrated evidence/)
+  await expect(page.getByTestId('research-note-save-state')).toContainText('保存失败')
+  failOutlineSaves = false
+  await page.getByTestId('research-note-save-now').click()
+  await expect.poll(() => records.find(record => record.id === outlineRecord?.id)?.content_markdown)
+    .toContain('Updated source conclusion with calibrated evidence.')
+  const refreshedOutline = records.find(record => record.id === outlineRecord?.id)
+  const refreshedComposition = refreshedOutline?.source_state.composition as {
+    source_notes?: Array<{ id: string; revision: number; last_refreshed_at?: number }>
+    refresh_history?: Array<Record<string, unknown>>
+  }
+  expect(refreshedComposition.source_notes?.find(source => source.id === 'note-a')?.revision)
+    .toBe(records[sourceIndex].revision)
+  expect(refreshedComposition.source_notes?.find(source => source.id === 'note-a')?.last_refreshed_at)
+    .toEqual(expect.any(Number))
+  expect(refreshedComposition.refresh_history?.at(-1)).toEqual(expect.objectContaining({
+    source_id: 'note-a',
+    from_revision: noteARevisionAtComposition,
+    to_revision: records[sourceIndex].revision,
+    replaced_manual_edits: true,
+  }))
+  expect(refreshedOutline?.source_state.links).toHaveLength(4)
+
+  await page.reload()
+  await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
+  await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Updated source conclusion with calibrated evidence/)
+  await expect(page.getByTestId('research-note-outline-update-summary')).toContainText('来源均为最新')
+  await expect(page.getByTestId('research-note-outline-status-note-a')).toContainText('刷新于')
+  records = records.filter(record => record.id !== 'note-b')
+  await page.getByRole('button', { name: '检查来源笔记更新' }).click()
+  await expect(page.getByTestId('research-note-outline-update-summary')).toContainText('1 个来源不可用')
+  await expect(page.getByTestId('research-note-outline-status-note-b')).toContainText('不可用')
+  await page.getByTestId('research-note-outline-source-note-a').click()
+  await expect(titleInput).toHaveValue('SPAD noise evidence note · revised')
+
+  await workspace.getByRole('button', { name: '打开原文' }).first().click()
   await expect.poll(() => readerPayload?.sourcePath).toBe(SOURCE_PATH)
   await expect(page).toHaveURL(/\/reader\/session\/reader-note-source/)
 

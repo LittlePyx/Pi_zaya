@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
+  Alert,
   Button,
   Checkbox,
   Empty,
@@ -17,6 +18,7 @@ import {
   ArrowRightOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DiffOutlined,
   FileMarkdownOutlined,
   FileTextOutlined,
   FileWordOutlined,
@@ -35,6 +37,7 @@ import {
   chatApi,
   type ResearchNoteRecord,
   type ResearchNoteSourceLink,
+  type ResearchNoteSourceState,
   type ResearchNoteUpdateBody,
 } from '../api/chat'
 import { MarkdownRenderer } from '../components/chat/MarkdownRenderer'
@@ -55,19 +58,42 @@ import {
   researchNoteOutlineConversationId,
   researchNoteOutlineHasMixedProjects,
   researchNoteOutlineProjectId,
-  researchNoteOutlineSources,
+  researchNoteOutlineSectionContent,
+  researchNoteOutlineSectionHasManualEdits,
   researchNoteOutlineSourceState,
+  researchNoteOutlineSourcesFromState,
   researchNoteOutlineTags,
+  refreshResearchNoteOutlineSource,
+  type ResearchNoteOutlineSource,
 } from './researchNoteOutline'
 
 const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
+type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
+
+interface OutlineSourceFreshness {
+  source: ResearchNoteOutlineSource
+  status: OutlineFreshnessStatus
+  latestRevision?: number
+  latestTitle?: string
+}
+
+interface OutlineSourceReview {
+  source: ResearchNoteOutlineSource
+  latest: ResearchNoteRecord
+  currentSection: string
+  hasManualEdits: boolean
+}
+
+function sourceStateLinks(sourceState: ResearchNoteSourceState | null | undefined): ResearchNoteSourceLink[] {
+  return Array.isArray(sourceState?.links)
+    ? sourceState.links.filter((link): link is ResearchNoteSourceLink => Boolean(link && typeof link === 'object'))
+    : []
+}
 
 function noteLinks(note: ResearchNoteRecord | null | undefined): ResearchNoteSourceLink[] {
-  return Array.isArray(note?.source_state?.links)
-    ? note.source_state.links.filter((link): link is ResearchNoteSourceLink => Boolean(link && typeof link === 'object'))
-    : []
+  return sourceStateLinks(note?.source_state)
 }
 
 function sourceLabel(link: ResearchNoteSourceLink): string {
@@ -156,7 +182,15 @@ export default function ResearchNotesPage() {
   const [draftContent, setDraftContent] = useState('')
   const [draftProjectId, setDraftProjectId] = useState<string | null>(null)
   const [draftTags, setDraftTags] = useState<string[]>([])
+  const [draftSourceState, setDraftSourceState] = useState<ResearchNoteSourceState>({})
   const [draftBaseRevision, setDraftBaseRevision] = useState(1)
+
+  const [outlineCheckVersion, setOutlineCheckVersion] = useState(0)
+  const [outlineFreshness, setOutlineFreshness] = useState<OutlineSourceFreshness[]>([])
+  const [outlineChecking, setOutlineChecking] = useState(false)
+  const [outlineReviewLoadingId, setOutlineReviewLoadingId] = useState('')
+  const [outlineReview, setOutlineReview] = useState<OutlineSourceReview | null>(null)
+  const outlineCheckRequestRef = useRef(0)
 
   const [combineOpen, setCombineOpen] = useState(false)
   const [combineTitle, setCombineTitle] = useState(S.research_notes_combine_default_title)
@@ -180,11 +214,13 @@ export default function ResearchNotesPage() {
     activeIdRef.current = record.id
     setActiveNote(record)
     setActiveId(record.id)
+    setOutlineReview(null)
     if (localDraft && shouldRestoreDraft) {
       setDraftTitle(localDraft.title)
       setDraftContent(localDraft.contentMarkdown)
       setDraftProjectId(localDraft.projectId)
       setDraftTags(localDraft.tags)
+      setDraftSourceState(localDraft.sourceState || record.source_state || {})
       setDraftBaseRevision(localDraft.baseRevision)
       const conflicted = localDraft.baseRevision !== record.revision
       setConflictRecord(conflicted ? record : null)
@@ -197,6 +233,7 @@ export default function ResearchNotesPage() {
     setDraftContent(record.content_markdown)
     setDraftProjectId(record.project_id || null)
     setDraftTags(Array.isArray(record.tags) ? record.tags : [])
+    setDraftSourceState(record.source_state || {})
     setDraftBaseRevision(record.revision)
     setConflictRecord(null)
     setSaveIssue(null)
@@ -238,7 +275,10 @@ export default function ResearchNotesPage() {
   }, [loadNotes])
 
   useEffect(() => {
-    const refresh = () => { void loadNotes() }
+    const refresh = () => {
+      void loadNotes()
+      setOutlineCheckVersion(current => current + 1)
+    }
     window.addEventListener(RESEARCH_NOTES_CHANGED_EVENT, refresh)
     const channel = typeof BroadcastChannel !== 'undefined'
       ? new BroadcastChannel(RESEARCH_NOTES_SYNC_CHANNEL)
@@ -293,8 +333,9 @@ export default function ResearchNotesPage() {
       contentMarkdown: draftContent,
       projectId: draftProjectId,
       tags: draftTags,
+      sourceState: draftSourceState,
     })
-  }, [activeNote, dirty, draftBaseRevision, draftContent, draftProjectId, draftTags, draftTitle])
+  }, [activeNote, dirty, draftBaseRevision, draftContent, draftProjectId, draftSourceState, draftTags, draftTitle])
 
   useEffect(() => {
     if (!dirty && !saving) return
@@ -305,6 +346,104 @@ export default function ResearchNotesPage() {
     window.addEventListener('beforeunload', keepDraft)
     return () => window.removeEventListener('beforeunload', keepDraft)
   }, [dirty, saving])
+
+  const outlineSources = useMemo(
+    () => researchNoteOutlineSourcesFromState(draftSourceState),
+    [draftSourceState],
+  )
+  const outlineSourceSignature = useMemo(
+    () => outlineSources.map(source => `${source.id}:${source.revision}`).join('|'),
+    [outlineSources],
+  )
+
+  useEffect(() => {
+    const requestId = ++outlineCheckRequestRef.current
+    if (!activeNote || outlineSources.length <= 0) {
+      setOutlineChecking(false)
+      setOutlineFreshness([])
+      return
+    }
+    setOutlineChecking(true)
+    setOutlineFreshness(outlineSources.map(source => ({ source, status: 'checking' })))
+    void chatApi.listResearchNotes(null, 500, { scope: 'all', archived: 'all' })
+      .then(records => {
+        if (requestId !== outlineCheckRequestRef.current || activeIdRef.current !== activeNote.id) return
+        const latestById = new Map(records.map(record => [record.id, record]))
+        setOutlineFreshness(outlineSources.map(source => {
+          const latest = latestById.get(source.id)
+          if (!latest) return { source, status: 'missing' }
+          return {
+            source,
+            status: latest.revision > source.revision ? 'updated' : 'current',
+            latestRevision: latest.revision,
+            latestTitle: latest.title,
+          }
+        }))
+      })
+      .catch(() => {
+        if (requestId !== outlineCheckRequestRef.current || activeIdRef.current !== activeNote.id) return
+        setOutlineFreshness(outlineSources.map(source => ({ source, status: 'error' })))
+      })
+      .finally(() => {
+        if (requestId === outlineCheckRequestRef.current && activeIdRef.current === activeNote.id) {
+          setOutlineChecking(false)
+        }
+      })
+    return () => {
+      if (requestId === outlineCheckRequestRef.current) outlineCheckRequestRef.current += 1
+    }
+  }, [activeNote, outlineCheckVersion, outlineSourceSignature, outlineSources])
+
+  const reviewOutlineSourceUpdate = async (item: OutlineSourceFreshness) => {
+    if (!activeNote || item.status !== 'updated') return
+    const noteId = activeNote.id
+    setOutlineReviewLoadingId(item.source.id)
+    try {
+      const latest = await chatApi.getResearchNote(item.source.id)
+      if (activeIdRef.current !== noteId) return
+      const currentSection = researchNoteOutlineSectionContent(
+        draftContent,
+        outlineSources,
+        item.source.id,
+      )
+      if (currentSection === null) {
+        message.error(S.research_notes_outline_section_missing)
+        return
+      }
+      setOutlineReview({
+        source: item.source,
+        latest,
+        currentSection,
+        hasManualEdits: researchNoteOutlineSectionHasManualEdits(
+          draftContent,
+          outlineSources,
+          item.source.id,
+        ),
+      })
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_notes_outline_refresh_load_failed)
+    } finally {
+      setOutlineReviewLoadingId('')
+    }
+  }
+
+  const applyOutlineSourceRefresh = () => {
+    if (!outlineReview || saveIssue === 'conflict') return
+    const result = refreshResearchNoteOutlineSource(
+      draftContent,
+      draftSourceState,
+      outlineReview.latest,
+    )
+    if (!result) {
+      message.error(S.research_notes_outline_section_missing)
+      return
+    }
+    setDraftContent(result.contentMarkdown)
+    setDraftSourceState(result.sourceState)
+    markDirty()
+    setOutlineReview(null)
+    message.success(S.research_notes_outline_refresh_applied)
+  }
 
   const saveDraftNow = useCallback(async (): Promise<boolean> => {
     if (!activeNote || !dirty || saving || saveIssue === 'conflict') return false
@@ -319,10 +458,12 @@ export default function ResearchNotesPage() {
         content_markdown: draftContent.trim() || S.research_notes_new_default_body,
         project_id: draftProjectId,
         tags: draftTags,
+        source_state: draftSourceState,
       })
       upsertSummary(record)
       if (activeIdRef.current === noteId) {
         setActiveNote(record)
+        setDraftSourceState(record.source_state || {})
         setDraftBaseRevision(record.revision)
         setConflictRecord(null)
         setSaveIssue(null)
@@ -367,6 +508,7 @@ export default function ResearchNotesPage() {
     draftBaseRevision,
     draftContent,
     draftProjectId,
+    draftSourceState,
     draftTags,
     draftTitle,
     saving,
@@ -434,6 +576,7 @@ export default function ResearchNotesPage() {
       setDraftBaseRevision(record.revision)
       setDraftProjectId(record.project_id || null)
       setDraftTags(record.tags || [])
+      setDraftSourceState(record.source_state || {})
       upsertSummary(record)
       if (patch.archived !== undefined) {
         noteRequestRef.current += 1
@@ -493,7 +636,7 @@ export default function ResearchNotesPage() {
         content_markdown: draftContent.trim() || S.research_notes_new_default_body,
         project_id: draftProjectId,
         source_conv_id: activeNote.source_conv_id || null,
-        source_state: activeNote.source_state,
+        source_state: draftSourceState,
         tags: draftTags,
       })
       clearResearchNoteWorkspaceDraft(originalId)
@@ -669,9 +812,19 @@ export default function ResearchNotesPage() {
     }
   }
 
-  const links = noteLinks(activeNote)
-  const outlineSources = researchNoteOutlineSources(activeNote)
+  const links = sourceStateLinks(draftSourceState)
   const combineHasMixedProjects = researchNoteOutlineHasMixedProjects(combineRecords)
+  const freshnessMatchesOutline = outlineFreshness
+    .map(item => `${item.source.id}:${item.source.revision}`)
+    .join('|') === outlineSourceSignature
+  const displayedOutlineFreshness: OutlineSourceFreshness[] = freshnessMatchesOutline && outlineFreshness.length > 0
+    ? outlineFreshness
+    : outlineSources.map(source => ({ source, status: 'checking' }))
+  const outlineIsChecking = outlineChecking
+    || displayedOutlineFreshness.some(item => item.status === 'checking')
+  const outlineUpdatedCount = displayedOutlineFreshness.filter(item => item.status === 'updated').length
+  const outlineMissingCount = displayedOutlineFreshness.filter(item => item.status === 'missing').length
+  const outlineCheckFailed = displayedOutlineFreshness.some(item => item.status === 'error')
   const statusText = saving
     ? S.research_notes_saving
     : saveIssue === 'conflict'
@@ -973,21 +1126,97 @@ export default function ResearchNotesPage() {
               <>
                 {outlineSources.length > 0 ? (
                   <article className="kb-notes-composition-card" data-testid="research-note-outline-sources">
-                    <div className="kb-notes-source-kind">
-                      <FileTextOutlined />
-                      <span>{S.research_notes_outline_sources.replace('{n}', String(outlineSources.length))}</span>
+                    <div className="kb-notes-composition-head">
+                      <div className="kb-notes-source-kind">
+                        <FileTextOutlined />
+                        <span>{S.research_notes_outline_sources.replace('{n}', String(outlineSources.length))}</span>
+                      </div>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<ReloadOutlined />}
+                        loading={outlineIsChecking}
+                        aria-label={S.research_notes_outline_check_updates}
+                        onClick={() => setOutlineCheckVersion(current => current + 1)}
+                      />
                     </div>
+                    <div
+                      className="kb-notes-outline-update-summary"
+                      data-testid="research-note-outline-update-summary"
+                      role="status"
+                      aria-live="polite"
+                    >
+                      {outlineIsChecking ? S.research_notes_outline_checking : null}
+                      {!outlineIsChecking && outlineUpdatedCount > 0 ? (
+                        <Tag color="orange">
+                          {S.research_notes_outline_updates_available.replace('{n}', String(outlineUpdatedCount))}
+                        </Tag>
+                      ) : null}
+                      {!outlineIsChecking && outlineMissingCount > 0 ? (
+                        <Tag color="red">
+                          {S.research_notes_outline_missing_count.replace('{n}', String(outlineMissingCount))}
+                        </Tag>
+                      ) : null}
+                      {!outlineIsChecking && !outlineCheckFailed && outlineUpdatedCount <= 0 && outlineMissingCount <= 0 ? (
+                        <Tag color="green">{S.research_notes_outline_up_to_date}</Tag>
+                      ) : null}
+                    </div>
+                    {outlineCheckFailed ? (
+                      <Alert type="warning" showIcon message={S.research_notes_outline_check_failed} />
+                    ) : null}
                     <div className="kb-notes-composition-links">
-                      {outlineSources.map(source => (
-                        <Button
-                          key={source.id}
-                          type="link"
-                          data-testid={`research-note-outline-source-${source.id}`}
-                          onClick={() => { void openNote(source.id) }}
-                        >
-                          {source.title}
-                        </Button>
-                      ))}
+                      {displayedOutlineFreshness.map(item => (
+                          <div
+                            key={item.source.id}
+                            className={`kb-notes-composition-source is-${item.status}`}
+                            data-testid={`research-note-outline-status-${item.source.id}`}
+                          >
+                            <div>
+                              <Button
+                                type="link"
+                                data-testid={`research-note-outline-source-${item.source.id}`}
+                                disabled={item.status === 'missing' || item.status === 'error'}
+                                onClick={() => { void openNote(item.source.id) }}
+                              >
+                                {item.latestTitle || item.source.title}
+                              </Button>
+                              <small>
+                                {item.status === 'updated' && item.latestRevision
+                                  ? S.research_notes_outline_revision_change
+                                    .replace('{from}', String(item.source.revision))
+                                    .replace('{to}', String(item.latestRevision))
+                                  : S.research_notes_outline_revision.replace('{n}', String(item.source.revision))}
+                                {item.source.last_refreshed_at
+                                  ? ` · ${S.research_notes_outline_last_refreshed.replace('{time}', formatUpdated(item.source.last_refreshed_at))}`
+                                  : ''}
+                              </small>
+                            </div>
+                            <div className="kb-notes-composition-source-actions">
+                              <Tag color={item.status === 'updated' ? 'orange' : item.status === 'current' ? 'green' : item.status === 'checking' ? 'default' : 'red'}>
+                                {item.status === 'updated'
+                                  ? S.research_notes_outline_source_updated
+                                  : item.status === 'current'
+                                    ? S.research_notes_outline_source_current
+                                    : item.status === 'checking'
+                                      ? S.research_notes_outline_checking_short
+                                      : item.status === 'missing'
+                                        ? S.research_notes_outline_source_missing
+                                        : S.research_notes_outline_source_error}
+                              </Tag>
+                              {item.status === 'updated' ? (
+                                <Button
+                                  size="small"
+                                  icon={<DiffOutlined />}
+                                  loading={outlineReviewLoadingId === item.source.id}
+                                  data-testid={`research-note-outline-review-${item.source.id}`}
+                                  onClick={() => { void reviewOutlineSourceUpdate(item) }}
+                                >
+                                  {S.research_notes_outline_review_update}
+                                </Button>
+                              ) : null}
+                            </div>
+                          </div>
+                        ))}
                     </div>
                   </article>
                 ) : null}
@@ -1027,6 +1256,57 @@ export default function ResearchNotesPage() {
           </div>
         </aside>
       </section>
+
+      <Modal
+        open={Boolean(outlineReview)}
+        width={980}
+        title={outlineReview
+          ? S.research_notes_outline_refresh_title.replace('{title}', outlineReview.latest.title)
+          : S.research_notes_outline_refresh_title.replace('{title}', '')}
+        onCancel={() => setOutlineReview(null)}
+        maskClosable={!saving}
+        footer={[
+          <Button key="cancel" onClick={() => setOutlineReview(null)}>{S.confirm_cancel}</Button>,
+          <Button
+            key="apply"
+            type="primary"
+            danger={Boolean(outlineReview?.hasManualEdits)}
+            disabled={saving || saveIssue === 'conflict'}
+            data-testid="research-note-outline-apply-refresh"
+            onClick={applyOutlineSourceRefresh}
+          >
+            {S.research_notes_outline_refresh_apply}
+          </Button>,
+        ]}
+      >
+        {outlineReview ? (
+          <div className="kb-notes-outline-review" data-testid="research-note-outline-review-dialog">
+            <p className="kb-notes-outline-review-revision">
+              {S.research_notes_outline_revision_change
+                .replace('{from}', String(outlineReview.source.revision))
+                .replace('{to}', String(outlineReview.latest.revision))}
+            </p>
+            {outlineReview.hasManualEdits ? (
+              <Alert type="warning" showIcon message={S.research_notes_outline_manual_edits_warning} />
+            ) : (
+              <Alert type="info" showIcon message={S.research_notes_outline_safe_refresh_hint} />
+            )}
+            {saveIssue === 'conflict' ? (
+              <Alert type="error" showIcon message={S.research_notes_outline_conflict_blocked} />
+            ) : null}
+            <div className="kb-notes-outline-review-columns">
+              <section>
+                <h3>{S.research_notes_outline_current_section}</h3>
+                <pre>{outlineReview.currentSection}</pre>
+              </section>
+              <section>
+                <h3>{S.research_notes_outline_latest_source}</h3>
+                <pre>{outlineReview.latest.content_markdown}</pre>
+              </section>
+            </div>
+          </div>
+        ) : null}
+      </Modal>
 
       <Modal
         open={combineOpen}
