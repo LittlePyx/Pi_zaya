@@ -103,6 +103,65 @@ def test_chat_research_notes_api_rejects_invalid_scope_and_blank_content(monkeyp
     assert blank.status_code == 422
 
 
+def test_chat_research_note_evidence_context_verifies_source_without_exposing_internal_path(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+
+    md_path = tmp_path / "converted.md"
+    md_path.write_text(
+        """# Paper
+
+<!-- kb_page: 4 -->
+
+## Results
+
+Context immediately before the evidence.
+
+The measured response remained linear across the tested range.
+
+Context immediately after the evidence.
+""",
+        encoding="utf-8",
+    )
+    from kb.source_blocks import load_source_blocks
+
+    target = next(
+        block
+        for block in load_source_blocks(md_path)
+        if "remained linear" in str(block.get("text") or "")
+    )
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda _path: str(md_path))
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", lambda *args, **kwargs: md_path)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/research-note/evidence-context",
+        json={
+            "source_path": "library/paper.pdf",
+            "source_name": "Paper",
+            "heading_path": "Results",
+            "evidence_quote": "The measured response remained linear across the tested range.",
+            "block_id": target["block_id"],
+            "page_start": 4,
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "exact"
+    assert payload["page_start"] == 4
+    assert payload["reader_open"]["sourcePath"] == "library/paper.pdf"
+    assert str(md_path) not in str(payload)
+    assert client.post(
+        "/api/chat/research-note/evidence-context",
+        json={"source_path": "   "},
+    ).status_code == 422
+
+
 def test_chat_research_notes_workspace_list_and_metadata(monkeypatch, tmp_path: Path) -> None:
     from api.routers import chat as chat_router
 

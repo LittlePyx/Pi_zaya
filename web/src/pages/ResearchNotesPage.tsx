@@ -35,6 +35,8 @@ import {
 import { useNavigate } from 'react-router-dom'
 import {
   chatApi,
+  type MessageProvenanceReaderOpen,
+  type ResearchNoteEvidenceContext,
   type ResearchNoteRecord,
   type ResearchNoteSourceLink,
   type ResearchNoteSourceState,
@@ -72,6 +74,12 @@ const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
 type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
 
+interface EvidenceReviewState {
+  loading: boolean
+  error?: string
+  data?: ResearchNoteEvidenceContext
+}
+
 interface OutlineSourceFreshness {
   source: ResearchNoteOutlineSource
   status: OutlineFreshnessStatus
@@ -98,6 +106,45 @@ function noteLinks(note: ResearchNoteRecord | null | undefined): ResearchNoteSou
 
 function sourceLabel(link: ResearchNoteSourceLink): string {
   return String(link.source_name || link.label || '').trim()
+}
+
+function sourceReviewKey(link: ResearchNoteSourceLink, index: number): string {
+  return [
+    link.capture_id,
+    link.source_path,
+    link.block_id,
+    link.anchor_id,
+    index,
+  ].map(value => String(value || '')).join(':')
+}
+
+function evidenceLocationLabel(
+  S: ReturnType<typeof useT>,
+  headingPath?: string,
+  pageStart?: number | null,
+  pageEnd?: number | null,
+): string {
+  const parts: string[] = []
+  if (headingPath) parts.push(headingPath)
+  if (pageStart) {
+    const page = pageEnd && pageEnd !== pageStart ? `${pageStart}–${pageEnd}` : String(pageStart)
+    parts.push(S.research_notes_evidence_page.replace('{page}', page))
+  }
+  return parts.join(' · ')
+}
+
+function evidenceReasonLabel(S: ReturnType<typeof useT>, reason: string): string {
+  const labels: Record<string, string> = {
+    exact_block: S.research_notes_evidence_reason_exact_block,
+    exact_anchor: S.research_notes_evidence_reason_exact_anchor,
+    quote_relocated: S.research_notes_evidence_reason_quote_relocated,
+    ambiguous_quote: S.research_notes_evidence_reason_ambiguous,
+    saved_target_missing: S.research_notes_evidence_reason_target_missing,
+    converted_markdown_missing: S.research_notes_evidence_reason_markdown_missing,
+    no_source_blocks: S.research_notes_evidence_reason_no_blocks,
+    no_match: S.research_notes_evidence_reason_no_match,
+  }
+  return labels[reason] || S.research_notes_evidence_reason_unknown
 }
 
 function noteSourceNames(note: ResearchNoteRecord): string[] {
@@ -184,6 +231,7 @@ export default function ResearchNotesPage() {
   const [draftTags, setDraftTags] = useState<string[]>([])
   const [draftSourceState, setDraftSourceState] = useState<ResearchNoteSourceState>({})
   const [draftBaseRevision, setDraftBaseRevision] = useState(1)
+  const [evidenceReviews, setEvidenceReviews] = useState<Record<string, EvidenceReviewState>>({})
 
   const [outlineCheckVersion, setOutlineCheckVersion] = useState(0)
   const [outlineFreshness, setOutlineFreshness] = useState<OutlineSourceFreshness[]>([])
@@ -200,6 +248,10 @@ export default function ResearchNotesPage() {
   const [combineSaving, setCombineSaving] = useState(false)
   const [combineRecords, setCombineRecords] = useState<ResearchNoteRecord[]>([])
   const [combineProjectId, setCombineProjectId] = useState<string | null>(null)
+
+  useEffect(() => {
+    setEvidenceReviews({})
+  }, [activeId])
 
   const markDirty = useCallback(() => {
     draftVersionRef.current += 1
@@ -680,44 +732,14 @@ export default function ResearchNotesPage() {
     navigate({ pathname: '/', search: `?${params.toString()}` })
   }
 
-  const openPaper = async (link: ResearchNoteSourceLink) => {
-    const sourcePath = String(link.source_path || '').trim()
+  const openPaper = async (
+    link: ResearchNoteSourceLink,
+    verifiedPayload: MessageProvenanceReaderOpen,
+  ) => {
+    const sourcePath = String(verifiedPayload.sourcePath || '').trim()
     if (!sourcePath) return
     try {
-      const session = await chatApi.createReaderSession({
-        sourcePath,
-        sourceName: link.source_name || link.label,
-        headingPath: link.heading_path,
-        snippet: link.evidence_quote,
-        highlightSnippet: link.evidence_quote,
-        blockId: link.block_id,
-        anchorId: link.anchor_id,
-        anchorKind: link.anchor_kind,
-        startOffset: link.start_offset,
-        endOffset: link.end_offset,
-        occurrence: link.occurrence,
-        readableIndex: link.readable_index,
-        documentOccurrence: link.document_occurrence,
-        startReadableIndex: link.start_readable_index,
-        endReadableIndex: link.end_readable_index,
-        strictLocate: true,
-        locateTarget: {
-          headingPath: link.heading_path,
-          snippet: link.evidence_quote,
-          highlightSnippet: link.evidence_quote,
-          evidenceQuote: link.evidence_quote,
-          blockId: link.block_id,
-          anchorId: link.anchor_id,
-          anchorKind: link.anchor_kind,
-          startOffset: link.start_offset,
-          endOffset: link.end_offset,
-          occurrence: link.occurrence,
-          readableIndex: link.readable_index,
-          documentOccurrence: link.document_occurrence,
-          startReadableIndex: link.start_readable_index,
-          endReadableIndex: link.end_readable_index,
-        },
-      }, {
+      const session = await chatApi.createReaderSession(verifiedPayload, {
         title: link.source_name || link.label,
         conversationId: link.conversation_id,
         messageId: link.message_id,
@@ -725,6 +747,35 @@ export default function ResearchNotesPage() {
       navigate(`/reader/session/${encodeURIComponent(session.id)}`)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
+    }
+  }
+
+  const reviewEvidence = async (
+    link: ResearchNoteSourceLink,
+    reviewKey: string,
+    openIfExact = false,
+  ) => {
+    const cached = evidenceReviews[reviewKey]?.data
+    if (openIfExact && cached?.status === 'exact' && cached.reader_open) {
+      await openPaper(link, cached.reader_open)
+      return
+    }
+    setEvidenceReviews(current => ({
+      ...current,
+      [reviewKey]: { ...current[reviewKey], loading: true, error: undefined },
+    }))
+    try {
+      const data = await chatApi.reviewResearchNoteEvidence(link)
+      setEvidenceReviews(current => ({ ...current, [reviewKey]: { loading: false, data } }))
+      if (openIfExact && data.status === 'exact' && data.reader_open) {
+        await openPaper(link, data.reader_open)
+      }
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : S.research_notes_evidence_load_failed
+      setEvidenceReviews(current => ({
+        ...current,
+        [reviewKey]: { ...current[reviewKey], loading: false, error: detail },
+      }))
     }
   }
 
@@ -1220,37 +1271,148 @@ export default function ResearchNotesPage() {
                     </div>
                   </article>
                 ) : null}
-                {links.map((link, index) => (
-                  <article key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`} className="kb-notes-source-card">
-                    <div className="kb-notes-source-kind">
-                      {link.kind === 'answer' ? <FileTextOutlined /> : <LinkOutlined />}
-                      <span>{link.kind === 'answer' ? S.research_notes_answer_source : S.research_notes_paper_source}</span>
-                    </div>
-                    <strong>{link.label || link.source_name || S.research_note_untitled_source}</strong>
-                    {link.location_label || link.heading_path ? (
-                      <small>{S.research_notes_source_location} · {link.location_label || link.heading_path}</small>
-                    ) : null}
-                    {link.evidence_quote ? (
-                      <blockquote>
-                        <span>{S.research_notes_source_quote}</span>
-                        {link.evidence_quote}
-                      </blockquote>
-                    ) : null}
-                    <Button
-                      type="link"
-                      icon={<ArrowRightOutlined />}
-                      disabled={link.kind === 'answer'
-                        ? !link.conversation_id || !link.message_id
-                        : !link.source_path}
-                      onClick={() => {
-                        if (link.kind === 'answer') openAnswer(link)
-                        else void openPaper(link)
-                      }}
+                {links.map((link, index) => {
+                  const reviewKey = sourceReviewKey(link, index)
+                  const review = evidenceReviews[reviewKey]
+                  const result = review?.data
+                  return (
+                    <article
+                      key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`}
+                      className="kb-notes-source-card"
+                      data-testid={`research-note-source-${index}`}
                     >
-                      {link.kind === 'answer' ? S.research_notes_open_answer : S.research_notes_open_paper}
-                    </Button>
-                  </article>
-                ))}
+                      <div className="kb-notes-source-kind">
+                        {link.kind === 'answer' ? <FileTextOutlined /> : <LinkOutlined />}
+                        <span>{link.kind === 'answer' ? S.research_notes_answer_source : S.research_notes_paper_source}</span>
+                      </div>
+                      <strong>{link.label || link.source_name || S.research_note_untitled_source}</strong>
+                      {link.location_label || link.heading_path ? (
+                        <small>{S.research_notes_source_location} · {link.location_label || link.heading_path}</small>
+                      ) : null}
+                      {link.evidence_quote ? (
+                        <blockquote>
+                          <span>{S.research_notes_source_quote}</span>
+                          {link.evidence_quote}
+                        </blockquote>
+                      ) : null}
+                      {link.kind === 'answer' ? (
+                        <Button
+                          type="link"
+                          icon={<ArrowRightOutlined />}
+                          disabled={!link.conversation_id || !link.message_id}
+                          onClick={() => openAnswer(link)}
+                        >
+                          {S.research_notes_open_answer}
+                        </Button>
+                      ) : (
+                        <>
+                          <div className="kb-notes-evidence-actions">
+                            <Button
+                              type="link"
+                              icon={<SearchOutlined />}
+                              loading={Boolean(review?.loading)}
+                              disabled={!link.source_path}
+                              data-testid={`research-note-evidence-review-${index}`}
+                              onClick={() => { void reviewEvidence(link, reviewKey) }}
+                            >
+                              {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
+                            </Button>
+                            {result?.status === 'exact' && result.reader_open ? (
+                              <Button
+                                type="link"
+                                icon={<ArrowRightOutlined />}
+                                data-testid={`research-note-evidence-open-${index}`}
+                                onClick={() => { void reviewEvidence(link, reviewKey, true) }}
+                              >
+                                {S.research_notes_evidence_open_exact}
+                              </Button>
+                            ) : null}
+                          </div>
+                          {review?.loading && !result ? (
+                            <div className="kb-notes-evidence-loading">
+                              <Spin size="small" /> {S.research_notes_evidence_loading}
+                            </div>
+                          ) : null}
+                          {review?.error ? (
+                            <Alert
+                              type="error"
+                              showIcon
+                              message={S.research_notes_evidence_load_failed}
+                              description={review.error}
+                            />
+                          ) : null}
+                          {result ? (
+                            <section
+                              className={`kb-notes-evidence-review kb-notes-evidence-review-${result.status}`}
+                              data-testid={`research-note-evidence-result-${index}`}
+                            >
+                              <div className="kb-notes-evidence-status">
+                                <Tag color={result.status === 'exact' ? 'green' : result.status === 'candidate' ? 'orange' : 'default'}>
+                                  {result.status === 'exact'
+                                    ? S.research_notes_evidence_exact
+                                    : result.status === 'candidate'
+                                      ? S.research_notes_evidence_candidate
+                                      : S.research_notes_evidence_unavailable}
+                                </Tag>
+                                <span>{evidenceReasonLabel(S, result.reason)}</span>
+                              </div>
+                              {evidenceLocationLabel(S, result.heading_path, result.page_start, result.page_end) ? (
+                                <div className="kb-notes-evidence-location">
+                                  {evidenceLocationLabel(S, result.heading_path, result.page_start, result.page_end)}
+                                </div>
+                              ) : null}
+                              {result.status === 'exact' && result.target ? (
+                                <div className="kb-notes-evidence-context">
+                                  {result.before.map((block, blockIndex) => (
+                                    <div key={`before-${block.block_id || blockIndex}`} className="kb-notes-evidence-context-block">
+                                      <small>{S.research_notes_evidence_before}</small>
+                                      <MarkdownRenderer content={block.markdown || block.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                    </div>
+                                  ))}
+                                  <div className="kb-notes-evidence-context-block is-target">
+                                    <small>{S.research_notes_evidence_target}</small>
+                                    <MarkdownRenderer content={result.target.markdown || result.target.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                  </div>
+                                  {result.after.map((block, blockIndex) => (
+                                    <div key={`after-${block.block_id || blockIndex}`} className="kb-notes-evidence-context-block">
+                                      <small>{S.research_notes_evidence_after}</small>
+                                      <MarkdownRenderer content={block.markdown || block.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : null}
+                              {result.status === 'candidate' ? (
+                                <div className="kb-notes-evidence-candidates">
+                                  <strong>{S.research_notes_evidence_candidates_title}</strong>
+                                  {result.candidates.map((candidate, candidateIndex) => (
+                                    <article key={candidate.block_id || candidateIndex}>
+                                      <small>
+                                        {evidenceLocationLabel(
+                                          S,
+                                          candidate.heading_path,
+                                          candidate.page_start,
+                                          candidate.page_end,
+                                        ) || S.research_notes_evidence_location_unknown}
+                                      </small>
+                                      <MarkdownRenderer content={candidate.markdown || candidate.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                      <Button
+                                        type="link"
+                                        icon={<ArrowRightOutlined />}
+                                        onClick={() => { void openPaper(link, candidate.reader_open) }}
+                                      >
+                                        {S.research_notes_evidence_review_candidate}
+                                      </Button>
+                                    </article>
+                                  ))}
+                                </div>
+                              ) : null}
+                            </section>
+                          ) : null}
+                        </>
+                      )}
+                    </article>
+                  )
+                })}
               </>
             )}
           </div>

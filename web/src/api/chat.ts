@@ -81,6 +81,39 @@ export interface ResearchNoteSourceLink {
   asset_src?: string
 }
 
+export interface ResearchNoteEvidenceBlock {
+  block_id?: string
+  anchor_id?: string
+  kind?: string
+  heading_path?: string
+  page_start?: number | null
+  page_end?: number | null
+  line_start?: number | null
+  line_end?: number | null
+  text: string
+  markdown: string
+}
+
+export interface ResearchNoteEvidenceCandidate extends ResearchNoteEvidenceBlock {
+  score: number
+  reader_open: MessageProvenanceReaderOpen
+}
+
+export interface ResearchNoteEvidenceContext {
+  status: 'exact' | 'candidate' | 'unavailable' | string
+  reason: string
+  source_name: string
+  heading_path: string
+  page_start?: number | null
+  page_end?: number | null
+  before: ResearchNoteEvidenceBlock[]
+  target?: ResearchNoteEvidenceBlock | null
+  after: ResearchNoteEvidenceBlock[]
+  candidates: ResearchNoteEvidenceCandidate[]
+  can_open_exact: boolean
+  reader_open?: MessageProvenanceReaderOpen | null
+}
+
 export interface ResearchNoteSourceState {
   version?: number
   selected_message_ids?: number[]
@@ -1571,6 +1604,18 @@ export const chatApi = {
   },
   getResearchNote: (noteId: string) =>
     api.get<ResearchNoteRecord>(`/api/chat/research-notes/${encodeURIComponent(noteId)}`),
+  reviewResearchNoteEvidence: (link: ResearchNoteSourceLink) =>
+    api.post<ResearchNoteEvidenceContext>('/api/chat/research-note/evidence-context', {
+      source_path: link.source_path,
+      source_name: link.source_name || link.label,
+      heading_path: link.heading_path,
+      evidence_quote: link.evidence_quote,
+      page_start: link.page_start,
+      page_end: link.page_end,
+      block_id: link.block_id,
+      anchor_id: link.anchor_id,
+      anchor_kind: link.anchor_kind,
+    }),
   createResearchNote: (body: ResearchNoteCreateBody) =>
     api.post<ResearchNoteRecord>('/api/chat/research-notes', body),
   updateResearchNote: (noteId: string, body: ResearchNoteUpdateBody) =>

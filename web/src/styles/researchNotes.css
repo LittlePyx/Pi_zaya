@@ -460,6 +460,107 @@
 
 .kb-notes-source-card .ant-btn { padding-inline: 0; }
 
+.kb-notes-evidence-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.kb-notes-evidence-loading {
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.kb-notes-source-card > .ant-alert {
+  margin-top: 8px;
+  padding: 7px 9px;
+  font-size: 11px;
+}
+
+.kb-notes-evidence-review {
+  display: grid;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.kb-notes-evidence-status {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.kb-notes-evidence-status .ant-tag {
+  flex: none;
+  margin-inline-end: 0;
+  font-size: 10px;
+  line-height: 18px;
+}
+
+.kb-notes-evidence-location {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.kb-notes-evidence-context,
+.kb-notes-evidence-candidates {
+  display: grid;
+  gap: 7px;
+}
+
+.kb-notes-evidence-context-block,
+.kb-notes-evidence-candidates > article {
+  padding: 8px 9px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 65%, var(--panel));
+}
+
+.kb-notes-evidence-context-block.is-target {
+  border-color: color-mix(in srgb, var(--primary) 48%, var(--border));
+  background: color-mix(in srgb, var(--primary) 7%, var(--panel));
+}
+
+.kb-notes-evidence-context-block > small,
+.kb-notes-evidence-candidates > article > small {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.kb-notes-evidence-context-block .kb-markdown,
+.kb-notes-evidence-candidates .kb-markdown {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.kb-notes-evidence-context-block .kb-markdown > :first-child,
+.kb-notes-evidence-candidates .kb-markdown > :first-child { margin-top: 0; }
+
+.kb-notes-evidence-context-block .kb-markdown > :last-child,
+.kb-notes-evidence-candidates .kb-markdown > :last-child { margin-bottom: 0; }
+
+.kb-notes-evidence-candidates > strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.kb-notes-evidence-candidates > article > .ant-btn {
+  height: auto;
+  margin-top: 4px;
+  white-space: normal;
+}
+
 .kb-notes-centered {
   min-height: 120px;
   display: flex;

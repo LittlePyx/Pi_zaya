@@ -57,6 +57,7 @@ from kb.path_safety import (
 from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
+from kb.research_note_evidence import build_research_note_evidence_context
 from kb.task_runtime import (
     _gen_has_active_task_id,
     _is_live_assistant_text,
@@ -181,6 +182,40 @@ class ResearchNoteExportBody(BaseModel):
         if not clean:
             raise ValueError("value must not be blank")
         return clean
+
+
+class ResearchNoteEvidenceContextBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(..., min_length=1, max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    source_name: str = Field("", max_length=_CHAT_SOURCE_NAME_MAX_CHARS)
+    heading_path: str = Field("", max_length=500)
+    evidence_quote: str = Field("", max_length=12_000)
+    block_id: str = Field("", max_length=160)
+    anchor_id: str = Field("", max_length=160)
+    anchor_kind: str = Field("", max_length=40)
+    page_start: int | None = Field(None, ge=1, le=100_000)
+    page_end: int | None = Field(None, ge=1, le=100_000)
+
+    @field_validator("source_path")
+    @classmethod
+    def _clean_evidence_context_source_path(cls, value: str) -> str:
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("source_path must not be blank")
+        return clean
+
+    @field_validator(
+        "source_name",
+        "heading_path",
+        "evidence_quote",
+        "block_id",
+        "anchor_id",
+        "anchor_kind",
+    )
+    @classmethod
+    def _clean_evidence_context_text(cls, value: str) -> str:
+        return str(value or "").replace("\x00", "").strip()
 
 
 class ResearchNoteCreateBody(BaseModel):
@@ -1250,6 +1285,53 @@ def export_chat_research_note(body: ResearchNoteExportBody):
             ),
         },
     )
+
+
+@router.post("/chat/research-note/evidence-context")
+def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBody):
+    source_path = _resolve_allowed_reader_source_path(body.source_path)
+    try:
+        settings = get_settings()
+        md_path = _resolve_paper_guide_md_path(
+            source_path,
+            md_root=_md_dir(),
+            db_dir=getattr(settings, "db_dir", None),
+            pdf_root=_pdf_dir(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+    if md_path is None:
+        return {
+            "status": "unavailable",
+            "reason": "converted_markdown_missing",
+            "source_name": body.source_name or Path(body.source_path).name,
+            "heading_path": body.heading_path,
+            "page_start": body.page_start,
+            "page_end": body.page_end,
+            "before": [],
+            "target": None,
+            "after": [],
+            "candidates": [],
+            "can_open_exact": False,
+            "reader_open": None,
+        }
+    try:
+        return build_research_note_evidence_context(
+            md_path=md_path,
+            source_path=body.source_path,
+            source_name=body.source_name,
+            heading_path=body.heading_path,
+            evidence_quote=body.evidence_quote,
+            block_id=body.block_id,
+            anchor_id=body.anchor_id,
+            anchor_kind=body.anchor_kind,
+            page_start=body.page_start,
+            page_end=body.page_end,
+        )
+    except Exception as exc:
+        raise HTTPException(500, "research note evidence context failed") from exc
 
 
 @router.get("/chat/research-notes")

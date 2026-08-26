@@ -133,6 +133,7 @@ test('outline helpers inherit a shared project and deduplicate traceable sources
 test('research notes workspace edits, combines, filters, and follows traceable sources', async ({ page }) => {
   let readerPayload: Record<string, unknown> | null = null
   let wordExportBody: Record<string, unknown> | null = null
+  const evidenceContextBodies: Array<Record<string, unknown>> = []
   let failOutlineSaves = false
   let records: ResearchNoteRecord[] = [
     {
@@ -288,6 +289,119 @@ test('research notes workspace edits, combines, filters, and follows traceable s
     })
   })
 
+  await page.route('**/api/chat/research-note/evidence-context', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    evidenceContextBodies.push(body)
+    const sourcePath = String(body.source_path || '')
+    if (sourcePath.includes('detector.md')) {
+      await fulfillJson(route, {
+        status: 'candidate',
+        reason: 'saved_target_missing',
+        source_name: 'Detector paper',
+        heading_path: 'Results / Dynamic range',
+        page_start: 5,
+        page_end: 5,
+        before: [],
+        target: null,
+        after: [],
+        can_open_exact: false,
+        reader_open: null,
+        candidates: [
+          {
+            block_id: 'block-detector-candidate',
+            anchor_id: 'p_00021',
+            kind: 'paragraph',
+            heading_path: 'Results / Detector limits',
+            page_start: 6,
+            page_end: 6,
+            text: 'A similar dynamic-range observation appears in this paragraph.',
+            markdown: 'A similar dynamic-range observation appears in this paragraph.',
+            score: 0.71,
+            reader_open: {
+              sourcePath,
+              sourceName: 'Detector paper',
+              headingPath: 'Results / Detector limits',
+              snippet: 'A similar dynamic-range observation appears in this paragraph.',
+              highlightSnippet: 'A similar dynamic-range observation appears in this paragraph.',
+              blockId: 'block-detector-candidate',
+              anchorId: 'p_00021',
+              anchorKind: 'paragraph',
+              strictLocate: true,
+              locateTarget: {
+                blockId: 'block-detector-candidate',
+                anchorId: 'p_00021',
+                anchorKind: 'paragraph',
+              },
+            },
+          },
+        ],
+      })
+      return
+    }
+    await fulfillJson(route, {
+      status: 'exact',
+      reason: 'exact_block',
+      source_name: 'Example SPAD paper',
+      heading_path: 'Methods / Noise modeling',
+      page_start: 3,
+      page_end: 3,
+      before: [
+        {
+          block_id: 'block-before-noise',
+          anchor_id: 'p_00010',
+          kind: 'paragraph',
+          heading_path: 'Methods / Noise modeling',
+          page_start: 3,
+          page_end: 3,
+          text: 'The detector was calibrated before acquisition.',
+          markdown: 'The detector was calibrated before acquisition.',
+        },
+      ],
+      target: {
+        block_id: 'block-noise',
+        anchor_id: 'p_00011',
+        kind: 'paragraph',
+        heading_path: 'Methods / Noise modeling',
+        page_start: 3,
+        page_end: 3,
+        text: 'Photon arrival is a stochastic process.',
+        markdown: 'Photon arrival is a stochastic process.',
+      },
+      after: [
+        {
+          block_id: 'block-after-noise',
+          anchor_id: 'p_00012',
+          kind: 'paragraph',
+          heading_path: 'Methods / Noise modeling',
+          page_start: 3,
+          page_end: 3,
+          text: 'Dark counts were measured separately.',
+          markdown: 'Dark counts were measured separately.',
+        },
+      ],
+      candidates: [],
+      can_open_exact: true,
+      reader_open: {
+        sourcePath,
+        sourceName: 'Example SPAD paper',
+        headingPath: 'Methods / Noise modeling',
+        snippet: 'Photon arrival is a stochastic process.',
+        highlightSnippet: 'Photon arrival is a stochastic process.',
+        blockId: 'block-noise',
+        anchorId: 'p_00011',
+        anchorKind: 'paragraph',
+        strictLocate: true,
+        locateTarget: {
+          headingPath: 'Methods / Noise modeling',
+          snippet: 'Photon arrival is a stochastic process.',
+          blockId: 'block-noise',
+          anchorId: 'p_00011',
+          anchorKind: 'paragraph',
+        },
+      },
+    })
+  })
+
   await page.route('**/api/chat/research-note/export', async (route) => {
     wordExportBody = route.request().postDataJSON() as Record<string, unknown>
     await route.fulfill({
@@ -306,6 +420,29 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await expect(page.getByRole('menuitem', { name: /研究笔记/ })).toHaveClass(/ant-menu-item-selected/)
   await expect(workspace.getByText('SPAD noise conclusion', { exact: true })).toBeVisible()
   await expect(workspace.locator('.kb-notes-source-card blockquote')).toContainText('Photon arrival is a stochastic process.')
+
+  await page.getByTestId('research-note-evidence-review-1').click()
+  const exactReview = page.getByTestId('research-note-evidence-result-1')
+  await expect(exactReview).toContainText('准确定位')
+  await expect(exactReview).toContainText('第 3 页')
+  await expect(exactReview).toContainText('The detector was calibrated before acquisition.')
+  await expect(exactReview).toContainText('Photon arrival is a stochastic process.')
+  await expect(exactReview).toContainText('Dark counts were measured separately.')
+  await expect(page.getByTestId('research-note-evidence-open-1')).toBeVisible()
+  expect(evidenceContextBodies.at(-1)).toEqual(expect.objectContaining({
+    source_path: SOURCE_PATH,
+    block_id: 'block-noise',
+  }))
+
+  await page.getByTestId('workspace-note-note-b').click()
+  await page.getByTestId('research-note-evidence-review-1').click()
+  const candidateReview = page.getByTestId('research-note-evidence-result-1')
+  await expect(candidateReview).toContainText('需要核查')
+  await expect(candidateReview).toContainText('候选位置（不会自动跳转）')
+  await expect(candidateReview).toContainText('A similar dynamic-range observation appears in this paragraph.')
+  await expect(page.getByTestId('research-note-source-1').getByRole('button', { name: '打开准确位置' })).toHaveCount(0)
+  await expect(page).toHaveURL(/\/notes$/)
+  await page.getByTestId('workspace-note-note-a').click()
 
   const titleInput = workspace.locator('.kb-notes-title-input')
   await titleInput.fill('SPAD noise evidence note')
@@ -468,8 +605,14 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await page.getByTestId('research-note-outline-source-note-a').click()
   await expect(titleInput).toHaveValue('SPAD noise evidence note · revised')
 
-  await workspace.getByRole('button', { name: '打开原文' }).first().click()
+  await page.getByTestId('research-note-evidence-review-1').click()
+  await page.getByTestId('research-note-evidence-open-1').click()
   await expect.poll(() => readerPayload?.sourcePath).toBe(SOURCE_PATH)
+  expect(readerPayload).toEqual(expect.objectContaining({
+    blockId: 'block-noise',
+    anchorId: 'p_00011',
+    strictLocate: true,
+  }))
   await expect(page).toHaveURL(/\/reader\/session\/reader-note-source/)
 
   await page.goto('/notes')
