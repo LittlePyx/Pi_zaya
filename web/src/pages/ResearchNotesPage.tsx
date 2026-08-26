@@ -75,11 +75,33 @@ const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
 type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
+type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'unavailable' | 'error' | 'unchecked'
+type EvidenceHealthFilter = 'all' | 'issues'
 
 interface EvidenceReviewState {
   loading: boolean
   error?: string
   data?: ResearchNoteEvidenceContext
+}
+
+interface EvidenceHealthRunState {
+  started: boolean
+  running: boolean
+  total: number
+  completed: number
+}
+
+interface EvidenceLinkEntry {
+  link: ResearchNoteSourceLink
+  index: number
+  reviewKey: string
+}
+
+const EMPTY_EVIDENCE_HEALTH_RUN: EvidenceHealthRunState = {
+  started: false,
+  running: false,
+  total: 0,
+  completed: 0,
 }
 
 interface OutlineSourceFreshness {
@@ -118,6 +140,21 @@ function sourceReviewKey(link: ResearchNoteSourceLink, index: number): string {
     link.anchor_id,
     index,
   ].map(value => String(value || '')).join(':')
+}
+
+function evidenceHealthStatus(
+  entry: EvidenceLinkEntry,
+  review: EvidenceReviewState | undefined,
+  started: boolean,
+): EvidenceHealthStatus {
+  if (!started) return 'unchecked'
+  if (!String(entry.link.source_path || '').trim()) return 'unavailable'
+  if (review?.error) return 'error'
+  if (review?.loading || !review?.data) return 'unchecked'
+  if (review.data.source_changed) return 'changed'
+  if (review.data.status === 'exact') return 'exact'
+  if (review.data.status === 'candidate') return 'candidate'
+  return 'unavailable'
 }
 
 function evidenceLocationLabel(
@@ -239,6 +276,10 @@ export default function ResearchNotesPage() {
   const [draftSourceState, setDraftSourceState] = useState<ResearchNoteSourceState>({})
   const [draftBaseRevision, setDraftBaseRevision] = useState(1)
   const [evidenceReviews, setEvidenceReviews] = useState<Record<string, EvidenceReviewState>>({})
+  const [evidenceHealthRun, setEvidenceHealthRun] = useState<EvidenceHealthRunState>(EMPTY_EVIDENCE_HEALTH_RUN)
+  const [evidenceHealthFilter, setEvidenceHealthFilter] = useState<EvidenceHealthFilter>('all')
+  const evidenceHealthRunRef = useRef(0)
+  const links = useMemo(() => sourceStateLinks(draftSourceState), [draftSourceState])
 
   const [outlineCheckVersion, setOutlineCheckVersion] = useState(0)
   const [outlineFreshness, setOutlineFreshness] = useState<OutlineSourceFreshness[]>([])
@@ -257,7 +298,10 @@ export default function ResearchNotesPage() {
   const [combineProjectId, setCombineProjectId] = useState<string | null>(null)
 
   useEffect(() => {
+    evidenceHealthRunRef.current += 1
     setEvidenceReviews({})
+    setEvidenceHealthRun(EMPTY_EVIDENCE_HEALTH_RUN)
+    setEvidenceHealthFilter('all')
   }, [activeId])
 
   const markDirty = useCallback(() => {
@@ -839,6 +883,77 @@ export default function ResearchNotesPage() {
     }
   }
 
+  const runEvidenceHealthCheck = async () => {
+    if (!activeNote || evidenceHealthRun.running) return
+    const noteId = activeNote.id
+    const paperEntries: EvidenceLinkEntry[] = links
+      .map((link, index) => ({ link, index, reviewKey: sourceReviewKey(link, index) }))
+      .filter(entry => entry.link.kind !== 'answer')
+    if (paperEntries.length <= 0) return
+    const requestEntries = paperEntries.filter(entry => String(entry.link.source_path || '').trim())
+    const runId = ++evidenceHealthRunRef.current
+    const initialReviews: Record<string, EvidenceReviewState> = {}
+    requestEntries.forEach(entry => {
+      initialReviews[entry.reviewKey] = { loading: true }
+    })
+    const results = { ...initialReviews }
+    let completed = paperEntries.length - requestEntries.length
+    setEvidenceReviews(initialReviews)
+    setEvidenceHealthFilter('all')
+    setEvidenceHealthRun({
+      started: true,
+      running: requestEntries.length > 0,
+      total: paperEntries.length,
+      completed,
+    })
+
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < requestEntries.length) {
+        const entry = requestEntries[cursor]
+        cursor += 1
+        let nextReview: EvidenceReviewState
+        try {
+          const data = await chatApi.reviewResearchNoteEvidence(entry.link)
+          nextReview = { loading: false, data }
+        } catch (error) {
+          nextReview = {
+            loading: false,
+            error: error instanceof Error ? error.message : S.research_notes_evidence_load_failed,
+          }
+        }
+        if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
+        results[entry.reviewKey] = nextReview
+        completed += 1
+        setEvidenceReviews(current => ({ ...current, [entry.reviewKey]: nextReview }))
+        setEvidenceHealthRun({
+          started: true,
+          running: completed < paperEntries.length,
+          total: paperEntries.length,
+          completed,
+        })
+      }
+    }
+
+    await Promise.all(
+      Array.from(
+        { length: Math.min(4, requestEntries.length) },
+        () => worker(),
+      ),
+    )
+    if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
+    const hasIssues = paperEntries.some(entry => (
+      evidenceHealthStatus(entry, results[entry.reviewKey], true) !== 'exact'
+    ))
+    setEvidenceHealthRun({
+      started: true,
+      running: false,
+      total: paperEntries.length,
+      completed: paperEntries.length,
+    })
+    setEvidenceHealthFilter(hasIssues ? 'issues' : 'all')
+  }
+
   const openCombine = async () => {
     const ids = Array.from(selectedIds)
     if (ids.length <= 0) return
@@ -923,7 +1038,40 @@ export default function ResearchNotesPage() {
     }
   }
 
-  const links = sourceStateLinks(draftSourceState)
+  const linkEntries: EvidenceLinkEntry[] = links.map((link, index) => ({
+    link,
+    index,
+    reviewKey: sourceReviewKey(link, index),
+  }))
+  const paperLinkEntries = linkEntries.filter(entry => entry.link.kind !== 'answer')
+  const evidenceHealthCounts = paperLinkEntries.reduce((counts, entry) => {
+    const status = evidenceHealthStatus(
+      entry,
+      evidenceReviews[entry.reviewKey],
+      evidenceHealthRun.started,
+    )
+    counts[status] += 1
+    return counts
+  }, {
+    exact: 0,
+    changed: 0,
+    candidate: 0,
+    unavailable: 0,
+    error: 0,
+    unchecked: 0,
+  } as Record<EvidenceHealthStatus, number>)
+  const evidenceIssueCount = evidenceHealthCounts.changed
+    + evidenceHealthCounts.candidate
+    + evidenceHealthCounts.unavailable
+    + evidenceHealthCounts.error
+  const displayedLinkEntries = evidenceHealthFilter === 'issues'
+    && evidenceHealthRun.started
+    && !evidenceHealthRun.running
+    ? linkEntries.filter(entry => (
+      entry.link.kind !== 'answer'
+      && evidenceHealthStatus(entry, evidenceReviews[entry.reviewKey], true) !== 'exact'
+    ))
+    : linkEntries
   const combineHasMixedProjects = researchNoteOutlineHasMixedProjects(combineRecords)
   const freshnessMatchesOutline = outlineFreshness
     .map(item => `${item.source.id}:${item.source.revision}`)
@@ -1227,8 +1375,75 @@ export default function ResearchNotesPage() {
 
         <aside className="kb-notes-sources-pane">
           <div className="kb-notes-sources-head">
-            <h2>{S.research_notes_sources_title}</h2>
-            <p>{S.research_notes_sources_hint}</p>
+            <div className="kb-notes-sources-head-row">
+              <div>
+                <h2>{S.research_notes_sources_title}</h2>
+                <p>{S.research_notes_sources_hint}</p>
+              </div>
+              <Button
+                size="small"
+                icon={<SearchOutlined />}
+                loading={evidenceHealthRun.running}
+                disabled={!activeNote || paperLinkEntries.length <= 0}
+                data-testid="research-note-evidence-check-all"
+                onClick={() => { void runEvidenceHealthCheck() }}
+              >
+                {evidenceHealthRun.started
+                  ? S.research_notes_evidence_health_recheck
+                  : S.research_notes_evidence_health_check}
+              </Button>
+            </div>
+            {evidenceHealthRun.started ? (
+              <section
+                className="kb-notes-evidence-health"
+                data-testid="research-note-evidence-health"
+                role="status"
+                aria-live="polite"
+              >
+                <div className="kb-notes-evidence-health-progress">
+                  {evidenceHealthRun.running ? <Spin size="small" /> : null}
+                  <span>
+                    {S.research_notes_evidence_health_progress
+                      .replace('{done}', String(evidenceHealthRun.completed))
+                      .replace('{total}', String(evidenceHealthRun.total))}
+                  </span>
+                </div>
+                <div className="kb-notes-evidence-health-counts">
+                  <Tag color="green">
+                    {S.research_notes_evidence_health_exact.replace('{n}', String(evidenceHealthCounts.exact))}
+                  </Tag>
+                  <Tag color="gold">
+                    {S.research_notes_evidence_health_changed.replace('{n}', String(evidenceHealthCounts.changed))}
+                  </Tag>
+                  <Tag color="orange">
+                    {S.research_notes_evidence_health_candidate.replace('{n}', String(evidenceHealthCounts.candidate))}
+                  </Tag>
+                  <Tag>
+                    {S.research_notes_evidence_health_unavailable.replace('{n}', String(evidenceHealthCounts.unavailable))}
+                  </Tag>
+                  <Tag color="red">
+                    {S.research_notes_evidence_health_error.replace('{n}', String(evidenceHealthCounts.error))}
+                  </Tag>
+                </div>
+                <Segmented
+                  block
+                  size="small"
+                  disabled={evidenceHealthRun.running}
+                  value={evidenceHealthFilter}
+                  options={[
+                    {
+                      value: 'all',
+                      label: S.research_notes_evidence_health_all.replace('{n}', String(links.length)),
+                    },
+                    {
+                      value: 'issues',
+                      label: S.research_notes_evidence_health_issues.replace('{n}', String(evidenceIssueCount)),
+                    },
+                  ]}
+                  onChange={value => setEvidenceHealthFilter(value as EvidenceHealthFilter)}
+                />
+              </section>
+            ) : null}
           </div>
           <div className="kb-notes-sources-list kb-main-scroll">
             {!activeNote || (links.length <= 0 && outlineSources.length <= 0) ? (
@@ -1331,10 +1546,37 @@ export default function ResearchNotesPage() {
                     </div>
                   </article>
                 ) : null}
-                {links.map((link, index) => {
-                  const reviewKey = sourceReviewKey(link, index)
+                {displayedLinkEntries.length <= 0 && evidenceHealthFilter === 'issues' ? (
+                  <Alert type="success" showIcon message={S.research_notes_evidence_health_no_issues} />
+                ) : null}
+                {displayedLinkEntries.map(({ link, index, reviewKey }) => {
                   const review = evidenceReviews[reviewKey]
                   const result = review?.data
+                  const healthStatus = evidenceHealthStatus(
+                    { link, index, reviewKey },
+                    review,
+                    evidenceHealthRun.started,
+                  )
+                  const healthColor = healthStatus === 'exact'
+                    ? 'green'
+                    : healthStatus === 'changed'
+                      ? 'gold'
+                      : healthStatus === 'candidate'
+                        ? 'orange'
+                        : healthStatus === 'error'
+                          ? 'red'
+                          : 'default'
+                  const healthLabel = healthStatus === 'exact'
+                    ? S.research_notes_evidence_health_status_exact
+                    : healthStatus === 'changed'
+                      ? S.research_notes_evidence_health_status_changed
+                      : healthStatus === 'candidate'
+                        ? S.research_notes_evidence_health_status_candidate
+                        : healthStatus === 'unavailable'
+                          ? S.research_notes_evidence_health_status_unavailable
+                          : healthStatus === 'error'
+                            ? S.research_notes_evidence_health_status_error
+                            : ''
                   return (
                     <article
                       key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`}
@@ -1344,6 +1586,14 @@ export default function ResearchNotesPage() {
                       <div className="kb-notes-source-kind">
                         {link.kind === 'answer' ? <FileTextOutlined /> : <LinkOutlined />}
                         <span>{link.kind === 'answer' ? S.research_notes_answer_source : S.research_notes_paper_source}</span>
+                        {link.kind !== 'answer' && healthLabel ? (
+                          <Tag
+                            color={healthColor}
+                            data-testid={`research-note-evidence-health-status-${index}`}
+                          >
+                            {healthLabel}
+                          </Tag>
+                        ) : null}
                       </div>
                       <strong>{link.label || link.source_name || S.research_note_untitled_source}</strong>
                       {link.location_label || link.heading_path ? (
@@ -1371,7 +1621,7 @@ export default function ResearchNotesPage() {
                               type="link"
                               icon={<SearchOutlined />}
                               loading={Boolean(review?.loading)}
-                              disabled={!link.source_path}
+                              disabled={!link.source_path || evidenceHealthRun.running}
                               data-testid={`research-note-evidence-review-${index}`}
                               onClick={() => { void reviewEvidence(link, reviewKey) }}
                             >
