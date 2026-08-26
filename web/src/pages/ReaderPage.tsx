@@ -5,6 +5,8 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   chatApi,
   type ReaderSessionRecord,
+  type ResearchNoteEvidenceContextSnapshot,
+  type ResearchNoteEvidenceContextSnapshotBlock,
   type ResearchNoteEvidenceRepairIntent,
   type ResearchNoteEvidenceReviewIntent,
 } from '../api/chat'
@@ -205,6 +207,147 @@ function normalizeEvidenceRepairIntent(value: unknown): ResearchNoteEvidenceRepa
   }
 }
 
+function normalizeEvidenceContextSnapshotBlock(value: unknown): ResearchNoteEvidenceContextSnapshotBlock | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const text = String(record?.text || '').trim()
+  if (!record || !text) return null
+  const positiveNumber = (key: string) => {
+    const number = Number(record[key])
+    return Number.isFinite(number) && number > 0 ? number : undefined
+  }
+  return {
+    block_id: String(record.block_id || '').trim() || undefined,
+    anchor_id: String(record.anchor_id || '').trim() || undefined,
+    kind: String(record.kind || '').trim() || undefined,
+    heading_path: String(record.heading_path || '').trim() || undefined,
+    page_start: positiveNumber('page_start'),
+    page_end: positiveNumber('page_end'),
+    line_start: positiveNumber('line_start'),
+    line_end: positiveNumber('line_end'),
+    text,
+  }
+}
+
+function normalizeEvidenceContextSnapshot(value: unknown): ResearchNoteEvidenceContextSnapshot | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const target = normalizeEvidenceContextSnapshotBlock(record?.target)
+  const fingerprint = String(record?.source_fingerprint || '').trim()
+  const capturedAt = Number(record?.captured_at)
+  if (!record || Number(record.version) !== 1 || !target || !fingerprint.startsWith('sha256:')) return null
+  const blockList = (input: unknown) => Array.isArray(input)
+    ? input.map(normalizeEvidenceContextSnapshotBlock).filter((item): item is ResearchNoteEvidenceContextSnapshotBlock => Boolean(item)).slice(0, 1)
+    : []
+  return {
+    version: 1,
+    captured_at: Number.isFinite(capturedAt) && capturedAt > 0 ? capturedAt : 0,
+    source_fingerprint: fingerprint,
+    reason: String(record.reason || '').trim() || undefined,
+    before: blockList(record.before),
+    target,
+    after: blockList(record.after),
+  }
+}
+
+type EvidenceContextRole = 'before' | 'target' | 'after'
+
+function evidenceContextRoleText(
+  snapshot: ResearchNoteEvidenceContextSnapshot | null | undefined,
+  role: EvidenceContextRole,
+): string {
+  if (!snapshot) return ''
+  if (role === 'target') return String(snapshot.target?.text || '').trim()
+  const blocks = role === 'before' ? snapshot.before : snapshot.after
+  return String(blocks?.[0]?.text || '').trim()
+}
+
+function evidenceContextChanged(
+  previous: ResearchNoteEvidenceContextSnapshot | null | undefined,
+  current: ResearchNoteEvidenceContextSnapshot | null | undefined,
+): boolean {
+  if (!previous || !current) return true
+  return (['before', 'target', 'after'] as EvidenceContextRole[]).some(
+    role => evidenceContextRoleText(previous, role) !== evidenceContextRoleText(current, role),
+  )
+}
+
+function renderEvidenceContextDifference(previousText: string, currentText: string, side: 'previous' | 'current') {
+  const left = Array.from(previousText)
+  const right = Array.from(currentText)
+  let prefixLength = 0
+  while (prefixLength < left.length && prefixLength < right.length && left[prefixLength] === right[prefixLength]) {
+    prefixLength += 1
+  }
+  let suffixLength = 0
+  while (
+    suffixLength < left.length - prefixLength
+    && suffixLength < right.length - prefixLength
+    && left[left.length - 1 - suffixLength] === right[right.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1
+  }
+  const source = side === 'previous' ? left : right
+  const prefix = source.slice(0, prefixLength).join('')
+  const changed = source.slice(prefixLength, source.length - suffixLength).join('')
+  const suffix = suffixLength > 0 ? source.slice(source.length - suffixLength).join('') : ''
+  if (!changed && previousText === currentText) return <>{source.join('')}</>
+  return (
+    <>
+      {prefix}
+      {changed ? <mark className={`is-${side}`}>{changed}</mark> : <mark className={`is-${side} is-empty`}>∅</mark>}
+      {suffix}
+    </>
+  )
+}
+
+function EvidenceContextSnapshotColumn({
+  snapshot,
+  counterpart,
+  side,
+  title,
+  roleLabels,
+  emptyLabel,
+  testId,
+}: {
+  snapshot: ResearchNoteEvidenceContextSnapshot
+  counterpart?: ResearchNoteEvidenceContextSnapshot | null
+  side: 'previous' | 'current'
+  title: string
+  roleLabels: Record<EvidenceContextRole, string>
+  emptyLabel: string
+  testId: string
+}) {
+  return (
+    <div data-testid={testId}>
+      <header>
+        <strong>{title}</strong>
+        {snapshot.captured_at > 0 ? <small>{new Date(snapshot.captured_at * 1000).toLocaleString()}</small> : null}
+      </header>
+      <div className="kb-reader-evidence-context-segments">
+        {(['before', 'target', 'after'] as EvidenceContextRole[]).map((role) => {
+          const text = evidenceContextRoleText(snapshot, role)
+          const otherText = evidenceContextRoleText(counterpart, role)
+          return (
+            <section className={`is-${role}`} key={role} data-testid={`${testId}-${role}`}>
+              <span>{roleLabels[role]}</span>
+              <p>
+                {text
+                  ? counterpart
+                    ? renderEvidenceContextDifference(
+                      side === 'previous' ? text : otherText,
+                      side === 'previous' ? otherText : text,
+                      side,
+                    )
+                    : text
+                  : <em>{emptyLabel}</em>}
+              </p>
+            </section>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function normalizeEvidenceReviewIntent(value: unknown): ResearchNoteEvidenceReviewIntent | null {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const review = record?.review && typeof record.review === 'object'
@@ -234,6 +377,8 @@ function normalizeEvidenceReviewIntent(value: unknown): ResearchNoteEvidenceRevi
     saved_evidence_quote: String(record?.saved_evidence_quote || '').trim(),
     current_evidence_quote: String(record?.current_evidence_quote || currentQuote).trim(),
     previously_invalid: Boolean(record?.previously_invalid),
+    saved_context_snapshot: normalizeEvidenceContextSnapshot(record?.saved_context_snapshot),
+    current_context_snapshot: normalizeEvidenceContextSnapshot(record?.current_context_snapshot),
     review: {
       source_index: sourceIndex,
       source_path: sourcePath,
@@ -814,6 +959,15 @@ export default function ReaderPage() {
     navigate,
   ])
 
+  const savedContextSnapshot = evidenceReviewIntent?.saved_context_snapshot || null
+  const currentContextSnapshot = evidenceReviewIntent?.current_context_snapshot || null
+  const localContextChanged = evidenceContextChanged(savedContextSnapshot, currentContextSnapshot)
+  const contextRoleLabels: Record<EvidenceContextRole, string> = {
+    before: S.reader_evidence_context_before,
+    target: S.reader_evidence_context_target,
+    after: S.reader_evidence_context_after,
+  }
+
   return (
     <div className="kb-reader-page">
       <header className="kb-reader-page-bar">
@@ -891,15 +1045,61 @@ export default function ReaderPage() {
                 message={S.reader_evidence_review_previously_invalid}
               />
             ) : null}
+            {!savedContextSnapshot ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={S.reader_evidence_context_baseline_missing}
+                description={S.reader_evidence_context_baseline_missing_hint}
+              />
+            ) : null}
+            {savedContextSnapshot && currentContextSnapshot && !localContextChanged ? (
+              <Alert
+                type="info"
+                showIcon
+                message={S.reader_evidence_context_no_local_change}
+                description={S.reader_evidence_context_no_local_change_hint}
+              />
+            ) : null}
             <div className="kb-reader-evidence-version-compare">
-              <div data-testid="reader-evidence-review-saved">
-                <strong>{S.reader_evidence_review_saved_quote}</strong>
-                <blockquote>{evidenceReviewIntent.saved_evidence_quote}</blockquote>
-              </div>
-              <div data-testid="reader-evidence-review-current">
-                <strong>{S.reader_evidence_review_current_quote}</strong>
-                <blockquote>{evidenceReviewIntent.current_evidence_quote}</blockquote>
-              </div>
+              {savedContextSnapshot ? (
+                <EvidenceContextSnapshotColumn
+                  snapshot={savedContextSnapshot}
+                  counterpart={currentContextSnapshot}
+                  side="previous"
+                  title={S.reader_evidence_context_saved}
+                  roleLabels={contextRoleLabels}
+                  emptyLabel={S.reader_evidence_context_empty}
+                  testId="reader-evidence-review-saved"
+                />
+              ) : (
+                <div data-testid="reader-evidence-review-saved" className="is-context-fallback">
+                  <header>
+                    <strong>{S.reader_evidence_review_saved_quote}</strong>
+                    <small>{S.reader_evidence_context_quote_only}</small>
+                  </header>
+                  <blockquote>{evidenceReviewIntent.saved_evidence_quote}</blockquote>
+                </div>
+              )}
+              {currentContextSnapshot ? (
+                <EvidenceContextSnapshotColumn
+                  snapshot={currentContextSnapshot}
+                  counterpart={savedContextSnapshot}
+                  side="current"
+                  title={S.reader_evidence_context_current}
+                  roleLabels={contextRoleLabels}
+                  emptyLabel={S.reader_evidence_context_empty}
+                  testId="reader-evidence-review-current"
+                />
+              ) : (
+                <div data-testid="reader-evidence-review-current" className="is-context-fallback">
+                  <header>
+                    <strong>{S.reader_evidence_review_current_quote}</strong>
+                    <small>{S.reader_evidence_context_quote_only}</small>
+                  </header>
+                  <blockquote>{evidenceReviewIntent.current_evidence_quote}</blockquote>
+                </div>
+              )}
             </div>
           </div>
           <div className="kb-reader-evidence-repair-actions">

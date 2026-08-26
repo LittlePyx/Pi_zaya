@@ -11,6 +11,7 @@ import {
 import type {
   Message,
   ResearchNoteRecord,
+  ResearchNoteSourceLink,
   ResearchNoteSourceState,
 } from '../../api/chat'
 import { chatApi } from '../../api/chat'
@@ -26,6 +27,7 @@ import {
   researchNoteDefaultTitle,
   type ResearchNoteLabels,
 } from './researchNote'
+import { researchNoteSourceLinkWithContext } from './researchNoteEvidenceContext'
 
 interface Props {
   open: boolean
@@ -47,6 +49,32 @@ function plainPreview(value: string): string {
     .replace(/[`*_>#|~-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+async function sourceStateWithContextSnapshots(
+  sourceState: ResearchNoteSourceState,
+): Promise<ResearchNoteSourceState> {
+  const links = Array.isArray(sourceState.links) ? sourceState.links : []
+  const next: ResearchNoteSourceLink[] = [...links]
+  const pending = links
+    .map((link, index) => ({ link, index }))
+    .filter(({ link }) => (
+      link.kind !== 'answer'
+      && !link.evidence_context_snapshot
+      && Boolean(link.source_path)
+      && Boolean(link.block_id || link.anchor_id)
+    ))
+  for (let offset = 0; offset < pending.length; offset += 6) {
+    await Promise.all(pending.slice(offset, offset + 6).map(async ({ link, index }) => {
+      try {
+        const context = await chatApi.reviewResearchNoteEvidence(link)
+        next[index] = researchNoteSourceLinkWithContext(link, context)
+      } catch {
+        // A missing conversion leaves this source without a baseline and does not block note saving.
+      }
+    }))
+  }
+  return { ...sourceState, links: next }
 }
 
 function downloadTextFile(filename: string, content: string) {
@@ -265,21 +293,25 @@ export function ResearchNoteModal({
     setSaving(true)
     setSaveState('saving')
     try {
+      const sourceStateForSave = currentNote
+        ? sourceState
+        : await sourceStateWithContextSnapshots(sourceState)
       const record = currentNote
         ? await chatApi.updateResearchNote(currentNote.id, {
           expected_revision: currentNote.revision,
           title: safeTitle,
           content_markdown: body.trim(),
-          source_state: sourceState,
+          source_state: sourceStateForSave,
         })
         : await chatApi.createResearchNote({
           title: safeTitle,
           content_markdown: body.trim(),
           project_id: projectId || null,
           source_conv_id: activeConvId || null,
-          source_state: sourceState,
+          source_state: sourceStateForSave,
         })
       setCurrentNote(record)
+      if (!currentNote) setSourceState(record.source_state || sourceStateForSave)
       setTargetValue(record.id)
       setAutoSaveEnabled(true)
       setSaveState('saved')

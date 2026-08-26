@@ -3208,9 +3208,21 @@ body.kb-reader-resizing .kb-reader-content {
   background: color-mix(in srgb, var(--panel) 94%, var(--bg));
 }
 
+.kb-reader-evidence-version-compare > div > header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .kb-reader-evidence-version-compare strong {
   color: var(--muted-text);
   font-size: 11px;
+}
+
+.kb-reader-evidence-version-compare small {
+  color: color-mix(in srgb, var(--muted-text) 82%, transparent);
+  font-size: 10px;
 }
 
 .kb-reader-evidence-version-compare blockquote {
@@ -3221,6 +3233,70 @@ body.kb-reader-resizing .kb-reader-content {
   font-size: 12px;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.kb-reader-evidence-context-segments {
+  display: grid;
+  max-height: 224px;
+  gap: 6px;
+  margin-top: 7px;
+  overflow-y: auto;
+}
+
+.kb-reader-evidence-context-segments section {
+  min-width: 0;
+  padding: 6px 8px;
+  border-left: 2px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--bg) 62%, transparent);
+}
+
+.kb-reader-evidence-context-segments section.is-target {
+  border-left-color: color-mix(in srgb, var(--accent) 72%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.kb-reader-evidence-context-segments section > span {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted-text);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.kb-reader-evidence-context-segments p {
+  margin: 0;
+  color: var(--text-main);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.kb-reader-evidence-context-segments em {
+  color: var(--muted-text);
+  font-style: normal;
+}
+
+.kb-reader-evidence-context-segments mark {
+  border-radius: 3px;
+  color: inherit;
+}
+
+.kb-reader-evidence-context-segments mark.is-previous {
+  background: color-mix(in srgb, #ff7875 28%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, #cf1322 58%, transparent);
+}
+
+.kb-reader-evidence-context-segments mark.is-current {
+  background: color-mix(in srgb, #73d13d 30%, transparent);
+}
+
+.kb-reader-evidence-context-segments mark.is-empty {
+  padding-inline: 3px;
+  color: var(--muted-text);
+  text-decoration: none;
 }
 
 .kb-reader-page-main {
@@ -3267,7 +3343,12 @@ body.kb-reader-resizing .kb-reader-content {
     flex: 1 1 auto;
   }
 
+}
+
+@media (max-width: 560px) {
   .kb-reader-evidence-version-compare { grid-template-columns: 1fr; }
+
+  .kb-reader-evidence-context-segments { max-height: 140px; }
 }
 
 .kb-reader-shell-btn.ant-btn.is-accent {

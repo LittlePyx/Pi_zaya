@@ -59,6 +59,13 @@ def test_exact_block_returns_surrounding_context_and_canonical_reader_target(tmp
     assert result["page_start"] == 2
     assert result["reader_open"]["blockId"] == target["block_id"]
     assert result["reader_open"]["strictLocate"] is True
+    snapshot = result["context_snapshot"]
+    assert snapshot["version"] == 1
+    assert snapshot["source_fingerprint"] == result["source_fingerprint"]
+    assert "calibrated" in snapshot["before"][0]["text"]
+    assert "Photon arrival" in snapshot["target"]["text"]
+    assert "Dark counts" in snapshot["after"][0]["text"]
+    assert "markdown" not in snapshot["target"]
 
 
 def test_unique_quote_can_recover_an_exact_location_after_ids_change(tmp_path: Path) -> None:
@@ -237,6 +244,17 @@ def test_confirmed_candidate_repairs_one_locator_and_keeps_an_audit_trail() -> N
             }
         ],
     }
+    target = {
+        "block_id": "new-block",
+        "anchor_id": "new-anchor",
+        "kind": "paragraph",
+        "heading_path": "Results",
+        "page_start": 4,
+        "page_end": 4,
+        "line_start": 22,
+        "line_end": 24,
+        "text": "The repaired detector sentence is exact.",
+    }
     repaired = repair_research_note_source_state(
         source_state,
         source_index=0,
@@ -245,18 +263,17 @@ def test_confirmed_candidate_repairs_one_locator_and_keeps_an_audit_trail() -> N
         old_block_id="old-block",
         old_anchor_id="old-anchor",
         old_evidence_quote="Old detector sentence.",
-        target={
-            "block_id": "new-block",
-            "anchor_id": "new-anchor",
-            "kind": "paragraph",
-            "heading_path": "Results",
-            "page_start": 4,
-            "page_end": 4,
-            "line_start": 22,
-            "line_end": 24,
-            "text": "The repaired detector sentence is exact.",
-        },
+        target=target,
         source_fingerprint="sha256:abc123",
+        context_snapshot={
+            "version": 1,
+            "captured_at": 1_800_000_000,
+            "source_fingerprint": "sha256:abc123",
+            "reason": "exact_block",
+            "before": [{"block_id": "before", "text": "Earlier context."}],
+            "target": target,
+            "after": [{"block_id": "after", "text": "Later context."}],
+        },
         repaired_at=1_800_000_000,
     )
 
@@ -284,6 +301,9 @@ def test_confirmed_candidate_repairs_one_locator_and_keeps_an_audit_trail() -> N
     assert audit["from"]["block_id"] == "old-block"
     assert audit["to"]["block_id"] == "new-block"
     assert audit["repaired_at"] == 1_800_000_000.0
+    assert audit["previous_context_snapshot"] is None
+    assert audit["reviewed_context_snapshot"]["target"]["block_id"] == "new-block"
+    assert link["evidence_context_snapshot"]["before"][0]["text"] == "Earlier context."
 
 
 def test_locator_repair_rejects_a_source_that_changed_after_reader_opened() -> None:
@@ -312,6 +332,20 @@ def test_locator_repair_rejects_a_source_that_changed_after_reader_opened() -> N
 
 
 def test_source_change_review_can_confirm_or_invalidate_without_rewriting_evidence() -> None:
+    old_snapshot = {
+        "version": 1,
+        "captured_at": 1_700_000_000,
+        "source_fingerprint": "sha256:old",
+        "reason": "exact_block",
+        "before": [{"block_id": "before-1", "text": "Old preceding context."}],
+        "target": {
+            "block_id": "block-1",
+            "anchor_id": "anchor-1",
+            "kind": "paragraph",
+            "text": "The saved detector evidence remains exact.",
+        },
+        "after": [{"block_id": "after-1", "text": "Old following context."}],
+    }
     state = {
         "links": [
             {
@@ -329,6 +363,7 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
                     "verified_at": 1_700_000_000.0,
                     "source_fingerprint": "sha256:old",
                 },
+                "evidence_context_snapshot": old_snapshot,
             }
         ]
     }
@@ -338,6 +373,15 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
         "kind": "paragraph",
         "heading_path": "Results",
         "text": "The saved detector evidence remains exact.",
+    }
+    current_snapshot = {
+        "version": 1,
+        "captured_at": 1_800_000_000,
+        "source_fingerprint": "sha256:new",
+        "reason": "exact_block",
+        "before": [{"block_id": "before-1", "text": "Updated preceding context."}],
+        "target": target,
+        "after": [{"block_id": "after-1", "text": "Old following context."}],
     }
 
     invalidated = review_research_note_source_state(
@@ -352,6 +396,7 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
         expected_source_fingerprint="sha256:old",
         target=target,
         source_fingerprint="sha256:new",
+        context_snapshot=current_snapshot,
         reviewed_at=1_800_000_000,
     )
 
@@ -371,6 +416,9 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
     assert first_audit["saved_locator"]["block_id"] == "block-1"
     assert first_audit["source_fingerprint_before"] == "sha256:old"
     assert first_audit["source_fingerprint_after"] == "sha256:new"
+    assert first_audit["previous_context_snapshot"]["before"][0]["text"] == "Old preceding context."
+    assert first_audit["reviewed_context_snapshot"]["before"][0]["text"] == "Updated preceding context."
+    assert invalid_link["evidence_context_snapshot"] == old_snapshot
 
     confirmed = review_research_note_source_state(
         invalidated,
@@ -384,6 +432,7 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
         expected_source_fingerprint="sha256:new",
         target=target,
         source_fingerprint="sha256:new",
+        context_snapshot=current_snapshot,
         reviewed_at=1_800_000_100,
     )
     confirmed_link = confirmed["links"][0]
@@ -393,6 +442,67 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
         "invalid",
         "confirmed",
     ]
+    assert "previous_context_snapshot" not in confirmed_link["evidence_review_history"][0]
+    assert confirmed_link["evidence_context_snapshot"]["before"][0]["text"] == "Updated preceding context."
+
+
+def test_source_change_review_ignores_malformed_legacy_context_lists() -> None:
+    target = {
+        "block_id": "block-1",
+        "anchor_id": "anchor-1",
+        "kind": "paragraph",
+        "text": "Saved evidence.",
+    }
+    state = {
+        "links": [
+            {
+                "source_path": "library/example.pdf",
+                "block_id": "block-1",
+                "anchor_id": "anchor-1",
+                "evidence_quote": "Saved evidence.",
+                "evidence_verification": {
+                    "status": "exact",
+                    "source_fingerprint": "sha256:old",
+                },
+                "evidence_context_snapshot": {
+                    "version": 1,
+                    "captured_at": 1_700_000_000,
+                    "source_fingerprint": "sha256:old",
+                    "before": 17,
+                    "target": target,
+                    "after": {"text": "not a list"},
+                },
+            }
+        ]
+    }
+    current_snapshot = {
+        "version": 1,
+        "captured_at": 1_800_000_000,
+        "source_fingerprint": "sha256:new",
+        "before": [],
+        "target": target,
+        "after": [],
+    }
+
+    reviewed = review_research_note_source_state(
+        state,
+        source_index=0,
+        source_path="library/example.pdf",
+        decision="confirmed",
+        old_block_id="block-1",
+        old_anchor_id="anchor-1",
+        old_evidence_quote="Saved evidence.",
+        expected_source_fingerprint="sha256:old",
+        target=target,
+        source_fingerprint="sha256:new",
+        context_snapshot=current_snapshot,
+        reviewed_at=1_800_000_000,
+    )
+
+    link = reviewed["links"][0]
+    assert link["evidence_review_history"][-1]["previous_context_snapshot"]["before"] == []
+    assert link["evidence_review_history"][-1]["previous_context_snapshot"]["after"] == []
+    assert link["evidence_context_snapshot"]["source_fingerprint"] == "sha256:new"
 
 
 def test_source_change_review_rejects_stale_verification_or_relocated_target() -> None:

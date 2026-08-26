@@ -911,6 +911,8 @@ export default function ResearchNotesPage() {
       saved_evidence_quote: String(link.evidence_quote || '').trim(),
       current_evidence_quote: target.text,
       previously_invalid: link.evidence_verification?.status === 'invalid',
+      saved_context_snapshot: link.evidence_context_snapshot || null,
+      current_context_snapshot: context.context_snapshot || null,
       review: {
         source_index: sourceIndex,
         source_path: link.source_path,

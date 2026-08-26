@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import time
 from copy import deepcopy
 from pathlib import Path
@@ -18,6 +19,8 @@ _CONTEXT_RADIUS = 1
 _CANDIDATE_LIMIT = 3
 _REPAIR_HISTORY_LIMIT = 12
 _REVIEW_HISTORY_LIMIT = 12
+_SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
+_SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
 
 
 def _clean_text(value: Any, *, limit: int = _TEXT_LIMIT) -> str:
@@ -61,6 +64,112 @@ def _locator_snapshot(link: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _context_snapshot_block(value: Any, *, target: bool = False) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    text = _clean_text(
+        value.get("text") or value.get("evidence_quote"),
+        limit=_SNAPSHOT_TARGET_TEXT_LIMIT if target else _SNAPSHOT_NEIGHBOR_TEXT_LIMIT,
+    )
+    if not text:
+        return None
+    return {
+        "block_id": _clean_text(value.get("block_id"), limit=160),
+        "anchor_id": _clean_text(value.get("anchor_id"), limit=160),
+        "kind": _clean_text(value.get("kind") or value.get("anchor_kind"), limit=40),
+        "heading_path": _clean_text(value.get("heading_path"), limit=500),
+        "page_start": _positive_int(value.get("page_start")),
+        "page_end": _positive_int(value.get("page_end")),
+        "line_start": _positive_int(value.get("line_start")),
+        "line_end": _positive_int(value.get("line_end")),
+        "text": text,
+    }
+
+
+def _normalize_context_snapshot(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict):
+        return None
+    fingerprint = _clean_text(value.get("source_fingerprint"), limit=96)
+    target = _context_snapshot_block(value.get("target"), target=True)
+    if not fingerprint.startswith("sha256:") or target is None:
+        return None
+    try:
+        captured_at = float(value.get("captured_at") or 0)
+    except (TypeError, ValueError):
+        captured_at = 0.0
+    raw_before = value.get("before")
+    raw_after = value.get("after")
+    before_values = raw_before if isinstance(raw_before, list) else []
+    after_values = raw_after if isinstance(raw_after, list) else []
+    before = [
+        block
+        for block in (_context_snapshot_block(row) for row in before_values[-1:])
+        if block is not None
+    ]
+    after = [
+        block
+        for block in (_context_snapshot_block(row) for row in after_values[:1])
+        if block is not None
+    ]
+    return {
+        "version": 1,
+        "captured_at": captured_at if math.isfinite(captured_at) and captured_at > 0 else time.time(),
+        "source_fingerprint": fingerprint,
+        "reason": _clean_text(value.get("reason"), limit=80),
+        "before": before,
+        "target": target,
+        "after": after,
+    }
+
+
+def research_note_evidence_context_snapshot(
+    context: dict[str, Any],
+    *,
+    captured_at: float | None = None,
+) -> dict[str, Any] | None:
+    """Return a compact, versioned before/target/after evidence snapshot."""
+    if not isinstance(context, dict) or _clean_text(context.get("status"), limit=24) != "exact":
+        return None
+    return _normalize_context_snapshot(
+        {
+            "version": 1,
+            "captured_at": float(captured_at if captured_at is not None else time.time()),
+            "source_fingerprint": context.get("source_fingerprint"),
+            "reason": context.get("reason"),
+            "before": context.get("before"),
+            "target": context.get("target"),
+            "after": context.get("after"),
+        }
+    )
+
+
+def _verified_context_snapshot(
+    value: Any,
+    *,
+    target: dict[str, Any],
+    source_fingerprint: str,
+) -> dict[str, Any] | None:
+    snapshot = _normalize_context_snapshot(value)
+    if snapshot is None:
+        return None
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if snapshot["source_fingerprint"] != fingerprint:
+        raise ValueError("evidence context snapshot source changed")
+    snapshot_target = snapshot["target"]
+    target_locator = _locator_snapshot(target)
+    if target_locator["block_id"] and snapshot_target["block_id"] != target_locator["block_id"]:
+        raise ValueError("evidence context snapshot block changed")
+    if target_locator["anchor_id"] and snapshot_target["anchor_id"] != target_locator["anchor_id"]:
+        raise ValueError("evidence context snapshot anchor changed")
+    return snapshot
+
+
+def _compact_history_contexts(history: list[dict[str, Any]]) -> None:
+    for row in history:
+        row.pop("previous_context_snapshot", None)
+        row.pop("reviewed_context_snapshot", None)
+
+
 def repair_research_note_source_state(
     source_state: dict[str, Any],
     *,
@@ -72,6 +181,7 @@ def repair_research_note_source_state(
     old_evidence_quote: str = "",
     target: dict[str, Any],
     source_fingerprint: str,
+    context_snapshot: dict[str, Any] | None = None,
     repaired_at: float | None = None,
 ) -> dict[str, Any]:
     """Return a copy with one explicitly identified source locator repaired.
@@ -106,6 +216,7 @@ def repair_research_note_source_state(
         raise ValueError("verified evidence target has no text")
 
     previous = _locator_snapshot(link)
+    previous_context_snapshot = _normalize_context_snapshot(link.get("evidence_context_snapshot"))
     for key in (
         "block_id",
         "anchor_id",
@@ -136,6 +247,11 @@ def repair_research_note_source_state(
 
     confirmed_at = float(repaired_at if repaired_at is not None else time.time())
     fingerprint = _clean_text(source_fingerprint, limit=96)
+    verified_snapshot = _verified_context_snapshot(
+        context_snapshot,
+        target=target,
+        source_fingerprint=fingerprint,
+    )
     link["evidence_verification"] = {
         "status": "exact",
         "reason": "confirmed_candidate",
@@ -144,6 +260,7 @@ def repair_research_note_source_state(
     }
     raw_history = link.get("locator_repair_history")
     history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    _compact_history_contexts(history)
     history.append(
         {
             "version": 1,
@@ -151,9 +268,15 @@ def repair_research_note_source_state(
             "source_fingerprint": fingerprint,
             "from": previous,
             "to": target_snapshot,
+            "previous_context_snapshot": previous_context_snapshot,
+            "reviewed_context_snapshot": verified_snapshot,
         }
     )
     link["locator_repair_history"] = history[-_REPAIR_HISTORY_LIMIT:]
+    if verified_snapshot is not None:
+        link["evidence_context_snapshot"] = verified_snapshot
+    else:
+        link.pop("evidence_context_snapshot", None)
     return next_state
 
 
@@ -170,6 +293,7 @@ def review_research_note_source_state(
     expected_source_fingerprint: str,
     target: dict[str, Any],
     source_fingerprint: str,
+    context_snapshot: dict[str, Any] | None = None,
     reviewed_at: float | None = None,
 ) -> dict[str, Any]:
     """Record an explicit review of unchanged evidence after source drift.
@@ -222,9 +346,16 @@ def review_research_note_source_state(
     fingerprint = _clean_text(source_fingerprint, limit=96)
     if not fingerprint.startswith("sha256:"):
         raise ValueError("verified source fingerprint required")
+    verified_snapshot = _verified_context_snapshot(
+        context_snapshot,
+        target=target,
+        source_fingerprint=fingerprint,
+    )
+    previous_context_snapshot = _normalize_context_snapshot(link.get("evidence_context_snapshot"))
     confirmed_at = float(reviewed_at if reviewed_at is not None else time.time())
     raw_history = link.get("evidence_review_history")
     history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    _compact_history_contexts(history)
     history.append(
         {
             "version": 1,
@@ -235,6 +366,8 @@ def review_research_note_source_state(
             "previous_verification": previous_verification,
             "saved_locator": _locator_snapshot(link),
             "reviewed_target": target_snapshot,
+            "previous_context_snapshot": previous_context_snapshot,
+            "reviewed_context_snapshot": verified_snapshot,
         }
     )
     link["evidence_review_history"] = history[-_REVIEW_HISTORY_LIMIT:]
@@ -244,6 +377,10 @@ def review_research_note_source_state(
         "verified_at": confirmed_at,
         "source_fingerprint": fingerprint,
     }
+    if normalized_decision == "confirmed" and verified_snapshot is not None:
+        link["evidence_context_snapshot"] = verified_snapshot
+    elif normalized_decision == "confirmed":
+        link.pop("evidence_context_snapshot", None)
     return next_state
 
 
@@ -386,6 +523,7 @@ def build_research_note_evidence_context(
             "reader_open": None,
             "source_fingerprint": current_fingerprint,
             "source_changed": source_changed,
+            "context_snapshot": None,
         }
 
     target_index: int | None = None
@@ -427,7 +565,7 @@ def build_research_note_evidence_context(
     if target_index is not None:
         target = blocks[target_index]
         serialized = _serialize_block(target)
-        return {
+        result = {
             "status": "exact",
             "reason": exact_reason,
             "source_name": source_name_clean,
@@ -448,6 +586,8 @@ def build_research_note_evidence_context(
             "source_fingerprint": current_fingerprint,
             "source_changed": source_changed,
         }
+        result["context_snapshot"] = research_note_evidence_context_snapshot(result)
+        return result
 
     ranked = match_source_blocks(
         blocks,
@@ -493,4 +633,5 @@ def build_research_note_evidence_context(
         "reader_open": None,
         "source_fingerprint": current_fingerprint,
         "source_changed": source_changed,
+        "context_snapshot": None,
     }

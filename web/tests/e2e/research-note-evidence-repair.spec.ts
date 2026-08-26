@@ -26,6 +26,34 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   const missingSourcePath = 'db/paper/missing.md'
   const failingSourcePath = 'db/paper/failure.md'
   const answerSourcePath = 'answer://must-not-be-reviewed'
+  const changedSavedContext = {
+    version: 1 as const,
+    captured_at: 1_799_999_900,
+    source_fingerprint: 'sha256:old-source',
+    reason: 'exact_block',
+    before: [{ block_id: 'before-change', text: 'Earlier calibration context.' }],
+    target: {
+      block_id: 'quote-1',
+      anchor_id: 'a-quote-1',
+      kind: 'blockquote',
+      text: 'SCI compresses a short video into one coded measurement.',
+    },
+    after: [{ block_id: 'after-change', text: 'The following limitation remains unchanged.' }],
+  }
+  const changedCurrentContext = {
+    version: 1 as const,
+    captured_at: 1_800_000_200,
+    source_fingerprint: 'sha256:new-source',
+    reason: 'exact_block',
+    before: [{ block_id: 'before-change', text: 'Updated calibration context.' }],
+    target: {
+      block_id: 'quote-1',
+      anchor_id: 'a-quote-1',
+      kind: 'blockquote',
+      text: 'SCI compresses a short video into one coded measurement.',
+    },
+    after: [{ block_id: 'after-change', text: 'The following limitation remains unchanged.' }],
+  }
   let note: ResearchNoteRecord = {
     id: 'note-repair',
     project_id: null,
@@ -73,6 +101,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
             verified_at: 1_799_999_900,
             source_fingerprint: 'sha256:old-source',
           },
+          evidence_context_snapshot: changedSavedContext,
         },
         {
           kind: 'source',
@@ -146,6 +175,20 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
               verified_at: 1_800_000_100,
               source_fingerprint: 'sha256:fixture',
             },
+            evidence_context_snapshot: {
+              version: 1,
+              captured_at: 1_800_000_100,
+              source_fingerprint: 'sha256:fixture',
+              reason: 'exact_block',
+              before: [],
+              target: {
+                block_id: 'quote-1',
+                anchor_id: 'a-quote-1',
+                kind: 'blockquote',
+                text: 'SCI compresses a short video into one coded measurement.',
+              },
+              after: [],
+            },
             locator_repair_history: [{
               version: 1,
               repaired_at: 1_800_000_100,
@@ -173,6 +216,9 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
           ...note.source_state,
           links: (note.source_state.links || []).map((link, index) => index === 2 ? {
             ...link,
+            evidence_context_snapshot: decision === 'confirmed'
+              ? changedCurrentContext
+              : link.evidence_context_snapshot,
             evidence_verification: {
               status: decision === 'invalid' ? 'invalid' : 'exact',
               reason: decision === 'invalid' ? 'marked_invalid' : 'confirmed_source_change',
@@ -187,6 +233,8 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
                 decision,
                 previous_verification: previousVerification,
                 saved_locator: { block_id: link.block_id, anchor_id: link.anchor_id },
+                previous_context_snapshot: link.evidence_context_snapshot,
+                reviewed_context_snapshot: changedCurrentContext,
               },
             ],
           } : link),
@@ -283,6 +331,18 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
         reader_open: currentReaderOpen,
         source_fingerprint: sourceChanged ? 'sha256:new-source' : 'sha256:exact-source',
         source_changed: sourceChanged && currentFingerprint !== 'sha256:new-source',
+        context_snapshot: sourceChanged ? changedCurrentContext : {
+          version: 1,
+          captured_at: 1_800_000_200,
+          source_fingerprint: 'sha256:exact-source',
+          reason: 'exact_block',
+          before: [],
+          target: {
+            block_id: 'exact-block',
+            text: 'This locator is still exact.',
+          },
+          after: [],
+        },
       })
       return
     }
@@ -299,6 +359,15 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
       reader_open: readerOpen,
       source_fingerprint: 'sha256:fixture',
       source_changed: false,
+      context_snapshot: {
+        version: 1,
+        captured_at: 1_800_000_200,
+        source_fingerprint: 'sha256:fixture',
+        reason: 'exact_block',
+        before: [],
+        target,
+        after: [],
+      },
     } : {
       status: 'candidate',
       reason: 'saved_target_missing',
@@ -382,11 +451,13 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(page).toHaveURL(/\/reader\/session\/repair-session/)
   await expect(page.getByTestId('reader-evidence-review-panel')).toBeVisible()
   await expect(page.getByTestId('reader-evidence-review-saved')).toContainText(
-    'SCI compresses a short video into one coded measurement.',
+    'Earlier calibration context.',
   )
   await expect(page.getByTestId('reader-evidence-review-current')).toContainText(
-    'SCI compresses a short video into one coded measurement.',
+    'Updated calibration context.',
   )
+  await expect(page.getByTestId('reader-evidence-review-saved-before').locator('mark.is-previous')).toBeVisible()
+  await expect(page.getByTestId('reader-evidence-review-current-before').locator('mark.is-current')).toBeVisible()
   const invalidate = page.getByTestId('reader-invalidate-evidence-review')
   await expect(invalidate).toBeEnabled()
   await invalidate.click()
@@ -394,6 +465,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(page).toHaveURL(/\/notes\?note=note-repair/)
   expect(note.source_state.links?.[2]?.evidence_verification?.status).toBe('invalid')
   expect(note.source_state.links?.[2]?.evidence_review_history?.[0]?.decision).toBe('invalid')
+  expect(note.source_state.links?.[2]?.evidence_context_snapshot?.source_fingerprint).toBe('sha256:old-source')
   await page.getByTestId('research-note-evidence-check-all').click()
   const invalidHealth = page.getByTestId('research-note-evidence-health')
   await expect(invalidHealth).toContainText('已核查 5/5 条文献证据')
@@ -411,6 +483,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await reconfirm.click()
   await expect(page).toHaveURL(/\/notes\?note=note-repair/)
   expect(note.source_state.links?.[2]?.evidence_verification?.status).toBe('exact')
+  expect(note.source_state.links?.[2]?.evidence_context_snapshot?.source_fingerprint).toBe('sha256:new-source')
   expect(note.source_state.links?.[2]?.evidence_review_history?.map(row => row.decision)).toEqual([
     'invalid',
     'confirmed',
@@ -473,4 +546,84 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   }))
   expect(evidenceContextBodies).toHaveLength(20)
   expect(evidenceContextBodies.every(body => String(body.source_path || '') !== answerSourcePath)).toBe(true)
+})
+
+test('legacy evidence review labels a missing historical context without fabricating it', async ({ page }) => {
+  await installAppShellMocks(page)
+  await installEmptyCitationShelfMock(page, { scopeId: 'legacy-context-review' })
+  await installIdleReferenceMocks(page)
+
+  const quote = 'SCI compresses a short video into one coded measurement.'
+  const readerOpen = {
+    sourcePath: READER_REGRESSION_SOURCE_PATH,
+    sourceName: READER_REGRESSION_SOURCE_NAME,
+    headingPath: 'Fixture Paper / 1. Introduction',
+    snippet: quote,
+    highlightSnippet: quote,
+    blockId: 'quote-1',
+    anchorId: 'a-quote-1',
+    anchorKind: 'blockquote',
+    strictLocate: true,
+    locateTarget: {
+      headingPath: 'Fixture Paper / 1. Introduction',
+      snippet: quote,
+      highlightSnippet: quote,
+      evidenceQuote: quote,
+      blockId: 'quote-1',
+      anchorId: 'a-quote-1',
+      anchorKind: 'blockquote',
+    },
+  }
+  await page.route('**/api/reader/sessions/legacy-context-review', async (route) => {
+    await fulfillJson(route, {
+      id: 'legacy-context-review',
+      title: READER_REGRESSION_SOURCE_NAME,
+      conversation_id: '',
+      message_id: null,
+      payload: readerOpen,
+      state: {
+        researchNoteEvidenceReview: {
+          version: 1,
+          note_id: 'legacy-note',
+          note_title: 'Legacy note',
+          source_label: READER_REGRESSION_SOURCE_NAME,
+          saved_evidence_quote: quote,
+          current_evidence_quote: quote,
+          previously_invalid: false,
+          current_context_snapshot: {
+            version: 1,
+            captured_at: 1_800_000_000,
+            source_fingerprint: 'sha256:new-source',
+            reason: 'exact_block',
+            before: [{ block_id: 'before', text: 'Current preceding context.' }],
+            target: { block_id: 'quote-1', anchor_id: 'a-quote-1', kind: 'blockquote', text: quote },
+            after: [{ block_id: 'after', text: 'Current following context.' }],
+          },
+          review: {
+            source_index: 0,
+            source_path: READER_REGRESSION_SOURCE_PATH,
+            old_block_id: 'quote-1',
+            old_anchor_id: 'a-quote-1',
+            old_evidence_quote: quote,
+            expected_source_fingerprint: 'sha256:old-source',
+            current_block_id: 'quote-1',
+            current_anchor_id: 'a-quote-1',
+            current_anchor_kind: 'blockquote',
+            current_evidence_quote: quote,
+            source_fingerprint: 'sha256:new-source',
+          },
+        },
+      },
+    })
+  })
+  await page.route('**/api/references/reader/doc', async (route) => {
+    await fulfillJson(route, buildReaderRegressionDocResponse('strict-quote'))
+  })
+
+  await page.goto('/reader/session/legacy-context-review')
+  const panel = page.getByTestId('reader-evidence-review-panel')
+  await expect(panel).toContainText('这条旧笔记没有保存时的语境快照')
+  await expect(page.getByTestId('reader-evidence-review-saved')).toContainText('仅保留了摘录')
+  await expect(page.getByTestId('reader-evidence-review-current')).toContainText('Current preceding context.')
+  await expect(page.getByTestId('reader-confirm-evidence-review')).toBeEnabled()
 })

@@ -79,6 +79,7 @@ export interface ResearchNoteSourceLink {
   line_start?: number
   line_end?: number
   asset_src?: string
+  evidence_context_snapshot?: ResearchNoteEvidenceContextSnapshot
   evidence_verification?: {
     status?: string
     reason?: string
@@ -91,6 +92,8 @@ export interface ResearchNoteSourceLink {
     source_fingerprint?: string
     from?: Record<string, unknown>
     to?: Record<string, unknown>
+    previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+    reviewed_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   }>
   evidence_review_history?: Array<{
     version?: number
@@ -101,6 +104,8 @@ export interface ResearchNoteSourceLink {
     previous_verification?: Record<string, unknown>
     saved_locator?: Record<string, unknown>
     reviewed_target?: Record<string, unknown>
+    previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+    reviewed_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   }>
 }
 
@@ -115,6 +120,28 @@ export interface ResearchNoteEvidenceBlock {
   line_end?: number | null
   text: string
   markdown: string
+}
+
+export interface ResearchNoteEvidenceContextSnapshotBlock {
+  block_id?: string
+  anchor_id?: string
+  kind?: string
+  heading_path?: string
+  page_start?: number | null
+  page_end?: number | null
+  line_start?: number | null
+  line_end?: number | null
+  text: string
+}
+
+export interface ResearchNoteEvidenceContextSnapshot {
+  version: 1
+  captured_at: number
+  source_fingerprint: string
+  reason?: string
+  before: ResearchNoteEvidenceContextSnapshotBlock[]
+  target: ResearchNoteEvidenceContextSnapshotBlock
+  after: ResearchNoteEvidenceContextSnapshotBlock[]
 }
 
 export interface ResearchNoteEvidenceCandidate extends ResearchNoteEvidenceBlock {
@@ -137,6 +164,7 @@ export interface ResearchNoteEvidenceContext {
   reader_open?: MessageProvenanceReaderOpen | null
   source_fingerprint: string
   source_changed: boolean
+  context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
 }
 
 export interface ResearchNoteEvidenceRepairBody {
@@ -185,6 +213,8 @@ export interface ResearchNoteEvidenceReviewIntent {
   saved_evidence_quote: string
   current_evidence_quote: string
   previously_invalid: boolean
+  saved_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  current_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   review: Omit<ResearchNoteEvidenceReviewBody, 'decision'>
 }
 

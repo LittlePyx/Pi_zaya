@@ -1392,6 +1392,7 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
             "reader_open": None,
             "source_fingerprint": "",
             "source_changed": bool(body.source_fingerprint),
+            "context_snapshot": None,
         }
     try:
         return build_research_note_evidence_context(
@@ -1480,6 +1481,11 @@ def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceR
             old_evidence_quote=body.old_evidence_quote,
             target=target,
             source_fingerprint=body.source_fingerprint,
+            context_snapshot=(
+                verified.get("context_snapshot")
+                if isinstance(verified.get("context_snapshot"), dict)
+                else None
+            ),
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
@@ -1569,6 +1575,11 @@ def review_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceR
             expected_source_fingerprint=body.expected_source_fingerprint,
             target=target,
             source_fingerprint=body.source_fingerprint,
+            context_snapshot=(
+                verified.get("context_snapshot")
+                if isinstance(verified.get("context_snapshot"), dict)
+                else None
+            ),
         )
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc

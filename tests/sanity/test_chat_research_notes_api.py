@@ -253,6 +253,9 @@ Dark counts were measured with the shutter closed.
     assert "start_offset" not in link
     assert link["locator_repair_history"][-1]["from"]["block_id"] == "stale-block"
     assert link["evidence_verification"]["source_fingerprint"] == context["source_fingerprint"]
+    assert link["evidence_context_snapshot"]["source_fingerprint"] == context["source_fingerprint"]
+    assert link["evidence_context_snapshot"]["target"]["block_id"] == candidate["block_id"]
+    assert link["locator_repair_history"][-1]["reviewed_context_snapshot"]["target"]["block_id"] == candidate["block_id"]
 
     reopened = client.post(
         "/api/chat/research-note/evidence-context",
@@ -308,6 +311,7 @@ Dark counts were measured with the shutter closed.
     changed_context = changed.json()
     assert changed_context["status"] == "exact"
     assert changed_context["source_changed"] is True
+    assert changed_context["context_snapshot"]["source_fingerprint"] == changed_context["source_fingerprint"]
     current_target = changed_context["target"]
     review_body = {
         "source_index": 0,
@@ -336,6 +340,8 @@ Dark counts were measured with the shutter closed.
     assert invalid_link["evidence_verification"]["status"] == "invalid"
     assert invalid_link["evidence_review_history"][-1]["previous_verification"]["source_fingerprint"] == old_fingerprint
     assert invalid_link["evidence_review_history"][-1]["saved_locator"]["block_id"] == candidate["block_id"]
+    assert invalid_link["evidence_context_snapshot"]["source_fingerprint"] == old_fingerprint
+    assert invalid_link["evidence_review_history"][-1]["reviewed_context_snapshot"]["source_fingerprint"] == changed_context["source_fingerprint"]
 
     confirmed = client.post(
         f"/api/chat/research-notes/{note['id']}/evidence-review",
@@ -355,6 +361,8 @@ Dark counts were measured with the shutter closed.
         "invalid",
         "confirmed",
     ]
+    assert confirmed_link["evidence_context_snapshot"]["source_fingerprint"] == changed_context["source_fingerprint"]
+    assert "reviewed_context_snapshot" not in confirmed_link["evidence_review_history"][0]
 
     stale_review = client.post(
         f"/api/chat/research-notes/{note['id']}/evidence-review",
