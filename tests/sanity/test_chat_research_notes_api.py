@@ -162,6 +162,133 @@ Context immediately after the evidence.
     ).status_code == 422
 
 
+def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+
+    md_path = tmp_path / "converted.md"
+    md_path.write_text(
+        """# Paper
+
+<!-- kb_page: 4 -->
+
+## Results
+
+The detector was calibrated before every acquisition.
+
+Photon arrival is a stochastic process governed by Poisson statistics.
+
+Dark counts were measured with the shutter closed.
+""",
+        encoding="utf-8",
+    )
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    note = store.create_research_note(
+        title="Evidence note",
+        content_markdown="Detector evidence",
+        source_state={
+            "version": 1,
+            "links": [
+                {
+                    "kind": "source",
+                    "label": "Paper",
+                    "source_path": "library/paper.pdf",
+                    "capture_id": "capture-1",
+                    "block_id": "stale-block",
+                    "anchor_id": "stale-anchor",
+                    "evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+                    "start_offset": 2,
+                    "end_offset": 54,
+                }
+            ],
+        },
+    )
+    assert note is not None
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda _path: str(md_path))
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", lambda *args, **kwargs: md_path)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    reviewed = client.post(
+        "/api/chat/research-note/evidence-context",
+        json={
+            "source_path": "library/paper.pdf",
+            "source_name": "Paper",
+            "evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+            "block_id": "stale-block",
+            "anchor_id": "stale-anchor",
+        },
+    )
+    assert reviewed.status_code == 200
+    context = reviewed.json()
+    assert context["status"] == "candidate"
+    candidate = context["candidates"][0]
+
+    repaired = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-repair",
+        json={
+            "source_index": 0,
+            "source_path": "library/paper.pdf",
+            "capture_id": "capture-1",
+            "old_block_id": "stale-block",
+            "old_anchor_id": "stale-anchor",
+            "old_evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+            "candidate_block_id": candidate["block_id"],
+            "candidate_anchor_id": candidate["anchor_id"],
+            "candidate_anchor_kind": candidate["kind"],
+            "candidate_evidence_quote": candidate["text"],
+            "source_fingerprint": context["source_fingerprint"],
+        },
+    )
+    assert repaired.status_code == 200
+    record = repaired.json()
+    assert record["revision"] == 2
+    link = record["source_state"]["links"][0]
+    assert link["block_id"] == candidate["block_id"]
+    assert link["anchor_id"] == candidate["anchor_id"]
+    assert "start_offset" not in link
+    assert link["locator_repair_history"][-1]["from"]["block_id"] == "stale-block"
+    assert link["evidence_verification"]["source_fingerprint"] == context["source_fingerprint"]
+
+    reopened = client.post(
+        "/api/chat/research-note/evidence-context",
+        json={
+            "source_path": link["source_path"],
+            "source_name": link["label"],
+            "evidence_quote": link["evidence_quote"],
+            "block_id": link["block_id"],
+            "anchor_id": link["anchor_id"],
+            "source_fingerprint": link["evidence_verification"]["source_fingerprint"],
+        },
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["status"] == "exact"
+    assert reopened.json()["source_changed"] is False
+
+    conflict = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-repair",
+        json={
+            "source_index": 0,
+            "source_path": "library/paper.pdf",
+            "capture_id": "capture-1",
+            "old_block_id": candidate["block_id"],
+            "old_anchor_id": candidate["anchor_id"],
+            "old_evidence_quote": candidate["text"],
+            "candidate_block_id": candidate["block_id"],
+            "candidate_anchor_id": candidate["anchor_id"],
+            "candidate_anchor_kind": candidate["kind"],
+            "candidate_evidence_quote": candidate["text"],
+            "source_fingerprint": "sha256:" + ("0" * 64),
+        },
+    )
+    assert conflict.status_code == 409
+    assert store.get_research_note(note["id"])["revision"] == 2
+
+
 def test_chat_research_notes_workspace_list_and_metadata(monkeypatch, tmp_path: Path) -> None:
     from api.routers import chat as chat_router
 

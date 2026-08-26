@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Empty, Spin, message } from 'antd'
+import { Alert, Button, Empty, Spin, message } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { chatApi, type ReaderSessionRecord } from '../api/chat'
+import {
+  chatApi,
+  type ReaderSessionRecord,
+  type ResearchNoteEvidenceRepairIntent,
+} from '../api/chat'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type {
   ReaderSelectionShelfPayload,
@@ -160,6 +164,72 @@ function normalizeReaderPayload(record: ReaderSessionRecord | null): ReaderOpenP
   }
 }
 
+function normalizeEvidenceRepairIntent(value: unknown): ResearchNoteEvidenceRepairIntent | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const repair = record?.repair && typeof record.repair === 'object'
+    ? record.repair as Record<string, unknown>
+    : null
+  const noteId = String(record?.note_id || '').trim()
+  const sourcePath = String(repair?.source_path || '').trim()
+  const evidenceQuote = String(repair?.candidate_evidence_quote || '').trim()
+  const fingerprint = String(repair?.source_fingerprint || '').trim()
+  const sourceIndex = Number(repair?.source_index)
+  if (
+    Number(record?.version) !== 1
+    || !noteId
+    || !sourcePath
+    || !evidenceQuote
+    || !fingerprint
+    || !Number.isInteger(sourceIndex)
+    || sourceIndex < 0
+  ) return null
+  return {
+    version: 1,
+    note_id: noteId,
+    note_title: String(record?.note_title || '').trim(),
+    source_label: String(record?.source_label || '').trim(),
+    repair: {
+      source_index: sourceIndex,
+      source_path: sourcePath,
+      capture_id: String(repair?.capture_id || '').trim() || undefined,
+      old_block_id: String(repair?.old_block_id || '').trim() || undefined,
+      old_anchor_id: String(repair?.old_anchor_id || '').trim() || undefined,
+      old_evidence_quote: String(repair?.old_evidence_quote || '').trim() || undefined,
+      candidate_block_id: String(repair?.candidate_block_id || '').trim() || undefined,
+      candidate_anchor_id: String(repair?.candidate_anchor_id || '').trim() || undefined,
+      candidate_anchor_kind: String(repair?.candidate_anchor_kind || '').trim() || undefined,
+      candidate_evidence_quote: evidenceQuote,
+      source_fingerprint: fingerprint,
+    },
+  }
+}
+
+function normalizeSavedLocateResult(value: unknown): ReaderLocateResult | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const status = String(record?.status || '') as ReaderLocateResult['status']
+  const precision = String(record?.precision || '') as ReaderLocateResult['precision']
+  const sourcePath = String(record?.sourcePath || '').trim()
+  if (!record || !sourcePath || !status || !precision) return null
+  return {
+    locateRequestId: Number(record.locateRequestId || 0),
+    sourcePath,
+    sourceName: String(record.sourceName || '').trim() || undefined,
+    locateFeedbackKey: String(record.locateFeedbackKey || '').trim() || undefined,
+    status,
+    precision,
+    ok: Boolean(record.ok),
+    repairable: Boolean(record.repairable),
+    strictLocate: Boolean(record.strictLocate),
+    hint: String(record.hint || '').trim(),
+    reason: String(record.reason || '').trim(),
+    activeAltIndex: Number.isFinite(Number(record.activeAltIndex)) ? Number(record.activeAltIndex) : undefined,
+    blockId: String(record.blockId || '').trim() || undefined,
+    anchorId: String(record.anchorId || '').trim() || undefined,
+    anchorKind: String(record.anchorKind || '').trim() || undefined,
+    headingPath: String(record.headingPath || '').trim() || undefined,
+  }
+}
+
 export default function ReaderPage() {
   const S = useT()
   const navigate = useNavigate()
@@ -171,6 +241,9 @@ export default function ReaderPage() {
   const [error, setError] = useState('')
   const [reloadToken, setReloadToken] = useState(0)
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
+  const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
+  const [repairingEvidence, setRepairingEvidence] = useState(false)
+  const [repairError, setRepairError] = useState('')
   const stateHydratedRef = useRef(false)
   const broadcastRef = useRef<BroadcastChannel | null>(null)
   const pendingStateRef = useRef<Record<string, unknown>>({})
@@ -201,6 +274,8 @@ export default function ReaderPage() {
         const state = (res.state && typeof res.state === 'object')
           ? res.state as Record<string, unknown>
           : {}
+        setLocateResult(normalizeSavedLocateResult(state.locateResult))
+        setRepairError('')
         let highlights = normalizeSessionHighlights(state.highlights || state.evidenceNotes)
         const payloadFromRecord = normalizeReaderPayload(res)
         const sourcePath = String(payloadFromRecord?.sourcePath || '').trim()
@@ -226,6 +301,7 @@ export default function ReaderPage() {
         stateHydratedRef.current = false
         setSession(null)
         setSessionHighlights([])
+        setLocateResult(null)
         setError(err instanceof Error ? err.message : (S.reader_standalone_missing || 'Reader session not found.'))
       })
       .finally(() => {
@@ -237,6 +313,14 @@ export default function ReaderPage() {
   }, [S.reader_standalone_missing, location.search, reloadToken, sessionId])
 
   const payload = useMemo(() => normalizeReaderPayload(session), [session])
+  const repairIntent = useMemo(
+    () => normalizeEvidenceRepairIntent(
+      session?.state && typeof session.state === 'object'
+        ? (session.state as Record<string, unknown>).researchNoteEvidenceRepair
+        : null,
+    ),
+    [session?.state],
+  )
   const payloadSourcePath = String(payload?.sourcePath || '').trim()
   const sessionConversationId = String(session?.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
   const sessionProjectId = String(
@@ -416,6 +500,11 @@ export default function ReaderPage() {
   }, [S.reader_returned_to_session, flushPendingState, payloadSourcePath, sessionConversationId, sessionId])
 
   const goBack = useCallback(() => {
+    if (repairIntent) {
+      flushPendingState()
+      navigate(`/notes?note=${encodeURIComponent(repairIntent.note_id)}`)
+      return
+    }
     if (sessionConversationId) {
       if (returnToConversationWindow({ closeReader: true, openMainWindow: true })) return
       if (typeof BroadcastChannel !== 'undefined') {
@@ -429,7 +518,7 @@ export default function ReaderPage() {
       return
     }
     navigate('/')
-  }, [S.reader_returned_to_session, navigate, returnToConversationWindow, sessionConversationId])
+  }, [S.reader_returned_to_session, flushPendingState, navigate, repairIntent, returnToConversationWindow, sessionConversationId])
 
   const persistReaderShelfItem = useCallback((item: Record<string, unknown>) => {
     if (!item || Object.keys(item).length <= 0) return
@@ -580,6 +669,8 @@ export default function ReaderPage() {
   }, [])
 
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
+    setLocateResult(result)
+    setRepairError('')
     publishState({
       locateResult: {
         ...result,
@@ -587,6 +678,38 @@ export default function ReaderPage() {
       },
     })
   }, [publishState])
+
+  const repairCandidateLocated = useMemo(() => {
+    if (!repairIntent || !locateResult) return false
+    const repair = repairIntent.repair
+    if (!locateResult.ok || !locateResult.strictLocate || locateResult.status !== 'exact') return false
+    if (
+      normalizeReaderSourcePathForMatch(locateResult.sourcePath)
+      !== normalizeReaderSourcePathForMatch(repair.source_path)
+    ) return false
+    if (repair.candidate_block_id && locateResult.blockId !== repair.candidate_block_id) return false
+    if (repair.candidate_anchor_id && locateResult.anchorId !== repair.candidate_anchor_id) return false
+    return Boolean(repair.candidate_block_id || repair.candidate_anchor_id)
+  }, [locateResult, repairIntent])
+
+  const confirmEvidenceRepair = useCallback(async () => {
+    if (!repairIntent || !repairCandidateLocated || repairingEvidence) return
+    setRepairingEvidence(true)
+    setRepairError('')
+    try {
+      await chatApi.repairResearchNoteEvidence(repairIntent.note_id, repairIntent.repair)
+      flushPendingState()
+      navigate(
+        `/notes?note=${encodeURIComponent(repairIntent.note_id)}&evidence_repaired=1`,
+      )
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : S.reader_evidence_repair_failed
+      setRepairError(detail)
+      message.error(S.reader_evidence_repair_failed)
+    } finally {
+      setRepairingEvidence(false)
+    }
+  }, [S.reader_evidence_repair_failed, flushPendingState, navigate, repairCandidateLocated, repairIntent, repairingEvidence])
 
   return (
     <div className="kb-reader-page">
@@ -597,7 +720,11 @@ export default function ReaderPage() {
           className="kb-reader-page-back"
           onClick={goBack}
         >
-          {sessionConversationId ? (S.reader_standalone_back_to_session || S.reader_standalone_back || 'Back') : (S.reader_standalone_back || 'Back')}
+          {repairIntent
+            ? S.reader_evidence_repair_back
+            : sessionConversationId
+              ? (S.reader_standalone_back_to_session || S.reader_standalone_back || 'Back')
+              : (S.reader_standalone_back || 'Back')}
         </Button>
         <div className="kb-reader-page-heading">
           <div className="kb-reader-page-kicker">{S.side_dock_reader || 'Reader'}</div>
@@ -612,6 +739,32 @@ export default function ReaderPage() {
           {S.reader_reload || 'Reload'}
         </Button>
       </header>
+      {repairIntent ? (
+        <section className="kb-reader-evidence-repair" data-testid="reader-evidence-repair-panel">
+          <Alert
+            type={repairError ? 'error' : repairCandidateLocated ? 'success' : 'info'}
+            showIcon
+            message={repairCandidateLocated
+              ? S.reader_evidence_repair_exact
+              : S.reader_evidence_repair_reviewing}
+            description={repairError || (repairCandidateLocated
+              ? S.reader_evidence_repair_exact_hint
+              : S.reader_evidence_repair_reviewing_hint)}
+          />
+          <div className="kb-reader-evidence-repair-actions">
+            <Button onClick={goBack}>{S.reader_evidence_repair_cancel}</Button>
+            <Button
+              type="primary"
+              disabled={!repairCandidateLocated}
+              loading={repairingEvidence}
+              data-testid="reader-confirm-evidence-repair"
+              onClick={() => { void confirmEvidenceRepair() }}
+            >
+              {S.reader_evidence_repair_confirm}
+            </Button>
+          </div>
+        </section>
+      ) : null}
       <main className="kb-reader-page-main">
         {loading ? (
           <div className="kb-reader-page-state">

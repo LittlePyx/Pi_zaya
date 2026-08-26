@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import time
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +16,7 @@ from kb.source_blocks import (
 _TEXT_LIMIT = 2_400
 _CONTEXT_RADIUS = 1
 _CANDIDATE_LIMIT = 3
+_REPAIR_HISTORY_LIMIT = 12
 
 
 def _clean_text(value: Any, *, limit: int = _TEXT_LIMIT) -> str:
@@ -25,6 +29,131 @@ def _positive_int(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return number if number > 0 else None
+
+
+def source_content_fingerprint(path: Path | str) -> str:
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _source_identity(value: Any) -> str:
+    return _clean_text(value, limit=1_200).replace("\\", "/").casefold()
+
+
+def _locator_snapshot(link: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "block_id": _clean_text(link.get("block_id"), limit=160),
+        "anchor_id": _clean_text(link.get("anchor_id"), limit=160),
+        "anchor_kind": _clean_text(link.get("anchor_kind"), limit=40),
+        "heading_path": _clean_text(link.get("heading_path"), limit=500),
+        "page_start": _positive_int(link.get("page_start")),
+        "page_end": _positive_int(link.get("page_end")),
+        "line_start": _positive_int(link.get("line_start")),
+        "line_end": _positive_int(link.get("line_end")),
+        "evidence_quote": _clean_text(
+            link.get("evidence_quote") or link.get("text"),
+            limit=12_000,
+        ),
+    }
+
+
+def repair_research_note_source_state(
+    source_state: dict[str, Any],
+    *,
+    source_index: int,
+    source_path: str,
+    capture_id: str = "",
+    old_block_id: str = "",
+    old_anchor_id: str = "",
+    old_evidence_quote: str = "",
+    target: dict[str, Any],
+    source_fingerprint: str,
+    repaired_at: float | None = None,
+) -> dict[str, Any]:
+    """Return a copy with one explicitly identified source locator repaired.
+
+    The saved link must still match the locator the user started from. This
+    prevents a delayed Reader confirmation from overwriting a newer edit.
+    """
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list) or not 0 <= int(source_index) < len(links):
+        raise ValueError("research note source link not found")
+    link = links[int(source_index)]
+    if not isinstance(link, dict):
+        raise ValueError("research note source link not found")
+    if _source_identity(link.get("source_path")) != _source_identity(source_path):
+        raise ValueError("research note source changed")
+
+    expected_identity = {
+        "capture_id": _clean_text(capture_id, limit=160),
+        "block_id": _clean_text(old_block_id, limit=160),
+        "anchor_id": _clean_text(old_anchor_id, limit=160),
+        "evidence_quote": _clean_text(old_evidence_quote, limit=12_000),
+    }
+    for key, expected in expected_identity.items():
+        if expected and _clean_text(link.get(key), limit=12_000) != expected:
+            raise ValueError("research note source changed")
+
+    target_snapshot = _locator_snapshot(target)
+    if not target_snapshot["block_id"] and not target_snapshot["anchor_id"]:
+        raise ValueError("verified evidence target has no stable locator")
+    if not target_snapshot["evidence_quote"]:
+        raise ValueError("verified evidence target has no text")
+
+    previous = _locator_snapshot(link)
+    for key in (
+        "block_id",
+        "anchor_id",
+        "anchor_kind",
+        "heading_path",
+        "page_start",
+        "page_end",
+        "line_start",
+        "line_end",
+        "evidence_quote",
+    ):
+        value = target_snapshot[key]
+        if value is None or value == "":
+            link.pop(key, None)
+        else:
+            link[key] = value
+    link.pop("location_label", None)
+    for key in (
+        "start_offset",
+        "end_offset",
+        "occurrence",
+        "readable_index",
+        "document_occurrence",
+        "start_readable_index",
+        "end_readable_index",
+    ):
+        link.pop(key, None)
+
+    confirmed_at = float(repaired_at if repaired_at is not None else time.time())
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    link["evidence_verification"] = {
+        "status": "exact",
+        "reason": "confirmed_candidate",
+        "verified_at": confirmed_at,
+        "source_fingerprint": fingerprint,
+    }
+    raw_history = link.get("locator_repair_history")
+    history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    history.append(
+        {
+            "version": 1,
+            "repaired_at": confirmed_at,
+            "source_fingerprint": fingerprint,
+            "from": previous,
+            "to": target_snapshot,
+        }
+    )
+    link["locator_repair_history"] = history[-_REPAIR_HISTORY_LIMIT:]
+    return next_state
 
 
 def _serialize_block(block: SourceBlock) -> dict[str, Any]:
@@ -130,6 +259,7 @@ def build_research_note_evidence_context(
     anchor_kind: str = "",
     page_start: int | None = None,
     page_end: int | None = None,
+    source_fingerprint: str = "",
 ) -> dict[str, Any]:
     """Verify a saved note citation against converted source blocks.
 
@@ -144,6 +274,9 @@ def build_research_note_evidence_context(
     requested_anchor_id = _clean_text(anchor_id, limit=160)
     requested_kind = _clean_text(anchor_kind, limit=40).lower()
     quote_norm = normalize_match_text(quote)
+    current_fingerprint = source_content_fingerprint(md_path)
+    saved_fingerprint = _clean_text(source_fingerprint, limit=96)
+    source_changed = bool(saved_fingerprint and saved_fingerprint != current_fingerprint)
 
     blocks = load_source_blocks(md_path)
     if not blocks:
@@ -160,6 +293,8 @@ def build_research_note_evidence_context(
             "candidates": [],
             "can_open_exact": False,
             "reader_open": None,
+            "source_fingerprint": current_fingerprint,
+            "source_changed": source_changed,
         }
 
     target_index: int | None = None
@@ -219,6 +354,8 @@ def build_research_note_evidence_context(
                 source_name=source_name_clean,
                 evidence_quote=quote,
             ),
+            "source_fingerprint": current_fingerprint,
+            "source_changed": source_changed,
         }
 
     ranked = match_source_blocks(
@@ -263,4 +400,6 @@ def build_research_note_evidence_context(
         "candidates": candidates,
         "can_open_exact": False,
         "reader_open": None,
+        "source_fingerprint": current_fingerprint,
+        "source_changed": source_changed,
     }

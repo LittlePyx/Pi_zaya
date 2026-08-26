@@ -1,6 +1,12 @@
 from pathlib import Path
 
-from kb.research_note_evidence import build_research_note_evidence_context
+import pytest
+
+from kb.research_note_evidence import (
+    build_research_note_evidence_context,
+    repair_research_note_source_state,
+    source_content_fingerprint,
+)
 from kb.source_blocks import load_source_blocks
 
 
@@ -178,3 +184,127 @@ This is the first evidence paragraph in the target section.
 
     assert result["status"] == "exact"
     assert result["before"] == []
+
+
+def test_source_fingerprint_marks_a_changed_conversion(tmp_path: Path) -> None:
+    path, target = _fixture_source(tmp_path)
+    fingerprint = source_content_fingerprint(path)
+
+    unchanged = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/example.pdf",
+        evidence_quote="Photon arrival is a stochastic process governed by Poisson statistics.",
+        block_id=str(target["block_id"]),
+        source_fingerprint=fingerprint,
+    )
+    path.write_text(path.read_text(encoding="utf-8") + "\nA new appendix line.\n", encoding="utf-8")
+    changed = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/example.pdf",
+        evidence_quote="Photon arrival is a stochastic process governed by Poisson statistics.",
+        block_id=str(target["block_id"]),
+        source_fingerprint=fingerprint,
+    )
+
+    assert unchanged["source_fingerprint"] == fingerprint
+    assert unchanged["source_changed"] is False
+    assert changed["source_fingerprint"] != fingerprint
+    assert changed["source_changed"] is True
+
+
+def test_confirmed_candidate_repairs_one_locator_and_keeps_an_audit_trail() -> None:
+    source_state = {
+        "version": 1,
+        "links": [
+            {
+                "kind": "source",
+                "label": "Detector evidence",
+                "source_path": "library/example.pdf",
+                "capture_id": "capture-1",
+                "capture_kind": "selection",
+                "block_id": "old-block",
+                "anchor_id": "old-anchor",
+                "anchor_kind": "paragraph",
+                "heading_path": "Old section",
+                "location_label": "Old section · page 1",
+                "page_start": 1,
+                "evidence_quote": "Old detector sentence.",
+                "start_offset": 3,
+                "end_offset": 25,
+                "occurrence": 2,
+                "asset_src": "/kept.png",
+            }
+        ],
+    }
+    repaired = repair_research_note_source_state(
+        source_state,
+        source_index=0,
+        source_path="LIBRARY\\example.pdf",
+        capture_id="capture-1",
+        old_block_id="old-block",
+        old_anchor_id="old-anchor",
+        old_evidence_quote="Old detector sentence.",
+        target={
+            "block_id": "new-block",
+            "anchor_id": "new-anchor",
+            "kind": "paragraph",
+            "heading_path": "Results",
+            "page_start": 4,
+            "page_end": 4,
+            "line_start": 22,
+            "line_end": 24,
+            "text": "The repaired detector sentence is exact.",
+        },
+        source_fingerprint="sha256:abc123",
+        repaired_at=1_800_000_000,
+    )
+
+    assert source_state["links"][0]["block_id"] == "old-block"
+    link = repaired["links"][0]
+    assert link["capture_id"] == "capture-1"
+    assert link["capture_kind"] == "selection"
+    assert link["asset_src"] == "/kept.png"
+    assert link["block_id"] == "new-block"
+    assert link["anchor_id"] == "new-anchor"
+    assert link["heading_path"] == "Results"
+    assert link["page_start"] == 4
+    assert link["evidence_quote"] == "The repaired detector sentence is exact."
+    assert "location_label" not in link
+    assert "start_offset" not in link
+    assert "end_offset" not in link
+    assert "occurrence" not in link
+    assert link["evidence_verification"] == {
+        "status": "exact",
+        "reason": "confirmed_candidate",
+        "verified_at": 1_800_000_000.0,
+        "source_fingerprint": "sha256:abc123",
+    }
+    audit = link["locator_repair_history"][-1]
+    assert audit["from"]["block_id"] == "old-block"
+    assert audit["to"]["block_id"] == "new-block"
+    assert audit["repaired_at"] == 1_800_000_000.0
+
+
+def test_locator_repair_rejects_a_source_that_changed_after_reader_opened() -> None:
+    state = {
+        "links": [
+            {
+                "source_path": "library/example.pdf",
+                "capture_id": "newer-capture",
+                "block_id": "newer-block",
+                "evidence_quote": "Newer evidence.",
+            }
+        ]
+    }
+
+    with pytest.raises(ValueError, match="source changed"):
+        repair_research_note_source_state(
+            state,
+            source_index=0,
+            source_path="library/example.pdf",
+            capture_id="older-capture",
+            old_block_id="older-block",
+            old_evidence_quote="Older evidence.",
+            target={"block_id": "candidate", "text": "Candidate evidence."},
+            source_fingerprint="sha256:abc123",
+        )

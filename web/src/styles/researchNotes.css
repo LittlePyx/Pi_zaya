@@ -509,6 +509,10 @@
   line-height: 1.45;
 }
 
+.kb-notes-evidence-review > .ant-alert {
+  margin-top: 8px;
+}
+
 .kb-notes-evidence-context,
 .kb-notes-evidence-candidates {
   display: grid;

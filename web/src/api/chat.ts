@@ -79,6 +79,19 @@ export interface ResearchNoteSourceLink {
   line_start?: number
   line_end?: number
   asset_src?: string
+  evidence_verification?: {
+    status?: string
+    reason?: string
+    verified_at?: number
+    source_fingerprint?: string
+  }
+  locator_repair_history?: Array<{
+    version?: number
+    repaired_at?: number
+    source_fingerprint?: string
+    from?: Record<string, unknown>
+    to?: Record<string, unknown>
+  }>
 }
 
 export interface ResearchNoteEvidenceBlock {
@@ -112,6 +125,30 @@ export interface ResearchNoteEvidenceContext {
   candidates: ResearchNoteEvidenceCandidate[]
   can_open_exact: boolean
   reader_open?: MessageProvenanceReaderOpen | null
+  source_fingerprint: string
+  source_changed: boolean
+}
+
+export interface ResearchNoteEvidenceRepairBody {
+  source_index: number
+  source_path: string
+  capture_id?: string
+  old_block_id?: string
+  old_anchor_id?: string
+  old_evidence_quote?: string
+  candidate_block_id?: string
+  candidate_anchor_id?: string
+  candidate_anchor_kind?: string
+  candidate_evidence_quote: string
+  source_fingerprint: string
+}
+
+export interface ResearchNoteEvidenceRepairIntent {
+  version: 1
+  note_id: string
+  note_title: string
+  source_label: string
+  repair: ResearchNoteEvidenceRepairBody
 }
 
 export interface ResearchNoteSourceState {
@@ -1615,7 +1652,13 @@ export const chatApi = {
       block_id: link.block_id,
       anchor_id: link.anchor_id,
       anchor_kind: link.anchor_kind,
+      source_fingerprint: link.evidence_verification?.source_fingerprint,
     }),
+  repairResearchNoteEvidence: (noteId: string, body: ResearchNoteEvidenceRepairBody) =>
+    api.post<ResearchNoteRecord>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-repair`,
+      body,
+    ),
   createResearchNote: (body: ResearchNoteCreateBody) =>
     api.post<ResearchNoteRecord>('/api/chat/research-notes', body),
   updateResearchNote: (noteId: string, body: ResearchNoteUpdateBody) =>

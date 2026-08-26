@@ -32,11 +32,13 @@ import {
   SaveOutlined,
   SearchOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import {
   chatApi,
   type MessageProvenanceReaderOpen,
+  type ResearchNoteEvidenceBlock,
   type ResearchNoteEvidenceContext,
+  type ResearchNoteEvidenceRepairIntent,
   type ResearchNoteRecord,
   type ResearchNoteSourceLink,
   type ResearchNoteSourceState,
@@ -201,6 +203,11 @@ async function copyText(value: string) {
 export default function ResearchNotesPage() {
   const S = useT()
   const navigate = useNavigate()
+  const location = useLocation()
+  const requestedNoteId = useMemo(
+    () => String(new URLSearchParams(location.search).get('note') || '').trim(),
+    [location.search],
+  )
   const projects = useChatStore(state => state.projects)
   const [notes, setNotes] = useState<ResearchNoteRecord[]>([])
   const [activeNote, setActiveNote] = useState<ResearchNoteRecord | null>(null)
@@ -372,9 +379,21 @@ export default function ResearchNotesPage() {
   }, [S.research_notes_load_failed, activeNote, applyRecord])
 
   useEffect(() => {
-    if (loading || activeId || notes.length <= 0) return
-    void openNote(notes[0].id)
-  }, [activeId, loading, notes, openNote])
+    if (loading || notes.length <= 0) return
+    const requested = requestedNoteId && notes.some(note => note.id === requestedNoteId)
+      ? requestedNoteId
+      : ''
+    const nextId = requested || (!activeId ? notes[0].id : '')
+    if (nextId && nextId !== activeId) void openNote(nextId)
+  }, [activeId, loading, notes, openNote, requestedNoteId])
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    if (params.get('evidence_repaired') !== '1') return
+    message.success(S.research_notes_evidence_repair_saved)
+    params.delete('evidence_repaired')
+    navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true })
+  }, [S.research_notes_evidence_repair_saved, location.pathname, location.search, navigate])
 
   useEffect(() => {
     if (!activeNote || !dirty) return
@@ -735,6 +754,7 @@ export default function ResearchNotesPage() {
   const openPaper = async (
     link: ResearchNoteSourceLink,
     verifiedPayload: MessageProvenanceReaderOpen,
+    state?: Record<string, unknown>,
   ) => {
     const sourcePath = String(verifiedPayload.sourcePath || '').trim()
     if (!sourcePath) return
@@ -743,11 +763,51 @@ export default function ResearchNotesPage() {
         title: link.source_name || link.label,
         conversationId: link.conversation_id,
         messageId: link.message_id,
+        state,
       })
       navigate(`/reader/session/${encodeURIComponent(session.id)}`)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
     }
+  }
+
+  const openRepairCandidate = async (
+    link: ResearchNoteSourceLink,
+    sourceIndex: number,
+    candidate: ResearchNoteEvidenceBlock,
+    verifiedPayload: MessageProvenanceReaderOpen,
+    context: ResearchNoteEvidenceContext,
+  ) => {
+    if (!activeNote || !link.source_path || !context.source_fingerprint) return
+    if (saving) {
+      message.info(S.research_notes_evidence_wait_for_save)
+      return
+    }
+    if (saveIssue === 'conflict') {
+      message.error(S.research_notes_evidence_conflict_blocked)
+      return
+    }
+    if (dirty && !(await saveDraftNow())) return
+    const intent: ResearchNoteEvidenceRepairIntent = {
+      version: 1,
+      note_id: activeNote.id,
+      note_title: draftTitle.trim() || activeNote.title,
+      source_label: sourceLabel(link),
+      repair: {
+        source_index: sourceIndex,
+        source_path: link.source_path,
+        capture_id: link.capture_id,
+        old_block_id: link.block_id,
+        old_anchor_id: link.anchor_id,
+        old_evidence_quote: link.evidence_quote,
+        candidate_block_id: candidate.block_id,
+        candidate_anchor_id: candidate.anchor_id,
+        candidate_anchor_kind: candidate.kind,
+        candidate_evidence_quote: candidate.text,
+        source_fingerprint: context.source_fingerprint,
+      },
+    }
+    await openPaper(link, verifiedPayload, { researchNoteEvidenceRepair: intent })
   }
 
   const reviewEvidence = async (
@@ -1317,7 +1377,7 @@ export default function ResearchNotesPage() {
                             >
                               {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
                             </Button>
-                            {result?.status === 'exact' && result.reader_open ? (
+                            {result?.status === 'exact' && result.reader_open && result.reason !== 'quote_relocated' ? (
                               <Button
                                 type="link"
                                 icon={<ArrowRightOutlined />}
@@ -1325,6 +1385,19 @@ export default function ResearchNotesPage() {
                                 onClick={() => { void reviewEvidence(link, reviewKey, true) }}
                               >
                                 {S.research_notes_evidence_open_exact}
+                              </Button>
+                            ) : null}
+                            {result?.status === 'exact' && result.reader_open && result.target && result.reason === 'quote_relocated' ? (
+                              <Button
+                                type="link"
+                                icon={<ArrowRightOutlined />}
+                                disabled={saving || saveIssue === 'conflict'}
+                                data-testid={`research-note-evidence-repair-relocated-${index}`}
+                                onClick={() => {
+                                  void openRepairCandidate(link, index, result.target as ResearchNoteEvidenceBlock, result.reader_open as MessageProvenanceReaderOpen, result)
+                                }}
+                              >
+                                {S.research_notes_evidence_review_and_repair}
                               </Button>
                             ) : null}
                           </div>
@@ -1356,6 +1429,13 @@ export default function ResearchNotesPage() {
                                 </Tag>
                                 <span>{evidenceReasonLabel(S, result.reason)}</span>
                               </div>
+                              {result.source_changed ? (
+                                <Alert
+                                  type="warning"
+                                  showIcon
+                                  message={S.research_notes_evidence_source_changed}
+                                />
+                              ) : null}
                               {evidenceLocationLabel(S, result.heading_path, result.page_start, result.page_end) ? (
                                 <div className="kb-notes-evidence-location">
                                   {evidenceLocationLabel(S, result.heading_path, result.page_start, result.page_end)}
@@ -1398,7 +1478,11 @@ export default function ResearchNotesPage() {
                                       <Button
                                         type="link"
                                         icon={<ArrowRightOutlined />}
-                                        onClick={() => { void openPaper(link, candidate.reader_open) }}
+                                        disabled={saving || saveIssue === 'conflict'}
+                                        data-testid={`research-note-evidence-repair-candidate-${index}-${candidateIndex}`}
+                                        onClick={() => {
+                                          void openRepairCandidate(link, index, candidate, candidate.reader_open, result)
+                                        }}
                                       >
                                         {S.research_notes_evidence_review_candidate}
                                       </Button>

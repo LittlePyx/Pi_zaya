@@ -3163,6 +3163,29 @@ body.kb-reader-resizing .kb-reader-content {
   line-height: 1.25;
 }
 
+.kb-reader-evidence-repair {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  background: color-mix(in srgb, var(--panel) 96%, #fff7e6 4%);
+  padding: 10px 18px;
+}
+
+.kb-reader-evidence-repair .ant-alert {
+  min-width: 0;
+  padding-block: 7px;
+}
+
+.kb-reader-evidence-repair-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 .kb-reader-page-main {
   display: flex;
   min-height: 0;
@@ -3192,6 +3215,20 @@ body.kb-reader-resizing .kb-reader-content {
 
 .kb-reader-page-state {
   gap: 10px;
+}
+
+@media (max-width: 760px) {
+  .kb-reader-evidence-repair {
+    grid-template-columns: 1fr;
+  }
+
+  .kb-reader-evidence-repair-actions {
+    justify-content: stretch;
+  }
+
+  .kb-reader-evidence-repair-actions .ant-btn {
+    flex: 1 1 auto;
+  }
 }
 
 .kb-reader-shell-btn.ant-btn.is-accent {

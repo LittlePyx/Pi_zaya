@@ -57,7 +57,11 @@ from kb.path_safety import (
 from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
-from kb.research_note_evidence import build_research_note_evidence_context
+from kb.research_note_evidence import (
+    build_research_note_evidence_context,
+    repair_research_note_source_state,
+    source_content_fingerprint,
+)
 from kb.task_runtime import (
     _gen_has_active_task_id,
     _is_live_assistant_text,
@@ -196,6 +200,7 @@ class ResearchNoteEvidenceContextBody(BaseModel):
     anchor_kind: str = Field("", max_length=40)
     page_start: int | None = Field(None, ge=1, le=100_000)
     page_end: int | None = Field(None, ge=1, le=100_000)
+    source_fingerprint: str = Field("", max_length=96)
 
     @field_validator("source_path")
     @classmethod
@@ -212,9 +217,42 @@ class ResearchNoteEvidenceContextBody(BaseModel):
         "block_id",
         "anchor_id",
         "anchor_kind",
+        "source_fingerprint",
     )
     @classmethod
     def _clean_evidence_context_text(cls, value: str) -> str:
+        return str(value or "").replace("\x00", "").strip()
+
+
+class ResearchNoteEvidenceRepairBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source_index: int = Field(..., ge=0, le=239)
+    source_path: str = Field(..., min_length=1, max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    capture_id: str = Field("", max_length=160)
+    old_block_id: str = Field("", max_length=160)
+    old_anchor_id: str = Field("", max_length=160)
+    old_evidence_quote: str = Field("", max_length=12_000)
+    candidate_block_id: str = Field("", max_length=160)
+    candidate_anchor_id: str = Field("", max_length=160)
+    candidate_anchor_kind: str = Field("", max_length=40)
+    candidate_evidence_quote: str = Field(..., min_length=1, max_length=12_000)
+    source_fingerprint: str = Field(..., min_length=1, max_length=96)
+
+    @field_validator(
+        "source_path",
+        "capture_id",
+        "old_block_id",
+        "old_anchor_id",
+        "old_evidence_quote",
+        "candidate_block_id",
+        "candidate_anchor_id",
+        "candidate_anchor_kind",
+        "candidate_evidence_quote",
+        "source_fingerprint",
+    )
+    @classmethod
+    def _clean_evidence_repair_text(cls, value: str) -> str:
         return str(value or "").replace("\x00", "").strip()
 
 
@@ -1316,6 +1354,8 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
             "candidates": [],
             "can_open_exact": False,
             "reader_open": None,
+            "source_fingerprint": "",
+            "source_changed": bool(body.source_fingerprint),
         }
     try:
         return build_research_note_evidence_context(
@@ -1329,9 +1369,95 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
             anchor_kind=body.anchor_kind,
             page_start=body.page_start,
             page_end=body.page_end,
+            source_fingerprint=body.source_fingerprint,
         )
     except Exception as exc:
         raise HTTPException(500, "research note evidence context failed") from exc
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-repair")
+def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceRepairBody):
+    if not body.candidate_block_id and not body.candidate_anchor_id:
+        raise HTTPException(422, "candidate block or anchor required")
+    if not body.candidate_evidence_quote or not body.source_fingerprint.startswith("sha256:"):
+        raise HTTPException(422, "verified candidate text and source fingerprint required")
+    store = get_chat_store()
+    note = store.get_research_note(note_id)
+    if note is None:
+        raise HTTPException(404, "research note not found")
+
+    source_path = _resolve_allowed_reader_source_path(body.source_path)
+    try:
+        settings = get_settings()
+        md_path = _resolve_paper_guide_md_path(
+            source_path,
+            md_root=_md_dir(),
+            db_dir=getattr(settings, "db_dir", None),
+            pdf_root=_pdf_dir(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+    if md_path is None:
+        raise HTTPException(409, "converted source changed; verify the candidate again")
+
+    try:
+        verified = build_research_note_evidence_context(
+            md_path=md_path,
+            source_path=body.source_path,
+            evidence_quote=body.candidate_evidence_quote,
+            block_id=body.candidate_block_id,
+            anchor_id=body.candidate_anchor_id,
+            anchor_kind=body.candidate_anchor_kind,
+        )
+    except Exception as exc:
+        raise HTTPException(500, "research note evidence repair verification failed") from exc
+
+    try:
+        fingerprint_after_verification = source_content_fingerprint(md_path)
+    except OSError as exc:
+        raise HTTPException(409, "converted source changed; verify the candidate again") from exc
+    if (
+        str(verified.get("source_fingerprint") or "") != body.source_fingerprint
+        or fingerprint_after_verification != body.source_fingerprint
+    ):
+        raise HTTPException(409, "converted source changed; verify the candidate again")
+    target = verified.get("target")
+    if str(verified.get("status") or "") != "exact" or not isinstance(target, dict):
+        raise HTTPException(409, "candidate is no longer an exact source location")
+    if str(verified.get("reason") or "") not in {"exact_block", "exact_anchor"}:
+        raise HTTPException(409, "candidate location changed; verify it again")
+    if body.candidate_block_id and str(target.get("block_id") or "") != body.candidate_block_id:
+        raise HTTPException(409, "candidate block changed; verify it again")
+    if body.candidate_anchor_id and str(target.get("anchor_id") or "") != body.candidate_anchor_id:
+        raise HTTPException(409, "candidate anchor changed; verify it again")
+
+    try:
+        source_state = repair_research_note_source_state(
+            note.get("source_state") if isinstance(note.get("source_state"), dict) else {},
+            source_index=body.source_index,
+            source_path=body.source_path,
+            capture_id=body.capture_id,
+            old_block_id=body.old_block_id,
+            old_anchor_id=body.old_anchor_id,
+            old_evidence_quote=body.old_evidence_quote,
+            target=target,
+            source_fingerprint=body.source_fingerprint,
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    record, conflicted = store.update_research_note(
+        note_id,
+        expected_revision=int(note.get("revision") or 1),
+        source_state=source_state,
+    )
+    if conflicted:
+        raise HTTPException(409, "research note changed; verify the candidate again")
+    if record is None:
+        raise HTTPException(404, "research note not found")
+    return record
 
 
 @router.get("/chat/research-notes")
