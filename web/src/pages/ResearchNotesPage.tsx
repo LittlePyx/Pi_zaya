@@ -39,6 +39,7 @@ import {
   type ResearchNoteEvidenceBlock,
   type ResearchNoteEvidenceContext,
   type ResearchNoteEvidenceRepairIntent,
+  type ResearchNoteEvidenceReviewIntent,
   type ResearchNoteRecord,
   type ResearchNoteSourceLink,
   type ResearchNoteSourceState,
@@ -75,7 +76,7 @@ const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
 type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
-type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'unavailable' | 'error' | 'unchecked'
+type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'invalid' | 'unavailable' | 'error' | 'unchecked'
 type EvidenceHealthFilter = 'all' | 'issues'
 
 interface EvidenceReviewState {
@@ -147,6 +148,7 @@ function evidenceHealthStatus(
   review: EvidenceReviewState | undefined,
   started: boolean,
 ): EvidenceHealthStatus {
+  if (entry.link.evidence_verification?.status === 'invalid') return 'invalid'
   if (!started) return 'unchecked'
   if (!String(entry.link.source_path || '').trim()) return 'unavailable'
   if (review?.error) return 'error'
@@ -155,6 +157,16 @@ function evidenceHealthStatus(
   if (review.data.status === 'exact') return 'exact'
   if (review.data.status === 'candidate') return 'candidate'
   return 'unavailable'
+}
+
+function evidenceTargetMatchesSavedLocator(
+  link: ResearchNoteSourceLink,
+  target: ResearchNoteEvidenceBlock | null | undefined,
+): boolean {
+  if (!target) return false
+  if (link.block_id && target.block_id !== link.block_id) return false
+  if (link.anchor_id && target.anchor_id !== link.anchor_id) return false
+  return Boolean(link.block_id || link.anchor_id)
 }
 
 function evidenceLocationLabel(
@@ -433,11 +445,23 @@ export default function ResearchNotesPage() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
-    if (params.get('evidence_repaired') !== '1') return
-    message.success(S.research_notes_evidence_repair_saved)
+    const repaired = params.get('evidence_repaired') === '1'
+    const reviewDecision = params.get('evidence_reviewed')
+    if (!repaired && reviewDecision !== 'confirmed' && reviewDecision !== 'invalid') return
+    if (repaired) message.success(S.research_notes_evidence_repair_saved)
+    if (reviewDecision === 'confirmed') message.success(S.research_notes_evidence_review_confirmed)
+    if (reviewDecision === 'invalid') message.success(S.research_notes_evidence_review_invalidated)
     params.delete('evidence_repaired')
+    params.delete('evidence_reviewed')
     navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true })
-  }, [S.research_notes_evidence_repair_saved, location.pathname, location.search, navigate])
+  }, [
+    S.research_notes_evidence_repair_saved,
+    S.research_notes_evidence_review_confirmed,
+    S.research_notes_evidence_review_invalidated,
+    location.pathname,
+    location.search,
+    navigate,
+  ])
 
   useEffect(() => {
     if (!activeNote || !dirty) return
@@ -854,6 +878,57 @@ export default function ResearchNotesPage() {
     await openPaper(link, verifiedPayload, { researchNoteEvidenceRepair: intent })
   }
 
+  const openSourceChangeReview = async (
+    link: ResearchNoteSourceLink,
+    sourceIndex: number,
+    target: ResearchNoteEvidenceBlock,
+    verifiedPayload: MessageProvenanceReaderOpen,
+    context: ResearchNoteEvidenceContext,
+  ) => {
+    const savedFingerprint = String(link.evidence_verification?.source_fingerprint || '').trim()
+    if (
+      !activeNote
+      || !link.source_path
+      || !savedFingerprint
+      || !context.source_fingerprint
+      || !target.text
+      || !evidenceTargetMatchesSavedLocator(link, target)
+    ) return
+    if (saving) {
+      message.info(S.research_notes_evidence_wait_for_save)
+      return
+    }
+    if (saveIssue === 'conflict') {
+      message.error(S.research_notes_evidence_conflict_blocked)
+      return
+    }
+    if (dirty && !(await saveDraftNow())) return
+    const intent: ResearchNoteEvidenceReviewIntent = {
+      version: 1,
+      note_id: activeNote.id,
+      note_title: draftTitle.trim() || activeNote.title,
+      source_label: sourceLabel(link),
+      saved_evidence_quote: String(link.evidence_quote || '').trim(),
+      current_evidence_quote: target.text,
+      previously_invalid: link.evidence_verification?.status === 'invalid',
+      review: {
+        source_index: sourceIndex,
+        source_path: link.source_path,
+        capture_id: link.capture_id,
+        old_block_id: link.block_id,
+        old_anchor_id: link.anchor_id,
+        old_evidence_quote: link.evidence_quote,
+        expected_source_fingerprint: savedFingerprint,
+        current_block_id: target.block_id,
+        current_anchor_id: target.anchor_id,
+        current_anchor_kind: target.kind,
+        current_evidence_quote: target.text,
+        source_fingerprint: context.source_fingerprint,
+      },
+    }
+    await openPaper(link, verifiedPayload, { researchNoteEvidenceReview: intent })
+  }
+
   const reviewEvidence = async (
     link: ResearchNoteSourceLink,
     reviewKey: string,
@@ -1056,12 +1131,14 @@ export default function ResearchNotesPage() {
     exact: 0,
     changed: 0,
     candidate: 0,
+    invalid: 0,
     unavailable: 0,
     error: 0,
     unchecked: 0,
   } as Record<EvidenceHealthStatus, number>)
   const evidenceIssueCount = evidenceHealthCounts.changed
     + evidenceHealthCounts.candidate
+    + evidenceHealthCounts.invalid
     + evidenceHealthCounts.unavailable
     + evidenceHealthCounts.error
   const displayedLinkEntries = evidenceHealthFilter === 'issues'
@@ -1418,6 +1495,9 @@ export default function ResearchNotesPage() {
                   <Tag color="orange">
                     {S.research_notes_evidence_health_candidate.replace('{n}', String(evidenceHealthCounts.candidate))}
                   </Tag>
+                  <Tag color="magenta">
+                    {S.research_notes_evidence_health_invalid.replace('{n}', String(evidenceHealthCounts.invalid))}
+                  </Tag>
                   <Tag>
                     {S.research_notes_evidence_health_unavailable.replace('{n}', String(evidenceHealthCounts.unavailable))}
                   </Tag>
@@ -1563,6 +1643,8 @@ export default function ResearchNotesPage() {
                       ? 'gold'
                       : healthStatus === 'candidate'
                         ? 'orange'
+                        : healthStatus === 'invalid'
+                          ? 'magenta'
                         : healthStatus === 'error'
                           ? 'red'
                           : 'default'
@@ -1572,11 +1654,29 @@ export default function ResearchNotesPage() {
                       ? S.research_notes_evidence_health_status_changed
                       : healthStatus === 'candidate'
                         ? S.research_notes_evidence_health_status_candidate
+                        : healthStatus === 'invalid'
+                          ? S.research_notes_evidence_health_status_invalid
                         : healthStatus === 'unavailable'
                           ? S.research_notes_evidence_health_status_unavailable
                           : healthStatus === 'error'
                             ? S.research_notes_evidence_health_status_error
                             : ''
+                  const targetMatchesSavedLocator = evidenceTargetMatchesSavedLocator(link, result?.target)
+                  const requiresLocatorRepair = Boolean(
+                    result?.status === 'exact'
+                    && result.reader_open
+                    && result.target
+                    && (result.reason === 'quote_relocated' || !targetMatchesSavedLocator),
+                  )
+                  const canReviewSourceVersion = Boolean(
+                    result?.status === 'exact'
+                    && result.reader_open
+                    && result.target
+                    && targetMatchesSavedLocator
+                    && result.reason !== 'quote_relocated'
+                    && (result.source_changed || link.evidence_verification?.status === 'invalid')
+                    && link.evidence_verification?.source_fingerprint,
+                  )
                   return (
                     <article
                       key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`}
@@ -1627,7 +1727,7 @@ export default function ResearchNotesPage() {
                             >
                               {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
                             </Button>
-                            {result?.status === 'exact' && result.reader_open && result.reason !== 'quote_relocated' ? (
+                            {result?.status === 'exact' && result.reader_open && !requiresLocatorRepair && !canReviewSourceVersion ? (
                               <Button
                                 type="link"
                                 icon={<ArrowRightOutlined />}
@@ -1637,7 +1737,7 @@ export default function ResearchNotesPage() {
                                 {S.research_notes_evidence_open_exact}
                               </Button>
                             ) : null}
-                            {result?.status === 'exact' && result.reader_open && result.target && result.reason === 'quote_relocated' ? (
+                            {result?.status === 'exact' && result.reader_open && result.target && requiresLocatorRepair ? (
                               <Button
                                 type="link"
                                 icon={<ArrowRightOutlined />}
@@ -1648,6 +1748,21 @@ export default function ResearchNotesPage() {
                                 }}
                               >
                                 {S.research_notes_evidence_review_and_repair}
+                              </Button>
+                            ) : null}
+                            {result?.status === 'exact' && result.reader_open && result.target && canReviewSourceVersion ? (
+                              <Button
+                                type="link"
+                                icon={<ArrowRightOutlined />}
+                                disabled={saving || saveIssue === 'conflict'}
+                                data-testid={`research-note-evidence-review-change-${index}`}
+                                onClick={() => {
+                                  void openSourceChangeReview(link, index, result.target as ResearchNoteEvidenceBlock, result.reader_open as MessageProvenanceReaderOpen, result)
+                                }}
+                              >
+                                {link.evidence_verification?.status === 'invalid'
+                                  ? S.research_notes_evidence_review_invalid
+                                  : S.research_notes_evidence_review_change}
                               </Button>
                             ) : null}
                           </div>
@@ -1684,6 +1799,13 @@ export default function ResearchNotesPage() {
                                   type="warning"
                                   showIcon
                                   message={S.research_notes_evidence_source_changed}
+                                />
+                              ) : null}
+                              {link.evidence_verification?.status === 'invalid' ? (
+                                <Alert
+                                  type="error"
+                                  showIcon
+                                  message={S.research_notes_evidence_invalid_notice}
                                 />
                               ) : null}
                               {evidenceLocationLabel(S, result.heading_path, result.page_start, result.page_end) ? (

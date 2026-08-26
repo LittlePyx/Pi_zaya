@@ -18,6 +18,7 @@ async function fulfillJson(route: Route, body: unknown, status = 200) {
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
   let repairCalls = 0
   let repairBody: Record<string, unknown> | null = null
+  const evidenceReviewBodies: Record<string, unknown>[] = []
   let readerSession: Record<string, unknown> | null = null
   const evidenceContextBodies: Record<string, unknown>[] = []
   const exactSourcePath = 'db/paper/exact.md'
@@ -62,9 +63,16 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
           label: 'Changed source',
           source_name: 'Changed source',
           source_path: changedSourcePath,
-          evidence_quote: 'This source changed after capture.',
-          block_id: 'changed-block',
-          source_fingerprint: 'sha256:old-source',
+          evidence_quote: 'SCI compresses a short video into one coded measurement.',
+          block_id: 'quote-1',
+          anchor_id: 'a-quote-1',
+          anchor_kind: 'blockquote',
+          evidence_verification: {
+            status: 'exact',
+            reason: 'confirmed_candidate',
+            verified_at: 1_799_999_900,
+            source_fingerprint: 'sha256:old-source',
+          },
         },
         {
           kind: 'source',
@@ -147,8 +155,44 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
             }],
           } : link),
         },
-        revision: 2,
+        revision: note.revision + 1,
         updated_at: 1_800_000_100,
+      }
+      await fulfillJson(route, note)
+      return
+    }
+    if (request.method() === 'POST' && path === `/api/chat/research-notes/${note.id}/evidence-review`) {
+      const body = request.postDataJSON() as Record<string, unknown>
+      evidenceReviewBodies.push(body)
+      const decision = String(body.decision || '')
+      const previous = note.source_state.links?.[2] || {}
+      const previousVerification = previous.evidence_verification || {}
+      note = {
+        ...note,
+        source_state: {
+          ...note.source_state,
+          links: (note.source_state.links || []).map((link, index) => index === 2 ? {
+            ...link,
+            evidence_verification: {
+              status: decision === 'invalid' ? 'invalid' : 'exact',
+              reason: decision === 'invalid' ? 'marked_invalid' : 'confirmed_source_change',
+              verified_at: 1_800_000_200 + evidenceReviewBodies.length,
+              source_fingerprint: 'sha256:new-source',
+            },
+            evidence_review_history: [
+              ...(link.evidence_review_history || []),
+              {
+                version: 1,
+                reviewed_at: 1_800_000_200 + evidenceReviewBodies.length,
+                decision,
+                previous_verification: previousVerification,
+                saved_locator: { block_id: link.block_id, anchor_id: link.anchor_id },
+              },
+            ],
+          } : link),
+        },
+        revision: note.revision + 1,
+        updated_at: 1_800_000_200 + evidenceReviewBodies.length,
       }
       await fulfillJson(route, note)
       return
@@ -214,6 +258,12 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
     }
     if (sourcePath === exactSourcePath || sourcePath === changedSourcePath) {
       const sourceChanged = sourcePath === changedSourcePath
+      const currentFingerprint = String(body.source_fingerprint || '')
+      const currentReaderOpen = sourceChanged ? {
+        ...readerOpen,
+        sourcePath: changedSourcePath,
+        sourceName: 'Changed source',
+      } : readerOpen
       await fulfillJson(route, {
         status: 'exact',
         reason: 'exact_block',
@@ -222,16 +272,17 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
         before: [],
         target: {
           ...target,
-          block_id: sourceChanged ? 'changed-block' : 'exact-block',
-          text: sourceChanged ? 'This source changed after capture.' : 'This locator is still exact.',
-          markdown: sourceChanged ? 'This source changed after capture.' : 'This locator is still exact.',
+          block_id: sourceChanged ? 'quote-1' : 'exact-block',
+          anchor_id: sourceChanged ? 'a-quote-1' : target.anchor_id,
+          text: sourceChanged ? 'SCI compresses a short video into one coded measurement.' : 'This locator is still exact.',
+          markdown: sourceChanged ? '> SCI compresses a short video into one coded measurement.' : 'This locator is still exact.',
         },
         after: [],
         candidates: [],
         can_open_exact: true,
-        reader_open: readerOpen,
+        reader_open: currentReaderOpen,
         source_fingerprint: sourceChanged ? 'sha256:new-source' : 'sha256:exact-source',
-        source_changed: sourceChanged,
+        source_changed: sourceChanged && currentFingerprint !== 'sha256:new-source',
       })
       return
     }
@@ -326,6 +377,51 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await page.getByText('需处理 4', { exact: true }).click()
   await expect(page.locator('.kb-notes-source-card')).toHaveCount(4)
 
+  await expect(page.getByTestId('research-note-evidence-review-change-2')).toHaveText('在 Reader 中对照核实')
+  await page.getByTestId('research-note-evidence-review-change-2').click()
+  await expect(page).toHaveURL(/\/reader\/session\/repair-session/)
+  await expect(page.getByTestId('reader-evidence-review-panel')).toBeVisible()
+  await expect(page.getByTestId('reader-evidence-review-saved')).toContainText(
+    'SCI compresses a short video into one coded measurement.',
+  )
+  await expect(page.getByTestId('reader-evidence-review-current')).toContainText(
+    'SCI compresses a short video into one coded measurement.',
+  )
+  const invalidate = page.getByTestId('reader-invalidate-evidence-review')
+  await expect(invalidate).toBeEnabled()
+  await invalidate.click()
+
+  await expect(page).toHaveURL(/\/notes\?note=note-repair/)
+  expect(note.source_state.links?.[2]?.evidence_verification?.status).toBe('invalid')
+  expect(note.source_state.links?.[2]?.evidence_review_history?.[0]?.decision).toBe('invalid')
+  await page.getByTestId('research-note-evidence-check-all').click()
+  const invalidHealth = page.getByTestId('research-note-evidence-health')
+  await expect(invalidHealth).toContainText('已核查 5/5 条文献证据')
+  await expect(invalidHealth).toContainText('准确 1')
+  await expect(invalidHealth).toContainText('原文变化 0')
+  await expect(invalidHealth).toContainText('需核查 1')
+  await expect(invalidHealth).toContainText('已失效 1')
+  await expect(page.getByTestId('research-note-evidence-health-status-2')).toHaveText('已失效')
+  await expect(page.getByTestId('research-note-evidence-review-change-2')).toHaveText('在 Reader 中重新核实')
+  await page.getByTestId('research-note-evidence-review-change-2').click()
+
+  await expect(page.getByTestId('reader-evidence-review-panel')).toContainText('这条证据此前已标记失效')
+  const reconfirm = page.getByTestId('reader-confirm-evidence-review')
+  await expect(reconfirm).toBeEnabled()
+  await reconfirm.click()
+  await expect(page).toHaveURL(/\/notes\?note=note-repair/)
+  expect(note.source_state.links?.[2]?.evidence_verification?.status).toBe('exact')
+  expect(note.source_state.links?.[2]?.evidence_review_history?.map(row => row.decision)).toEqual([
+    'invalid',
+    'confirmed',
+  ])
+  await page.getByTestId('research-note-evidence-check-all').click()
+  const confirmedHealth = page.getByTestId('research-note-evidence-health')
+  await expect(confirmedHealth).toContainText('准确 2')
+  await expect(confirmedHealth).toContainText('原文变化 0')
+  await expect(confirmedHealth).toContainText('已失效 0')
+  await expect(page.getByText('需处理 3', { exact: true })).toBeVisible()
+
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('需要核查')
   await page.getByTestId('research-note-evidence-repair-candidate-0-0').click()
 
@@ -357,16 +453,24 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await page.getByTestId('research-note-evidence-check-all').click()
   const repairedHealth = page.getByTestId('research-note-evidence-health')
   await expect(repairedHealth).toContainText('已核查 5/5 条文献证据')
-  await expect(repairedHealth).toContainText('准确 2')
-  await expect(repairedHealth).toContainText('原文变化 1')
+  await expect(repairedHealth).toContainText('准确 3')
+  await expect(repairedHealth).toContainText('原文变化 0')
   await expect(repairedHealth).toContainText('需核查 0')
+  await expect(repairedHealth).toContainText('已失效 0')
   await expect(repairedHealth).toContainText('不可用 1')
   await expect(repairedHealth).toContainText('失败 1')
-  await expect(page.getByText('需处理 3', { exact: true })).toBeVisible()
+  await expect(page.getByText('需处理 2', { exact: true })).toBeVisible()
   await expect(page.getByTestId('research-note-source-0')).toHaveCount(0)
   await page.getByText('全部来源 6', { exact: true }).click()
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('准确定位')
   await expect(page.getByTestId('research-note-evidence-open-0')).toBeVisible()
-  expect(evidenceContextBodies).toHaveLength(10)
+  expect(evidenceReviewBodies.map(body => body.decision)).toEqual(['invalid', 'confirmed'])
+  expect(evidenceReviewBodies[0]).toEqual(expect.objectContaining({
+    source_index: 2,
+    expected_source_fingerprint: 'sha256:old-source',
+    source_fingerprint: 'sha256:new-source',
+    current_block_id: 'quote-1',
+  }))
+  expect(evidenceContextBodies).toHaveLength(20)
   expect(evidenceContextBodies.every(body => String(body.source_path || '') !== answerSourcePath)).toBe(true)
 })

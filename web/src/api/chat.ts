@@ -92,6 +92,16 @@ export interface ResearchNoteSourceLink {
     from?: Record<string, unknown>
     to?: Record<string, unknown>
   }>
+  evidence_review_history?: Array<{
+    version?: number
+    reviewed_at?: number
+    decision?: 'confirmed' | 'invalid' | string
+    source_fingerprint_before?: string
+    source_fingerprint_after?: string
+    previous_verification?: Record<string, unknown>
+    saved_locator?: Record<string, unknown>
+    reviewed_target?: Record<string, unknown>
+  }>
 }
 
 export interface ResearchNoteEvidenceBlock {
@@ -149,6 +159,33 @@ export interface ResearchNoteEvidenceRepairIntent {
   note_title: string
   source_label: string
   repair: ResearchNoteEvidenceRepairBody
+}
+
+export interface ResearchNoteEvidenceReviewBody {
+  decision: 'confirmed' | 'invalid'
+  source_index: number
+  source_path: string
+  capture_id?: string
+  old_block_id?: string
+  old_anchor_id?: string
+  old_evidence_quote?: string
+  expected_source_fingerprint: string
+  current_block_id?: string
+  current_anchor_id?: string
+  current_anchor_kind?: string
+  current_evidence_quote: string
+  source_fingerprint: string
+}
+
+export interface ResearchNoteEvidenceReviewIntent {
+  version: 1
+  note_id: string
+  note_title: string
+  source_label: string
+  saved_evidence_quote: string
+  current_evidence_quote: string
+  previously_invalid: boolean
+  review: Omit<ResearchNoteEvidenceReviewBody, 'decision'>
 }
 
 export interface ResearchNoteSourceState {
@@ -1657,6 +1694,11 @@ export const chatApi = {
   repairResearchNoteEvidence: (noteId: string, body: ResearchNoteEvidenceRepairBody) =>
     api.post<ResearchNoteRecord>(
       `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-repair`,
+      body,
+    ),
+  decideResearchNoteEvidenceReview: (noteId: string, body: ResearchNoteEvidenceReviewBody) =>
+    api.post<ResearchNoteRecord>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-review`,
       body,
     ),
   createResearchNote: (body: ResearchNoteCreateBody) =>

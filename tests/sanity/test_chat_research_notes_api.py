@@ -288,6 +288,81 @@ Dark counts were measured with the shutter closed.
     assert conflict.status_code == 409
     assert store.get_research_note(note["id"])["revision"] == 2
 
+    old_fingerprint = link["evidence_verification"]["source_fingerprint"]
+    md_path.write_text(
+        md_path.read_text(encoding="utf-8") + "\n## Appendix\n\nAdditional conversion output.\n",
+        encoding="utf-8",
+    )
+    changed = client.post(
+        "/api/chat/research-note/evidence-context",
+        json={
+            "source_path": link["source_path"],
+            "source_name": link["label"],
+            "evidence_quote": link["evidence_quote"],
+            "block_id": link["block_id"],
+            "anchor_id": link["anchor_id"],
+            "source_fingerprint": old_fingerprint,
+        },
+    )
+    assert changed.status_code == 200
+    changed_context = changed.json()
+    assert changed_context["status"] == "exact"
+    assert changed_context["source_changed"] is True
+    current_target = changed_context["target"]
+    review_body = {
+        "source_index": 0,
+        "source_path": link["source_path"],
+        "capture_id": link["capture_id"],
+        "old_block_id": link["block_id"],
+        "old_anchor_id": link["anchor_id"],
+        "old_evidence_quote": link["evidence_quote"],
+        "expected_source_fingerprint": old_fingerprint,
+        "current_block_id": current_target["block_id"],
+        "current_anchor_id": current_target["anchor_id"],
+        "current_anchor_kind": current_target["kind"],
+        "current_evidence_quote": current_target["text"],
+        "source_fingerprint": changed_context["source_fingerprint"],
+    }
+
+    invalidated = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-review",
+        json={**review_body, "decision": "invalid"},
+    )
+    assert invalidated.status_code == 200
+    invalid_record = invalidated.json()
+    assert invalid_record["revision"] == 3
+    invalid_link = invalid_record["source_state"]["links"][0]
+    assert invalid_link["evidence_quote"] == candidate["text"]
+    assert invalid_link["evidence_verification"]["status"] == "invalid"
+    assert invalid_link["evidence_review_history"][-1]["previous_verification"]["source_fingerprint"] == old_fingerprint
+    assert invalid_link["evidence_review_history"][-1]["saved_locator"]["block_id"] == candidate["block_id"]
+
+    confirmed = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-review",
+        json={
+            **review_body,
+            "decision": "confirmed",
+            "expected_source_fingerprint": changed_context["source_fingerprint"],
+        },
+    )
+    assert confirmed.status_code == 200
+    confirmed_record = confirmed.json()
+    assert confirmed_record["revision"] == 4
+    confirmed_link = confirmed_record["source_state"]["links"][0]
+    assert confirmed_link["evidence_verification"]["status"] == "exact"
+    assert confirmed_link["evidence_verification"]["reason"] == "confirmed_source_change"
+    assert [row["decision"] for row in confirmed_link["evidence_review_history"]] == [
+        "invalid",
+        "confirmed",
+    ]
+
+    stale_review = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-review",
+        json={**review_body, "decision": "invalid"},
+    )
+    assert stale_review.status_code == 409
+    assert store.get_research_note(note["id"])["revision"] == 4
+
 
 def test_chat_research_notes_workspace_list_and_metadata(monkeypatch, tmp_path: Path) -> None:
     from api.routers import chat as chat_router

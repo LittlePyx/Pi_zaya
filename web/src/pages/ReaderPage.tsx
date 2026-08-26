@@ -6,6 +6,7 @@ import {
   chatApi,
   type ReaderSessionRecord,
   type ResearchNoteEvidenceRepairIntent,
+  type ResearchNoteEvidenceReviewIntent,
 } from '../api/chat'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type {
@@ -204,6 +205,52 @@ function normalizeEvidenceRepairIntent(value: unknown): ResearchNoteEvidenceRepa
   }
 }
 
+function normalizeEvidenceReviewIntent(value: unknown): ResearchNoteEvidenceReviewIntent | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const review = record?.review && typeof record.review === 'object'
+    ? record.review as Record<string, unknown>
+    : null
+  const noteId = String(record?.note_id || '').trim()
+  const sourcePath = String(review?.source_path || '').trim()
+  const expectedFingerprint = String(review?.expected_source_fingerprint || '').trim()
+  const currentFingerprint = String(review?.source_fingerprint || '').trim()
+  const currentQuote = String(review?.current_evidence_quote || '').trim()
+  const sourceIndex = Number(review?.source_index)
+  if (
+    Number(record?.version) !== 1
+    || !noteId
+    || !sourcePath
+    || !expectedFingerprint
+    || !currentFingerprint
+    || !currentQuote
+    || !Number.isInteger(sourceIndex)
+    || sourceIndex < 0
+  ) return null
+  return {
+    version: 1,
+    note_id: noteId,
+    note_title: String(record?.note_title || '').trim(),
+    source_label: String(record?.source_label || '').trim(),
+    saved_evidence_quote: String(record?.saved_evidence_quote || '').trim(),
+    current_evidence_quote: String(record?.current_evidence_quote || currentQuote).trim(),
+    previously_invalid: Boolean(record?.previously_invalid),
+    review: {
+      source_index: sourceIndex,
+      source_path: sourcePath,
+      capture_id: String(review?.capture_id || '').trim() || undefined,
+      old_block_id: String(review?.old_block_id || '').trim() || undefined,
+      old_anchor_id: String(review?.old_anchor_id || '').trim() || undefined,
+      old_evidence_quote: String(review?.old_evidence_quote || '').trim() || undefined,
+      expected_source_fingerprint: expectedFingerprint,
+      current_block_id: String(review?.current_block_id || '').trim() || undefined,
+      current_anchor_id: String(review?.current_anchor_id || '').trim() || undefined,
+      current_anchor_kind: String(review?.current_anchor_kind || '').trim() || undefined,
+      current_evidence_quote: currentQuote,
+      source_fingerprint: currentFingerprint,
+    },
+  }
+}
+
 function normalizeSavedLocateResult(value: unknown): ReaderLocateResult | null {
   const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
   const status = String(record?.status || '') as ReaderLocateResult['status']
@@ -244,6 +291,8 @@ export default function ReaderPage() {
   const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
   const [repairingEvidence, setRepairingEvidence] = useState(false)
   const [repairError, setRepairError] = useState('')
+  const [evidenceReviewDecision, setEvidenceReviewDecision] = useState<'confirmed' | 'invalid' | null>(null)
+  const [evidenceReviewError, setEvidenceReviewError] = useState('')
   const stateHydratedRef = useRef(false)
   const broadcastRef = useRef<BroadcastChannel | null>(null)
   const pendingStateRef = useRef<Record<string, unknown>>({})
@@ -276,6 +325,8 @@ export default function ReaderPage() {
           : {}
         setLocateResult(normalizeSavedLocateResult(state.locateResult))
         setRepairError('')
+        setEvidenceReviewError('')
+        setEvidenceReviewDecision(null)
         let highlights = normalizeSessionHighlights(state.highlights || state.evidenceNotes)
         const payloadFromRecord = normalizeReaderPayload(res)
         const sourcePath = String(payloadFromRecord?.sourcePath || '').trim()
@@ -317,6 +368,14 @@ export default function ReaderPage() {
     () => normalizeEvidenceRepairIntent(
       session?.state && typeof session.state === 'object'
         ? (session.state as Record<string, unknown>).researchNoteEvidenceRepair
+        : null,
+    ),
+    [session?.state],
+  )
+  const evidenceReviewIntent = useMemo(
+    () => normalizeEvidenceReviewIntent(
+      session?.state && typeof session.state === 'object'
+        ? (session.state as Record<string, unknown>).researchNoteEvidenceReview
         : null,
     ),
     [session?.state],
@@ -500,9 +559,10 @@ export default function ReaderPage() {
   }, [S.reader_returned_to_session, flushPendingState, payloadSourcePath, sessionConversationId, sessionId])
 
   const goBack = useCallback(() => {
-    if (repairIntent) {
+    const noteIntent = repairIntent || evidenceReviewIntent
+    if (noteIntent) {
       flushPendingState()
-      navigate(`/notes?note=${encodeURIComponent(repairIntent.note_id)}`)
+      navigate(`/notes?note=${encodeURIComponent(noteIntent.note_id)}`)
       return
     }
     if (sessionConversationId) {
@@ -518,7 +578,7 @@ export default function ReaderPage() {
       return
     }
     navigate('/')
-  }, [S.reader_returned_to_session, flushPendingState, navigate, repairIntent, returnToConversationWindow, sessionConversationId])
+  }, [S.reader_returned_to_session, evidenceReviewIntent, flushPendingState, navigate, repairIntent, returnToConversationWindow, sessionConversationId])
 
   const persistReaderShelfItem = useCallback((item: Record<string, unknown>) => {
     if (!item || Object.keys(item).length <= 0) return
@@ -671,6 +731,7 @@ export default function ReaderPage() {
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
     setLocateResult(result)
     setRepairError('')
+    setEvidenceReviewError('')
     publishState({
       locateResult: {
         ...result,
@@ -711,6 +772,48 @@ export default function ReaderPage() {
     }
   }, [S.reader_evidence_repair_failed, flushPendingState, navigate, repairCandidateLocated, repairIntent, repairingEvidence])
 
+  const evidenceReviewTargetLocated = useMemo(() => {
+    if (!evidenceReviewIntent || !locateResult) return false
+    const review = evidenceReviewIntent.review
+    if (!locateResult.ok || !locateResult.strictLocate || locateResult.status !== 'exact') return false
+    if (
+      normalizeReaderSourcePathForMatch(locateResult.sourcePath)
+      !== normalizeReaderSourcePathForMatch(review.source_path)
+    ) return false
+    if (review.current_block_id && locateResult.blockId !== review.current_block_id) return false
+    if (review.current_anchor_id && locateResult.anchorId !== review.current_anchor_id) return false
+    return Boolean(review.current_block_id || review.current_anchor_id)
+  }, [evidenceReviewIntent, locateResult])
+
+  const decideEvidenceReview = useCallback(async (decision: 'confirmed' | 'invalid') => {
+    if (!evidenceReviewIntent || !evidenceReviewTargetLocated || evidenceReviewDecision) return
+    setEvidenceReviewDecision(decision)
+    setEvidenceReviewError('')
+    try {
+      await chatApi.decideResearchNoteEvidenceReview(evidenceReviewIntent.note_id, {
+        ...evidenceReviewIntent.review,
+        decision,
+      })
+      flushPendingState()
+      navigate(
+        `/notes?note=${encodeURIComponent(evidenceReviewIntent.note_id)}&evidence_reviewed=${decision}`,
+      )
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : S.reader_evidence_review_failed
+      setEvidenceReviewError(detail)
+      message.error(S.reader_evidence_review_failed)
+    } finally {
+      setEvidenceReviewDecision(null)
+    }
+  }, [
+    S.reader_evidence_review_failed,
+    evidenceReviewDecision,
+    evidenceReviewIntent,
+    evidenceReviewTargetLocated,
+    flushPendingState,
+    navigate,
+  ])
+
   return (
     <div className="kb-reader-page">
       <header className="kb-reader-page-bar">
@@ -720,7 +823,7 @@ export default function ReaderPage() {
           className="kb-reader-page-back"
           onClick={goBack}
         >
-          {repairIntent
+          {repairIntent || evidenceReviewIntent
             ? S.reader_evidence_repair_back
             : sessionConversationId
               ? (S.reader_standalone_back_to_session || S.reader_standalone_back || 'Back')
@@ -761,6 +864,63 @@ export default function ReaderPage() {
               onClick={() => { void confirmEvidenceRepair() }}
             >
               {S.reader_evidence_repair_confirm}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+      {evidenceReviewIntent ? (
+        <section
+          className="kb-reader-evidence-repair kb-reader-evidence-version-review"
+          data-testid="reader-evidence-review-panel"
+        >
+          <div className="kb-reader-evidence-version-review-main">
+            <Alert
+              type={evidenceReviewError ? 'error' : evidenceReviewTargetLocated ? 'success' : 'info'}
+              showIcon
+              message={evidenceReviewTargetLocated
+                ? S.reader_evidence_review_ready
+                : S.reader_evidence_review_locating}
+              description={evidenceReviewError || (evidenceReviewTargetLocated
+                ? S.reader_evidence_review_ready_hint
+                : S.reader_evidence_review_locating_hint)}
+            />
+            {evidenceReviewIntent.previously_invalid ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={S.reader_evidence_review_previously_invalid}
+              />
+            ) : null}
+            <div className="kb-reader-evidence-version-compare">
+              <div data-testid="reader-evidence-review-saved">
+                <strong>{S.reader_evidence_review_saved_quote}</strong>
+                <blockquote>{evidenceReviewIntent.saved_evidence_quote}</blockquote>
+              </div>
+              <div data-testid="reader-evidence-review-current">
+                <strong>{S.reader_evidence_review_current_quote}</strong>
+                <blockquote>{evidenceReviewIntent.current_evidence_quote}</blockquote>
+              </div>
+            </div>
+          </div>
+          <div className="kb-reader-evidence-repair-actions">
+            <Button onClick={goBack}>{S.reader_evidence_review_cancel}</Button>
+            <Button
+              danger
+              disabled={!evidenceReviewTargetLocated || Boolean(evidenceReviewDecision)}
+              loading={evidenceReviewDecision === 'invalid'}
+              data-testid="reader-invalidate-evidence-review"
+              onClick={() => { void decideEvidenceReview('invalid') }}
+            >
+              {S.reader_evidence_review_invalidate}
+            </Button>
+            <Button
+              type="primary"
+              disabled={!evidenceReviewTargetLocated || Boolean(evidenceReviewDecision)}
+              loading={evidenceReviewDecision === 'confirmed'}
+              data-testid="reader-confirm-evidence-review"
+              onClick={() => { void decideEvidenceReview('confirmed') }}
+            >
+              {S.reader_evidence_review_confirm}
             </Button>
           </div>
         </section>

@@ -5,6 +5,7 @@ import pytest
 from kb.research_note_evidence import (
     build_research_note_evidence_context,
     repair_research_note_source_state,
+    review_research_note_source_state,
     source_content_fingerprint,
 )
 from kb.source_blocks import load_source_blocks
@@ -307,4 +308,129 @@ def test_locator_repair_rejects_a_source_that_changed_after_reader_opened() -> N
             old_evidence_quote="Older evidence.",
             target={"block_id": "candidate", "text": "Candidate evidence."},
             source_fingerprint="sha256:abc123",
+        )
+
+
+def test_source_change_review_can_confirm_or_invalidate_without_rewriting_evidence() -> None:
+    state = {
+        "links": [
+            {
+                "kind": "source",
+                "source_path": "library/example.pdf",
+                "capture_id": "capture-1",
+                "block_id": "block-1",
+                "anchor_id": "anchor-1",
+                "anchor_kind": "paragraph",
+                "heading_path": "Results",
+                "evidence_quote": "The saved detector evidence remains exact.",
+                "evidence_verification": {
+                    "status": "exact",
+                    "reason": "confirmed_candidate",
+                    "verified_at": 1_700_000_000.0,
+                    "source_fingerprint": "sha256:old",
+                },
+            }
+        ]
+    }
+    target = {
+        "block_id": "block-1",
+        "anchor_id": "anchor-1",
+        "kind": "paragraph",
+        "heading_path": "Results",
+        "text": "The saved detector evidence remains exact.",
+    }
+
+    invalidated = review_research_note_source_state(
+        state,
+        source_index=0,
+        source_path="LIBRARY\\example.pdf",
+        decision="invalid",
+        capture_id="capture-1",
+        old_block_id="block-1",
+        old_anchor_id="anchor-1",
+        old_evidence_quote="The saved detector evidence remains exact.",
+        expected_source_fingerprint="sha256:old",
+        target=target,
+        source_fingerprint="sha256:new",
+        reviewed_at=1_800_000_000,
+    )
+
+    assert state["links"][0]["evidence_verification"]["status"] == "exact"
+    invalid_link = invalidated["links"][0]
+    assert invalid_link["block_id"] == "block-1"
+    assert invalid_link["evidence_quote"] == "The saved detector evidence remains exact."
+    assert invalid_link["evidence_verification"] == {
+        "status": "invalid",
+        "reason": "marked_invalid",
+        "verified_at": 1_800_000_000.0,
+        "source_fingerprint": "sha256:new",
+    }
+    first_audit = invalid_link["evidence_review_history"][0]
+    assert first_audit["decision"] == "invalid"
+    assert first_audit["previous_verification"]["verified_at"] == 1_700_000_000.0
+    assert first_audit["saved_locator"]["block_id"] == "block-1"
+    assert first_audit["source_fingerprint_before"] == "sha256:old"
+    assert first_audit["source_fingerprint_after"] == "sha256:new"
+
+    confirmed = review_research_note_source_state(
+        invalidated,
+        source_index=0,
+        source_path="library/example.pdf",
+        decision="confirmed",
+        capture_id="capture-1",
+        old_block_id="block-1",
+        old_anchor_id="anchor-1",
+        old_evidence_quote="The saved detector evidence remains exact.",
+        expected_source_fingerprint="sha256:new",
+        target=target,
+        source_fingerprint="sha256:new",
+        reviewed_at=1_800_000_100,
+    )
+    confirmed_link = confirmed["links"][0]
+    assert confirmed_link["evidence_verification"]["status"] == "exact"
+    assert confirmed_link["evidence_verification"]["reason"] == "confirmed_source_change"
+    assert [row["decision"] for row in confirmed_link["evidence_review_history"]] == [
+        "invalid",
+        "confirmed",
+    ]
+
+
+def test_source_change_review_rejects_stale_verification_or_relocated_target() -> None:
+    state = {
+        "links": [
+            {
+                "source_path": "library/example.pdf",
+                "block_id": "saved-block",
+                "evidence_quote": "Saved evidence.",
+                "evidence_verification": {
+                    "status": "exact",
+                    "source_fingerprint": "sha256:newer",
+                },
+            }
+        ]
+    }
+    with pytest.raises(ValueError, match="verification changed"):
+        review_research_note_source_state(
+            state,
+            source_index=0,
+            source_path="library/example.pdf",
+            decision="confirmed",
+            old_block_id="saved-block",
+            old_evidence_quote="Saved evidence.",
+            expected_source_fingerprint="sha256:older",
+            target={"block_id": "saved-block", "text": "Saved evidence."},
+            source_fingerprint="sha256:current",
+        )
+
+    with pytest.raises(ValueError, match="repair required"):
+        review_research_note_source_state(
+            state,
+            source_index=0,
+            source_path="library/example.pdf",
+            decision="confirmed",
+            old_block_id="saved-block",
+            old_evidence_quote="Saved evidence.",
+            expected_source_fingerprint="sha256:newer",
+            target={"block_id": "relocated-block", "text": "Saved evidence."},
+            source_fingerprint="sha256:current",
         )

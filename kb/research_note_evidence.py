@@ -17,6 +17,7 @@ _TEXT_LIMIT = 2_400
 _CONTEXT_RADIUS = 1
 _CANDIDATE_LIMIT = 3
 _REPAIR_HISTORY_LIMIT = 12
+_REVIEW_HISTORY_LIMIT = 12
 
 
 def _clean_text(value: Any, *, limit: int = _TEXT_LIMIT) -> str:
@@ -153,6 +154,96 @@ def repair_research_note_source_state(
         }
     )
     link["locator_repair_history"] = history[-_REPAIR_HISTORY_LIMIT:]
+    return next_state
+
+
+def review_research_note_source_state(
+    source_state: dict[str, Any],
+    *,
+    source_index: int,
+    source_path: str,
+    decision: str,
+    capture_id: str = "",
+    old_block_id: str = "",
+    old_anchor_id: str = "",
+    old_evidence_quote: str = "",
+    expected_source_fingerprint: str,
+    target: dict[str, Any],
+    source_fingerprint: str,
+    reviewed_at: float | None = None,
+) -> dict[str, Any]:
+    """Record an explicit review of unchanged evidence after source drift.
+
+    This never changes the saved quote or locator. A changed locator must use
+    the separate candidate-repair path. Both confirmation and invalidation
+    retain the previous verification and locator in a bounded audit trail.
+    """
+    normalized_decision = _clean_text(decision, limit=24).lower()
+    if normalized_decision not in {"confirmed", "invalid"}:
+        raise ValueError("unsupported evidence review decision")
+
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list) or not 0 <= int(source_index) < len(links):
+        raise ValueError("research note source link not found")
+    link = links[int(source_index)]
+    if not isinstance(link, dict):
+        raise ValueError("research note source link not found")
+    if _source_identity(link.get("source_path")) != _source_identity(source_path):
+        raise ValueError("research note source changed")
+
+    expected_identity = {
+        "capture_id": _clean_text(capture_id, limit=160),
+        "block_id": _clean_text(old_block_id, limit=160),
+        "anchor_id": _clean_text(old_anchor_id, limit=160),
+        "evidence_quote": _clean_text(old_evidence_quote, limit=12_000),
+    }
+    for key, expected in expected_identity.items():
+        if expected and _clean_text(link.get(key), limit=12_000) != expected:
+            raise ValueError("research note source changed")
+
+    previous_verification = link.get("evidence_verification")
+    previous_verification = deepcopy(previous_verification) if isinstance(previous_verification, dict) else {}
+    saved_fingerprint = _clean_text(previous_verification.get("source_fingerprint"), limit=96)
+    expected_fingerprint = _clean_text(expected_source_fingerprint, limit=96)
+    if not expected_fingerprint or saved_fingerprint != expected_fingerprint:
+        raise ValueError("research note evidence verification changed")
+
+    target_snapshot = _locator_snapshot(target)
+    if not target_snapshot["block_id"] and not target_snapshot["anchor_id"]:
+        raise ValueError("verified evidence target has no stable locator")
+    if not target_snapshot["evidence_quote"]:
+        raise ValueError("verified evidence target has no text")
+    if expected_identity["block_id"] and target_snapshot["block_id"] != expected_identity["block_id"]:
+        raise ValueError("evidence location changed; repair required")
+    if expected_identity["anchor_id"] and target_snapshot["anchor_id"] != expected_identity["anchor_id"]:
+        raise ValueError("evidence location changed; repair required")
+
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if not fingerprint.startswith("sha256:"):
+        raise ValueError("verified source fingerprint required")
+    confirmed_at = float(reviewed_at if reviewed_at is not None else time.time())
+    raw_history = link.get("evidence_review_history")
+    history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    history.append(
+        {
+            "version": 1,
+            "reviewed_at": confirmed_at,
+            "decision": normalized_decision,
+            "source_fingerprint_before": saved_fingerprint,
+            "source_fingerprint_after": fingerprint,
+            "previous_verification": previous_verification,
+            "saved_locator": _locator_snapshot(link),
+            "reviewed_target": target_snapshot,
+        }
+    )
+    link["evidence_review_history"] = history[-_REVIEW_HISTORY_LIMIT:]
+    link["evidence_verification"] = {
+        "status": "exact" if normalized_decision == "confirmed" else "invalid",
+        "reason": "confirmed_source_change" if normalized_decision == "confirmed" else "marked_invalid",
+        "verified_at": confirmed_at,
+        "source_fingerprint": fingerprint,
+    }
     return next_state
 
 

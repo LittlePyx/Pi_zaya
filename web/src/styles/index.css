@@ -3186,6 +3186,43 @@ body.kb-reader-resizing .kb-reader-content {
   gap: 8px;
 }
 
+.kb-reader-evidence-version-review { align-items: start; }
+
+.kb-reader-evidence-version-review-main {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.kb-reader-evidence-version-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.kb-reader-evidence-version-compare > div {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+}
+
+.kb-reader-evidence-version-compare strong {
+  color: var(--muted-text);
+  font-size: 11px;
+}
+
+.kb-reader-evidence-version-compare blockquote {
+  max-height: 96px;
+  margin: 5px 0 0;
+  overflow: auto;
+  color: var(--text-main);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .kb-reader-page-main {
   display: flex;
   min-height: 0;
@@ -3229,6 +3266,8 @@ body.kb-reader-resizing .kb-reader-content {
   .kb-reader-evidence-repair-actions .ant-btn {
     flex: 1 1 auto;
   }
+
+  .kb-reader-evidence-version-compare { grid-template-columns: 1fr; }
 }
 
 .kb-reader-shell-btn.ant-btn.is-accent {
