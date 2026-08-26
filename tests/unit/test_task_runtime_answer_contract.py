@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from kb import task_runtime
+from kb.answer_contract import _build_answer_contract_system_rules
 
 
 def test_current_paper_retrieval_skips_llm_query_expansion_unless_cross_paper_requested() -> None:
@@ -23,7 +24,7 @@ def test_detect_answer_intent_prefers_explicit_hint():
         "Can you compare method A and method B?",
         answer_mode_hint="writing",
     )
-    assert intent == "writing"
+    assert intent == "reading"
 
 
 def test_provider_failure_grounded_fallback_keeps_refocus_mechanism_terms() -> None:
@@ -54,6 +55,20 @@ def test_detect_answer_intent_by_prompt():
     assert task_runtime._detect_answer_intent("如何设计实验和对照组") == "experiment"
     assert task_runtime._detect_answer_intent("训练报错了，帮我排查") == "troubleshoot"
     assert task_runtime._detect_answer_intent("帮我润色 related work 这一段") == "writing"
+
+
+def test_writing_request_is_redirected_to_traceable_evidence() -> None:
+    rules = _build_answer_contract_system_rules(
+        intent="writing",
+        depth="L2",
+        has_hits=True,
+    )
+    steps = task_runtime._build_default_next_steps(intent="writing", has_hits=True, locale="zh")
+
+    assert "do not draft, rewrite, or polish manuscript prose" in rules
+    assert "directly reusable wording" not in rules
+    assert any("准确的证据位置" in step for step in steps)
+    assert all("重写" not in step and "段间衔接" not in step for step in steps)
 
 
 def test_detect_answer_depth_auto_and_fixed():

@@ -148,6 +148,8 @@ def _normalize_pref_value(key: str, value):
         raise HTTPException(400, f"{key} must be a boolean")
     if key in _CHOICE_PREF_VALUES:
         raw = str(value or "").replace("\x00", "").strip().lower()
+        if key == "answer_mode_hint" and raw == "writing":
+            return "reading"
         if raw not in _CHOICE_PREF_VALUES[key]:
             allowed = ", ".join(sorted(_CHOICE_PREF_VALUES[key]))
             raise HTTPException(400, f"{key} must be one of: {allowed}")
@@ -226,7 +228,7 @@ def _public_prefs(prefs: dict, *, include_paths: bool = True) -> dict:
             continue
         if isinstance(value, (dict, list, tuple)):
             continue
-        out[clean] = value
+        out[clean] = "reading" if clean == "answer_mode_hint" and value == "writing" else value
     return out
 
 

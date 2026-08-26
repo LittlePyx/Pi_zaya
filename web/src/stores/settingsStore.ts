@@ -275,7 +275,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         showContext: !!p.show_context,
         answerContractV1: !!p.answer_contract_v1,
         answerDepthAuto: p.answer_depth_auto !== false,
-        answerModeHint: String(p.answer_mode_hint || ''),
+        answerModeHint: String(p.answer_mode_hint || '') === 'writing' ? 'reading' : String(p.answer_mode_hint || ''),
         answerOutputMode: String(p.answer_output_mode || ''),
         refsCardLocale: nextRefsCardLocale,
         qualityDataSharingEnabled: Boolean(p.quality_data_sharing_enabled),

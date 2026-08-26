@@ -6,6 +6,10 @@ This file guides Codex when working in this repository.
 
 Pi_zaya is a FastAPI + React academic PDF knowledge base with RAG-powered Q&A, traceable citations, a literature basket, and conversion quality tooling. PDFs are converted to Markdown, chunked, indexed with BM25 plus structured indices, and queried through the backend API.
 
+### Product Boundary
+
+Pi_zaya supports reading papers already in the user's library and finding, locating, comparing, verifying, and organizing traceable evidence. It is not a manuscript-writing or submission-preparation tool. Do not add manuscript drafting, paragraph rewriting/polishing, submission-ready exports, or adjacent authoring workflows. Evidence outlines may organize source-backed notes, but user-facing copy must not describe them as writing outlines.
+
 The legacy Streamlit entry has been removed. Do not use `app.py`, `streamlit run`, or port `8501` as the product entry.
 
 ## Commands

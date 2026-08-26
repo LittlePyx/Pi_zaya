@@ -54,6 +54,9 @@ def test_normal_prompt_bundle_adds_user_facing_quality_protocol_with_hits():
     )
 
     system = out["system"]
+    assert "Product boundary:" in system
+    assert "Do not draft, rewrite, polish" in system
+    assert "return an evidence map with source locations and gaps" in system
     assert out["research_answer_plan"] == "compare"
     assert "Research answer plan:" in system
     assert "Plan type: compare." in system

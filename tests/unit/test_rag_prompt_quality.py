@@ -41,6 +41,8 @@ def test_build_messages_requires_evidence_aligned_answer_shape_for_hits():
 
     assert messages[0]["role"] == "system"
     system = messages[0]["content"]
+    assert "Product boundary:" in system
+    assert "Do not draft, rewrite, polish" in system
     assert "Grounding contract:" in system
     assert "Every paper-specific claim should carry a citation marker" in system
     assert "Conclusion:" in system

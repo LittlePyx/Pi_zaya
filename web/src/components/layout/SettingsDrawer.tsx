@@ -1224,7 +1224,6 @@ export function SettingsDrawer({
                 { label: S.mode_idea, value: 'idea' },
                 { label: S.mode_experiment, value: 'experiment' },
                 { label: S.mode_troubleshoot, value: 'troubleshoot' },
-                { label: S.mode_writing, value: 'writing' },
               ]}
             />
           </SettingsRow>

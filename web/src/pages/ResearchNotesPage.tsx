@@ -1320,7 +1320,7 @@ export default function ResearchNotesPage() {
             void copyText(combineContent).then(() => message.success(S.research_notes_copied))
           }}>{S.research_notes_copy}</Button>,
           <Button key="markdown" icon={<FileMarkdownOutlined />} onClick={() => {
-            downloadMarkdown(`${safeFilename(combineTitle, 'research-outline')}.md`, combineContent)
+            downloadMarkdown(`${safeFilename(combineTitle, 'evidence-outline')}.md`, combineContent)
           }}>{S.research_notes_export_markdown}</Button>,
           <Button key="word" icon={<FileWordOutlined />} onClick={() => {
             void chatApi.downloadResearchNoteDocx({ title: combineTitle, content_markdown: combineContent })

@@ -174,8 +174,8 @@ def test_chat_research_outline_composition_survives_store_reopen(monkeypatch, tm
     response = client.post(
         "/api/chat/research-notes",
         json={
-            "title": "Persistent writing outline",
-            "content_markdown": "# Persistent writing outline\n\n## 1. First source note",
+            "title": "Persistent evidence outline",
+            "content_markdown": "# Persistent evidence outline\n\n## 1. First source note",
             "source_state": {
                 "version": 1,
                 "links": [
@@ -212,7 +212,7 @@ def test_chat_research_outline_composition_survives_store_reopen(monkeypatch, tm
         f"/api/chat/research-notes/{outline_id}",
         json={
             "expected_revision": 1,
-            "content_markdown": "# Persistent writing outline\n\n## 1. First source note\n\nFirst finding with calibrated evidence",
+            "content_markdown": "# Persistent evidence outline\n\n## 1. First source note\n\nFirst finding with calibrated evidence",
             "source_state": {
                 "version": 1,
                 "links": [

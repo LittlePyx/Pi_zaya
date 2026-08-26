@@ -522,6 +522,13 @@ def test_public_prefs_allow_only_ui_preferences_and_drop_sensitive_unknowns() ->
     assert payload == {"theme": "dark", "top_k": 8}
 
 
+def test_legacy_writing_mode_is_migrated_to_reading() -> None:
+    assert settings_router._normalize_pref_value("answer_mode_hint", "writing") == "reading"
+    assert settings_router._public_prefs({"answer_mode_hint": "writing"}) == {
+        "answer_mode_hint": "reading"
+    }
+
+
 def test_llm_connection_test_accepts_transient_overrides(monkeypatch):
     settings_router._LLM_TEST_RESULTS.clear()
     settings = SimpleNamespace(

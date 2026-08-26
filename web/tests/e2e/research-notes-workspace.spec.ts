@@ -238,7 +238,7 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       const index = records.findIndex(item => item.id === noteId)
       const body = request.postDataJSON() as Record<string, unknown>
       const current = records[index]
-      if (failOutlineSaves && current?.title === 'Integrated SPAD writing outline') {
+      if (failOutlineSaves && current?.title === 'Integrated SPAD evidence outline') {
         await fulfillJson(route, { detail: 'temporary outline save failure' }, 503)
         return
       }
@@ -331,18 +331,19 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   const checkboxes = workspace.getByRole('checkbox', { name: '选择用于组合' })
   await checkboxes.nth(0).check()
   await checkboxes.nth(1).check()
-  await workspace.getByRole('button', { name: '组合写作提纲' }).click()
-  const outline = page.getByRole('dialog', { name: '组合写作提纲' })
+  await expect(workspace).toContainText('可追溯的证据提纲')
+  await workspace.getByRole('button', { name: '组合证据提纲' }).click()
+  const outline = page.getByRole('dialog', { name: '组合证据提纲' })
   await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/SPAD noise evidence note/)
   await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/Detector trade-off/)
   await expect(outline).toContainText('所选笔记来自不同项目')
-  await outline.getByRole('textbox').nth(0).fill('Integrated SPAD writing outline')
-  await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/^# Integrated SPAD writing outline/)
+  await outline.getByRole('textbox').nth(0).fill('Integrated SPAD evidence outline')
+  await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/^# Integrated SPAD evidence outline/)
   const noteARevisionAtComposition = records.find(record => record.id === 'note-a')?.revision
   await page.getByTestId('research-note-outline-save').click()
   await expect(outline).toBeHidden()
 
-  const outlineRecord = records.find(record => record.title === 'Integrated SPAD writing outline')
+  const outlineRecord = records.find(record => record.title === 'Integrated SPAD evidence outline')
   expect(outlineRecord?.project_id).toBeNull()
   expect(outlineRecord?.tags).toEqual(['SPAD', 'noise', 'detector'])
   expect(outlineRecord?.source_state.links).toHaveLength(3)
@@ -365,13 +366,13 @@ test('research notes workspace edits, combines, filters, and follows traceable s
     ],
     refresh_history: [],
   })
-  await expect(titleInput).toHaveValue('Integrated SPAD writing outline')
+  await expect(titleInput).toHaveValue('Integrated SPAD evidence outline')
   await expect(page.getByTestId('research-note-outline-sources')).toContainText('组成笔记（2）')
   await expect(workspace.locator('.kb-notes-source-card')).toHaveCount(3)
 
   await page.reload()
   await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
-  await expect(titleInput).toHaveValue('Integrated SPAD writing outline')
+  await expect(titleInput).toHaveValue('Integrated SPAD evidence outline')
   await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Edited, traceable conclusion/)
 
   const outlineEditor = workspace.locator('.kb-notes-editor-body textarea')
