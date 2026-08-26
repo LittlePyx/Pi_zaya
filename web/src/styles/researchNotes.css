@@ -195,6 +195,13 @@
 }
 
 .kb-notes-save-state.is-dirty { color: #b7791f; }
+.kb-notes-save-state.is-error { color: var(--error, #cf1322); }
+
+.kb-notes-conflict-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 
 .kb-notes-editor-fields {
   padding: 14px 18px 12px;
@@ -501,6 +508,8 @@
   }
   .kb-notes-page-header p,
   .kb-notes-sources-head p { display: none; }
+  .kb-notes-editor-toolbar { flex-wrap: wrap; }
+  .kb-notes-editor-actions { margin-left: 0; }
 }
 
 @media (max-width: 980px) {

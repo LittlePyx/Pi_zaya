@@ -27,6 +27,7 @@ import {
   PushpinFilled,
   PushpinOutlined,
   ReloadOutlined,
+  SaveOutlined,
   SearchOutlined,
 } from '@ant-design/icons'
 import { useNavigate } from 'react-router-dom'
@@ -43,9 +44,16 @@ import {
   RESEARCH_NOTES_CHANGED_EVENT,
   RESEARCH_NOTES_SYNC_CHANNEL,
 } from '../components/chat/readerResearchNoteCapture'
+import {
+  clearResearchNoteWorkspaceDraft,
+  readResearchNoteWorkspaceDraft,
+  workspaceDraftMatchesRecord,
+  writeResearchNoteWorkspaceDraft,
+} from './researchNoteWorkspaceDraft'
 
 const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
+type SaveIssue = 'failed' | 'conflict' | null
 
 function noteLinks(note: ResearchNoteRecord | null | undefined): ResearchNoteSourceLink[] {
   return Array.isArray(note?.source_state?.links)
@@ -127,9 +135,12 @@ export default function ResearchNotesPage() {
   const [loadingNote, setLoadingNote] = useState(false)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
-  const [saveFailed, setSaveFailed] = useState(false)
+  const [saveIssue, setSaveIssue] = useState<SaveIssue>(null)
+  const [conflictRecord, setConflictRecord] = useState<ResearchNoteRecord | null>(null)
   const draftVersionRef = useRef(0)
   const listRequestRef = useRef(0)
+  const noteRequestRef = useRef(0)
+  const activeIdRef = useRef('')
 
   const [query, setQuery] = useState('')
   const [archiveView, setArchiveView] = useState<'active' | 'archived'>('active')
@@ -144,6 +155,7 @@ export default function ResearchNotesPage() {
   const [draftContent, setDraftContent] = useState('')
   const [draftProjectId, setDraftProjectId] = useState<string | null>(null)
   const [draftTags, setDraftTags] = useState<string[]>([])
+  const [draftBaseRevision, setDraftBaseRevision] = useState(1)
 
   const [combineOpen, setCombineOpen] = useState(false)
   const [combineTitle, setCombineTitle] = useState(S.research_notes_combine_default_title)
@@ -153,18 +165,37 @@ export default function ResearchNotesPage() {
 
   const markDirty = useCallback(() => {
     draftVersionRef.current += 1
-    setSaveFailed(false)
+    setSaveIssue(current => current === 'conflict' ? current : null)
     setDirty(true)
   }, [])
 
   const applyRecord = useCallback((record: ResearchNoteRecord) => {
+    const localDraft = readResearchNoteWorkspaceDraft(record.id)
+    const shouldRestoreDraft = Boolean(localDraft && !workspaceDraftMatchesRecord(localDraft, record))
+    draftVersionRef.current += 1
+    activeIdRef.current = record.id
     setActiveNote(record)
     setActiveId(record.id)
+    if (localDraft && shouldRestoreDraft) {
+      setDraftTitle(localDraft.title)
+      setDraftContent(localDraft.contentMarkdown)
+      setDraftProjectId(localDraft.projectId)
+      setDraftTags(localDraft.tags)
+      setDraftBaseRevision(localDraft.baseRevision)
+      const conflicted = localDraft.baseRevision !== record.revision
+      setConflictRecord(conflicted ? record : null)
+      setSaveIssue(conflicted ? 'conflict' : null)
+      setDirty(true)
+      return
+    }
+    clearResearchNoteWorkspaceDraft(record.id)
     setDraftTitle(record.title)
     setDraftContent(record.content_markdown)
     setDraftProjectId(record.project_id || null)
     setDraftTags(Array.isArray(record.tags) ? record.tags : [])
-    setSaveFailed(false)
+    setDraftBaseRevision(record.revision)
+    setConflictRecord(null)
+    setSaveIssue(null)
     setDirty(false)
   }, [])
 
@@ -223,18 +254,26 @@ export default function ResearchNotesPage() {
   }, [loadNotes])
 
   const openNote = useCallback(async (noteId: string) => {
-    if (!noteId) return
+    if (!noteId || (noteId === activeIdRef.current && activeNote)) return
+    const requestId = ++noteRequestRef.current
+    const previousId = activeIdRef.current
+    activeIdRef.current = noteId
     setActiveId(noteId)
     setLoadingNote(true)
     try {
       const record = await chatApi.getResearchNote(noteId)
+      if (requestId !== noteRequestRef.current) return
       applyRecord(record)
     } catch (error) {
-      message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
+      if (requestId === noteRequestRef.current) {
+        activeIdRef.current = previousId
+        setActiveId(previousId)
+        message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
+      }
     } finally {
-      setLoadingNote(false)
+      if (requestId === noteRequestRef.current) setLoadingNote(false)
     }
-  }, [S.research_notes_load_failed, applyRecord])
+  }, [S.research_notes_load_failed, activeNote, applyRecord])
 
   useEffect(() => {
     if (loading || activeId || notes.length <= 0) return
@@ -242,61 +281,100 @@ export default function ResearchNotesPage() {
   }, [activeId, loading, notes, openNote])
 
   useEffect(() => {
-    if (!activeId || notes.some(note => note.id === activeId)) return
-    setActiveId('')
-    setActiveNote(null)
-  }, [activeId, notes])
+    if (!activeNote || !dirty) return
+    writeResearchNoteWorkspaceDraft({
+      noteId: activeNote.id,
+      baseRevision: draftBaseRevision,
+      title: draftTitle,
+      contentMarkdown: draftContent,
+      projectId: draftProjectId,
+      tags: draftTags,
+    })
+  }, [activeNote, dirty, draftBaseRevision, draftContent, draftProjectId, draftTags, draftTitle])
 
   useEffect(() => {
-    if (!activeNote || !dirty || saving || saveFailed) return
+    if (!dirty && !saving) return
+    const keepDraft = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', keepDraft)
+    return () => window.removeEventListener('beforeunload', keepDraft)
+  }, [dirty, saving])
+
+  const saveDraftNow = useCallback(async (): Promise<boolean> => {
+    if (!activeNote || !dirty || saving || saveIssue === 'conflict') return false
+    const noteId = activeNote.id
     const version = draftVersionRef.current
-    const timer = window.setTimeout(async () => {
-      setSaving(true)
-      try {
-        const record = await chatApi.updateResearchNote(activeNote.id, {
-          expected_revision: activeNote.revision,
-          title: draftTitle.trim() || S.research_notes_new_default_title,
-          content_markdown: draftContent.trim() || S.research_notes_new_default_body,
-          project_id: draftProjectId,
-          tags: draftTags,
-        })
+    setSaving(true)
+    setSaveIssue(null)
+    try {
+      const record = await chatApi.updateResearchNote(noteId, {
+        expected_revision: draftBaseRevision,
+        title: draftTitle.trim() || S.research_notes_new_default_title,
+        content_markdown: draftContent.trim() || S.research_notes_new_default_body,
+        project_id: draftProjectId,
+        tags: draftTags,
+      })
+      upsertSummary(record)
+      if (activeIdRef.current === noteId) {
         setActiveNote(record)
-        upsertSummary(record)
-        if (draftVersionRef.current === version) setDirty(false)
-      } catch (error) {
-        const text = error instanceof Error ? error.message : ''
-        if (text.includes('409')) {
-          message.error(S.research_notes_conflict)
-          try {
-            applyRecord(await chatApi.getResearchNote(activeNote.id))
-          } catch {
-            setSaveFailed(true)
-          }
-        } else {
-          setSaveFailed(true)
-          message.error(text || S.research_notes_save_failed)
+        setDraftBaseRevision(record.revision)
+        setConflictRecord(null)
+        setSaveIssue(null)
+        if (draftVersionRef.current === version) {
+          clearResearchNoteWorkspaceDraft(noteId)
+          setDirty(false)
         }
-      } finally {
-        setSaving(false)
       }
-    }, 850)
-    return () => window.clearTimeout(timer)
+      return true
+    } catch (error) {
+      const text = error instanceof Error ? error.message : ''
+      if (text.includes('409')) {
+        let latest: ResearchNoteRecord | null = null
+        try {
+          latest = await chatApi.getResearchNote(noteId)
+        } catch {
+          // The local draft is already durable even when the latest record cannot be loaded.
+        }
+        if (activeIdRef.current === noteId) {
+          if (latest) setActiveNote(latest)
+          setConflictRecord(latest)
+          setSaveIssue('conflict')
+          setDirty(true)
+          message.error(S.research_notes_conflict)
+        }
+      } else if (activeIdRef.current === noteId) {
+        setSaveIssue('failed')
+        setDirty(true)
+        message.error(text || S.research_notes_save_failed)
+      }
+      return false
+    } finally {
+      setSaving(false)
+    }
   }, [
     S.research_notes_conflict,
     S.research_notes_new_default_body,
     S.research_notes_new_default_title,
     S.research_notes_save_failed,
     activeNote,
-    applyRecord,
     dirty,
+    draftBaseRevision,
     draftContent,
     draftProjectId,
     draftTags,
     draftTitle,
     saving,
-    saveFailed,
+    saveIssue,
     upsertSummary,
   ])
+
+  useEffect(() => {
+    if (!activeNote || !dirty || saving || saveIssue) return
+    const timer = window.setTimeout(() => { void saveDraftNow() }, 850)
+    return () => window.clearTimeout(timer)
+  }, [activeNote, dirty, saveDraftNow, saveIssue, saving])
 
   const sourceOptions = useMemo(() => Array.from(new Set(notes.flatMap(noteSourceNames))).sort(), [notes])
   const tagOptions = useMemo(() => Array.from(new Set(notes.flatMap(note => note.tags || []))).sort(), [notes])
@@ -345,20 +423,33 @@ export default function ResearchNotesPage() {
     try {
       setSaving(true)
       const record = await chatApi.updateResearchNote(activeNote.id, {
-        expected_revision: activeNote.revision,
+        expected_revision: draftBaseRevision,
         ...patch,
       })
       setActiveNote(record)
+      setDraftBaseRevision(record.revision)
       setDraftProjectId(record.project_id || null)
       setDraftTags(record.tags || [])
       upsertSummary(record)
       if (patch.archived !== undefined) {
+        noteRequestRef.current += 1
+        activeIdRef.current = ''
         setActiveId('')
         setActiveNote(null)
         await loadNotes()
       }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : S.research_notes_save_failed)
+      const text = error instanceof Error ? error.message : ''
+      if (text.includes('409')) {
+        message.error(S.research_notes_conflict)
+        try {
+          applyRecord(await chatApi.getResearchNote(activeNote.id))
+        } catch {
+          message.error(S.research_notes_load_failed)
+        }
+      } else {
+        message.error(text || S.research_notes_save_failed)
+      }
     } finally {
       setSaving(false)
     }
@@ -368,17 +459,69 @@ export default function ResearchNotesPage() {
     if (!activeNote) return
     try {
       await chatApi.deleteResearchNote(activeNote.id)
+      clearResearchNoteWorkspaceDraft(activeNote.id)
       setNotes(current => current.filter(item => item.id !== activeNote.id))
       setSelectedIds(current => {
         const next = new Set(current)
         next.delete(activeNote.id)
         return next
       })
+      noteRequestRef.current += 1
+      activeIdRef.current = ''
       setActiveId('')
       setActiveNote(null)
       message.success(S.research_notes_deleted)
     } catch (error) {
       message.error(error instanceof Error ? error.message : S.research_notes_delete_failed)
+    }
+  }
+
+  const saveConflictCopy = async () => {
+    if (!activeNote || saveIssue !== 'conflict') return
+    const originalId = activeNote.id
+    const suffix = S.research_notes_conflict_copy_suffix.trim()
+    const baseTitle = draftTitle.trim() || activeNote.title
+    const copyTitle = `${baseTitle.slice(0, Math.max(1, 239 - suffix.length)).trim()} ${suffix}`.trim()
+    setSaving(true)
+    try {
+      const record = await chatApi.createResearchNote({
+        title: copyTitle,
+        content_markdown: draftContent.trim() || S.research_notes_new_default_body,
+        project_id: draftProjectId,
+        source_conv_id: activeNote.source_conv_id || null,
+        source_state: activeNote.source_state,
+        tags: draftTags,
+      })
+      clearResearchNoteWorkspaceDraft(originalId)
+      setArchiveView('active')
+      setNotes(current => [
+        { ...record, content_markdown: '' },
+        ...current.filter(item => item.id !== record.id && !item.archived),
+      ])
+      applyRecord(record)
+      setEditorMode('edit')
+      message.success(S.research_notes_conflict_copy_saved)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_notes_save_failed)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const loadLatestConflictRecord = async () => {
+    if (!activeNote || saveIssue !== 'conflict') return
+    const noteId = activeNote.id
+    setLoadingNote(true)
+    try {
+      const record = conflictRecord?.id === noteId
+        ? conflictRecord
+        : await chatApi.getResearchNote(noteId)
+      clearResearchNoteWorkspaceDraft(noteId)
+      applyRecord(record)
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
+    } finally {
+      setLoadingNote(false)
     }
   }
 
@@ -476,7 +619,9 @@ export default function ResearchNotesPage() {
   const links = noteLinks(activeNote)
   const statusText = saving
     ? S.research_notes_saving
-    : saveFailed
+    : saveIssue === 'conflict'
+      ? S.research_notes_conflict_status
+    : saveIssue === 'failed'
       ? S.research_notes_save_failed
     : dirty
       ? S.research_notes_unsaved_changes
@@ -516,9 +661,14 @@ export default function ResearchNotesPage() {
               { value: 'archived', label: S.research_notes_archived },
             ]}
             onChange={value => {
+              noteRequestRef.current += 1
+              activeIdRef.current = ''
               setArchiveView(value as 'active' | 'archived')
               setActiveId('')
               setActiveNote(null)
+              setDirty(false)
+              setSaveIssue(null)
+              setConflictRecord(null)
               setSelectedIds(new Set())
             }}
           />
@@ -633,7 +783,49 @@ export default function ResearchNotesPage() {
                   ]}
                   onChange={value => setEditorMode(value as 'edit' | 'preview')}
                 />
-                <span className={`kb-notes-save-state ${dirty ? 'is-dirty' : ''}`}>{statusText}</span>
+                <span
+                  className={`kb-notes-save-state ${dirty ? 'is-dirty' : ''} ${saveIssue ? 'is-error' : ''}`}
+                  data-testid="research-note-save-state"
+                  role="status"
+                  aria-live="polite"
+                >
+                  {statusText}
+                </span>
+                {dirty && saveIssue !== 'conflict' ? (
+                  <Button
+                    size="small"
+                    icon={<SaveOutlined />}
+                    loading={saving}
+                    data-testid="research-note-save-now"
+                    onClick={() => { void saveDraftNow() }}
+                  >
+                    {saveIssue === 'failed' ? S.research_notes_retry_save : S.research_notes_save_now}
+                  </Button>
+                ) : null}
+                {saveIssue === 'conflict' ? (
+                  <div className="kb-notes-conflict-actions">
+                    <Button
+                      size="small"
+                      type="primary"
+                      icon={<CopyOutlined />}
+                      loading={saving}
+                      data-testid="research-note-save-copy"
+                      onClick={() => { void saveConflictCopy() }}
+                    >
+                      {S.research_notes_save_conflict_copy}
+                    </Button>
+                    <Popconfirm
+                      title={S.research_notes_load_latest_confirm}
+                      okText={S.research_notes_load_latest}
+                      cancelText={S.confirm_cancel}
+                      onConfirm={loadLatestConflictRecord}
+                    >
+                      <Button size="small" data-testid="research-note-load-latest">
+                        {S.research_notes_load_latest}
+                      </Button>
+                    </Popconfirm>
+                  </div>
+                ) : null}
                 <div className="kb-notes-editor-actions">
                   <Tooltip title={activeNote.pinned ? S.research_notes_unpin : S.research_notes_pin}>
                     <Button
@@ -651,7 +843,7 @@ export default function ResearchNotesPage() {
                     cancelText={S.confirm_cancel}
                     onConfirm={deleteActive}
                   >
-                    <Button danger icon={<DeleteOutlined />} aria-label={S.research_notes_delete} />
+                    <Button danger disabled={dirty || saving} icon={<DeleteOutlined />} aria-label={S.research_notes_delete} />
                   </Popconfirm>
                 </div>
               </div>

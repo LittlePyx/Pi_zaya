@@ -204,3 +204,173 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await workspace.getByRole('button', { name: '回到回答' }).click()
   await expect(page).toHaveURL(new RegExp(`conversation=${CONVERSATION_ID}.*note_message=22`))
 })
+
+test('workspace preserves fast-switch drafts and recovers safely from save failures and conflicts', async ({ page }) => {
+  let failSave = false
+  let conflictNextSave = false
+  let records = [
+    {
+      id: 'note-safe-a',
+      project_id: PROJECT_ID,
+      source_conv_id: CONVERSATION_ID,
+      title: 'Safety note A',
+      content_markdown: 'Initial evidence A.',
+      source_state: { version: 1, links: [] },
+      tags: ['safety'],
+      pinned: false,
+      archived: false,
+      revision: 1,
+      created_at: 1_780_100_000,
+      updated_at: 1_780_100_100,
+    },
+    {
+      id: 'note-safe-b',
+      project_id: null,
+      source_conv_id: null,
+      title: 'Safety note B',
+      content_markdown: 'Initial evidence B.',
+      source_state: { version: 1, links: [] },
+      tags: [],
+      pinned: false,
+      archived: false,
+      revision: 1,
+      created_at: 1_780_100_010,
+      updated_at: 1_780_100_090,
+    },
+  ]
+
+  await installAppShellMocks(page, {
+    projects: [{ id: PROJECT_ID, name: 'Single-photon imaging', created_at: 1, updated_at: 1 }],
+  })
+
+  await page.route('**/api/chat/research-notes**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    const noteId = path.split('/').at(-1) || ''
+
+    if (request.method() === 'GET' && path === '/api/chat/research-notes') {
+      await fulfillJson(route, records
+        .filter(record => !record.archived)
+        .map(record => ({ ...record, content_markdown: '' })))
+      return
+    }
+    if (request.method() === 'GET') {
+      const record = records.find(item => item.id === noteId)
+      await fulfillJson(route, record || { detail: 'not found' }, record ? 200 : 404)
+      return
+    }
+    if (request.method() === 'PATCH') {
+      const index = records.findIndex(item => item.id === noteId)
+      const current = records[index]
+      if (!current) {
+        await fulfillJson(route, { detail: 'not found' }, 404)
+        return
+      }
+      if (failSave) {
+        await fulfillJson(route, { detail: 'temporary outage' }, 503)
+        return
+      }
+      if (conflictNextSave) {
+        conflictNextSave = false
+        records[index] = {
+          ...current,
+          title: 'External revision title',
+          content_markdown: 'Content saved by another window.',
+          revision: current.revision + 1,
+          updated_at: current.updated_at + 1,
+        }
+        await fulfillJson(route, { detail: 'research note revision conflict' }, 409)
+        return
+      }
+      const body = request.postDataJSON() as Record<string, unknown>
+      records[index] = {
+        ...current,
+        title: String(body.title || current.title),
+        content_markdown: String(body.content_markdown || current.content_markdown),
+        project_id: Object.prototype.hasOwnProperty.call(body, 'project_id') ? body.project_id as string | null : current.project_id,
+        tags: Array.isArray(body.tags) ? body.tags as string[] : current.tags,
+        revision: current.revision + 1,
+        updated_at: current.updated_at + 1,
+      }
+      await fulfillJson(route, records[index])
+      return
+    }
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      const record = {
+        id: `note-safe-${records.length + 1}`,
+        project_id: body.project_id as string | null || null,
+        source_conv_id: body.source_conv_id as string | null || null,
+        title: String(body.title || ''),
+        content_markdown: String(body.content_markdown || ''),
+        source_state: body.source_state as { version: number; links: never[] } || { version: 1, links: [] },
+        tags: Array.isArray(body.tags) ? body.tags as string[] : [],
+        pinned: false,
+        archived: false,
+        revision: 1,
+        created_at: 1_780_100_200,
+        updated_at: 1_780_100_200,
+      }
+      records = [record, ...records]
+      await fulfillJson(route, record)
+      return
+    }
+    await fulfillJson(route, { ok: true })
+  })
+
+  await page.goto('/notes')
+  const workspace = page.getByTestId('research-notes-workspace')
+  const titleInput = workspace.locator('.kb-notes-title-input')
+  const editor = workspace.locator('.kb-notes-editor-body textarea')
+  await expect(titleInput).toHaveValue('Safety note A')
+
+  await titleInput.fill('Draft kept during a fast switch')
+  await page.getByTestId('workspace-note-note-safe-b').click()
+  await expect(titleInput).toHaveValue('Safety note B')
+  await page.getByTestId('workspace-note-note-safe-a').click()
+  await expect(titleInput).toHaveValue('Draft kept during a fast switch')
+  await expect.poll(() => records.find(record => record.id === 'note-safe-a')?.title)
+    .toBe('Draft kept during a fast switch')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('kb:research-note-workspace-draft:note-safe-a')))
+    .toBeNull()
+
+  failSave = true
+  await editor.fill('This edit must survive a temporary save outage.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('保存失败')
+  await expect(editor).toHaveValue('This edit must survive a temporary save outage.')
+  failSave = false
+  await page.getByTestId('research-note-save-now').click()
+  await expect.poll(() => records.find(record => record.id === 'note-safe-a')?.content_markdown)
+    .toBe('This edit must survive a temporary save outage.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('已保存')
+
+  conflictNextSave = true
+  await editor.fill('Keep this local conclusion instead of overwriting it.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('本机草稿仍保留')
+  await expect(editor).toHaveValue('Keep this local conclusion instead of overwriting it.')
+  expect(records.find(record => record.id === 'note-safe-a')?.content_markdown)
+    .toBe('Content saved by another window.')
+
+  await page.getByTestId('research-note-save-copy').click()
+  await expect(titleInput).toHaveValue(/冲突副本/)
+  await expect(editor).toHaveValue('Keep this local conclusion instead of overwriting it.')
+  expect(records[0]?.content_markdown).toBe('Keep this local conclusion instead of overwriting it.')
+  expect(records.find(record => record.id === 'note-safe-a')?.content_markdown)
+    .toBe('Content saved by another window.')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('kb:research-note-workspace-draft:note-safe-a')))
+    .toBeNull()
+
+  const copyId = records[0]?.id || ''
+  conflictNextSave = true
+  await editor.fill('A second local edit that the user chooses to discard.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('本机草稿仍保留')
+  await page.getByTestId('research-note-load-latest').click()
+  await page.locator('.ant-popconfirm').getByRole('button', { name: '载入最新版' }).click()
+  await expect(editor).toHaveValue('Content saved by another window.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('已保存')
+  await expect.poll(() => page.evaluate(
+    noteId => localStorage.getItem(`kb:research-note-workspace-draft:${noteId}`),
+    copyId,
+  )).toBeNull()
+})
