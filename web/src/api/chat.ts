@@ -107,6 +107,14 @@ export interface ResearchNoteSourceLink {
     previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
     reviewed_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   }>
+  evidence_context_history?: Array<{
+    version?: number
+    action?: 'baseline_backfilled' | string
+    captured_at?: number
+    source_fingerprint?: string
+    locator?: Record<string, unknown>
+    previous_verification?: Record<string, unknown>
+  }>
 }
 
 export interface ResearchNoteEvidenceBlock {
@@ -216,6 +224,27 @@ export interface ResearchNoteEvidenceReviewIntent {
   saved_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   current_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   review: Omit<ResearchNoteEvidenceReviewBody, 'decision'>
+}
+
+export interface ResearchNoteEvidenceBaselineItem {
+  source_index: number
+  source_name: string
+  status: 'created' | 'skipped' | 'failed'
+  reason: string
+}
+
+export interface ResearchNoteEvidenceBaselineSummary {
+  total: number
+  created: number
+  skipped: number
+  failed: number
+  reasons: Record<string, number>
+}
+
+export interface ResearchNoteEvidenceBaselineResult {
+  note: ResearchNoteRecord
+  summary: ResearchNoteEvidenceBaselineSummary
+  items: ResearchNoteEvidenceBaselineItem[]
 }
 
 export interface ResearchNoteSourceState {
@@ -1730,6 +1759,11 @@ export const chatApi = {
     api.post<ResearchNoteRecord>(
       `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-review`,
       body,
+    ),
+  captureResearchNoteEvidenceContextBaselines: (noteId: string, expectedRevision: number) =>
+    api.post<ResearchNoteEvidenceBaselineResult>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-context-baseline`,
+      { expected_revision: expectedRevision },
     ),
   createResearchNote: (body: ResearchNoteCreateBody) =>
     api.post<ResearchNoteRecord>('/api/chat/research-notes', body),

@@ -162,6 +162,151 @@ Context immediately after the evidence.
     ).status_code == 422
 
 
+def test_chat_research_note_context_baseline_batch_is_safe_audited_and_idempotent(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+    from kb.source_blocks import load_source_blocks
+
+    md_path = tmp_path / "converted.md"
+    md_path.write_text(
+        """# Paper
+
+<!-- kb_page: 4 -->
+
+## Results
+
+The detector was calibrated before every acquisition.
+
+Photon arrival is a stochastic process governed by Poisson statistics.
+
+Dark counts were measured with the shutter closed.
+""",
+        encoding="utf-8",
+    )
+    target = next(
+        block
+        for block in load_source_blocks(md_path)
+        if "Photon arrival" in str(block.get("text") or "")
+    )
+    exact_link = {
+        "kind": "source",
+        "label": "Paper",
+        "source_path": "library/paper.pdf",
+        "capture_id": "capture-exact",
+        "block_id": target["block_id"],
+        "anchor_id": target["anchor_id"],
+        "anchor_kind": target["kind"],
+        "heading_path": target["heading_path"],
+        "page_start": target["page_start"],
+        "evidence_quote": target["text"],
+    }
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    note = store.create_research_note(
+        title="Legacy evidence note",
+        content_markdown="Original note body",
+        source_state={
+            "version": 1,
+            "links": [
+                exact_link,
+                {
+                    **exact_link,
+                    "capture_id": "capture-changed",
+                    "evidence_verification": {
+                        "status": "exact",
+                        "source_fingerprint": "sha256:" + ("0" * 64),
+                    },
+                },
+                {
+                    **exact_link,
+                    "capture_id": "capture-candidate",
+                    "block_id": "stale-block",
+                    "anchor_id": "stale-anchor",
+                    "evidence_quote": "photon arrivals follow Poisson behavior",
+                },
+                {
+                    **exact_link,
+                    "capture_id": "capture-invalid",
+                    "evidence_verification": {"status": "invalid"},
+                },
+                {
+                    **exact_link,
+                    "capture_id": "capture-unavailable",
+                    "source_path": "",
+                },
+                {
+                    **exact_link,
+                    "capture_id": "capture-existing",
+                    "evidence_context_snapshot": {"version": 1},
+                },
+                {
+                    **exact_link,
+                    "capture_id": "capture-location-changed",
+                    "block_id": "stale-block",
+                },
+                {"kind": "answer", "label": "Answer", "message_id": 12},
+            ],
+        },
+    )
+    assert note is not None
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda _path: str(md_path))
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", lambda *args, **kwargs: md_path)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-context-baseline",
+        json={"expected_revision": 1},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"] == {
+        "total": 7,
+        "created": 1,
+        "skipped": 6,
+        "failed": 0,
+        "reasons": {
+            "baseline_created": 1,
+            "source_changed": 1,
+            "candidate": 1,
+            "invalid": 1,
+            "unavailable": 1,
+            "already_present": 1,
+            "location_changed": 1,
+        },
+    }
+    record = payload["note"]
+    assert record["revision"] == 2
+    assert record["content_markdown"] == "Original note body"
+    captured = record["source_state"]["links"][0]
+    assert captured["block_id"] == target["block_id"]
+    assert captured["anchor_id"] == target["anchor_id"]
+    assert captured["evidence_quote"] == target["text"]
+    assert captured["evidence_verification"]["reason"] == "baseline_backfilled"
+    assert captured["evidence_context_history"][-1]["action"] == "baseline_backfilled"
+    assert captured["evidence_context_snapshot"]["target"]["block_id"] == target["block_id"]
+
+    repeated = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-context-baseline",
+        json={"expected_revision": 2},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["summary"]["created"] == 0
+    assert repeated.json()["summary"]["skipped"] == 7
+    assert repeated.json()["note"]["revision"] == 2
+
+    stale = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-context-baseline",
+        json={"expected_revision": 1},
+    )
+    assert stale.status_code == 409
+    assert store.get_research_note(note["id"])["revision"] == 2
+
+
 def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(
     monkeypatch,
     tmp_path: Path,

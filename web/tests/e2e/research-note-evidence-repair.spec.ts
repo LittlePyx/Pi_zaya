@@ -627,3 +627,148 @@ test('legacy evidence review labels a missing historical context without fabrica
   await expect(page.getByTestId('reader-evidence-review-current')).toContainText('Current preceding context.')
   await expect(page.getByTestId('reader-confirm-evidence-review')).toBeEnabled()
 })
+
+test('legacy note creates only safe current evidence baselines and reports skipped sources', async ({ page }) => {
+  await page.setViewportSize({ width: 1024, height: 800 })
+  await installAppShellMocks(page)
+  await installEmptyCitationShelfMock(page, { scopeId: 'note-baseline' })
+  await installIdleReferenceMocks(page)
+
+  const quote = 'SCI compresses a short video into one coded measurement.'
+  let baselineBody: Record<string, unknown> | null = null
+  let markBaselineStarted: (() => void) | undefined
+  let finishBaselineResponse: (() => void) | undefined
+  const baselineStarted = new Promise<void>((resolve) => { markBaselineStarted = resolve })
+  const baselineResponseReleased = new Promise<void>((resolve) => { finishBaselineResponse = resolve })
+  let note: ResearchNoteRecord = {
+    id: 'note-baseline',
+    project_id: null,
+    source_conv_id: null,
+    title: 'Legacy evidence baseline',
+    content_markdown: 'A note body that must not be rewritten.',
+    source_state: {
+      version: 1,
+      links: [
+        {
+          kind: 'source',
+          label: READER_REGRESSION_SOURCE_NAME,
+          source_name: READER_REGRESSION_SOURCE_NAME,
+          source_path: READER_REGRESSION_SOURCE_PATH,
+          block_id: 'quote-1',
+          anchor_id: 'a-quote-1',
+          anchor_kind: 'blockquote',
+          evidence_quote: quote,
+        },
+        {
+          kind: 'source',
+          label: 'Changed paper',
+          source_name: 'Changed paper',
+          source_path: 'db/paper/changed.md',
+          block_id: 'changed-block',
+          evidence_quote: 'Changed evidence must be skipped.',
+          evidence_verification: {
+            status: 'exact',
+            source_fingerprint: 'sha256:old-source',
+          },
+        },
+      ],
+    },
+    tags: [],
+    pinned: false,
+    archived: false,
+    revision: 1,
+    created_at: 1_800_000_000,
+    updated_at: 1_800_000_000,
+  }
+  await page.route('**/api/chat/research-notes**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (request.method() === 'GET' && url.pathname === '/api/chat/research-notes') {
+      await fulfillJson(route, [{ ...note, content_markdown: '' }])
+      return
+    }
+    if (request.method() === 'GET' && url.pathname === `/api/chat/research-notes/${note.id}`) {
+      await fulfillJson(route, note)
+      return
+    }
+    await fulfillJson(route, { detail: 'unexpected research note request' }, 404)
+  })
+  await page.route(`**/api/chat/research-notes/${note.id}/evidence-context-baseline`, async (route) => {
+    baselineBody = route.request().postDataJSON() as Record<string, unknown>
+    markBaselineStarted?.()
+    await baselineResponseReleased
+    const originalLink = note.source_state.links?.[0]
+    expect(originalLink).toBeTruthy()
+    const snapshot = {
+      version: 1 as const,
+      captured_at: 1_800_000_100,
+      source_fingerprint: 'sha256:current-source',
+      reason: 'exact_block',
+      before: [{ block_id: 'before', text: 'Current context before.' }],
+      target: { block_id: 'quote-1', anchor_id: 'a-quote-1', kind: 'blockquote', text: quote },
+      after: [{ block_id: 'after', text: 'Current context after.' }],
+    }
+    note = {
+      ...note,
+      revision: 2,
+      updated_at: 1_800_000_100,
+      source_state: {
+        ...note.source_state,
+        links: (note.source_state.links || []).map((link, index) => index === 0 ? {
+          ...link,
+          evidence_context_snapshot: snapshot,
+          evidence_verification: {
+            status: 'exact',
+            reason: 'baseline_backfilled',
+            verified_at: snapshot.captured_at,
+            source_fingerprint: snapshot.source_fingerprint,
+          },
+          evidence_context_history: [{
+            version: 1,
+            action: 'baseline_backfilled',
+            captured_at: snapshot.captured_at,
+            source_fingerprint: snapshot.source_fingerprint,
+          }],
+        } : link),
+      },
+    }
+    await fulfillJson(route, {
+      note,
+      summary: {
+        total: 2,
+        created: 1,
+        skipped: 1,
+        failed: 0,
+        reasons: { baseline_created: 1, source_changed: 1 },
+      },
+      items: [
+        { source_index: 0, source_name: READER_REGRESSION_SOURCE_NAME, status: 'created', reason: 'baseline_created' },
+        { source_index: 1, source_name: 'Changed paper', status: 'skipped', reason: 'source_changed' },
+      ],
+    })
+  })
+
+  await page.goto('/notes?note=note-baseline')
+  const baseline = page.getByTestId('research-note-evidence-baseline')
+  const baselineBox = await baseline.boundingBox()
+  expect(baselineBox).not.toBeNull()
+  expect((baselineBox?.x || 0) + (baselineBox?.width || 0)).toBeLessThanOrEqual(1024)
+  await expect(baseline).toContainText('缺少当前语境基线 2')
+  await page.getByTestId('research-note-evidence-baseline-create').click()
+  await page.getByRole('button', { name: '建立当前基线' }).last().click()
+  await baselineStarted
+  const editor = page.locator('.kb-notes-editor-body textarea')
+  await editor.fill('A note body edited while baselines are checked.')
+  finishBaselineResponse?.()
+
+  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('已建立 1')
+  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('已跳过 1')
+  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('失败 0')
+  await expect(baseline).toContainText('缺少当前语境基线 1')
+  await expect(editor).toHaveValue('A note body edited while baselines are checked.')
+  expect(baselineBody).toEqual({ expected_revision: 1 })
+  expect(note.content_markdown).toBe('A note body that must not be rewritten.')
+  expect(note.source_state.links?.[0]?.block_id).toBe('quote-1')
+  expect(note.source_state.links?.[0]?.evidence_quote).toBe(quote)
+  expect(note.source_state.links?.[0]?.evidence_context_history?.[0]?.action).toBe('baseline_backfilled')
+})

@@ -4,6 +4,7 @@ import pytest
 
 from kb.research_note_evidence import (
     build_research_note_evidence_context,
+    capture_research_note_source_context_baseline,
     repair_research_note_source_state,
     review_research_note_source_state,
     source_content_fingerprint,
@@ -66,6 +67,108 @@ def test_exact_block_returns_surrounding_context_and_canonical_reader_target(tmp
     assert "Photon arrival" in snapshot["target"]["text"]
     assert "Dark counts" in snapshot["after"][0]["text"]
     assert "markdown" not in snapshot["target"]
+
+
+def test_current_context_baseline_keeps_saved_evidence_and_records_audit(tmp_path: Path) -> None:
+    path, target = _fixture_source(tmp_path)
+    context = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/paper.pdf",
+        evidence_quote=target["text"],
+        block_id=target["block_id"],
+        anchor_id=target["anchor_id"],
+    )
+    state = {
+        "version": 1,
+        "links": [
+            {
+                "kind": "source",
+                "source_path": "library/paper.pdf",
+                "block_id": target["block_id"],
+                "anchor_id": target["anchor_id"],
+                "anchor_kind": target["kind"],
+                "heading_path": target["heading_path"],
+                "evidence_quote": target["text"],
+            }
+        ],
+        "unrelated": {"keep": True},
+    }
+
+    captured = capture_research_note_source_context_baseline(
+        state,
+        source_index=0,
+        source_path="library/paper.pdf",
+        target=context["target"],
+        source_fingerprint=context["source_fingerprint"],
+        context_snapshot=context["context_snapshot"],
+    )
+
+    assert "evidence_context_snapshot" not in state["links"][0]
+    assert captured["unrelated"] == {"keep": True}
+    link = captured["links"][0]
+    assert link["block_id"] == target["block_id"]
+    assert link["anchor_id"] == target["anchor_id"]
+    assert link["evidence_quote"] == target["text"]
+    assert link["evidence_context_snapshot"]["before"][0]["text"].startswith("The detector")
+    assert link["evidence_verification"] == {
+        "status": "exact",
+        "reason": "baseline_backfilled",
+        "verified_at": link["evidence_context_snapshot"]["captured_at"],
+        "source_fingerprint": context["source_fingerprint"],
+    }
+    audit = link["evidence_context_history"][-1]
+    assert audit["action"] == "baseline_backfilled"
+    assert audit["locator"]["block_id"] == target["block_id"]
+    assert "evidence_quote" not in audit["locator"]
+
+
+def test_current_context_baseline_rejects_existing_changed_or_invalid_evidence(tmp_path: Path) -> None:
+    path, target = _fixture_source(tmp_path)
+    context = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/paper.pdf",
+        evidence_quote=target["text"],
+        block_id=target["block_id"],
+        anchor_id=target["anchor_id"],
+    )
+    base_link = {
+        "kind": "source",
+        "source_path": "library/paper.pdf",
+        "block_id": target["block_id"],
+        "anchor_id": target["anchor_id"],
+        "evidence_quote": target["text"],
+    }
+    kwargs = {
+        "source_index": 0,
+        "source_path": "library/paper.pdf",
+        "target": context["target"],
+        "source_fingerprint": context["source_fingerprint"],
+        "context_snapshot": context["context_snapshot"],
+    }
+
+    with pytest.raises(ValueError, match="already exists"):
+        capture_research_note_source_context_baseline(
+            {"links": [{**base_link, "evidence_context_snapshot": context["context_snapshot"]}]},
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="source changed"):
+        capture_research_note_source_context_baseline(
+            {
+                "links": [{
+                    **base_link,
+                    "evidence_verification": {
+                        "status": "exact",
+                        "source_fingerprint": "sha256:older",
+                    },
+                }]
+            },
+            **kwargs,
+        )
+    with pytest.raises(ValueError, match="invalid"):
+        capture_research_note_source_context_baseline(
+            {"links": [{**base_link, "evidence_verification": {"status": "invalid"}}]},
+            **kwargs,
+        )
 
 
 def test_unique_quote_can_recover_an_exact_location_after_ids_change(tmp_path: Path) -> None:

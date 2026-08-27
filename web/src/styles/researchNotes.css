@@ -299,6 +299,52 @@
 
 .kb-notes-sources-head h2 { font-size: 15px; }
 
+.kb-notes-evidence-baseline {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--notes-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 5%, var(--panel));
+}
+
+.kb-notes-evidence-baseline-copy {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.kb-notes-evidence-baseline-copy > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.kb-notes-evidence-baseline-copy .anticon { color: var(--primary); }
+
+.kb-notes-evidence-baseline-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.kb-notes-evidence-baseline > .ant-btn { width: 100%; }
+
+.kb-notes-evidence-baseline-result {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.kb-notes-evidence-baseline-result .ant-tag {
+  margin: 0;
+  font-size: 10px;
+}
+
 .kb-notes-evidence-health {
   display: grid;
   gap: 7px;
@@ -810,6 +856,19 @@
   .kb-notes-sources-head p { display: none; }
   .kb-notes-editor-toolbar { flex-wrap: wrap; }
   .kb-notes-editor-actions { margin-left: 0; }
+}
+
+@media (max-width: 1180px) and (min-width: 981px) {
+  .kb-notes-workspace {
+    grid-template-columns: minmax(170px, 190px) minmax(320px, 1fr) minmax(210px, 230px);
+  }
+  .kb-notes-sources-head-row {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .kb-notes-sources-head-row > .ant-btn { width: 100%; }
+  .kb-notes-sources-head h2 { white-space: nowrap; }
 }
 
 @media (max-width: 980px) {

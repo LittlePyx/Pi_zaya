@@ -59,6 +59,7 @@ from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
 from kb.research_note_evidence import (
     build_research_note_evidence_context,
+    capture_research_note_source_context_baseline,
     repair_research_note_source_state,
     review_research_note_source_state,
     source_content_fingerprint,
@@ -290,6 +291,12 @@ class ResearchNoteEvidenceReviewBody(BaseModel):
     @classmethod
     def _clean_evidence_review_text(cls, value: str) -> str:
         return str(value or "").replace("\x00", "").strip()
+
+
+class ResearchNoteEvidenceBaselineBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(..., ge=1)
 
 
 class ResearchNoteCreateBody(BaseModel):
@@ -1410,6 +1417,174 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
         )
     except Exception as exc:
         raise HTTPException(500, "research note evidence context failed") from exc
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-context-baseline")
+def capture_chat_research_note_evidence_context_baseline(
+    note_id: str,
+    body: ResearchNoteEvidenceBaselineBody,
+):
+    store = get_chat_store()
+    note = store.get_research_note(note_id)
+    if note is None:
+        raise HTTPException(404, "research note not found")
+    if int(note.get("revision") or 1) != body.expected_revision:
+        raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
+
+    source_state = note.get("source_state") if isinstance(note.get("source_state"), dict) else {}
+    links = source_state.get("links")
+    links = links if isinstance(links, list) else []
+    next_source_state = source_state
+    summary: dict[str, Any] = {
+        "total": 0,
+        "created": 0,
+        "skipped": 0,
+        "failed": 0,
+        "reasons": {},
+    }
+    items: list[dict[str, Any]] = []
+
+    try:
+        settings = get_settings()
+        md_root = _md_dir()
+        pdf_root = _pdf_dir()
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+
+    def record_result(
+        source_index: int,
+        link: dict[str, Any],
+        *,
+        status: Literal["created", "skipped", "failed"],
+        reason: str,
+    ) -> None:
+        summary[status] = int(summary[status]) + 1
+        reason_counts = summary["reasons"]
+        reason_counts[reason] = int(reason_counts.get(reason) or 0) + 1
+        items.append(
+            {
+                "source_index": source_index,
+                "source_name": str(link.get("source_name") or link.get("label") or "").strip(),
+                "status": status,
+                "reason": reason,
+            }
+        )
+
+    for source_index, raw_link in enumerate(links):
+        if not isinstance(raw_link, dict) or str(raw_link.get("kind") or "").strip() == "answer":
+            continue
+        summary["total"] = int(summary["total"]) + 1
+        if raw_link.get("evidence_context_snapshot") is not None:
+            record_result(source_index, raw_link, status="skipped", reason="already_present")
+            continue
+        verification = raw_link.get("evidence_verification")
+        verification = verification if isinstance(verification, dict) else {}
+        if str(verification.get("status") or "").strip().lower() == "invalid":
+            record_result(source_index, raw_link, status="skipped", reason="invalid")
+            continue
+        source_path_raw = str(raw_link.get("source_path") or "").strip()
+        if not source_path_raw:
+            record_result(source_index, raw_link, status="skipped", reason="unavailable")
+            continue
+        try:
+            source_path = _resolve_allowed_reader_source_path(source_path_raw)
+            md_path = _resolve_paper_guide_md_path(
+                source_path,
+                md_root=md_root,
+                db_dir=getattr(settings, "db_dir", None),
+                pdf_root=pdf_root,
+            )
+        except HTTPException:
+            record_result(source_index, raw_link, status="skipped", reason="unavailable")
+            continue
+        except Exception:
+            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            continue
+        if md_path is None:
+            record_result(source_index, raw_link, status="skipped", reason="unavailable")
+            continue
+
+        saved_fingerprint = str(verification.get("source_fingerprint") or "").strip()
+        try:
+            verified = build_research_note_evidence_context(
+                md_path=md_path,
+                source_path=source_path_raw,
+                source_name=str(raw_link.get("source_name") or raw_link.get("label") or ""),
+                heading_path=str(raw_link.get("heading_path") or ""),
+                evidence_quote=str(raw_link.get("evidence_quote") or ""),
+                block_id=str(raw_link.get("block_id") or ""),
+                anchor_id=str(raw_link.get("anchor_id") or ""),
+                anchor_kind=str(raw_link.get("anchor_kind") or ""),
+                page_start=raw_link.get("page_start"),
+                page_end=raw_link.get("page_end"),
+                source_fingerprint=saved_fingerprint,
+            )
+        except Exception:
+            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            continue
+        if bool(verified.get("source_changed")):
+            record_result(source_index, raw_link, status="skipped", reason="source_changed")
+            continue
+        if str(verified.get("status") or "") != "exact":
+            reason = "candidate" if str(verified.get("status") or "") == "candidate" else "unavailable"
+            record_result(source_index, raw_link, status="skipped", reason=reason)
+            continue
+        if str(verified.get("reason") or "") not in {"exact_block", "exact_anchor"}:
+            record_result(source_index, raw_link, status="skipped", reason="location_changed")
+            continue
+        target = verified.get("target")
+        snapshot = verified.get("context_snapshot")
+        if not isinstance(target, dict) or not isinstance(snapshot, dict):
+            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            continue
+        saved_block_id = str(raw_link.get("block_id") or "").strip()
+        saved_anchor_id = str(raw_link.get("anchor_id") or "").strip()
+        if (
+            (saved_block_id and str(target.get("block_id") or "").strip() != saved_block_id)
+            or (saved_anchor_id and str(target.get("anchor_id") or "").strip() != saved_anchor_id)
+        ):
+            record_result(source_index, raw_link, status="skipped", reason="location_changed")
+            continue
+        current_fingerprint = str(verified.get("source_fingerprint") or "")
+        try:
+            fingerprint_after_verification = source_content_fingerprint(md_path)
+        except OSError:
+            record_result(source_index, raw_link, status="failed", reason="source_changed_during_capture")
+            continue
+        if fingerprint_after_verification != current_fingerprint:
+            record_result(source_index, raw_link, status="failed", reason="source_changed_during_capture")
+            continue
+        try:
+            next_source_state = capture_research_note_source_context_baseline(
+                next_source_state,
+                source_index=source_index,
+                source_path=source_path_raw,
+                target=target,
+                source_fingerprint=current_fingerprint,
+                context_snapshot=snapshot,
+            )
+        except ValueError:
+            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            continue
+        record_result(source_index, raw_link, status="created", reason="baseline_created")
+
+    if int(summary["created"]) > 0:
+        record, conflicted = store.update_research_note(
+            note_id,
+            expected_revision=body.expected_revision,
+            source_state=next_source_state,
+        )
+        if conflicted:
+            raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
+        if record is None:
+            raise HTTPException(409, "research note evidence baselines could not be saved")
+    else:
+        record = store.get_research_note(note_id)
+        if record is None:
+            raise HTTPException(404, "research note not found")
+        if int(record.get("revision") or 1) != body.expected_revision:
+            raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
+    return {"note": record, "summary": summary, "items": items}
 
 
 @router.post("/chat/research-notes/{note_id}/evidence-repair")

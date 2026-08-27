@@ -19,6 +19,7 @@ _CONTEXT_RADIUS = 1
 _CANDIDATE_LIMIT = 3
 _REPAIR_HISTORY_LIMIT = 12
 _REVIEW_HISTORY_LIMIT = 12
+_CONTEXT_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
 
@@ -168,6 +169,112 @@ def _compact_history_contexts(history: list[dict[str, Any]]) -> None:
     for row in history:
         row.pop("previous_context_snapshot", None)
         row.pop("reviewed_context_snapshot", None)
+
+
+def _verification_snapshot(value: Any) -> dict[str, Any]:
+    record = value if isinstance(value, dict) else {}
+    try:
+        verified_at = float(record.get("verified_at") or 0)
+    except (TypeError, ValueError):
+        verified_at = 0.0
+    return {
+        "status": _clean_text(record.get("status"), limit=24),
+        "reason": _clean_text(record.get("reason"), limit=80),
+        "verified_at": verified_at if math.isfinite(verified_at) and verified_at > 0 else None,
+        "source_fingerprint": _clean_text(record.get("source_fingerprint"), limit=96),
+    }
+
+
+def capture_research_note_source_context_baseline(
+    source_state: dict[str, Any],
+    *,
+    source_index: int,
+    source_path: str,
+    target: dict[str, Any],
+    source_fingerprint: str,
+    context_snapshot: dict[str, Any],
+) -> dict[str, Any]:
+    """Capture a current context baseline without changing saved evidence.
+
+    This is intentionally stricter than locator repair. The stored source must
+    still have the same stable locator, any prior fingerprint must still match,
+    and an existing context snapshot is never replaced by this path.
+    """
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list) or not 0 <= int(source_index) < len(links):
+        raise ValueError("research note source link not found")
+    link = links[int(source_index)]
+    if not isinstance(link, dict):
+        raise ValueError("research note source link not found")
+    if _source_identity(link.get("source_path")) != _source_identity(source_path):
+        raise ValueError("research note source changed")
+    if link.get("evidence_context_snapshot") is not None:
+        raise ValueError("research note evidence context already exists")
+
+    previous_verification = _verification_snapshot(link.get("evidence_verification"))
+    if previous_verification["status"] == "invalid":
+        raise ValueError("invalid research note evidence cannot establish a baseline")
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if not fingerprint.startswith("sha256:"):
+        raise ValueError("verified source fingerprint required")
+    saved_fingerprint = previous_verification["source_fingerprint"]
+    if saved_fingerprint and saved_fingerprint != fingerprint:
+        raise ValueError("research note evidence source changed")
+
+    saved_locator = _locator_snapshot(link)
+    target_locator = _locator_snapshot(target)
+    if not saved_locator["block_id"] and not saved_locator["anchor_id"]:
+        raise ValueError("research note evidence has no stable locator")
+    if saved_locator["block_id"] and target_locator["block_id"] != saved_locator["block_id"]:
+        raise ValueError("research note evidence block changed")
+    if saved_locator["anchor_id"] and target_locator["anchor_id"] != saved_locator["anchor_id"]:
+        raise ValueError("research note evidence anchor changed")
+    if not target_locator["evidence_quote"]:
+        raise ValueError("verified evidence target has no text")
+
+    verified_snapshot = _verified_context_snapshot(
+        context_snapshot,
+        target=target,
+        source_fingerprint=fingerprint,
+    )
+    if verified_snapshot is None:
+        raise ValueError("verified evidence context required")
+
+    captured_at = float(verified_snapshot["captured_at"])
+    link["evidence_context_snapshot"] = verified_snapshot
+    link["evidence_verification"] = {
+        "status": "exact",
+        "reason": "baseline_backfilled",
+        "verified_at": captured_at,
+        "source_fingerprint": fingerprint,
+    }
+    raw_history = link.get("evidence_context_history")
+    history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    history.append(
+        {
+            "version": 1,
+            "action": "baseline_backfilled",
+            "captured_at": captured_at,
+            "source_fingerprint": fingerprint,
+            "locator": {
+                key: saved_locator[key]
+                for key in (
+                    "block_id",
+                    "anchor_id",
+                    "anchor_kind",
+                    "heading_path",
+                    "page_start",
+                    "page_end",
+                    "line_start",
+                    "line_end",
+                )
+            },
+            "previous_verification": previous_verification,
+        }
+    )
+    link["evidence_context_history"] = history[-_CONTEXT_HISTORY_LIMIT:]
+    return next_state
 
 
 def repair_research_note_source_state(
