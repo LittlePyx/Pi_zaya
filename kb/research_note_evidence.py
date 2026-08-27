@@ -20,6 +20,7 @@ _CANDIDATE_LIMIT = 3
 _REPAIR_HISTORY_LIMIT = 12
 _REVIEW_HISTORY_LIMIT = 12
 _CONTEXT_HISTORY_LIMIT = 12
+_BASELINE_CHECK_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
 
@@ -185,6 +186,136 @@ def _verification_snapshot(value: Any) -> dict[str, Any]:
     }
 
 
+def _baseline_check_locator(link: dict[str, Any]) -> dict[str, Any]:
+    locator = _locator_snapshot(link)
+    return {
+        key: locator[key]
+        for key in (
+            "block_id",
+            "anchor_id",
+            "anchor_kind",
+            "heading_path",
+            "page_start",
+            "page_end",
+            "line_start",
+            "line_end",
+        )
+    }
+
+
+def record_research_note_source_baseline_check(
+    source_state: dict[str, Any],
+    *,
+    source_index: int,
+    status: str,
+    reason: str,
+    source_fingerprint: str = "",
+    checked_at: float | None = None,
+) -> dict[str, Any]:
+    """Persist one unresolved baseline-check outcome without rewriting evidence.
+
+    Repeating the same outcome for the same locator and source fingerprint is
+    idempotent. A changed outcome is retained in a bounded audit history.
+    """
+    normalized_status = _clean_text(status, limit=24).lower()
+    normalized_reason = _clean_text(reason, limit=80)
+    if normalized_status not in {"skipped", "failed"} or not normalized_reason:
+        raise ValueError("unsupported evidence baseline check outcome")
+
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list) or not 0 <= int(source_index) < len(links):
+        raise ValueError("research note source link not found")
+    link = links[int(source_index)]
+    if not isinstance(link, dict):
+        raise ValueError("research note source link not found")
+
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if fingerprint and not fingerprint.startswith("sha256:"):
+        fingerprint = ""
+    locator = _baseline_check_locator(link)
+    previous = link.get("evidence_baseline_check")
+    try:
+        previous_checked_at = float(previous.get("checked_at") or 0) if isinstance(previous, dict) else 0.0
+    except (TypeError, ValueError):
+        previous_checked_at = 0.0
+    if (
+        isinstance(previous, dict)
+        and previous.get("version") == 1
+        and _clean_text(previous.get("status"), limit=24).lower() == normalized_status
+        and _clean_text(previous.get("reason"), limit=80) == normalized_reason
+        and _clean_text(previous.get("source_fingerprint"), limit=96) == fingerprint
+        and previous.get("locator") == locator
+        and math.isfinite(previous_checked_at)
+        and previous_checked_at > 0
+    ):
+        return next_state
+
+    timestamp = float(checked_at if checked_at is not None else time.time())
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        timestamp = time.time()
+    record = {
+        "version": 1,
+        "checked_at": timestamp,
+        "status": normalized_status,
+        "reason": normalized_reason,
+        "source_fingerprint": fingerprint,
+        "locator": locator,
+    }
+    link["evidence_baseline_check"] = record
+    raw_history = link.get("evidence_baseline_check_history")
+    history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    history.append(deepcopy(record))
+    link["evidence_baseline_check_history"] = history[-_BASELINE_CHECK_HISTORY_LIMIT:]
+    return next_state
+
+
+def resolve_research_note_source_baseline_check(
+    source_state: dict[str, Any],
+    *,
+    source_index: int,
+    reason: str,
+    source_fingerprint: str = "",
+    resolved_at: float | None = None,
+) -> dict[str, Any]:
+    """Clear a current baseline-check issue while retaining its audit trail."""
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list) or not 0 <= int(source_index) < len(links):
+        raise ValueError("research note source link not found")
+    link = links[int(source_index)]
+    if not isinstance(link, dict):
+        raise ValueError("research note source link not found")
+    previous = link.get("evidence_baseline_check")
+    if not isinstance(previous, dict):
+        link.pop("evidence_baseline_check", None)
+        return next_state
+
+    timestamp = float(resolved_at if resolved_at is not None else time.time())
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        timestamp = time.time()
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if fingerprint and not fingerprint.startswith("sha256:"):
+        fingerprint = ""
+    raw_history = link.get("evidence_baseline_check_history")
+    history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    history.append(
+        {
+            "version": 1,
+            "resolved_at": timestamp,
+            "status": "resolved",
+            "reason": _clean_text(reason, limit=80),
+            "source_fingerprint": fingerprint,
+            "previous_status": _clean_text(previous.get("status"), limit=24),
+            "previous_reason": _clean_text(previous.get("reason"), limit=80),
+            "locator": deepcopy(previous.get("locator")) if isinstance(previous.get("locator"), dict) else {},
+        }
+    )
+    link["evidence_baseline_check_history"] = history[-_BASELINE_CHECK_HISTORY_LIMIT:]
+    link.pop("evidence_baseline_check", None)
+    return next_state
+
+
 def capture_research_note_source_context_baseline(
     source_state: dict[str, Any],
     *,
@@ -274,7 +405,13 @@ def capture_research_note_source_context_baseline(
         }
     )
     link["evidence_context_history"] = history[-_CONTEXT_HISTORY_LIMIT:]
-    return next_state
+    return resolve_research_note_source_baseline_check(
+        next_state,
+        source_index=source_index,
+        reason="baseline_created",
+        source_fingerprint=fingerprint,
+        resolved_at=captured_at,
+    )
 
 
 def repair_research_note_source_state(
@@ -384,7 +521,13 @@ def repair_research_note_source_state(
         link["evidence_context_snapshot"] = verified_snapshot
     else:
         link.pop("evidence_context_snapshot", None)
-    return next_state
+    return resolve_research_note_source_baseline_check(
+        next_state,
+        source_index=source_index,
+        reason="candidate_repaired",
+        source_fingerprint=fingerprint,
+        resolved_at=confirmed_at,
+    )
 
 
 def review_research_note_source_state(
@@ -488,7 +631,13 @@ def review_research_note_source_state(
         link["evidence_context_snapshot"] = verified_snapshot
     elif normalized_decision == "confirmed":
         link.pop("evidence_context_snapshot", None)
-    return next_state
+    return resolve_research_note_source_baseline_check(
+        next_state,
+        source_index=source_index,
+        reason=f"source_review_{normalized_decision}",
+        source_fingerprint=fingerprint,
+        resolved_at=confirmed_at,
+    )
 
 
 def _serialize_block(block: SourceBlock) -> dict[str, Any]:

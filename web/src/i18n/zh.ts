@@ -2219,6 +2219,7 @@ export const S = {
   research_notes_evidence_baseline_failed_count: '失败 {n}',
   research_notes_evidence_baseline_locate_and_review: '定位并核查',
   research_notes_evidence_baseline_locate: '定位证据',
+  research_notes_evidence_baseline_checked_at: '最近核验 {time}',
   research_notes_evidence_baseline_reason_source_changed: '来源版本已变化，需确认原证据是否仍然成立。',
   research_notes_evidence_baseline_reason_location_changed: '保存的定位已变化，需确认当前对应位置。',
   research_notes_evidence_baseline_reason_candidate: '只找到候选位置，需人工确认对应关系。',

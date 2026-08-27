@@ -5,7 +5,9 @@ import pytest
 from kb.research_note_evidence import (
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
+    record_research_note_source_baseline_check,
     repair_research_note_source_state,
+    resolve_research_note_source_baseline_check,
     review_research_note_source_state,
     source_content_fingerprint,
 )
@@ -93,6 +95,14 @@ def test_current_context_baseline_keeps_saved_evidence_and_records_audit(tmp_pat
         ],
         "unrelated": {"keep": True},
     }
+    state = record_research_note_source_baseline_check(
+        state,
+        source_index=0,
+        status="skipped",
+        reason="candidate",
+        source_fingerprint=context["source_fingerprint"],
+        checked_at=1_799_999_900,
+    )
 
     captured = capture_research_note_source_context_baseline(
         state,
@@ -120,6 +130,82 @@ def test_current_context_baseline_keeps_saved_evidence_and_records_audit(tmp_pat
     assert audit["action"] == "baseline_backfilled"
     assert audit["locator"]["block_id"] == target["block_id"]
     assert "evidence_quote" not in audit["locator"]
+    assert "evidence_baseline_check" not in link
+    assert link["evidence_baseline_check_history"][-1]["status"] == "resolved"
+    assert link["evidence_baseline_check_history"][-1]["reason"] == "baseline_created"
+
+
+def test_baseline_check_audit_is_idempotent_bounded_and_resolvable() -> None:
+    state = {
+        "links": [{
+            "kind": "source",
+            "source_path": "library/example.pdf",
+            "block_id": "block-1",
+            "anchor_id": "anchor-1",
+            "evidence_quote": "Saved evidence.",
+        }]
+    }
+    checked = record_research_note_source_baseline_check(
+        state,
+        source_index=0,
+        status="skipped",
+        reason="source_changed",
+        source_fingerprint="sha256:new",
+        checked_at=1_800_000_000,
+    )
+    repeated = record_research_note_source_baseline_check(
+        checked,
+        source_index=0,
+        status="skipped",
+        reason="source_changed",
+        source_fingerprint="sha256:new",
+        checked_at=1_800_000_100,
+    )
+
+    assert repeated == checked
+    assert repeated["links"][0]["evidence_baseline_check"]["checked_at"] == 1_800_000_000
+    assert len(repeated["links"][0]["evidence_baseline_check_history"]) == 1
+
+    changed = repeated
+    for index in range(14):
+        changed = record_research_note_source_baseline_check(
+            changed,
+            source_index=0,
+            status="failed" if index % 2 else "skipped",
+            reason=f"outcome_{index}",
+            checked_at=1_800_000_200 + index,
+        )
+    assert len(changed["links"][0]["evidence_baseline_check_history"]) == 12
+
+    resolved = resolve_research_note_source_baseline_check(
+        changed,
+        source_index=0,
+        reason="source_review_confirmed",
+        source_fingerprint="sha256:current",
+        resolved_at=1_800_000_300,
+    )
+    link = resolved["links"][0]
+    assert "evidence_baseline_check" not in link
+    assert len(link["evidence_baseline_check_history"]) == 12
+    assert link["evidence_baseline_check_history"][-1] == {
+        "version": 1,
+        "resolved_at": 1_800_000_300.0,
+        "status": "resolved",
+        "reason": "source_review_confirmed",
+        "source_fingerprint": "sha256:current",
+        "previous_status": "failed",
+        "previous_reason": "outcome_13",
+        "locator": {
+            "block_id": "block-1",
+            "anchor_id": "anchor-1",
+            "anchor_kind": "",
+            "heading_path": "",
+            "page_start": None,
+            "page_end": None,
+            "line_start": None,
+            "line_end": None,
+        },
+    }
 
 
 def test_current_context_baseline_rejects_existing_changed_or_invalid_evidence(tmp_path: Path) -> None:
@@ -347,6 +433,13 @@ def test_confirmed_candidate_repairs_one_locator_and_keeps_an_audit_trail() -> N
             }
         ],
     }
+    source_state = record_research_note_source_baseline_check(
+        source_state,
+        source_index=0,
+        status="skipped",
+        reason="candidate",
+        checked_at=1_799_999_900,
+    )
     target = {
         "block_id": "new-block",
         "anchor_id": "new-anchor",
@@ -407,6 +500,8 @@ def test_confirmed_candidate_repairs_one_locator_and_keeps_an_audit_trail() -> N
     assert audit["previous_context_snapshot"] is None
     assert audit["reviewed_context_snapshot"]["target"]["block_id"] == "new-block"
     assert link["evidence_context_snapshot"]["before"][0]["text"] == "Earlier context."
+    assert "evidence_baseline_check" not in link
+    assert link["evidence_baseline_check_history"][-1]["reason"] == "candidate_repaired"
 
 
 def test_locator_repair_rejects_a_source_that_changed_after_reader_opened() -> None:
@@ -470,6 +565,14 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
             }
         ]
     }
+    state = record_research_note_source_baseline_check(
+        state,
+        source_index=0,
+        status="skipped",
+        reason="source_changed",
+        source_fingerprint="sha256:new",
+        checked_at=1_799_999_950,
+    )
     target = {
         "block_id": "block-1",
         "anchor_id": "anchor-1",
@@ -522,6 +625,8 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
     assert first_audit["previous_context_snapshot"]["before"][0]["text"] == "Old preceding context."
     assert first_audit["reviewed_context_snapshot"]["before"][0]["text"] == "Updated preceding context."
     assert invalid_link["evidence_context_snapshot"] == old_snapshot
+    assert "evidence_baseline_check" not in invalid_link
+    assert invalid_link["evidence_baseline_check_history"][-1]["reason"] == "source_review_invalid"
 
     confirmed = review_research_note_source_state(
         invalidated,

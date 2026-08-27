@@ -672,6 +672,19 @@ test('legacy note creates only safe current evidence baselines and reports skipp
             source_fingerprint: 'sha256:old-source',
           },
         },
+        {
+          kind: 'source',
+          label: 'Invalid evidence',
+          source_name: 'Invalid evidence',
+          source_path: 'db/paper/invalid.md',
+          block_id: 'invalid-block',
+          evidence_quote: 'This evidence was explicitly marked invalid.',
+          evidence_verification: {
+            status: 'invalid',
+            reason: 'marked_invalid',
+            source_fingerprint: 'sha256:invalid-source',
+          },
+        },
       ],
     },
     tags: [],
@@ -715,36 +728,65 @@ test('legacy note creates only safe current evidence baselines and reports skipp
       updated_at: 1_800_000_100,
       source_state: {
         ...note.source_state,
-        links: (note.source_state.links || []).map((link, index) => index === 0 ? {
-          ...link,
-          evidence_context_snapshot: snapshot,
-          evidence_verification: {
-            status: 'exact',
-            reason: 'baseline_backfilled',
-            verified_at: snapshot.captured_at,
-            source_fingerprint: snapshot.source_fingerprint,
-          },
-          evidence_context_history: [{
-            version: 1,
-            action: 'baseline_backfilled',
-            captured_at: snapshot.captured_at,
-            source_fingerprint: snapshot.source_fingerprint,
-          }],
-        } : link),
+        links: (note.source_state.links || []).map((link, index) => {
+          if (index === 0) return {
+            ...link,
+            evidence_context_snapshot: snapshot,
+            evidence_verification: {
+              status: 'exact',
+              reason: 'baseline_backfilled',
+              verified_at: snapshot.captured_at,
+              source_fingerprint: snapshot.source_fingerprint,
+            },
+            evidence_context_history: [{
+              version: 1,
+              action: 'baseline_backfilled',
+              captured_at: snapshot.captured_at,
+              source_fingerprint: snapshot.source_fingerprint,
+            }],
+          }
+          if (index === 1) return {
+            ...link,
+            evidence_baseline_check: {
+              version: 1,
+              checked_at: 1_800_000_100,
+              status: 'skipped',
+              reason: 'source_changed',
+              source_fingerprint: 'sha256:new-source',
+              locator: { block_id: 'changed-block' },
+            },
+            evidence_baseline_check_history: [{
+              version: 1,
+              checked_at: 1_800_000_100,
+              status: 'skipped',
+              reason: 'source_changed',
+              source_fingerprint: 'sha256:new-source',
+              locator: { block_id: 'changed-block' },
+            }],
+          }
+          return link
+        }),
       },
     }
     await fulfillJson(route, {
       note,
       summary: {
-        total: 2,
+        total: 3,
         created: 1,
-        skipped: 1,
+        skipped: 2,
         failed: 0,
-        reasons: { baseline_created: 1, source_changed: 1 },
+        reasons: { baseline_created: 1, source_changed: 1, invalid: 1 },
       },
       items: [
         { source_index: 0, source_name: READER_REGRESSION_SOURCE_NAME, status: 'created', reason: 'baseline_created' },
-        { source_index: 1, source_name: 'Changed paper', status: 'skipped', reason: 'source_changed' },
+        {
+          source_index: 1,
+          source_name: 'Changed paper',
+          status: 'skipped',
+          reason: 'source_changed',
+          checked_at: 1_800_000_100,
+        },
+        { source_index: 2, source_name: 'Invalid evidence', status: 'skipped', reason: 'invalid' },
       ],
     })
   })
@@ -811,6 +853,17 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   expect(note.source_state.links?.[0]?.block_id).toBe('quote-1')
   expect(note.source_state.links?.[0]?.evidence_quote).toBe(quote)
   expect(note.source_state.links?.[0]?.evidence_context_history?.[0]?.action).toBe('baseline_backfilled')
+  expect(note.source_state.links?.[1]?.evidence_baseline_check?.reason).toBe('source_changed')
+
+  await page.evaluate(() => {
+    window.localStorage.removeItem('kb:research-note-workspace-draft:note-baseline')
+  })
+  await page.reload()
+  await expect(page.getByTestId('research-note-evidence-baseline-result')).toHaveCount(0)
+  await expect(baseline).toContainText('需要逐条核查 1')
+  await expect(issue).toContainText('来源版本已变化')
+  await expect(issue).toContainText('最近核验')
+  await expect(page.getByTestId('research-note-evidence-baseline-create')).toHaveCount(0)
 
   await issue.getByRole('button', { name: '定位并核查' }).click()
   await expect.poll(() => evidenceContextBodies.length).toBe(1)
@@ -823,5 +876,5 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   await expect(page.getByTestId('research-note-source-1')).toHaveClass(/is-baseline-focus/)
   await expect(page.getByTestId('research-note-source-1')).toBeFocused()
   await expect(page.getByTestId('research-note-source-1')).toContainText('原文转换结果已变化')
-  await expect(editor).toHaveValue('A note body edited while baselines are checked.')
+  await expect(editor).toHaveValue('A note body that must not be rewritten.')
 })

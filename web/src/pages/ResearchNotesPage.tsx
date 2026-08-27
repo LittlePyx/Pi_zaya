@@ -169,10 +169,14 @@ function evidenceBaselineSourceSignature(sourceState: ResearchNoteSourceState | 
     link.evidence_verification?.status,
     link.evidence_verification?.source_fingerprint,
     link.evidence_context_snapshot?.source_fingerprint,
+    link.evidence_baseline_check?.status,
+    link.evidence_baseline_check?.reason,
+    link.evidence_baseline_check?.checked_at,
+    link.evidence_baseline_check?.source_fingerprint,
   ].map(value => String(value || ''))))
 }
 
-function mergeEvidenceContextBaselines(
+function mergeEvidenceBaselineState(
   currentState: ResearchNoteSourceState,
   storedState: ResearchNoteSourceState,
 ): ResearchNoteSourceState {
@@ -183,17 +187,24 @@ function mergeEvidenceContextBaselines(
     links: currentLinks.map((link, index) => {
       const stored = storedLinks[index]
       if (!stored || sourceReviewKey(stored, index) !== sourceReviewKey(link, index)) return link
+      const merged: ResearchNoteSourceLink = { ...link }
       if (
-        link.evidence_context_snapshot != null
-        || stored.evidence_context_snapshot == null
-        || stored.evidence_verification?.reason !== 'baseline_backfilled'
-      ) return link
-      return {
-        ...link,
-        evidence_context_snapshot: stored.evidence_context_snapshot,
-        evidence_verification: stored.evidence_verification,
-        evidence_context_history: stored.evidence_context_history,
+        link.evidence_context_snapshot == null
+        && stored.evidence_context_snapshot != null
+        && stored.evidence_verification?.reason === 'baseline_backfilled'
+      ) {
+        merged.evidence_context_snapshot = stored.evidence_context_snapshot
+        merged.evidence_verification = stored.evidence_verification
+        merged.evidence_context_history = stored.evidence_context_history
       }
+      if (stored.evidence_baseline_check) merged.evidence_baseline_check = stored.evidence_baseline_check
+      else delete merged.evidence_baseline_check
+      if (stored.evidence_baseline_check_history) {
+        merged.evidence_baseline_check_history = stored.evidence_baseline_check_history
+      } else {
+        delete merged.evidence_baseline_check_history
+      }
+      return merged
     }),
   }
 }
@@ -1130,7 +1141,7 @@ export default function ResearchNotesPage() {
       } else {
         setActiveNote(result.note)
         setDraftBaseRevision(result.note.revision)
-        setDraftSourceState(current => mergeEvidenceContextBaselines(
+        setDraftSourceState(current => mergeEvidenceBaselineState(
           current,
           result.note.source_state || {},
         ))
@@ -1252,26 +1263,39 @@ export default function ResearchNotesPage() {
     reviewKey: sourceReviewKey(link, index),
   }))
   const paperLinkEntries = linkEntries.filter(entry => entry.link.kind !== 'answer')
-  const missingEvidenceBaselineCount = paperLinkEntries.filter(
-    entry => entry.link.evidence_context_snapshot == null,
-  ).length
+  const missingEvidenceBaselineEntries = paperLinkEntries.filter(entry => (
+    entry.link.evidence_context_snapshot == null
+    && entry.link.evidence_verification?.status !== 'invalid'
+  ))
+  const missingEvidenceBaselineCount = missingEvidenceBaselineEntries.length
   const missingEvidenceBaselineIndices = new Set(
-    paperLinkEntries
-      .filter(entry => entry.link.evidence_context_snapshot == null)
-      .map(entry => entry.index),
+    missingEvidenceBaselineEntries.map(entry => entry.index),
   )
   const baselineResultIsCurrent = Boolean(
     evidenceBaselineRun.sourceSignature
     && evidenceBaselineRun.sourceSignature === evidenceBaselineSourceSignature(draftSourceState),
   )
   const currentEvidenceBaselineSummary = baselineResultIsCurrent ? evidenceBaselineRun.summary : undefined
+  const persistedEvidenceBaselineIssues: ResearchNoteEvidenceBaselineItem[] = missingEvidenceBaselineEntries
+    .flatMap(entry => {
+      const check = entry.link.evidence_baseline_check
+      if (!check?.reason || !['skipped', 'failed'].includes(String(check.status || ''))) return []
+      return [{
+        source_index: entry.index,
+        source_name: sourceLabel(entry.link),
+        status: check.status === 'failed' ? 'failed' as const : 'skipped' as const,
+        reason: check.reason,
+        checked_at: check.checked_at,
+      }]
+    })
   const evidenceBaselineIssues = baselineResultIsCurrent
     ? (evidenceBaselineRun.items || []).filter(item => (
       missingEvidenceBaselineIndices.has(item.source_index)
       && item.status !== 'created'
       && item.reason !== 'already_present'
+      && item.reason !== 'invalid'
     ))
-    : []
+    : persistedEvidenceBaselineIssues
   const evidenceBaselineIssueCount = evidenceBaselineIssues.length
   const hasUnclassifiedEvidenceBaselines = missingEvidenceBaselineCount > evidenceBaselineIssueCount
   const locateEvidenceBaselineIssue = (item: ResearchNoteEvidenceBaselineItem) => {
@@ -1721,11 +1745,19 @@ export default function ResearchNotesPage() {
                       return (
                         <div
                           key={`${item.source_index}:${item.reason}`}
-                          className="kb-notes-evidence-baseline-issue"
+                          className={`kb-notes-evidence-baseline-issue${item.status === 'failed' ? ' is-failed' : ''}`}
                           data-testid={`research-note-evidence-baseline-issue-${item.source_index}`}
                         >
                           <strong>{item.source_name || (entry ? sourceLabel(entry.link) : '') || S.research_note_untitled_source}</strong>
                           <span>{evidenceBaselineReasonLabel(S, item.reason)}</span>
+                          {item.checked_at ? (
+                            <time dateTime={new Date(item.checked_at * 1000).toISOString()}>
+                              {S.research_notes_evidence_baseline_checked_at.replace(
+                                '{time}',
+                                formatUpdated(item.checked_at),
+                              )}
+                            </time>
+                          ) : null}
                           <Button
                             type="link"
                             size="small"

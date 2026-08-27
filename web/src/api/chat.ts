@@ -86,6 +86,25 @@ export interface ResearchNoteSourceLink {
     verified_at?: number
     source_fingerprint?: string
   }
+  evidence_baseline_check?: {
+    version?: number
+    checked_at?: number
+    status?: 'skipped' | 'failed' | string
+    reason?: string
+    source_fingerprint?: string
+    locator?: Record<string, unknown>
+  }
+  evidence_baseline_check_history?: Array<{
+    version?: number
+    checked_at?: number
+    resolved_at?: number
+    status?: 'skipped' | 'failed' | 'resolved' | string
+    reason?: string
+    source_fingerprint?: string
+    previous_status?: string
+    previous_reason?: string
+    locator?: Record<string, unknown>
+  }>
   locator_repair_history?: Array<{
     version?: number
     repaired_at?: number
@@ -231,6 +250,7 @@ export interface ResearchNoteEvidenceBaselineItem {
   source_name: string
   status: 'created' | 'skipped' | 'failed'
   reason: string
+  checked_at?: number
 }
 
 export interface ResearchNoteEvidenceBaselineSummary {

@@ -216,6 +216,11 @@ test('reader anchor helpers understand Chinese equation and figure labels withou
 test('reader locate guard compares source paths by normalized identity', () => {
   expect(normalizeReaderSourcePathForMatch('DB\\\\Fixture//Fixture.en.md/')).toBe('db/fixture/fixture.en.md')
   expect(readerSourcePathsMatch('DB\\\\Fixture//Fixture.en.md/', 'db/fixture/fixture.en.md')).toBe(true)
+  expect(readerSourcePathsMatch(
+    'F:\\Research Papers\\Pi_zaya\\db\\Fixture\\Fixture.en.md',
+    'db/fixture/fixture.en.md',
+  )).toBe(true)
+  expect(readerSourcePathsMatch('F:\\Other\\Fixture.en.md', 'fixture.en.md')).toBe(false)
   expect(readerSourcePathsMatch('db/fixture/fixture.en.md', 'db/other/fixture.en.md')).toBe(false)
   expect(readerSourcePathsMatch('', 'db/fixture/fixture.en.md')).toBe(false)
   expect(normalizeReaderSourcePathForMatch('file:///F:/Research%20Papers/./Fixture//Paper.en.md?download=1#anchor')).toBe('f:/research papers/fixture/paper.en.md')

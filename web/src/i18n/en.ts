@@ -2218,6 +2218,7 @@ export const S = {
   research_notes_evidence_baseline_failed_count: 'Failed {n}',
   research_notes_evidence_baseline_locate_and_review: 'Locate and review',
   research_notes_evidence_baseline_locate: 'Locate evidence',
+  research_notes_evidence_baseline_checked_at: 'Last checked {time}',
   research_notes_evidence_baseline_reason_source_changed: 'The source version changed; confirm whether the saved evidence still holds.',
   research_notes_evidence_baseline_reason_location_changed: 'The saved location changed; confirm its current matching location.',
   research_notes_evidence_baseline_reason_candidate: 'Only a candidate location was found; confirm that it is the same evidence.',

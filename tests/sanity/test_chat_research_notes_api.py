@@ -289,6 +289,19 @@ Dark counts were measured with the shutter closed.
     assert captured["evidence_verification"]["reason"] == "baseline_backfilled"
     assert captured["evidence_context_history"][-1]["action"] == "baseline_backfilled"
     assert captured["evidence_context_snapshot"]["target"]["block_id"] == target["block_id"]
+    for source_index, reason in ((1, "source_changed"), (2, "candidate"), (4, "unavailable"), (6, "location_changed")):
+        checked = record["source_state"]["links"][source_index]["evidence_baseline_check"]
+        assert checked["status"] == "skipped"
+        assert checked["reason"] == reason
+        assert checked["checked_at"] > 0
+        assert record["source_state"]["links"][source_index]["evidence_baseline_check_history"][-1] == checked
+    assert "evidence_baseline_check" not in record["source_state"]["links"][3]
+    assert "evidence_baseline_check" not in record["source_state"]["links"][5]
+    assert all(
+        item.get("checked_at", 0) > 0
+        for item in payload["items"]
+        if item["reason"] in {"source_changed", "candidate", "unavailable", "location_changed"}
+    )
 
     repeated = client.post(
         f"/api/chat/research-notes/{note['id']}/evidence-context-baseline",
@@ -305,6 +318,42 @@ Dark counts were measured with the shutter closed.
     )
     assert stale.status_code == 409
     assert store.get_research_note(note["id"])["revision"] == 2
+
+    unresolved_note = store.create_research_note(
+        title="Unavailable evidence note",
+        content_markdown="Keep this note body",
+        source_state={
+            "version": 1,
+            "links": [{
+                "kind": "source",
+                "label": "Unavailable paper",
+                "source_path": "",
+                "evidence_quote": "Saved evidence.",
+            }],
+        },
+    )
+    assert unresolved_note is not None
+    unresolved = client.post(
+        f"/api/chat/research-notes/{unresolved_note['id']}/evidence-context-baseline",
+        json={"expected_revision": 1},
+    )
+    assert unresolved.status_code == 200
+    unresolved_payload = unresolved.json()
+    assert unresolved_payload["summary"]["created"] == 0
+    assert unresolved_payload["note"]["revision"] == 2
+    assert unresolved_payload["note"]["content_markdown"] == "Keep this note body"
+    unresolved_check = unresolved_payload["note"]["source_state"]["links"][0]["evidence_baseline_check"]
+    assert unresolved_check["reason"] == "unavailable"
+    assert client.get(f"/api/chat/research-notes/{unresolved_note['id']}").json()["source_state"]["links"][0][
+        "evidence_baseline_check"
+    ] == unresolved_check
+    unresolved_repeat = client.post(
+        f"/api/chat/research-notes/{unresolved_note['id']}/evidence-context-baseline",
+        json={"expected_revision": 2},
+    )
+    assert unresolved_repeat.status_code == 200
+    assert unresolved_repeat.json()["note"]["revision"] == 2
+    assert unresolved_repeat.json()["items"][0]["checked_at"] == unresolved_check["checked_at"]
 
 
 def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(

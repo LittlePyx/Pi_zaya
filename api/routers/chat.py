@@ -60,7 +60,9 @@ from kb.research_note import research_note_docx, research_note_filename
 from kb.research_note_evidence import (
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
+    record_research_note_source_baseline_check,
     repair_research_note_source_state,
+    resolve_research_note_source_baseline_check,
     review_research_note_source_state,
     source_content_fingerprint,
 )
@@ -1443,6 +1445,7 @@ def capture_chat_research_note_evidence_context_baseline(
         "reasons": {},
     }
     items: list[dict[str, Any]] = []
+    checked_at = time.time()
 
     try:
         settings = get_settings()
@@ -1457,18 +1460,41 @@ def capture_chat_research_note_evidence_context_baseline(
         *,
         status: Literal["created", "skipped", "failed"],
         reason: str,
+        source_fingerprint: str = "",
     ) -> None:
+        nonlocal next_source_state
+        if reason not in {"already_present", "invalid", "baseline_created"}:
+            next_source_state = record_research_note_source_baseline_check(
+                next_source_state,
+                source_index=source_index,
+                status=status,
+                reason=reason,
+                source_fingerprint=source_fingerprint,
+                checked_at=checked_at,
+            )
+        elif reason in {"already_present", "invalid"}:
+            next_source_state = resolve_research_note_source_baseline_check(
+                next_source_state,
+                source_index=source_index,
+                reason=reason,
+                source_fingerprint=source_fingerprint,
+                resolved_at=checked_at,
+            )
         summary[status] = int(summary[status]) + 1
         reason_counts = summary["reasons"]
         reason_counts[reason] = int(reason_counts.get(reason) or 0) + 1
-        items.append(
-            {
-                "source_index": source_index,
-                "source_name": str(link.get("source_name") or link.get("label") or "").strip(),
-                "status": status,
-                "reason": reason,
-            }
-        )
+        item = {
+            "source_index": source_index,
+            "source_name": str(link.get("source_name") or link.get("label") or "").strip(),
+            "status": status,
+            "reason": reason,
+        }
+        persisted_links = next_source_state.get("links")
+        persisted_link = persisted_links[source_index] if isinstance(persisted_links, list) else None
+        persisted_check = persisted_link.get("evidence_baseline_check") if isinstance(persisted_link, dict) else None
+        if isinstance(persisted_check, dict) and persisted_check.get("reason") == reason:
+            item["checked_at"] = persisted_check.get("checked_at")
+        items.append(item)
 
     for source_index, raw_link in enumerate(links):
         if not isinstance(raw_link, dict) or str(raw_link.get("kind") or "").strip() == "answer":
@@ -1523,19 +1549,43 @@ def capture_chat_research_note_evidence_context_baseline(
             record_result(source_index, raw_link, status="failed", reason="verification_failed")
             continue
         if bool(verified.get("source_changed")):
-            record_result(source_index, raw_link, status="skipped", reason="source_changed")
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="source_changed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
             continue
         if str(verified.get("status") or "") != "exact":
             reason = "candidate" if str(verified.get("status") or "") == "candidate" else "unavailable"
-            record_result(source_index, raw_link, status="skipped", reason=reason)
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason=reason,
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
             continue
         if str(verified.get("reason") or "") not in {"exact_block", "exact_anchor"}:
-            record_result(source_index, raw_link, status="skipped", reason="location_changed")
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="location_changed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
             continue
         target = verified.get("target")
         snapshot = verified.get("context_snapshot")
         if not isinstance(target, dict) or not isinstance(snapshot, dict):
-            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="verification_failed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
             continue
         saved_block_id = str(raw_link.get("block_id") or "").strip()
         saved_anchor_id = str(raw_link.get("anchor_id") or "").strip()
@@ -1543,16 +1593,34 @@ def capture_chat_research_note_evidence_context_baseline(
             (saved_block_id and str(target.get("block_id") or "").strip() != saved_block_id)
             or (saved_anchor_id and str(target.get("anchor_id") or "").strip() != saved_anchor_id)
         ):
-            record_result(source_index, raw_link, status="skipped", reason="location_changed")
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="location_changed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
             continue
         current_fingerprint = str(verified.get("source_fingerprint") or "")
         try:
             fingerprint_after_verification = source_content_fingerprint(md_path)
         except OSError:
-            record_result(source_index, raw_link, status="failed", reason="source_changed_during_capture")
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="source_changed_during_capture",
+                source_fingerprint=current_fingerprint,
+            )
             continue
         if fingerprint_after_verification != current_fingerprint:
-            record_result(source_index, raw_link, status="failed", reason="source_changed_during_capture")
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="source_changed_during_capture",
+                source_fingerprint=current_fingerprint,
+            )
             continue
         try:
             next_source_state = capture_research_note_source_context_baseline(
@@ -1564,11 +1632,17 @@ def capture_chat_research_note_evidence_context_baseline(
                 context_snapshot=snapshot,
             )
         except ValueError:
-            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="verification_failed",
+                source_fingerprint=current_fingerprint,
+            )
             continue
         record_result(source_index, raw_link, status="created", reason="baseline_created")
 
-    if int(summary["created"]) > 0:
+    if next_source_state != source_state:
         record, conflicted = store.update_research_note(
             note_id,
             expected_revision=body.expected_revision,

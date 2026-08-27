@@ -377,6 +377,17 @@
   line-height: 1.45;
 }
 
+.kb-notes-evidence-baseline-issue > time {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.4;
+}
+
+.kb-notes-evidence-baseline-issue.is-failed {
+  border-color: color-mix(in srgb, #cf1322 24%, var(--notes-border));
+  background: color-mix(in srgb, #cf1322 4%, var(--panel));
+}
+
 .kb-notes-evidence-baseline-issue > .ant-btn {
   justify-self: start;
   height: auto;

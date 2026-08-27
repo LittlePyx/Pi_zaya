@@ -14,7 +14,17 @@ export function normalizeReaderSourcePathForMatch(value: unknown): string {
 export function readerSourcePathsMatch(left: unknown, right: unknown): boolean {
   const leftNorm = normalizeReaderSourcePathForMatch(left)
   const rightNorm = normalizeReaderSourcePathForMatch(right)
-  return Boolean(leftNorm && rightNorm && leftNorm === rightNorm)
+  if (!leftNorm || !rightNorm) return false
+  if (leftNorm === rightNorm) return true
+
+  const leftAbsolute = /^(?:[a-z]:\/|\/)/.test(leftNorm)
+  const rightAbsolute = /^(?:[a-z]:\/|\/)/.test(rightNorm)
+  if (leftAbsolute === rightAbsolute) return false
+  const absolute = leftAbsolute ? leftNorm : rightNorm
+  const relative = leftAbsolute ? rightNorm : leftNorm
+  const relativeParts = relative.split('/').filter(Boolean)
+  if (relativeParts.length < 2 || relativeParts.includes('..')) return false
+  return absolute.endsWith(`/${relative}`)
 }
 
 export function normalizeReaderLocateRequestId(value: unknown): number {

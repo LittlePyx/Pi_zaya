@@ -27,7 +27,7 @@ import {
   READER_STANDALONE_WINDOW_NAME,
   READER_SESSION_SYNC_CHANNEL,
 } from '../components/chat/reader/readerTypes'
-import { normalizeReaderSourcePathForMatch } from '../components/chat/reader/readerLocateGuard'
+import { readerSourcePathsMatch } from '../components/chat/reader/readerLocateGuard'
 import {
   sanitizeReaderLocateCandidates,
   sanitizeReaderLocateTarget,
@@ -544,10 +544,7 @@ export default function ReaderPage() {
         : {}
       if (String(data.type || '') !== 'reader-session-state') return
       const sourcePath = String(data.sourcePath || '').trim()
-      if (
-        !normalizeReaderSourcePathForMatch(sourcePath)
-        || normalizeReaderSourcePathForMatch(sourcePath) !== normalizeReaderSourcePathForMatch(payloadSourcePath)
-      ) return
+      if (!readerSourcePathsMatch(sourcePath, payloadSourcePath)) return
       if (String(data.sessionId || '').trim() === sessionId) return
       const highlights = normalizeSessionHighlights(data.highlights)
       setSessionHighlights((current) => {
@@ -889,10 +886,7 @@ export default function ReaderPage() {
     if (!repairIntent || !locateResult) return false
     const repair = repairIntent.repair
     if (!locateResult.ok || !locateResult.strictLocate || locateResult.status !== 'exact') return false
-    if (
-      normalizeReaderSourcePathForMatch(locateResult.sourcePath)
-      !== normalizeReaderSourcePathForMatch(repair.source_path)
-    ) return false
+    if (!readerSourcePathsMatch(locateResult.sourcePath, repair.source_path)) return false
     if (repair.candidate_block_id && locateResult.blockId !== repair.candidate_block_id) return false
     if (repair.candidate_anchor_id && locateResult.anchorId !== repair.candidate_anchor_id) return false
     return Boolean(repair.candidate_block_id || repair.candidate_anchor_id)
@@ -921,10 +915,7 @@ export default function ReaderPage() {
     if (!evidenceReviewIntent || !locateResult) return false
     const review = evidenceReviewIntent.review
     if (!locateResult.ok || !locateResult.strictLocate || locateResult.status !== 'exact') return false
-    if (
-      normalizeReaderSourcePathForMatch(locateResult.sourcePath)
-      !== normalizeReaderSourcePathForMatch(review.source_path)
-    ) return false
+    if (!readerSourcePathsMatch(locateResult.sourcePath, review.source_path)) return false
     if (review.current_block_id && locateResult.blockId !== review.current_block_id) return false
     if (review.current_anchor_id && locateResult.anchorId !== review.current_anchor_id) return false
     return Boolean(review.current_block_id || review.current_anchor_id)
