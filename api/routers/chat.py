@@ -58,6 +58,7 @@ from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
 from kb.research_note_evidence import (
+    auto_resolve_research_note_source_state,
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
     record_research_note_source_baseline_check,
@@ -1463,7 +1464,15 @@ def capture_chat_research_note_evidence_context_baseline(
         source_fingerprint: str = "",
     ) -> None:
         nonlocal next_source_state
-        if reason not in {"already_present", "invalid", "baseline_created"}:
+        if status == "created":
+            next_source_state = resolve_research_note_source_baseline_check(
+                next_source_state,
+                source_index=source_index,
+                reason=reason,
+                source_fingerprint=source_fingerprint,
+                resolved_at=checked_at,
+            )
+        elif reason not in {"already_present", "invalid"}:
             next_source_state = record_research_note_source_baseline_check(
                 next_source_state,
                 source_index=source_index,
@@ -1548,6 +1557,83 @@ def capture_chat_research_note_evidence_context_baseline(
         except Exception:
             record_result(source_index, raw_link, status="failed", reason="verification_failed")
             continue
+        verified_status = str(verified.get("status") or "")
+        verified_reason = str(verified.get("reason") or "")
+        target = verified.get("target")
+        snapshot = verified.get("context_snapshot")
+        current_fingerprint = str(verified.get("source_fingerprint") or "")
+        saved_block_id = str(raw_link.get("block_id") or "").strip()
+        saved_anchor_id = str(raw_link.get("anchor_id") or "").strip()
+        target_block_id = str(target.get("block_id") or "").strip() if isinstance(target, dict) else ""
+        target_anchor_id = str(target.get("anchor_id") or "").strip() if isinstance(target, dict) else ""
+        stable_locator_changed = bool(
+            (saved_block_id and saved_block_id != target_block_id)
+            or (saved_anchor_id and saved_anchor_id != target_anchor_id)
+        )
+        automatic_action = ""
+        if (
+            verified_status == "exact"
+            and verified_reason in {"exact_block", "exact_anchor", "quote_relocated"}
+            and isinstance(target, dict)
+            and isinstance(snapshot, dict)
+        ):
+            if verified_reason == "quote_relocated":
+                automatic_action = "exact_quote_auto_relocated"
+            elif bool(verified.get("source_changed")):
+                automatic_action = "source_change_auto_verified"
+            elif stable_locator_changed:
+                automatic_action = "stable_locator_auto_aligned"
+        if automatic_action:
+            try:
+                fingerprint_after_verification = source_content_fingerprint(md_path)
+            except OSError:
+                record_result(
+                    source_index,
+                    raw_link,
+                    status="failed",
+                    reason="source_changed_during_capture",
+                    source_fingerprint=current_fingerprint,
+                )
+                continue
+            if fingerprint_after_verification != current_fingerprint:
+                record_result(
+                    source_index,
+                    raw_link,
+                    status="failed",
+                    reason="source_changed_during_capture",
+                    source_fingerprint=current_fingerprint,
+                )
+                continue
+            try:
+                next_source_state = auto_resolve_research_note_source_state(
+                    next_source_state,
+                    source_index=source_index,
+                    source_path=source_path_raw,
+                    target=target,
+                    source_fingerprint=current_fingerprint,
+                    context_snapshot=snapshot,
+                    match_reason=verified_reason,
+                    action=automatic_action,
+                    resolved_at=checked_at,
+                )
+            except ValueError:
+                fallback_reason = "source_changed" if bool(verified.get("source_changed")) else "location_changed"
+                record_result(
+                    source_index,
+                    raw_link,
+                    status="skipped",
+                    reason=fallback_reason,
+                    source_fingerprint=current_fingerprint,
+                )
+                continue
+            record_result(
+                source_index,
+                raw_link,
+                status="created",
+                reason=automatic_action,
+                source_fingerprint=current_fingerprint,
+            )
+            continue
         if bool(verified.get("source_changed")):
             record_result(
                 source_index,
@@ -1557,8 +1643,8 @@ def capture_chat_research_note_evidence_context_baseline(
                 source_fingerprint=str(verified.get("source_fingerprint") or ""),
             )
             continue
-        if str(verified.get("status") or "") != "exact":
-            reason = "candidate" if str(verified.get("status") or "") == "candidate" else "unavailable"
+        if verified_status != "exact":
+            reason = "candidate" if verified_status == "candidate" else "unavailable"
             record_result(
                 source_index,
                 raw_link,
@@ -1567,7 +1653,7 @@ def capture_chat_research_note_evidence_context_baseline(
                 source_fingerprint=str(verified.get("source_fingerprint") or ""),
             )
             continue
-        if str(verified.get("reason") or "") not in {"exact_block", "exact_anchor"}:
+        if verified_reason not in {"exact_block", "exact_anchor"}:
             record_result(
                 source_index,
                 raw_link,
@@ -1576,8 +1662,6 @@ def capture_chat_research_note_evidence_context_baseline(
                 source_fingerprint=str(verified.get("source_fingerprint") or ""),
             )
             continue
-        target = verified.get("target")
-        snapshot = verified.get("context_snapshot")
         if not isinstance(target, dict) or not isinstance(snapshot, dict):
             record_result(
                 source_index,
@@ -1587,8 +1671,6 @@ def capture_chat_research_note_evidence_context_baseline(
                 source_fingerprint=str(verified.get("source_fingerprint") or ""),
             )
             continue
-        saved_block_id = str(raw_link.get("block_id") or "").strip()
-        saved_anchor_id = str(raw_link.get("anchor_id") or "").strip()
         if (
             (saved_block_id and str(target.get("block_id") or "").strip() != saved_block_id)
             or (saved_anchor_id and str(target.get("anchor_id") or "").strip() != saved_anchor_id)
@@ -1601,7 +1683,6 @@ def capture_chat_research_note_evidence_context_baseline(
                 source_fingerprint=str(verified.get("source_fingerprint") or ""),
             )
             continue
-        current_fingerprint = str(verified.get("source_fingerprint") or "")
         try:
             fingerprint_after_verification = source_content_fingerprint(md_path)
         except OSError:

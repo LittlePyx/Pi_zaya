@@ -266,17 +266,17 @@ Dark counts were measured with the shutter closed.
     payload = response.json()
     assert payload["summary"] == {
         "total": 7,
-        "created": 1,
-        "skipped": 6,
+        "created": 3,
+        "skipped": 4,
         "failed": 0,
         "reasons": {
             "baseline_created": 1,
-            "source_changed": 1,
+            "source_change_auto_verified": 1,
             "candidate": 1,
             "invalid": 1,
             "unavailable": 1,
             "already_present": 1,
-            "location_changed": 1,
+            "stable_locator_auto_aligned": 1,
         },
     }
     record = payload["note"]
@@ -289,18 +289,27 @@ Dark counts were measured with the shutter closed.
     assert captured["evidence_verification"]["reason"] == "baseline_backfilled"
     assert captured["evidence_context_history"][-1]["action"] == "baseline_backfilled"
     assert captured["evidence_context_snapshot"]["target"]["block_id"] == target["block_id"]
-    for source_index, reason in ((1, "source_changed"), (2, "candidate"), (4, "unavailable"), (6, "location_changed")):
+    auto_verified = record["source_state"]["links"][1]
+    assert auto_verified["evidence_verification"]["reason"] == "source_change_auto_verified"
+    assert auto_verified["evidence_context_snapshot"]["target"]["block_id"] == target["block_id"]
+    assert auto_verified["evidence_auto_resolution_history"][-1]["action"] == "source_change_auto_verified"
+    auto_aligned = record["source_state"]["links"][6]
+    assert auto_aligned["block_id"] == target["block_id"]
+    assert auto_aligned["evidence_quote"] == target["text"]
+    assert auto_aligned["evidence_verification"]["reason"] == "stable_locator_auto_aligned"
+    assert auto_aligned["evidence_auto_resolution_history"][-1]["action"] == "stable_locator_auto_aligned"
+    for source_index, reason in ((2, "candidate"), (4, "unavailable")):
         checked = record["source_state"]["links"][source_index]["evidence_baseline_check"]
         assert checked["status"] == "skipped"
         assert checked["reason"] == reason
         assert checked["checked_at"] > 0
         assert record["source_state"]["links"][source_index]["evidence_baseline_check_history"][-1] == checked
-    assert "evidence_baseline_check" not in record["source_state"]["links"][3]
-    assert "evidence_baseline_check" not in record["source_state"]["links"][5]
+    for source_index in (0, 1, 3, 5, 6):
+        assert "evidence_baseline_check" not in record["source_state"]["links"][source_index]
     assert all(
         item.get("checked_at", 0) > 0
         for item in payload["items"]
-        if item["reason"] in {"source_changed", "candidate", "unavailable", "location_changed"}
+        if item["reason"] in {"candidate", "unavailable"}
     )
 
     repeated = client.post(

@@ -62,8 +62,10 @@ import {
   writeResearchNoteWorkspaceDraft,
 } from './researchNoteWorkspaceDraft'
 import {
+  researchNoteEvidenceMaintenanceRequired,
   researchNoteEvidenceReviewIssues,
   researchNoteEvidenceReviewSummary,
+  researchNoteEvidenceSystemRetryRequired,
   type ResearchNoteEvidenceReviewSummary,
 } from './researchNoteEvidenceReview'
 import {
@@ -345,11 +347,14 @@ export default function ResearchNotesPage() {
   const projects = useChatStore(state => state.projects)
   const [notes, setNotes] = useState<ResearchNoteRecord[]>([])
   const [activeNote, setActiveNote] = useState<ResearchNoteRecord | null>(null)
+  const activeNoteRef = useRef<ResearchNoteRecord | null>(null)
   const [activeId, setActiveId] = useState('')
   const [loading, setLoading] = useState(true)
   const [loadingNote, setLoadingNote] = useState(false)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const dirtyRef = useRef(false)
+  const savingRef = useRef(false)
   const [saveIssue, setSaveIssue] = useState<SaveIssue>(null)
   const [conflictRecord, setConflictRecord] = useState<ResearchNoteRecord | null>(null)
   const draftVersionRef = useRef(0)
@@ -357,6 +362,7 @@ export default function ResearchNotesPage() {
   const noteRequestRef = useRef(0)
   const activeIdRef = useRef('')
   const requestedNoteHandledRef = useRef('')
+  const evidenceAutoAttemptsRef = useRef<Map<string, number>>(new Map())
 
   const [query, setQuery] = useState('')
   const [archiveView, setArchiveView] = useState<'active' | 'archived'>('active')
@@ -382,6 +388,10 @@ export default function ResearchNotesPage() {
   const evidenceHealthRunRef = useRef(0)
   const evidenceBaselineRunRef = useRef(0)
   const links = useMemo(() => sourceStateLinks(draftSourceState), [draftSourceState])
+
+  activeNoteRef.current = activeNote
+  dirtyRef.current = dirty
+  savingRef.current = saving
 
   const [outlineCheckVersion, setOutlineCheckVersion] = useState(0)
   const [outlineFreshness, setOutlineFreshness] = useState<OutlineSourceFreshness[]>([])
@@ -467,6 +477,79 @@ export default function ResearchNotesPage() {
     })
   }, [archiveView])
 
+  const autoResolveEvidenceRecord = useCallback(async (
+    record: ResearchNoteRecord,
+  ): Promise<ResearchNoteRecord> => {
+    if (!researchNoteEvidenceMaintenanceRequired(record.source_state)) return record
+    const localDraft = readResearchNoteWorkspaceDraft(record.id)
+    if (localDraft && !workspaceDraftMatchesRecord(localDraft, record)) return record
+    if (
+      activeNoteRef.current?.id === record.id
+      && (dirtyRef.current || savingRef.current)
+    ) return record
+
+    const attemptKey = `${record.id}:${record.revision}`
+    const attempts = evidenceAutoAttemptsRef.current.get(attemptKey) || 0
+    const reviewSummary = researchNoteEvidenceReviewSummary(record.source_state)
+    const systemRetryRequired = researchNoteEvidenceSystemRetryRequired(record.source_state)
+    if (attempts >= 1 && reviewSummary.total > 0 && !systemRetryRequired) return record
+    if (attempts >= 2) return record
+    const nextAttempts = attempts + 1
+    evidenceAutoAttemptsRef.current.set(attemptKey, nextAttempts)
+    try {
+      const result = await chatApi.captureResearchNoteEvidenceContextBaselines(
+        record.id,
+        record.revision,
+      )
+      if (researchNoteEvidenceMaintenanceRequired(result.note.source_state)) {
+        evidenceAutoAttemptsRef.current.set(
+          `${result.note.id}:${result.note.revision}`,
+          nextAttempts,
+        )
+      }
+      return result.note
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : ''
+      if (detail.includes('409')) {
+        try {
+          return await chatApi.getResearchNote(record.id)
+        } catch {
+          return record
+        }
+      }
+      return record
+    }
+  }, [])
+
+  const autoResolveListedEvidence = useCallback(async (
+    records: ResearchNoteRecord[],
+  ): Promise<{ records: ResearchNoteRecord[]; updated: Map<string, ResearchNoteRecord> }> => {
+    const candidates = records.filter(record => (
+      researchNoteEvidenceReviewSummary(record.source_state).total > 0
+      || researchNoteEvidenceSystemRetryRequired(record.source_state)
+    ))
+    if (candidates.length <= 0) return { records, updated: new Map() }
+    const updated = new Map<string, ResearchNoteRecord>()
+    let cursor = 0
+    const worker = async () => {
+      while (cursor < candidates.length) {
+        const record = candidates[cursor]
+        cursor += 1
+        const resolved = await autoResolveEvidenceRecord(record)
+        if (resolved !== record || resolved.revision !== record.revision) {
+          updated.set(record.id, resolved)
+        }
+      }
+    }
+    await Promise.all(
+      Array.from({ length: Math.min(3, candidates.length) }, () => worker()),
+    )
+    return {
+      records: records.map(record => updated.get(record.id) || record),
+      updated,
+    }
+  }, [autoResolveEvidenceRecord])
+
   const loadNotes = useCallback(async () => {
     const requestId = ++listRequestRef.current
     setLoading(true)
@@ -477,7 +560,18 @@ export default function ResearchNotesPage() {
         archived: archiveView,
       })
       if (requestId !== listRequestRef.current) return
-      setNotes(records)
+      const resolved = await autoResolveListedEvidence(records)
+      if (requestId !== listRequestRef.current) return
+      setNotes(resolved.records)
+      const refreshedActive = resolved.updated.get(activeIdRef.current)
+      if (
+        refreshedActive
+        && activeNoteRef.current
+        && !dirtyRef.current
+        && !savingRef.current
+      ) {
+        applyRecord(refreshedActive)
+      }
     } catch (error) {
       if (requestId === listRequestRef.current) {
         message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
@@ -485,12 +579,22 @@ export default function ResearchNotesPage() {
     } finally {
       if (requestId === listRequestRef.current) setLoading(false)
     }
-  }, [S.research_notes_load_failed, archiveView, query])
+  }, [S.research_notes_load_failed, applyRecord, archiveView, autoResolveListedEvidence, query])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadNotes() }, 180)
     return () => window.clearTimeout(timer)
   }, [loadNotes])
+
+  useEffect(() => {
+    const retryable = notes.some(note => {
+      const attempts = evidenceAutoAttemptsRef.current.get(`${note.id}:${note.revision}`) || 0
+      return researchNoteEvidenceSystemRetryRequired(note.source_state) && attempts < 2
+    })
+    if (!retryable || loading) return
+    const timer = window.setTimeout(() => { void loadNotes() }, 4_000)
+    return () => window.clearTimeout(timer)
+  }, [loading, loadNotes, notes])
 
   useEffect(() => {
     const refresh = () => {
@@ -527,8 +631,11 @@ export default function ResearchNotesPage() {
     setActiveId(noteId)
     setLoadingNote(true)
     try {
-      const record = await chatApi.getResearchNote(noteId)
+      let record = await chatApi.getResearchNote(noteId)
       if (requestId !== noteRequestRef.current) return
+      record = await autoResolveEvidenceRecord(record)
+      if (requestId !== noteRequestRef.current) return
+      upsertSummary(record)
       applyRecord(record, { focusFirstEvidenceIssue: true })
     } catch (error) {
       if (requestId === noteRequestRef.current) {
@@ -539,7 +646,7 @@ export default function ResearchNotesPage() {
     } finally {
       if (requestId === noteRequestRef.current) setLoadingNote(false)
     }
-  }, [S.research_notes_load_failed, activeNote, applyRecord, draftSourceState])
+  }, [S.research_notes_load_failed, activeNote, applyRecord, autoResolveEvidenceRecord, draftSourceState, upsertSummary])
 
   useEffect(() => {
     if (!activeNote || focusedEvidenceIndex == null || loadingNote) return
@@ -1200,12 +1307,18 @@ export default function ResearchNotesPage() {
         items: result.items,
         sourceSignature: evidenceBaselineSourceSignature(result.note.source_state),
       })
+      const decisionCount = result.items.filter(item => (
+        item.status === 'skipped'
+        && ['candidate', 'source_changed', 'location_changed'].includes(item.reason)
+      )).length
       const feedback = S.research_notes_evidence_baseline_result
         .replace('{created}', String(result.summary.created))
-        .replace('{skipped}', String(result.summary.skipped))
-        .replace('{failed}', String(result.summary.failed))
-      if (result.summary.failed > 0) message.warning(feedback)
-      else message.success(feedback)
+        .replace('{review}', String(decisionCount))
+      if (result.summary.failed > 0) {
+        message.info(`${feedback} ${S.research_notes_evidence_baseline_background_retry}`)
+      } else {
+        message.success(feedback)
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : ''
       if (detail.includes('409')) {
@@ -1311,8 +1424,11 @@ export default function ResearchNotesPage() {
   }))
   const paperLinkEntries = linkEntries.filter(entry => entry.link.kind !== 'answer')
   const missingEvidenceBaselineEntries = paperLinkEntries.filter(entry => (
-    entry.link.evidence_context_snapshot == null
+    Boolean(String(entry.link.source_path || '').trim())
+    && entry.link.evidence_context_snapshot == null
     && entry.link.evidence_verification?.status !== 'invalid'
+    && entry.link.evidence_baseline_check?.status !== 'failed'
+    && entry.link.evidence_baseline_check?.reason !== 'unavailable'
   ))
   const missingEvidenceBaselineCount = missingEvidenceBaselineEntries.length
   const missingEvidenceBaselineIndices = new Set(
@@ -1335,9 +1451,8 @@ export default function ResearchNotesPage() {
   const evidenceBaselineIssues = baselineResultIsCurrent
     ? (evidenceBaselineRun.items || []).filter(item => (
       missingEvidenceBaselineIndices.has(item.source_index)
-      && item.status !== 'created'
-      && item.reason !== 'already_present'
-      && item.reason !== 'invalid'
+      && item.status === 'skipped'
+      && ['candidate', 'source_changed', 'location_changed'].includes(item.reason)
     ))
     : persistedEvidenceBaselineIssues
   const evidenceBaselineIssueCount = evidenceBaselineIssues.length
@@ -1425,7 +1540,14 @@ export default function ResearchNotesPage() {
               </Button>
             </>
           ) : null}
-          <Button icon={<ReloadOutlined />} onClick={() => { void loadNotes() }} aria-label={S.reload} />
+          <Button
+            icon={<ReloadOutlined />}
+            onClick={() => {
+              evidenceAutoAttemptsRef.current.clear()
+              void loadNotes()
+            }}
+            aria-label={S.reload}
+          />
           <Button type="primary" icon={<PlusOutlined />} onClick={() => { void createNote() }}>
             {S.research_notes_new}
           </Button>
@@ -1567,11 +1689,6 @@ export default function ResearchNotesPage() {
                         {reviewSummary.needsReview > 0 ? (
                           <Tag color="gold" data-testid={`workspace-note-evidence-review-count-${note.id}`}>
                             {S.research_notes_evidence_card_review.replace('{n}', String(reviewSummary.needsReview))}
-                          </Tag>
-                        ) : null}
-                        {reviewSummary.failed > 0 ? (
-                          <Tag color="red" data-testid={`workspace-note-evidence-failed-count-${note.id}`}>
-                            {S.research_notes_evidence_card_failed.replace('{n}', String(reviewSummary.failed))}
                           </Tag>
                         ) : null}
                       </div>
@@ -1807,12 +1924,6 @@ export default function ResearchNotesPage() {
                       {S.research_notes_evidence_baseline_needs_review_count.replace(
                         '{n}',
                         String(evidenceBaselineIssueCount),
-                      )}
-                    </Tag>
-                    <Tag color={currentEvidenceBaselineSummary.failed > 0 ? 'red' : 'default'}>
-                      {S.research_notes_evidence_baseline_failed_count.replace(
-                        '{n}',
-                        String(currentEvidenceBaselineSummary.failed),
                       )}
                     </Tag>
                   </div>

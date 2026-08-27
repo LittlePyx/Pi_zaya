@@ -20,6 +20,7 @@ _CANDIDATE_LIMIT = 3
 _REPAIR_HISTORY_LIMIT = 12
 _REVIEW_HISTORY_LIMIT = 12
 _CONTEXT_HISTORY_LIMIT = 12
+_AUTO_RESOLUTION_HISTORY_LIMIT = 12
 _BASELINE_CHECK_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
@@ -170,6 +171,7 @@ def _compact_history_contexts(history: list[dict[str, Any]]) -> None:
     for row in history:
         row.pop("previous_context_snapshot", None)
         row.pop("reviewed_context_snapshot", None)
+        row.pop("resolved_context_snapshot", None)
 
 
 def _verification_snapshot(value: Any) -> dict[str, Any]:
@@ -527,6 +529,147 @@ def repair_research_note_source_state(
         reason="candidate_repaired",
         source_fingerprint=fingerprint,
         resolved_at=confirmed_at,
+    )
+
+
+def auto_resolve_research_note_source_state(
+    source_state: dict[str, Any],
+    *,
+    source_index: int,
+    source_path: str,
+    target: dict[str, Any],
+    source_fingerprint: str,
+    context_snapshot: dict[str, Any],
+    match_reason: str,
+    action: str,
+    resolved_at: float | None = None,
+) -> dict[str, Any]:
+    """Resolve only evidence matches that are deterministic without user judgment.
+
+    Stable block/anchor matches may refresh a changed source fingerprint. A
+    relocated quote is accepted only after the verifier has proved that the
+    complete saved quote occurs at one exact source block. The saved quote is
+    never rewritten by this automatic path.
+    """
+    normalized_match_reason = _clean_text(match_reason, limit=80)
+    normalized_action = _clean_text(action, limit=80)
+    allowed_actions = {
+        "source_change_auto_verified",
+        "exact_quote_auto_relocated",
+        "stable_locator_auto_aligned",
+    }
+    if normalized_match_reason not in {"exact_block", "exact_anchor", "quote_relocated"}:
+        raise ValueError("evidence match requires user review")
+    if normalized_action not in allowed_actions:
+        raise ValueError("unsupported automatic evidence resolution")
+
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list) or not 0 <= int(source_index) < len(links):
+        raise ValueError("research note source link not found")
+    link = links[int(source_index)]
+    if not isinstance(link, dict):
+        raise ValueError("research note source link not found")
+    if _source_identity(link.get("source_path")) != _source_identity(source_path):
+        raise ValueError("research note source changed")
+
+    saved_locator = _locator_snapshot(link)
+    target_for_locator = dict(target)
+    target_for_locator["anchor_kind"] = target.get("anchor_kind") or target.get("kind")
+    target_locator = _locator_snapshot(target_for_locator)
+    if not target_locator["block_id"] and not target_locator["anchor_id"]:
+        raise ValueError("verified evidence target has no stable locator")
+    if not target_locator["evidence_quote"]:
+        raise ValueError("verified evidence target has no text")
+
+    saved_quote = normalize_match_text(saved_locator["evidence_quote"])
+    target_text = normalize_match_text(target_locator["evidence_quote"])
+    if len(saved_quote) < 16 or saved_quote not in target_text:
+        raise ValueError("saved evidence quote is not an exact current-source match")
+    if normalized_match_reason == "exact_block" and (
+        not saved_locator["block_id"] or saved_locator["block_id"] != target_locator["block_id"]
+    ):
+        raise ValueError("saved evidence block is no longer exact")
+    if normalized_match_reason == "exact_anchor" and (
+        not saved_locator["anchor_id"] or saved_locator["anchor_id"] != target_locator["anchor_id"]
+    ):
+        raise ValueError("saved evidence anchor is no longer exact")
+
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if not fingerprint.startswith("sha256:"):
+        raise ValueError("verified source fingerprint required")
+    verified_snapshot = _verified_context_snapshot(
+        context_snapshot,
+        target=target_for_locator,
+        source_fingerprint=fingerprint,
+    )
+    if verified_snapshot is None:
+        raise ValueError("verified evidence context required")
+
+    previous_verification = _verification_snapshot(link.get("evidence_verification"))
+    previous_context_snapshot = _normalize_context_snapshot(link.get("evidence_context_snapshot"))
+    for key in (
+        "block_id",
+        "anchor_id",
+        "anchor_kind",
+        "heading_path",
+        "page_start",
+        "page_end",
+        "line_start",
+        "line_end",
+    ):
+        value = target_locator[key]
+        if value is None or value == "":
+            link.pop(key, None)
+        else:
+            link[key] = value
+    link.pop("location_label", None)
+    if normalized_action in {"exact_quote_auto_relocated", "stable_locator_auto_aligned"}:
+        for key in (
+            "start_offset",
+            "end_offset",
+            "occurrence",
+            "readable_index",
+            "document_occurrence",
+            "start_readable_index",
+            "end_readable_index",
+        ):
+            link.pop(key, None)
+
+    timestamp = float(resolved_at if resolved_at is not None else time.time())
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        timestamp = time.time()
+    link["evidence_verification"] = {
+        "status": "exact",
+        "reason": normalized_action,
+        "verified_at": timestamp,
+        "source_fingerprint": fingerprint,
+    }
+    link["evidence_context_snapshot"] = verified_snapshot
+    raw_history = link.get("evidence_auto_resolution_history")
+    history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+    _compact_history_contexts(history)
+    history.append(
+        {
+            "version": 1,
+            "resolved_at": timestamp,
+            "action": normalized_action,
+            "match_reason": normalized_match_reason,
+            "source_fingerprint": fingerprint,
+            "from": saved_locator,
+            "to": target_locator,
+            "previous_verification": previous_verification,
+            "previous_context_snapshot": previous_context_snapshot,
+            "resolved_context_snapshot": verified_snapshot,
+        }
+    )
+    link["evidence_auto_resolution_history"] = history[-_AUTO_RESOLUTION_HISTORY_LIMIT:]
+    return resolve_research_note_source_baseline_check(
+        next_state,
+        source_index=source_index,
+        reason=normalized_action,
+        source_fingerprint=fingerprint,
+        resolved_at=timestamp,
     )
 
 

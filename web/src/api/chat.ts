@@ -126,6 +126,18 @@ export interface ResearchNoteSourceLink {
     previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
     reviewed_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   }>
+  evidence_auto_resolution_history?: Array<{
+    version?: number
+    resolved_at?: number
+    action?: 'source_change_auto_verified' | 'exact_quote_auto_relocated' | 'stable_locator_auto_aligned' | string
+    match_reason?: string
+    source_fingerprint?: string
+    from?: Record<string, unknown>
+    to?: Record<string, unknown>
+    previous_verification?: Record<string, unknown>
+    previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+    resolved_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  }>
   evidence_context_history?: Array<{
     version?: number
     action?: 'baseline_backfilled' | string

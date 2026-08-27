@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from kb.research_note_evidence import (
+    auto_resolve_research_note_source_state,
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
     record_research_note_source_baseline_check,
@@ -527,6 +528,76 @@ def test_locator_repair_rejects_a_source_that_changed_after_reader_opened() -> N
             target={"block_id": "candidate", "text": "Candidate evidence."},
             source_fingerprint="sha256:abc123",
         )
+
+
+def test_exact_quote_relocation_is_auto_resolved_without_rewriting_saved_quote() -> None:
+    saved_quote = "The detector remained linear across the calibrated range."
+    state = record_research_note_source_baseline_check(
+        {
+            "links": [{
+                "kind": "source",
+                "source_path": "library/example.pdf",
+                "block_id": "old-block",
+                "anchor_id": "old-anchor",
+                "evidence_quote": saved_quote,
+                "start_offset": 4,
+                "end_offset": 59,
+            }],
+        },
+        source_index=0,
+        status="skipped",
+        reason="location_changed",
+        checked_at=1_799_999_900,
+    )
+    target = {
+        "block_id": "new-block",
+        "anchor_id": "new-anchor",
+        "kind": "paragraph",
+        "heading_path": "Results",
+        "page_start": 6,
+        "text": f"In repeated trials, {saved_quote} No saturation was observed.",
+    }
+    snapshot = {
+        "version": 1,
+        "captured_at": 1_800_000_000,
+        "source_fingerprint": "sha256:new",
+        "reason": "quote_relocated",
+        "before": [],
+        "target": target,
+        "after": [],
+    }
+
+    resolved = auto_resolve_research_note_source_state(
+        state,
+        source_index=0,
+        source_path="LIBRARY\\example.pdf",
+        target=target,
+        source_fingerprint="sha256:new",
+        context_snapshot=snapshot,
+        match_reason="quote_relocated",
+        action="exact_quote_auto_relocated",
+        resolved_at=1_800_000_000,
+    )
+
+    link = resolved["links"][0]
+    assert link["block_id"] == "new-block"
+    assert link["anchor_id"] == "new-anchor"
+    assert link["evidence_quote"] == saved_quote
+    assert "start_offset" not in link
+    assert "end_offset" not in link
+    assert link["evidence_verification"] == {
+        "status": "exact",
+        "reason": "exact_quote_auto_relocated",
+        "verified_at": 1_800_000_000.0,
+        "source_fingerprint": "sha256:new",
+    }
+    audit = link["evidence_auto_resolution_history"][-1]
+    assert audit["action"] == "exact_quote_auto_relocated"
+    assert audit["match_reason"] == "quote_relocated"
+    assert audit["from"]["block_id"] == "old-block"
+    assert audit["to"]["block_id"] == "new-block"
+    assert "evidence_baseline_check" not in link
+    assert link["evidence_baseline_check_history"][-1]["reason"] == "exact_quote_auto_relocated"
 
 
 def test_source_change_review_can_confirm_or_invalidate_without_rewriting_evidence() -> None:
