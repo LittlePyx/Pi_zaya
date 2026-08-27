@@ -62,6 +62,11 @@ import {
   writeResearchNoteWorkspaceDraft,
 } from './researchNoteWorkspaceDraft'
 import {
+  researchNoteEvidenceReviewIssues,
+  researchNoteEvidenceReviewSummary,
+  type ResearchNoteEvidenceReviewSummary,
+} from './researchNoteEvidenceReview'
+import {
   buildResearchNoteOutline,
   researchNoteOutlineConversationId,
   researchNoteOutlineHasMixedProjects,
@@ -81,6 +86,7 @@ type SaveIssue = 'failed' | 'conflict' | null
 type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
 type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'invalid' | 'unavailable' | 'error' | 'unchecked'
 type EvidenceHealthFilter = 'all' | 'issues'
+type DirectoryEvidenceFilter = 'all' | 'issues'
 
 interface EvidenceReviewState {
   loading: boolean
@@ -350,6 +356,7 @@ export default function ResearchNotesPage() {
   const listRequestRef = useRef(0)
   const noteRequestRef = useRef(0)
   const activeIdRef = useRef('')
+  const requestedNoteHandledRef = useRef('')
 
   const [query, setQuery] = useState('')
   const [archiveView, setArchiveView] = useState<'active' | 'archived'>('active')
@@ -357,6 +364,7 @@ export default function ResearchNotesPage() {
   const [sourceFilter, setSourceFilter] = useState(ALL_FILTER)
   const [tagFilter, setTagFilter] = useState(ALL_FILTER)
   const [timeFilter, setTimeFilter] = useState<'all' | 'week' | 'month'>('all')
+  const [directoryEvidenceFilter, setDirectoryEvidenceFilter] = useState<DirectoryEvidenceFilter>('all')
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [editorMode, setEditorMode] = useState<'edit' | 'preview'>('edit')
 
@@ -407,7 +415,10 @@ export default function ResearchNotesPage() {
     setDirty(true)
   }, [])
 
-  const applyRecord = useCallback((record: ResearchNoteRecord) => {
+  const applyRecord = useCallback((
+    record: ResearchNoteRecord,
+    options: { focusFirstEvidenceIssue?: boolean } = {},
+  ) => {
     const localDraft = readResearchNoteWorkspaceDraft(record.id)
     const shouldRestoreDraft = Boolean(localDraft && !workspaceDraftMatchesRecord(localDraft, record))
     draftVersionRef.current += 1
@@ -416,16 +427,20 @@ export default function ResearchNotesPage() {
     setActiveId(record.id)
     setOutlineReview(null)
     if (localDraft && shouldRestoreDraft) {
+      const nextSourceState = localDraft.sourceState || record.source_state || {}
       setDraftTitle(localDraft.title)
       setDraftContent(localDraft.contentMarkdown)
       setDraftProjectId(localDraft.projectId)
       setDraftTags(localDraft.tags)
-      setDraftSourceState(localDraft.sourceState || record.source_state || {})
+      setDraftSourceState(nextSourceState)
       setDraftBaseRevision(localDraft.baseRevision)
       const conflicted = localDraft.baseRevision !== record.revision
       setConflictRecord(conflicted ? record : null)
       setSaveIssue(conflicted ? 'conflict' : null)
       setDirty(true)
+      if (options.focusFirstEvidenceIssue) {
+        setFocusedEvidenceIndex(researchNoteEvidenceReviewSummary(nextSourceState).firstSourceIndex)
+      }
       return
     }
     clearResearchNoteWorkspaceDraft(record.id)
@@ -438,6 +453,9 @@ export default function ResearchNotesPage() {
     setConflictRecord(null)
     setSaveIssue(null)
     setDirty(false)
+    if (options.focusFirstEvidenceIssue) {
+      setFocusedEvidenceIndex(researchNoteEvidenceReviewSummary(record.source_state).firstSourceIndex)
+    }
   }, [])
 
   const upsertSummary = useCallback((record: ResearchNoteRecord) => {
@@ -498,7 +516,11 @@ export default function ResearchNotesPage() {
   }, [loadNotes])
 
   const openNote = useCallback(async (noteId: string) => {
-    if (!noteId || (noteId === activeIdRef.current && activeNote)) return
+    if (!noteId) return
+    if (noteId === activeIdRef.current && activeNote) {
+      setFocusedEvidenceIndex(researchNoteEvidenceReviewSummary(draftSourceState).firstSourceIndex)
+      return
+    }
     const requestId = ++noteRequestRef.current
     const previousId = activeIdRef.current
     activeIdRef.current = noteId
@@ -507,7 +529,7 @@ export default function ResearchNotesPage() {
     try {
       const record = await chatApi.getResearchNote(noteId)
       if (requestId !== noteRequestRef.current) return
-      applyRecord(record)
+      applyRecord(record, { focusFirstEvidenceIssue: true })
     } catch (error) {
       if (requestId === noteRequestRef.current) {
         activeIdRef.current = previousId
@@ -517,16 +539,35 @@ export default function ResearchNotesPage() {
     } finally {
       if (requestId === noteRequestRef.current) setLoadingNote(false)
     }
-  }, [S.research_notes_load_failed, activeNote, applyRecord])
+  }, [S.research_notes_load_failed, activeNote, applyRecord, draftSourceState])
+
+  useEffect(() => {
+    if (!activeNote || focusedEvidenceIndex == null || loadingNote) return
+    const frame = window.requestAnimationFrame(() => {
+      const sourceCard = document.querySelector<HTMLElement>(
+        `[data-testid="research-note-source-${focusedEvidenceIndex}"]`,
+      )
+      sourceCard?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      sourceCard?.focus({ preventScroll: true })
+    })
+    return () => window.cancelAnimationFrame(frame)
+  }, [activeNote, focusedEvidenceIndex, loadingNote])
 
   useEffect(() => {
     if (loading || notes.length <= 0) return
-    const requested = requestedNoteId && notes.some(note => note.id === requestedNoteId)
+    const requested = requestedNoteId
+      && requestedNoteHandledRef.current !== requestedNoteId
+      && notes.some(note => note.id === requestedNoteId)
       ? requestedNoteId
       : ''
+    if (requested) requestedNoteHandledRef.current = requested
     const nextId = requested || (!activeId ? notes[0].id : '')
     if (nextId && nextId !== activeId) void openNote(nextId)
   }, [activeId, loading, notes, openNote, requestedNoteId])
+
+  useEffect(() => {
+    if (!requestedNoteId) requestedNoteHandledRef.current = ''
+  }, [requestedNoteId])
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -749,6 +790,11 @@ export default function ResearchNotesPage() {
   const sourceOptions = useMemo(() => Array.from(new Set(notes.flatMap(noteSourceNames))).sort(), [notes])
   const tagOptions = useMemo(() => Array.from(new Set(notes.flatMap(note => note.tags || []))).sort(), [notes])
   const projectNameById = useMemo(() => new Map(projects.map(project => [project.id, project.name])), [projects])
+  const noteEvidenceReviewSummaries = useMemo(() => new Map<string, ResearchNoteEvidenceReviewSummary>(
+    notes.map(note => [note.id, researchNoteEvidenceReviewSummary(note.source_state)]),
+  ), [notes])
+  const evidenceReviewNoteCount = useMemo(() => Array.from(noteEvidenceReviewSummaries.values())
+    .filter(summary => summary.total > 0).length, [noteEvidenceReviewSummaries])
 
   const filteredNotes = useMemo(() => {
     const now = Date.now() / 1000
@@ -763,9 +809,10 @@ export default function ResearchNotesPage() {
       if (sourceFilter !== ALL_FILTER && !noteSourceNames(note).includes(sourceFilter)) return false
       if (tagFilter !== ALL_FILTER && !(note.tags || []).includes(tagFilter)) return false
       if (cutoff && note.updated_at < cutoff) return false
+      if (directoryEvidenceFilter === 'issues' && !(noteEvidenceReviewSummaries.get(note.id)?.total)) return false
       return true
     })
-  }, [notes, projectFilter, sourceFilter, tagFilter, timeFilter])
+  }, [directoryEvidenceFilter, noteEvidenceReviewSummaries, notes, projectFilter, sourceFilter, tagFilter, timeFilter])
 
   const createNote = async () => {
     try {
@@ -1276,18 +1323,15 @@ export default function ResearchNotesPage() {
     && evidenceBaselineRun.sourceSignature === evidenceBaselineSourceSignature(draftSourceState),
   )
   const currentEvidenceBaselineSummary = baselineResultIsCurrent ? evidenceBaselineRun.summary : undefined
-  const persistedEvidenceBaselineIssues: ResearchNoteEvidenceBaselineItem[] = missingEvidenceBaselineEntries
-    .flatMap(entry => {
-      const check = entry.link.evidence_baseline_check
-      if (!check?.reason || !['skipped', 'failed'].includes(String(check.status || ''))) return []
-      return [{
-        source_index: entry.index,
-        source_name: sourceLabel(entry.link),
-        status: check.status === 'failed' ? 'failed' as const : 'skipped' as const,
-        reason: check.reason,
-        checked_at: check.checked_at,
-      }]
-    })
+  const persistedEvidenceBaselineIssues: ResearchNoteEvidenceBaselineItem[] = researchNoteEvidenceReviewIssues(
+    draftSourceState,
+  ).map(issue => ({
+    source_index: issue.sourceIndex,
+    source_name: sourceLabel(issue.link),
+    status: issue.status,
+    reason: issue.reason,
+    checked_at: issue.checkedAt,
+  }))
   const evidenceBaselineIssues = baselineResultIsCurrent
     ? (evidenceBaselineRun.items || []).filter(item => (
       missingEvidenceBaselineIndices.has(item.source_index)
@@ -1456,18 +1500,40 @@ export default function ResearchNotesPage() {
               ]}
             />
           </div>
+          <Segmented
+            block
+            size="small"
+            className="kb-notes-evidence-filter"
+            data-testid="research-notes-evidence-filter"
+            aria-label={S.research_notes_filter_evidence_review}
+            value={directoryEvidenceFilter}
+            options={[
+              { value: 'all', label: S.research_notes_evidence_filter_all },
+              {
+                value: 'issues',
+                label: S.research_notes_evidence_filter_issues.replace('{n}', String(evidenceReviewNoteCount)),
+              },
+            ]}
+            onChange={value => setDirectoryEvidenceFilter(value as DirectoryEvidenceFilter)}
+          />
           <div className="kb-notes-directory-list kb-main-scroll">
             {loading ? (
               <div className="kb-notes-centered"><Spin size="small" /> {S.research_notes_loading_workspace}</div>
             ) : filteredNotes.length <= 0 ? (
-              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={S.research_notes_empty_workspace} />
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={directoryEvidenceFilter === 'issues'
+                  ? S.research_notes_evidence_filter_empty
+                  : S.research_notes_empty_workspace}
+              />
             ) : filteredNotes.map(note => {
               const selected = selectedIds.has(note.id)
               const sourceCount = noteLinks(note).length
+              const reviewSummary = noteEvidenceReviewSummaries.get(note.id)
               return (
                 <article
                   key={note.id}
-                  className={`kb-notes-directory-card ${activeId === note.id ? 'is-active' : ''}`}
+                  className={`kb-notes-directory-card ${activeId === note.id ? 'is-active' : ''}${reviewSummary?.total ? ' has-evidence-review' : ''}${reviewSummary?.failed ? ' has-evidence-failure' : ''}`}
                   data-testid={`workspace-note-${note.id}`}
                   onClick={() => { void openNote(note.id) }}
                 >
@@ -1493,6 +1559,23 @@ export default function ResearchNotesPage() {
                     <div className="kb-notes-card-tags">
                       {(note.tags || []).slice(0, 3).map(tag => <Tag key={tag}>{tag}</Tag>)}
                     </div>
+                    {reviewSummary?.total ? (
+                      <div
+                        className="kb-notes-card-evidence-review"
+                        data-testid={`workspace-note-evidence-review-${note.id}`}
+                      >
+                        {reviewSummary.needsReview > 0 ? (
+                          <Tag color="gold" data-testid={`workspace-note-evidence-review-count-${note.id}`}>
+                            {S.research_notes_evidence_card_review.replace('{n}', String(reviewSummary.needsReview))}
+                          </Tag>
+                        ) : null}
+                        {reviewSummary.failed > 0 ? (
+                          <Tag color="red" data-testid={`workspace-note-evidence-failed-count-${note.id}`}>
+                            {S.research_notes_evidence_card_failed.replace('{n}', String(reviewSummary.failed))}
+                          </Tag>
+                        ) : null}
+                      </div>
+                    ) : null}
                     <div className="kb-notes-card-foot">
                       <span><LinkOutlined /> {sourceCount}</span>
                       <time>{formatUpdated(note.updated_at)}</time>

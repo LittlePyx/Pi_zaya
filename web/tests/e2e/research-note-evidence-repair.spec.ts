@@ -1,6 +1,10 @@
 import { expect, test, type Route } from '@playwright/test'
 import type { ResearchNoteRecord } from '../../src/api/chat'
 import {
+  researchNoteEvidenceReviewIssues,
+  researchNoteEvidenceReviewSummary,
+} from '../../src/pages/researchNoteEvidenceReview'
+import {
   READER_REGRESSION_SOURCE_NAME,
   READER_REGRESSION_SOURCE_PATH,
   buildReaderRegressionDocResponse,
@@ -14,6 +18,47 @@ import {
 async function fulfillJson(route: Route, body: unknown, status = 200) {
   await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) })
 }
+
+test('research note evidence review summary counts only unresolved saved checks', () => {
+  const sourceState = {
+    links: [
+      {
+        kind: 'source',
+        source_name: 'Needs review',
+        evidence_baseline_check: { status: 'skipped', reason: 'candidate', checked_at: 10 },
+      },
+      {
+        kind: 'source',
+        source_name: 'Check failed',
+        evidence_baseline_check: { status: 'failed', reason: 'verification_failed', checked_at: 20 },
+      },
+      {
+        kind: 'source',
+        source_name: 'Already resolved',
+        evidence_context_snapshot: { source_fingerprint: 'sha256:current' },
+        evidence_baseline_check: { status: 'skipped', reason: 'candidate' },
+      },
+      {
+        kind: 'source',
+        source_name: 'Explicitly invalid',
+        evidence_verification: { status: 'invalid' },
+        evidence_baseline_check: { status: 'skipped', reason: 'source_changed' },
+      },
+      {
+        kind: 'answer',
+        evidence_baseline_check: { status: 'failed', reason: 'verification_failed' },
+      },
+    ],
+  }
+
+  expect(researchNoteEvidenceReviewIssues(sourceState).map(issue => issue.sourceIndex)).toEqual([0, 1])
+  expect(researchNoteEvidenceReviewSummary(sourceState)).toEqual({
+    needsReview: 1,
+    failed: 1,
+    total: 2,
+    firstSourceIndex: 0,
+  })
+})
 
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
   let repairCalls = 0
@@ -694,15 +739,72 @@ test('legacy note creates only safe current evidence baselines and reports skipp
     created_at: 1_800_000_000,
     updated_at: 1_800_000_000,
   }
+  const failedNote: ResearchNoteRecord = {
+    ...note,
+    id: 'note-failed-check',
+    title: 'Evidence check failed',
+    content_markdown: 'A separate saved note.',
+    source_state: {
+      version: 1,
+      links: [{
+        kind: 'source',
+        source_name: 'Temporarily unavailable paper',
+        source_path: 'db/paper/unavailable.md',
+        evidence_baseline_check: {
+          version: 1,
+          checked_at: 1_800_000_050,
+          status: 'failed',
+          reason: 'verification_failed',
+        },
+      }],
+    },
+    updated_at: 1_799_999_990,
+  }
+  const cleanNote: ResearchNoteRecord = {
+    ...note,
+    id: 'note-clean-check',
+    title: 'Evidence already checked',
+    content_markdown: 'A checked saved note.',
+    source_state: {
+      version: 1,
+      links: [{
+        kind: 'source',
+        source_name: 'Checked paper',
+        source_path: 'db/paper/checked.md',
+        evidence_context_snapshot: {
+          version: 1,
+          captured_at: 1_800_000_000,
+          source_fingerprint: 'sha256:checked',
+          reason: 'exact_block',
+          before: [],
+          target: { block_id: 'checked', text: 'Checked evidence.' },
+          after: [],
+        },
+      }],
+    },
+    updated_at: 1_799_999_980,
+  }
   await page.route('**/api/chat/research-notes**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
     if (request.method() === 'GET' && url.pathname === '/api/chat/research-notes') {
-      await fulfillJson(route, [{ ...note, content_markdown: '' }])
+      await fulfillJson(route, [
+        { ...note, content_markdown: '' },
+        { ...failedNote, content_markdown: '' },
+        { ...cleanNote, content_markdown: '' },
+      ])
       return
     }
     if (request.method() === 'GET' && url.pathname === `/api/chat/research-notes/${note.id}`) {
       await fulfillJson(route, note)
+      return
+    }
+    if (request.method() === 'GET' && url.pathname === `/api/chat/research-notes/${failedNote.id}`) {
+      await fulfillJson(route, failedNote)
+      return
+    }
+    if (request.method() === 'GET' && url.pathname === `/api/chat/research-notes/${cleanNote.id}`) {
+      await fulfillJson(route, cleanNote)
       return
     }
     await fulfillJson(route, { detail: 'unexpected research note request' }, 404)
@@ -827,6 +929,9 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   })
 
   await page.goto('/notes?note=note-baseline')
+  await expect(page.getByTestId('workspace-note-evidence-failed-count-note-failed-check')).toHaveText('核验失败 1')
+  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('只看待核验（1）')
+  await expect(page.getByTestId('workspace-note-evidence-review-note-baseline')).toHaveCount(0)
   const baseline = page.getByTestId('research-note-evidence-baseline')
   const baselineBox = await baseline.boundingBox()
   expect(baselineBox).not.toBeNull()
@@ -848,6 +953,18 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   await expect(issue).toContainText('来源版本已变化')
   await expect(page.getByTestId('research-note-evidence-baseline-create')).toHaveCount(0)
   await expect(editor).toHaveValue('A note body edited while baselines are checked.')
+  await expect(page.getByTestId('workspace-note-evidence-review-count-note-baseline')).toHaveText('待核验 1')
+  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('只看待核验（2）')
+  await page.getByTestId('research-notes-evidence-filter').getByText('只看待核验（2）', { exact: true }).click()
+  await expect(page.getByTestId('workspace-note-note-baseline')).toBeVisible()
+  await expect(page.getByTestId('workspace-note-note-failed-check')).toBeVisible()
+  await expect(page.getByTestId('workspace-note-note-clean-check')).toHaveCount(0)
+  await page.getByTestId('research-notes-evidence-filter').getByText('全部核验状态', { exact: true }).click()
+  await page.getByTestId('workspace-note-note-clean-check').click()
+  await expect(page.locator('.kb-notes-title-input')).toHaveValue('Evidence already checked')
+  await page.getByTestId('workspace-note-note-baseline').click()
+  await expect(page.locator('.kb-notes-title-input')).toHaveValue('Legacy evidence baseline')
+  await expect(page.getByTestId('research-note-source-1')).toBeFocused()
   expect(baselineBody).toEqual({ expected_revision: 1 })
   expect(note.content_markdown).toBe('A note body that must not be rewritten.')
   expect(note.source_state.links?.[0]?.block_id).toBe('quote-1')
@@ -864,6 +981,8 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   await expect(issue).toContainText('来源版本已变化')
   await expect(issue).toContainText('最近核验')
   await expect(page.getByTestId('research-note-evidence-baseline-create')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-source-1')).toHaveClass(/is-baseline-focus/)
+  await expect(page.getByTestId('research-note-source-1')).toBeFocused()
 
   await issue.getByRole('button', { name: '定位并核查' }).click()
   await expect.poll(() => evidenceContextBodies.length).toBe(1)
@@ -877,4 +996,25 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   await expect(page.getByTestId('research-note-source-1')).toBeFocused()
   await expect(page.getByTestId('research-note-source-1')).toContainText('原文转换结果已变化')
   await expect(editor).toHaveValue('A note body that must not be rewritten.')
+
+  const resolvedLinks = [...(note.source_state.links || [])]
+  const resolvedLink = { ...(resolvedLinks[1] || {}) }
+  delete resolvedLink.evidence_baseline_check
+  resolvedLink.evidence_verification = {
+    status: 'invalid',
+    reason: 'marked_invalid',
+    verified_at: 1_800_000_200,
+    source_fingerprint: 'sha256:new-source',
+  }
+  resolvedLinks[1] = resolvedLink
+  note = {
+    ...note,
+    source_state: { ...note.source_state, links: resolvedLinks },
+    revision: note.revision + 1,
+    updated_at: 1_800_000_200,
+  }
+  await page.goto('/notes?note=note-baseline&evidence_reviewed=invalid')
+  await expect(page.getByTestId('workspace-note-evidence-review-note-baseline')).toHaveCount(0)
+  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('只看待核验（1）')
+  await expect(page.locator('.kb-notes-editor-body textarea')).toHaveValue('A note body that must not be rewritten.')
 })

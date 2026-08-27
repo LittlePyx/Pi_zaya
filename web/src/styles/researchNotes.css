@@ -76,6 +76,15 @@
 
 .kb-notes-filters .ant-select { min-width: 0; }
 
+.kb-notes-evidence-filter {
+  width: 100%;
+}
+
+.kb-notes-evidence-filter .ant-segmented-item-label {
+  padding-inline: 6px;
+  font-size: 10px;
+}
+
 .kb-notes-directory-list,
 .kb-notes-sources-list {
   flex: 1;
@@ -110,6 +119,14 @@
   border-color: color-mix(in srgb, var(--primary) 68%, var(--border));
   background: color-mix(in srgb, var(--primary) 7%, var(--panel));
   box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.kb-notes-directory-card.has-evidence-review:not(.is-active) {
+  border-color: color-mix(in srgb, #d89614 32%, var(--notes-border));
+}
+
+.kb-notes-directory-card.has-evidence-failure:not(.is-active) {
+  border-color: color-mix(in srgb, #cf1322 38%, var(--notes-border));
 }
 
 .kb-notes-card-title {
@@ -156,6 +173,19 @@
   font-size: 10px;
   line-height: 18px;
   text-overflow: ellipsis;
+}
+
+.kb-notes-card-evidence-review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.kb-notes-card-evidence-review .ant-tag {
+  margin-inline-end: 0;
+  font-size: 9px;
+  line-height: 17px;
 }
 
 .kb-notes-card-foot {
