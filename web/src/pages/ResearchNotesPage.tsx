@@ -2392,7 +2392,7 @@ export default function ResearchNotesPage() {
           ? S.research_notes_outline_refresh_title.replace('{title}', outlineReview.latest.title)
           : S.research_notes_outline_refresh_title.replace('{title}', '')}
         onCancel={() => setOutlineReview(null)}
-        maskClosable={!saving}
+        mask={{ closable: !saving }}
         footer={[
           <Button key="cancel" onClick={() => setOutlineReview(null)}>{S.confirm_cancel}</Button>,
           <Button
@@ -2441,7 +2441,7 @@ export default function ResearchNotesPage() {
         width={920}
         title={S.research_notes_combine_title}
         closable={!combineSaving}
-        maskClosable={!combineSaving}
+        mask={{ closable: !combineSaving }}
         onCancel={() => { if (!combineSaving) setCombineOpen(false) }}
         footer={[
           <Button key="copy" icon={<CopyOutlined />} onClick={() => {

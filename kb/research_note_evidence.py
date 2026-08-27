@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from kb.path_safety import clean_file_source_path_input
 from kb.source_blocks import (
     SourceBlock,
     load_source_blocks,
@@ -22,6 +23,7 @@ _REVIEW_HISTORY_LIMIT = 12
 _CONTEXT_HISTORY_LIMIT = 12
 _AUTO_RESOLUTION_HISTORY_LIMIT = 12
 _BASELINE_CHECK_HISTORY_LIMIT = 12
+_SOURCE_PATH_MIGRATION_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
 RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 1
@@ -88,6 +90,103 @@ def research_note_source_state_matches_paths(
         and (scan_all or research_note_source_path_matches(link.get("source_path"), source_paths))
         for link in links
     )
+
+
+def _source_migration_identity(value: Any) -> str:
+    cleaned = clean_file_source_path_input(value)
+    return research_note_source_identity(cleaned).rstrip("/")
+
+
+def _source_path_leaf(value: Any) -> str:
+    return clean_file_source_path_input(value).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
+
+
+def migrate_research_note_source_state_paths(
+    source_state: Any,
+    *,
+    exact_path_migrations: dict[str, str] | None = None,
+    prefix_path_migrations: list[tuple[str, str]] | tuple[tuple[str, str], ...] | None = None,
+    reason: str = "library_source_renamed",
+    migrated_at: float | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Rewrite exact library source identities while retaining a bounded audit.
+
+    Prefix migrations are intentionally explicit. Basename guessing is unsafe
+    here because two library roots may contain files with the same leaf name.
+    """
+    next_state = deepcopy(source_state) if isinstance(source_state, dict) else {}
+    links = next_state.get("links")
+    if not isinstance(links, list):
+        return next_state, 0
+
+    exact: dict[str, str] = {}
+    for old_path, new_path in dict(exact_path_migrations or {}).items():
+        old_identity = _source_migration_identity(old_path)
+        new_clean = _clean_text(clean_file_source_path_input(new_path), limit=1_200)
+        if old_identity and new_clean and old_identity != _source_migration_identity(new_clean):
+            exact[old_identity] = new_clean
+
+    prefixes: list[tuple[str, str, int]] = []
+    for row in prefix_path_migrations or ():
+        if not isinstance(row, (list, tuple)) or len(row) != 2:
+            continue
+        old_identity = _source_migration_identity(row[0])
+        new_clean = _clean_text(clean_file_source_path_input(row[1]), limit=1_200).rstrip("/\\")
+        if old_identity and new_clean and old_identity != _source_migration_identity(new_clean):
+            prefixes.append((old_identity, new_clean, len(old_identity.split("/"))))
+    prefixes.sort(key=lambda item: len(item[0]), reverse=True)
+
+    if not exact and not prefixes:
+        return next_state, 0
+    timestamp = float(migrated_at if migrated_at is not None else time.time())
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        timestamp = time.time()
+    migration_reason = _clean_text(reason, limit=80) or "library_source_renamed"
+    migrated = 0
+
+    for link in links:
+        if not isinstance(link, dict) or str(link.get("kind") or "").strip() == "answer":
+            continue
+        old_path = _clean_text(link.get("source_path"), limit=1_200)
+        old_identity = _source_migration_identity(old_path)
+        if not old_identity:
+            continue
+        new_path = exact.get(old_identity, "")
+        if not new_path:
+            for old_prefix, new_prefix, old_part_count in prefixes:
+                if old_identity == old_prefix:
+                    new_path = new_prefix
+                    break
+                marker = f"{old_prefix}/"
+                if old_identity.startswith(marker):
+                    cleaned_old = clean_file_source_path_input(old_path).replace("\\", "/")
+                    suffix = "/".join(cleaned_old.split("/")[old_part_count:]).lstrip("/")
+                    new_path = f"{new_prefix}/{suffix}" if suffix else new_prefix
+                    break
+        new_path = _clean_text(new_path, limit=1_200)
+        if not new_path or _source_migration_identity(new_path) == old_identity:
+            continue
+
+        raw_history = link.get("source_path_migration_history")
+        history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
+        history.append(
+            {
+                "version": 1,
+                "migrated_at": timestamp,
+                "reason": migration_reason,
+                "from": old_path,
+                "to": new_path,
+            }
+        )
+        link["source_path_migration_history"] = history[-_SOURCE_PATH_MIGRATION_HISTORY_LIMIT:]
+        link["source_path"] = new_path
+        old_leaf = _source_path_leaf(old_path)
+        source_name = _clean_text(link.get("source_name"), limit=500)
+        if source_name and source_name.casefold() == old_leaf.casefold():
+            link["source_name"] = _source_path_leaf(new_path)
+        migrated += 1
+
+    return next_state, migrated
 
 
 def _source_identity(value: Any) -> str:

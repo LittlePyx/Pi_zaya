@@ -4492,6 +4492,123 @@ def test_auto_rename_saved_pdf_purges_old_markdown_index(monkeypatch, tmp_path: 
     assert fake_store.upserts[-1][1] == new_pdf.name
 
 
+def test_auto_rename_saved_pdf_migrates_note_sources_and_revalidates_new_paths(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    old_pdf = pdf_dir / "old.pdf"
+    old_pdf.write_bytes(b"%PDF-1.4 test")
+    old_md = md_dir / "old" / "old.en.md"
+    old_md.parent.mkdir(parents=True, exist_ok=True)
+    old_md.write_text("# Evidence\n", encoding="utf-8")
+
+    class FakeStore:
+        def upsert(self, *args, **kwargs):
+            return None
+
+    migration_calls: list[dict] = []
+    recovery_calls: list[dict] = []
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_migration",
+        lambda **kwargs: migration_calls.append(kwargs) or {
+            "ok": True,
+            "handled": True,
+            "notes_updated": 1,
+            "links_updated": 2,
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "enqueue_research_note_source_recovery",
+        lambda paths, reason: recovery_calls.append({"paths": list(paths), "reason": reason}) or True,
+    )
+    monkeypatch.setattr(library_router, "_bg_update_recoverable_pdf_path", lambda *_args: None)
+
+    result = library_router.auto_rename_saved_pdf_in_library(
+        pdf_path=old_pdf,
+        use_llm=False,
+        also_md=True,
+    )
+
+    new_pdf = pdf_dir / "Nature-2024-New Paper.pdf"
+    new_md = md_dir / "Nature-2024-New Paper" / "Nature-2024-New Paper.en.md"
+    assert result["ok"] is True
+    assert result["note_source_sync"]["notes_updated"] == 1
+    assert len(migration_calls) == 1
+    exact = migration_calls[0]["exact_path_migrations"]
+    prefixes = migration_calls[0]["prefix_path_migrations"]
+    assert exact[str(old_pdf).replace("\\", "/")] == str(new_pdf).replace("\\", "/")
+    assert exact[str(old_md).replace("\\", "/")] == str(new_md).replace("\\", "/")
+    assert any(old == "old" and new == "Nature-2024-New Paper" for old, new in prefixes)
+    assert recovery_calls == [{
+        "paths": [str(new_pdf).replace("\\", "/"), str(new_md).replace("\\", "/")],
+        "reason": "library_source_renamed",
+    }]
+
+
+def test_auto_rename_saved_pdf_rolls_back_when_note_source_migration_fails(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    old_pdf = pdf_dir / "old.pdf"
+    old_pdf.write_bytes(b"%PDF-1.4 test")
+    old_md = md_dir / "old" / "old.en.md"
+    old_md.parent.mkdir(parents=True, exist_ok=True)
+    old_md.write_text("# Evidence\n", encoding="utf-8")
+
+    class FakeStore:
+        def upsert(self, *args, **kwargs):
+            raise AssertionError("library metadata must not change after migration rollback")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_migration",
+        lambda **kwargs: {"ok": False, "handled": True, "error": "chat database unavailable"},
+    )
+
+    result = library_router.auto_rename_saved_pdf_in_library(
+        pdf_path=old_pdf,
+        use_llm=False,
+        also_md=True,
+    )
+
+    assert result["ok"] is False
+    assert result["renamed"] is False
+    assert result["rollback"]["pdf"] is True
+    assert old_pdf.exists()
+    assert old_md.exists()
+    assert not (pdf_dir / "Nature-2024-New Paper.pdf").exists()
+
+
 def test_auto_rename_saved_pdf_avoids_existing_markdown_target_folder(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

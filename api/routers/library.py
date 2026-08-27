@@ -93,9 +93,11 @@ from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf
 from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
 from kb.reference_sync import start_reference_sync
 from kb.research_note_maintenance import (
+    dispatch_research_note_source_migration,
     enqueue_research_note_source_recovery,
     enqueue_research_note_source_recovery_scan,
 )
+from kb.path_safety import reference_source_roots, root_relative_file_id
 from kb.store import (
     atomic_write_json,
     compute_doc_id,
@@ -5510,6 +5512,85 @@ def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: P
         return {"ok": False, "msg": str(exc)}
 
 
+def _research_note_source_migrations_for_library_rename(
+    *,
+    src_pdf: Path,
+    dest_pdf: Path,
+    md_root: Path,
+    old_md_main: Path,
+    old_md_exists: bool,
+    also_md: bool,
+    db_dir: Path | str | None,
+) -> tuple[dict[str, str], list[tuple[str, str]], list[str]]:
+    """Build collision-safe aliases for persisted note source paths."""
+    exact: dict[str, str] = {}
+    prefixes: list[tuple[str, str]] = []
+
+    def portable(value: Path | str) -> str:
+        raw = str(value or "").replace("\x00", "").strip()
+        if not raw:
+            return ""
+        try:
+            candidate = Path(raw).expanduser()
+            text = str(candidate.resolve(strict=False)) if candidate.is_absolute() else str(candidate)
+        except Exception:
+            text = raw
+        return text.replace("\\", "/").strip().rstrip("/")
+
+    def add_exact(old_value: Path | str, new_value: Path | str) -> None:
+        old_text = portable(old_value)
+        new_text = portable(new_value)
+        if old_text and new_text and old_text.casefold() != new_text.casefold():
+            exact[old_text] = new_text
+
+    def add_prefix(old_value: Path | str, new_value: Path | str) -> None:
+        old_text = portable(old_value)
+        new_text = portable(new_value)
+        if old_text and new_text and old_text.casefold() != new_text.casefold():
+            prefixes.append((old_text, new_text))
+
+    add_exact(src_pdf, dest_pdf)
+    add_exact(src_pdf.name, dest_pdf.name)
+    recovery_paths = [portable(dest_pdf)]
+    if not (bool(also_md) and bool(old_md_exists)):
+        return exact, prefixes, recovery_paths
+
+    old_folder = Path(md_root) / src_pdf.stem
+    new_folder, new_md_main, new_md_exists = _resolve_library_md_output_paths(md_root, dest_pdf)
+    if not new_md_exists:
+        return exact, prefixes, recovery_paths
+
+    add_exact(old_md_main, new_md_main)
+    if old_md_main.name.casefold() == f"{src_pdf.stem}.en.md".casefold():
+        add_exact(old_md_main.name, new_md_main.name)
+    add_prefix(old_folder, new_folder)
+    add_prefix(old_folder.name, new_folder.name)
+
+    project_root = Path(__file__).resolve().parents[2]
+    for base in (project_root, Path(md_root).parent):
+        try:
+            add_exact(old_md_main.relative_to(base), new_md_main.relative_to(base))
+        except Exception:
+            pass
+        try:
+            add_prefix(old_folder.relative_to(base), new_folder.relative_to(base))
+        except Exception:
+            pass
+
+    roots = reference_source_roots(md_root=md_root, db_dir=db_dir)
+    old_public_main = root_relative_file_id(old_md_main, roots)
+    new_public_main = root_relative_file_id(new_md_main, roots)
+    if old_public_main and new_public_main:
+        add_exact(old_public_main, new_public_main)
+    old_public_folder = root_relative_file_id(old_folder, roots)
+    new_public_folder = root_relative_file_id(new_folder, roots)
+    if old_public_folder and new_public_folder:
+        add_prefix(old_public_folder, new_public_folder)
+
+    recovery_paths.append(portable(new_md_main))
+    return exact, prefixes, recovery_paths
+
+
 def _build_rename_suggestion_item(*, pdf_path: Path, pdf_dir: Path, md_dir: Path, use_llm: bool) -> dict:
     try:
         st = pdf_path.stat()
@@ -5783,6 +5864,50 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
                 "rollback": {"pdf": bool(rollback_pdf), "md": rollback_md},
             }
 
+    note_source_sync = {
+        "ok": True,
+        "handled": False,
+        "notes_updated": 0,
+        "links_updated": 0,
+    }
+    recovery_paths: list[str] = [str(dest_pdf)]
+    if renamed:
+        exact_migrations, prefix_migrations, recovery_paths = _research_note_source_migrations_for_library_rename(
+            src_pdf=src_pdf,
+            dest_pdf=dest_pdf,
+            md_root=md_d,
+            old_md_main=old_md_main,
+            old_md_exists=bool(old_md_exists),
+            also_md=bool(also_md),
+            db_dir=getattr(settings, "db_dir", None),
+        )
+        note_source_sync = dispatch_research_note_source_migration(
+            exact_path_migrations=exact_migrations,
+            prefix_path_migrations=prefix_migrations,
+            reason="library_source_renamed",
+        )
+        if bool(note_source_sync.get("handled")) and not bool(note_source_sync.get("ok")):
+            rollback_pdf = _safe_move_path(dest_pdf, src_pdf)
+            rollback_md = {"ok": True, "msg": "skipped"}
+            if bool(also_md) and bool(old_md_exists):
+                rollback_md = _sync_md_after_pdf_rename_basic(
+                    md_root=md_d,
+                    src_pdf=dest_pdf,
+                    dest_pdf=src_pdf,
+                )
+            return {
+                "ok": False,
+                "error": str(note_source_sync.get("error") or "research note source synchronization failed"),
+                "path": str(src_pdf if rollback_pdf else dest_pdf),
+                "name": (src_pdf if rollback_pdf else dest_pdf).name,
+                "sha1": sha1,
+                "citation_meta": citation_meta,
+                "renamed": False,
+                "md_sync": md_sync,
+                "note_source_sync": note_source_sync,
+                "rollback": {"pdf": bool(rollback_pdf), "md": rollback_md},
+            }
+
     index_cleanup = {
         "docs_removed": 0,
         "chunks_removed": 0,
@@ -5812,6 +5937,13 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
             _bg_update_recoverable_pdf_path(src_pdf, dest_pdf)
         except Exception:
             pass
+        try:
+            enqueue_research_note_source_recovery(
+                recovery_paths,
+                reason="library_source_renamed",
+            )
+        except Exception:
+            pass
 
     return {
         "ok": True,
@@ -5821,6 +5953,7 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
         "citation_meta": citation_meta,
         "renamed": bool(renamed),
         "md_sync": md_sync,
+        "note_source_sync": note_source_sync,
         "index_cleanup": index_cleanup,
     }
 

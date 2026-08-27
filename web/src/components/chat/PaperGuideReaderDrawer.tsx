@@ -170,6 +170,12 @@ export function PaperGuideReaderDrawer({
     open,
     sourcePath,
   })
+  const setSystemActiveAltIndex = useCallback((idx: number) => {
+    setActiveAltIndex(idx, 'system')
+  }, [setActiveAltIndex])
+  const setManualActiveAltIndex = useCallback((idx: number) => {
+    setActiveAltIndex(idx, 'manual')
+  }, [setActiveAltIndex])
   const {
     loading,
     error,
@@ -251,7 +257,7 @@ export function PaperGuideReaderDrawer({
     alternatives,
     relatedBlockIds,
     activeAltIndex,
-    setActiveAltIndex: (idx) => setActiveAltIndex(idx, 'system'),
+    setActiveAltIndex: setSystemActiveAltIndex,
     activeHeadingPath,
     activeFocusSnippet,
     activeHighlightSnippet,
@@ -588,7 +594,7 @@ export function PaperGuideReaderDrawer({
     outlineOpen,
     readerBlocks,
     sessionHighlights,
-    setActiveAltIndex: (idx) => setActiveAltIndex(idx, 'manual'),
+    setActiveAltIndex: setManualActiveAltIndex,
     sourcePath,
     title,
     S,

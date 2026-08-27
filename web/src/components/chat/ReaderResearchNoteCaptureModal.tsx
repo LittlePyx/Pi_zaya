@@ -267,7 +267,7 @@ export function ReaderResearchNoteCaptureModal({
       cancelText={S.confirm_cancel}
       okButtonProps={{ disabled: !capture || loading, loading: saving, 'data-testid': 'reader-note-save' }}
       cancelButtonProps={{ disabled: saving }}
-      maskClosable={!saving}
+      mask={{ closable: !saving }}
       keyboard={!saving}
       onOk={() => { void save() }}
       onCancel={onClose}

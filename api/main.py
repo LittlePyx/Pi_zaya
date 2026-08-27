@@ -19,7 +19,9 @@ from api.security import auth_settings, auth_token_configured, is_public_api_pat
 from kb.config import load_settings
 from kb.research_note_maintenance import (
     register_research_note_recovery_handler,
+    register_research_note_source_migration_handler,
     unregister_research_note_recovery_handler,
+    unregister_research_note_source_migration_handler,
 )
 from kb.retriever_cache import warm_retriever_async
 from kb.task_runtime import _bg_reconcile_persisted_jobs
@@ -29,7 +31,9 @@ from kb.user_issue_store import start_remote_outbox_worker
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     recovery_handler = chat.maintain_research_note_evidence_for_recovered_sources
+    source_migration_handler = chat.migrate_research_note_sources_after_library_rename
     register_research_note_recovery_handler(recovery_handler)
+    register_research_note_source_migration_handler(source_migration_handler)
     try:
         _bg_reconcile_persisted_jobs()
     except Exception:
@@ -45,6 +49,7 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        unregister_research_note_source_migration_handler(source_migration_handler)
         unregister_research_note_recovery_handler(recovery_handler)
 
 

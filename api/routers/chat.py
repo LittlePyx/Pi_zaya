@@ -1902,6 +1902,20 @@ def maintain_research_note_evidence_for_recovered_sources(
     return summary
 
 
+def migrate_research_note_sources_after_library_rename(
+    *,
+    exact_path_migrations: dict[str, str],
+    prefix_path_migrations: list[tuple[str, str]],
+    reason: str,
+) -> dict[str, Any]:
+    """Atomically move note evidence links with a renamed library source."""
+    return get_chat_store().migrate_research_note_source_paths(
+        exact_path_migrations=exact_path_migrations,
+        prefix_path_migrations=prefix_path_migrations,
+        reason=reason,
+    )
+
+
 @router.post("/chat/research-notes/evidence-maintenance")
 def maintain_chat_research_note_evidence(body: ResearchNoteEvidenceMaintenanceBody):
     """Run bounded system-owned evidence maintenance for note list summaries."""

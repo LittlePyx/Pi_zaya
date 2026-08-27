@@ -7,6 +7,7 @@ from kb.research_note_evidence import (
     auto_resolve_research_note_source_state,
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
+    migrate_research_note_source_state_paths,
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
     research_note_evidence_maintenance_due,
@@ -15,6 +16,61 @@ from kb.research_note_evidence import (
     source_content_fingerprint,
 )
 from kb.source_blocks import load_source_blocks
+
+
+def test_source_path_migration_is_exact_audited_and_idempotent() -> None:
+    state = {
+        "links": [
+            {
+                "kind": "source",
+                "source_path": "file:///F:/Library/Old%20Paper.pdf?download=1#selection",
+                "source_name": "Old Paper.pdf",
+                "evidence_quote": "Keep the saved evidence unchanged.",
+            },
+            {
+                "kind": "source",
+                "source_path": "kb-source/0/Old Paper/assets/table.md",
+                "source_name": "A stable paper title",
+            },
+            {"kind": "source", "source_path": "F:/Library/Other.pdf"},
+            {"kind": "answer", "source_path": "F:/Library/Old Paper.pdf"},
+        ]
+    }
+
+    migrated, count = migrate_research_note_source_state_paths(
+        state,
+        exact_path_migrations={"F:/Library/Old Paper.pdf": "F:/Library/New Paper.pdf"},
+        prefix_path_migrations=[
+            ("kb-source/0/Old Paper", "kb-source/0/New Paper"),
+        ],
+        migrated_at=1_800_000_000,
+    )
+
+    assert count == 2
+    assert state["links"][0]["source_path"].startswith("file:///")
+    assert migrated["links"][0]["source_path"] == "F:/Library/New Paper.pdf"
+    assert migrated["links"][0]["source_name"] == "New Paper.pdf"
+    assert migrated["links"][0]["evidence_quote"] == "Keep the saved evidence unchanged."
+    assert migrated["links"][0]["source_path_migration_history"][-1] == {
+        "version": 1,
+        "migrated_at": 1_800_000_000,
+        "reason": "library_source_renamed",
+        "from": "file:///F:/Library/Old%20Paper.pdf?download=1#selection",
+        "to": "F:/Library/New Paper.pdf",
+    }
+    assert migrated["links"][1]["source_path"] == "kb-source/0/New Paper/assets/table.md"
+    assert migrated["links"][1]["source_name"] == "A stable paper title"
+    assert migrated["links"][2]["source_path"] == "F:/Library/Other.pdf"
+    assert migrated["links"][3]["source_path"] == "F:/Library/Old Paper.pdf"
+
+    repeated, repeated_count = migrate_research_note_source_state_paths(
+        migrated,
+        exact_path_migrations={"F:/Library/Old Paper.pdf": "F:/Library/New Paper.pdf"},
+        prefix_path_migrations=[("kb-source/0/Old Paper", "kb-source/0/New Paper")],
+        migrated_at=1_800_000_001,
+    )
+    assert repeated_count == 0
+    assert repeated == migrated
 
 
 def _write_source(tmp_path: Path, body: str) -> Path:

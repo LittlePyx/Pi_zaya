@@ -9,7 +9,10 @@ import re
 from pathlib import Path
 
 from kb.path_safety import clean_file_source_path_input
-from kb.research_note_evidence import research_note_source_state_matches_paths
+from kb.research_note_evidence import (
+    migrate_research_note_source_state_paths,
+    research_note_source_state_matches_paths,
+)
 
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
 MAX_CITATION_SHELF_ITEMS = 120
@@ -1815,6 +1818,59 @@ class ChatStore:
             current["source_state_json"] = source_state_json
             current["revision"] = next_revision
         return _research_note_record(current), False
+
+    def migrate_research_note_source_paths(
+        self,
+        *,
+        exact_path_migrations: dict[str, str] | None = None,
+        prefix_path_migrations: list[tuple[str, str]] | tuple[tuple[str, str], ...] | None = None,
+        reason: str = "library_source_renamed",
+        migrated_at: float | None = None,
+    ) -> dict:
+        """Atomically migrate library paths in all research-note evidence links.
+
+        This is system maintenance: revisions advance for conflict safety while
+        user-authored content and ``updated_at`` remain untouched.
+        """
+        timestamp = float(migrated_at if migrated_at is not None else time.time())
+        updates: list[tuple[str, int, str, int]] = []
+        migrated_links = 0
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            rows = conn.execute(
+                "SELECT id, source_state_json, revision FROM research_notes ORDER BY created_at ASC"
+            ).fetchall()
+            for row in rows:
+                current = dict(row)
+                source_state = _research_brief_json(current.get("source_state_json") or "{}", default={})
+                next_state, link_count = migrate_research_note_source_state_paths(
+                    source_state,
+                    exact_path_migrations=exact_path_migrations,
+                    prefix_path_migrations=prefix_path_migrations,
+                    reason=reason,
+                    migrated_at=timestamp,
+                )
+                if link_count <= 0:
+                    continue
+                clean_source_state = _sanitize_json_state_dict(next_state)
+                source_state_json = self._research_brief_json_text(clean_source_state, fallback={})
+                if len(source_state_json) > MAX_RESEARCH_NOTE_SOURCE_STATE_LEN:
+                    raise ValueError("research note source migration exceeds source state limit")
+                current_revision = max(1, int(current.get("revision") or 1))
+                updates.append((source_state_json, current_revision + 1, str(current.get("id") or ""), link_count))
+                migrated_links += link_count
+            for source_state_json, next_revision, note_id, _link_count in updates:
+                conn.execute(
+                    "UPDATE research_notes SET source_state_json = ?, revision = ? WHERE id = ?",
+                    (source_state_json, next_revision, note_id),
+                )
+        return {
+            "ok": True,
+            "notes_scanned": len(rows),
+            "notes_updated": len(updates),
+            "links_updated": migrated_links,
+            "note_ids": [note_id for _json, _revision, note_id, _count in updates],
+        }
 
     def delete_research_note(self, note_id: str) -> bool:
         nid = str(note_id or "").strip()

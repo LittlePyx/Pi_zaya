@@ -153,6 +153,50 @@ def test_research_notes_can_be_selected_for_recovered_source_paths(tmp_path: Pat
     assert {item["id"] for item in scanned} == {paper["id"], other["id"]}
 
 
+def test_research_note_source_path_migration_is_atomic_system_maintenance(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    active = store.create_research_note(
+        title="Active note",
+        content_markdown="User reading note",
+        source_state={"links": [{"kind": "source", "source_path": "F:/library/old.pdf"}]},
+    )
+    archived = store.create_research_note(
+        title="Archived note",
+        content_markdown="Archived reading note",
+        source_state={"links": [{"kind": "source", "source_path": "kb-source/0/old/old.en.md"}]},
+        archived=True,
+    )
+    answer = store.create_research_note(
+        title="Answer link",
+        content_markdown="Answer note",
+        source_state={"links": [{"kind": "answer", "source_path": "F:/library/old.pdf"}]},
+    )
+    assert active is not None and archived is not None and answer is not None
+
+    result = store.migrate_research_note_source_paths(
+        exact_path_migrations={"F:/library/old.pdf": "F:/library/new.pdf"},
+        prefix_path_migrations=[("kb-source/0/old", "kb-source/0/new")],
+        migrated_at=1_800_000_000,
+    )
+
+    assert result["ok"] is True
+    assert result["notes_updated"] == 2
+    assert result["links_updated"] == 2
+    active_after = store.get_research_note(active["id"])
+    archived_after = store.get_research_note(archived["id"])
+    answer_after = store.get_research_note(answer["id"])
+    assert active_after is not None and archived_after is not None and answer_after is not None
+    assert active_after["revision"] == 2
+    assert active_after["updated_at"] == active["updated_at"]
+    assert active_after["content_markdown"] == "User reading note"
+    assert active_after["source_state"]["links"][0]["source_path"] == "F:/library/new.pdf"
+    assert archived_after["revision"] == 2
+    assert archived_after["updated_at"] == archived["updated_at"]
+    assert archived_after["source_state"]["links"][0]["source_path"] == "kb-source/0/new/old.en.md"
+    assert answer_after["revision"] == 1
+    assert answer_after["source_state"]["links"][0]["source_path"] == "F:/library/old.pdf"
+
+
 def test_research_note_delete_is_explicit(tmp_path: Path) -> None:
     store = ChatStore(tmp_path / "chat.sqlite3")
     created = store.create_research_note(title="Delete me", content_markdown="Content")

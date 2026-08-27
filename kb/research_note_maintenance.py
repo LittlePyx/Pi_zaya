@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 logger = logging.getLogger(__name__)
 
 ResearchNoteRecoveryHandler = Callable[..., object]
+ResearchNoteSourceMigrationHandler = Callable[..., object]
 
 _LOCK = threading.Condition(threading.RLock())
 _PENDING_PATHS: OrderedDict[str, str] = OrderedDict()
@@ -16,6 +17,8 @@ _SCAN_ALL = False
 _RUNNING = False
 _HANDLER: ResearchNoteRecoveryHandler | None = None
 _HANDLER_USERS = 0
+_SOURCE_MIGRATION_HANDLER: ResearchNoteSourceMigrationHandler | None = None
+_SOURCE_MIGRATION_HANDLER_USERS = 0
 _WORKER: threading.Thread | None = None
 _PATH_BATCH_LIMIT = 32
 
@@ -62,6 +65,72 @@ def unregister_research_note_recovery_handler(
         _PENDING_REASONS.clear()
         _SCAN_ALL = False
         _LOCK.notify_all()
+
+
+def register_research_note_source_migration_handler(
+    handler: ResearchNoteSourceMigrationHandler,
+) -> None:
+    """Register the synchronous handler used by transactional library renames."""
+    if not callable(handler):
+        raise TypeError("research note source migration handler must be callable")
+    global _SOURCE_MIGRATION_HANDLER, _SOURCE_MIGRATION_HANDLER_USERS
+    with _LOCK:
+        if _SOURCE_MIGRATION_HANDLER is handler:
+            _SOURCE_MIGRATION_HANDLER_USERS += 1
+        else:
+            _SOURCE_MIGRATION_HANDLER = handler
+            _SOURCE_MIGRATION_HANDLER_USERS = 1
+
+
+def unregister_research_note_source_migration_handler(
+    handler: ResearchNoteSourceMigrationHandler | None = None,
+) -> None:
+    global _SOURCE_MIGRATION_HANDLER, _SOURCE_MIGRATION_HANDLER_USERS
+    with _LOCK:
+        if handler is not None and _SOURCE_MIGRATION_HANDLER is not handler:
+            return
+        if handler is not None and _SOURCE_MIGRATION_HANDLER_USERS > 1:
+            _SOURCE_MIGRATION_HANDLER_USERS -= 1
+            return
+        _SOURCE_MIGRATION_HANDLER = None
+        _SOURCE_MIGRATION_HANDLER_USERS = 0
+
+
+def dispatch_research_note_source_migration(
+    *,
+    exact_path_migrations: dict[str, str],
+    prefix_path_migrations: list[tuple[str, str]],
+    reason: str,
+) -> dict:
+    """Synchronously migrate note paths before a library rename is reported done."""
+    with _LOCK:
+        handler = _SOURCE_MIGRATION_HANDLER
+    if handler is None:
+        return {
+            "ok": True,
+            "handled": False,
+            "notes_updated": 0,
+            "links_updated": 0,
+        }
+    try:
+        result = handler(
+            exact_path_migrations=dict(exact_path_migrations or {}),
+            prefix_path_migrations=list(prefix_path_migrations or []),
+            reason=str(reason or "library_source_renamed")[:80],
+        )
+    except Exception as exc:
+        logger.exception("research_note_source_migration_failed", extra={"reason": reason})
+        return {
+            "ok": False,
+            "handled": True,
+            "notes_updated": 0,
+            "links_updated": 0,
+            "error": str(exc)[:240],
+        }
+    payload = dict(result) if isinstance(result, dict) else {}
+    payload.setdefault("ok", True)
+    payload["handled"] = True
+    return payload
 
 
 def enqueue_research_note_source_recovery(
