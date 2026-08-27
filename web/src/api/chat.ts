@@ -93,6 +93,9 @@ export interface ResearchNoteSourceLink {
     reason?: string
     source_fingerprint?: string
     locator?: Record<string, unknown>
+    maintenance_version?: number
+    retry_count?: number
+    retry_after?: number
   }
   evidence_baseline_check_history?: Array<{
     version?: number
@@ -104,6 +107,9 @@ export interface ResearchNoteSourceLink {
     previous_status?: string
     previous_reason?: string
     locator?: Record<string, unknown>
+    maintenance_version?: number
+    retry_count?: number
+    retry_after?: number
   }>
   locator_repair_history?: Array<{
     version?: number
@@ -277,6 +283,26 @@ export interface ResearchNoteEvidenceBaselineResult {
   note: ResearchNoteRecord
   summary: ResearchNoteEvidenceBaselineSummary
   items: ResearchNoteEvidenceBaselineItem[]
+}
+
+export interface ResearchNoteEvidenceMaintenanceResult {
+  notes: ResearchNoteRecord[]
+  summary: {
+    requested: number
+    processed: number
+    updated: number
+    deferred: number
+    conflicted: number
+    not_found: number
+    errors: number
+    resolved_links: number
+    decision_links: number
+    has_more: boolean
+  }
+  items: Array<{
+    note_id: string
+    status: 'processed' | 'not_due' | 'budget_deferred' | 'system_deferred' | 'conflicted' | 'not_found' | string
+  }>
 }
 
 export interface ResearchNoteSourceState {
@@ -1796,6 +1822,11 @@ export const chatApi = {
     api.post<ResearchNoteEvidenceBaselineResult>(
       `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-context-baseline`,
       { expected_revision: expectedRevision },
+    ),
+  maintainResearchNoteEvidence: (notes: Array<{ note_id: string; expected_revision: number }>) =>
+    api.post<ResearchNoteEvidenceMaintenanceResult>(
+      '/api/chat/research-notes/evidence-maintenance',
+      { notes },
     ),
   createResearchNote: (body: ResearchNoteCreateBody) =>
     api.post<ResearchNoteRecord>('/api/chat/research-notes', body),

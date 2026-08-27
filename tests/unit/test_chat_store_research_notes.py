@@ -86,6 +86,42 @@ def test_research_notes_follow_project_scope_and_survive_project_deletion(tmp_pa
     assert {item["id"] for item in store.list_research_notes()} == {project_note["id"], root_note["id"]}
 
 
+def test_research_note_evidence_maintenance_preserves_user_edit_time_and_guards_revision(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    created = store.create_research_note(
+        title="Evidence note",
+        content_markdown="User-authored reading note",
+        source_state={"links": [{"kind": "source", "source_path": "library/paper.pdf"}]},
+    )
+    assert created is not None
+
+    maintained, conflict = store.update_research_note_evidence_state(
+        created["id"],
+        expected_revision=1,
+        source_state={
+            "links": [{
+                "kind": "source",
+                "source_path": "library/paper.pdf",
+                "evidence_context_snapshot": {"source_fingerprint": "sha256:current"},
+            }]
+        },
+    )
+    assert conflict is False
+    assert maintained is not None
+    assert maintained["revision"] == 2
+    assert maintained["updated_at"] == created["updated_at"]
+    assert maintained["content_markdown"] == "User-authored reading note"
+
+    stale, conflict = store.update_research_note_evidence_state(
+        created["id"],
+        expected_revision=1,
+        source_state={},
+    )
+    assert conflict is True
+    assert stale is not None
+    assert stale["revision"] == 2
+
+
 def test_research_note_delete_is_explicit(tmp_path: Path) -> None:
     store = ChatStore(tmp_path / "chat.sqlite3")
     created = store.create_research_note(title="Delete me", content_markdown="Content")

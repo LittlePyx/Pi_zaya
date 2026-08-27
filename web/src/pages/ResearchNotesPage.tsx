@@ -62,10 +62,11 @@ import {
   writeResearchNoteWorkspaceDraft,
 } from './researchNoteWorkspaceDraft'
 import {
-  researchNoteEvidenceMaintenanceRequired,
+  researchNoteEvidenceMaintenanceDue,
+  researchNoteEvidenceMaintenanceTracked,
+  researchNoteEvidenceNextRetryAt,
   researchNoteEvidenceReviewIssues,
   researchNoteEvidenceReviewSummary,
-  researchNoteEvidenceSystemRetryRequired,
   type ResearchNoteEvidenceReviewSummary,
 } from './researchNoteEvidenceReview'
 import {
@@ -350,6 +351,7 @@ export default function ResearchNotesPage() {
   const activeNoteRef = useRef<ResearchNoteRecord | null>(null)
   const [activeId, setActiveId] = useState('')
   const [loading, setLoading] = useState(true)
+  const [evidenceMaintaining, setEvidenceMaintaining] = useState(false)
   const [loadingNote, setLoadingNote] = useState(false)
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -362,7 +364,7 @@ export default function ResearchNotesPage() {
   const noteRequestRef = useRef(0)
   const activeIdRef = useRef('')
   const requestedNoteHandledRef = useRef('')
-  const evidenceAutoAttemptsRef = useRef<Map<string, number>>(new Map())
+  const evidenceMaintenanceFailureAtRef = useRef(0)
 
   const [query, setQuery] = useState('')
   const [archiveView, setArchiveView] = useState<'active' | 'archived'>('active')
@@ -480,7 +482,7 @@ export default function ResearchNotesPage() {
   const autoResolveEvidenceRecord = useCallback(async (
     record: ResearchNoteRecord,
   ): Promise<ResearchNoteRecord> => {
-    if (!researchNoteEvidenceMaintenanceRequired(record.source_state)) return record
+    if (!researchNoteEvidenceMaintenanceDue(record.source_state)) return record
     const localDraft = readResearchNoteWorkspaceDraft(record.id)
     if (localDraft && !workspaceDraftMatchesRecord(localDraft, record)) return record
     if (
@@ -488,26 +490,12 @@ export default function ResearchNotesPage() {
       && (dirtyRef.current || savingRef.current)
     ) return record
 
-    const attemptKey = `${record.id}:${record.revision}`
-    const attempts = evidenceAutoAttemptsRef.current.get(attemptKey) || 0
-    const reviewSummary = researchNoteEvidenceReviewSummary(record.source_state)
-    const systemRetryRequired = researchNoteEvidenceSystemRetryRequired(record.source_state)
-    if (attempts >= 1 && reviewSummary.total > 0 && !systemRetryRequired) return record
-    if (attempts >= 2) return record
-    const nextAttempts = attempts + 1
-    evidenceAutoAttemptsRef.current.set(attemptKey, nextAttempts)
     try {
       const result = await chatApi.captureResearchNoteEvidenceContextBaselines(
         record.id,
         record.revision,
       )
-      if (researchNoteEvidenceMaintenanceRequired(result.note.source_state)) {
-        evidenceAutoAttemptsRef.current.set(
-          `${result.note.id}:${result.note.revision}`,
-          nextAttempts,
-        )
-      }
-      return result.note
+      return result?.note?.id === record.id ? result.note : record
     } catch (error) {
       const detail = error instanceof Error ? error.message : ''
       if (detail.includes('409')) {
@@ -523,32 +511,41 @@ export default function ResearchNotesPage() {
 
   const autoResolveListedEvidence = useCallback(async (
     records: ResearchNoteRecord[],
+    protectedNoteId = '',
   ): Promise<{ records: ResearchNoteRecord[]; updated: Map<string, ResearchNoteRecord> }> => {
-    const candidates = records.filter(record => (
-      researchNoteEvidenceReviewSummary(record.source_state).total > 0
-      || researchNoteEvidenceSystemRetryRequired(record.source_state)
-    ))
+    const candidates = records.filter(record => {
+      if (
+        record.id === protectedNoteId
+        || !researchNoteEvidenceMaintenanceTracked(record.source_state)
+        || !researchNoteEvidenceMaintenanceDue(record.source_state)
+      ) return false
+      const localDraft = readResearchNoteWorkspaceDraft(record.id)
+      return !(localDraft && !workspaceDraftMatchesRecord(localDraft, record))
+    }).slice(0, 64)
     if (candidates.length <= 0) return { records, updated: new Map() }
-    const updated = new Map<string, ResearchNoteRecord>()
-    let cursor = 0
-    const worker = async () => {
-      while (cursor < candidates.length) {
-        const record = candidates[cursor]
-        cursor += 1
-        const resolved = await autoResolveEvidenceRecord(record)
-        if (resolved !== record || resolved.revision !== record.revision) {
-          updated.set(record.id, resolved)
-        }
+    try {
+      const result = await chatApi.maintainResearchNoteEvidence(candidates.map(record => ({
+        note_id: record.id,
+        expected_revision: record.revision,
+      })))
+      if (!Array.isArray(result?.notes)) throw new Error('invalid evidence maintenance response')
+      evidenceMaintenanceFailureAtRef.current = Number(result.summary?.errors || 0) > 0
+        ? Date.now()
+        : 0
+      const updated = new Map(
+        result.notes
+          .filter(record => record && typeof record.id === 'string')
+          .map(record => [record.id, record]),
+      )
+      return {
+        records: records.map(record => updated.get(record.id) || record),
+        updated,
       }
+    } catch {
+      evidenceMaintenanceFailureAtRef.current = Date.now()
+      return { records, updated: new Map() }
     }
-    await Promise.all(
-      Array.from({ length: Math.min(3, candidates.length) }, () => worker()),
-    )
-    return {
-      records: records.map(record => updated.get(record.id) || record),
-      updated,
-    }
-  }, [autoResolveEvidenceRecord])
+  }, [])
 
   const loadNotes = useCallback(async () => {
     const requestId = ++listRequestRef.current
@@ -560,26 +557,27 @@ export default function ResearchNotesPage() {
         archived: archiveView,
       })
       if (requestId !== listRequestRef.current) return
-      const resolved = await autoResolveListedEvidence(records)
+      setNotes(records)
+      setLoading(false)
+      const requested = requestedNoteId && records.some(note => note.id === requestedNoteId)
+        ? requestedNoteId
+        : ''
+      const protectedNoteId = activeIdRef.current || requested || records[0]?.id || ''
+      setEvidenceMaintaining(true)
+      const resolved = await autoResolveListedEvidence(records, protectedNoteId)
       if (requestId !== listRequestRef.current) return
       setNotes(resolved.records)
-      const refreshedActive = resolved.updated.get(activeIdRef.current)
-      if (
-        refreshedActive
-        && activeNoteRef.current
-        && !dirtyRef.current
-        && !savingRef.current
-      ) {
-        applyRecord(refreshedActive)
-      }
     } catch (error) {
       if (requestId === listRequestRef.current) {
         message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
       }
     } finally {
-      if (requestId === listRequestRef.current) setLoading(false)
+      if (requestId === listRequestRef.current) {
+        setLoading(false)
+        setEvidenceMaintaining(false)
+      }
     }
-  }, [S.research_notes_load_failed, applyRecord, archiveView, autoResolveListedEvidence, query])
+  }, [S.research_notes_load_failed, archiveView, autoResolveListedEvidence, query, requestedNoteId])
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void loadNotes() }, 180)
@@ -587,14 +585,25 @@ export default function ResearchNotesPage() {
   }, [loadNotes])
 
   useEffect(() => {
-    const retryable = notes.some(note => {
-      const attempts = evidenceAutoAttemptsRef.current.get(`${note.id}:${note.revision}`) || 0
-      return researchNoteEvidenceSystemRetryRequired(note.source_state) && attempts < 2
+    if (loading || evidenceMaintaining || notes.length <= 0) return
+    const eligible = notes.filter(note => {
+      if (note.id === activeIdRef.current) return false
+      if (!researchNoteEvidenceMaintenanceTracked(note.source_state)) return false
+      const localDraft = readResearchNoteWorkspaceDraft(note.id)
+      return !(localDraft && !workspaceDraftMatchesRecord(localDraft, note))
     })
-    if (!retryable || loading) return
-    const timer = window.setTimeout(() => { void loadNotes() }, 4_000)
+    const now = Date.now()
+    const hasImmediate = eligible.some(note => researchNoteEvidenceMaintenanceDue(note.source_state, now / 1000))
+    const retryTimes = eligible.flatMap(note => {
+      const retryAt = researchNoteEvidenceNextRetryAt(note.source_state)
+      return retryAt == null ? [] : [retryAt * 1000]
+    })
+    if (!hasImmediate && retryTimes.length <= 0) return
+    const failureDelay = Math.max(0, evidenceMaintenanceFailureAtRef.current + 30_000 - now)
+    const dueDelay = hasImmediate ? 250 : Math.max(250, Math.min(...retryTimes) - now + 50)
+    const timer = window.setTimeout(() => { void loadNotes() }, Math.max(dueDelay, failureDelay))
     return () => window.clearTimeout(timer)
-  }, [loading, loadNotes, notes])
+  }, [evidenceMaintaining, loading, loadNotes, notes])
 
   useEffect(() => {
     const refresh = () => {
@@ -1543,7 +1552,6 @@ export default function ResearchNotesPage() {
           <Button
             icon={<ReloadOutlined />}
             onClick={() => {
-              evidenceAutoAttemptsRef.current.clear()
               void loadNotes()
             }}
             aria-label={S.reload}

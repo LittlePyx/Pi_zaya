@@ -1750,6 +1750,44 @@ class ChatStore:
             )
         return _research_note_record(current), False
 
+    def update_research_note_evidence_state(
+        self,
+        note_id: str,
+        *,
+        expected_revision: int,
+        source_state: dict,
+    ) -> tuple[dict | None, bool]:
+        """CAS-update system-maintained evidence without changing user edit time."""
+        nid = str(note_id or "").strip()
+        if not nid:
+            return None, False
+        clean_source_state = _sanitize_json_state_dict(source_state)
+        source_state_json = self._research_brief_json_text(clean_source_state, fallback={})
+        if len(source_state_json) > MAX_RESEARCH_NOTE_SOURCE_STATE_LEN:
+            return None, False
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            row = conn.execute(
+                "SELECT * FROM research_notes WHERE id = ?",
+                (nid,),
+            ).fetchone()
+            if not row:
+                return None, False
+            current = dict(row)
+            current_revision = max(1, int(current.get("revision") or 1))
+            if int(expected_revision) != current_revision:
+                return _research_note_record(current), True
+            if str(current.get("source_state_json") or "{}") == source_state_json:
+                return _research_note_record(current), False
+            next_revision = current_revision + 1
+            conn.execute(
+                "UPDATE research_notes SET source_state_json = ?, revision = ? WHERE id = ?",
+                (source_state_json, next_revision, nid),
+            )
+            current["source_state_json"] = source_state_json
+            current["revision"] = next_revision
+        return _research_note_record(current), False
+
     def delete_research_note(self, note_id: str) -> bool:
         nid = str(note_id or "").strip()
         if not nid:

@@ -1,6 +1,9 @@
 import { expect, test, type Route } from '@playwright/test'
 import type { ResearchNoteRecord } from '../../src/api/chat'
 import {
+  researchNoteEvidenceMaintenanceDue,
+  researchNoteEvidenceMaintenanceTracked,
+  researchNoteEvidenceNextRetryAt,
   researchNoteEvidenceReviewIssues,
   researchNoteEvidenceReviewSummary,
   researchNoteEvidenceSystemRetryRequired,
@@ -69,6 +72,25 @@ test('research note evidence review summary counts only unresolved saved checks'
     firstSourceIndex: 0,
   })
   expect(researchNoteEvidenceSystemRetryRequired(sourceState)).toBe(true)
+  expect(researchNoteEvidenceMaintenanceTracked(sourceState)).toBe(true)
+  expect(researchNoteEvidenceMaintenanceDue(sourceState, 100)).toBe(true)
+
+  const scheduledRetryState = {
+    links: [{
+      kind: 'source',
+      source_path: 'db/paper/check-failed.md',
+      evidence_baseline_check: {
+        status: 'failed',
+        reason: 'verification_failed',
+        maintenance_version: 1,
+        retry_count: 1,
+        retry_after: 120,
+      },
+    }],
+  }
+  expect(researchNoteEvidenceMaintenanceDue(scheduledRetryState, 100)).toBe(false)
+  expect(researchNoteEvidenceMaintenanceDue(scheduledRetryState, 120)).toBe(true)
+  expect(researchNoteEvidenceNextRetryAt(scheduledRetryState)).toBe(120)
 })
 
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
@@ -692,6 +714,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
 
   const quote = 'SCI compresses a short video into one coded measurement.'
   let baselineBody: Record<string, unknown> | null = null
+  const maintenanceBodies: Array<{ notes?: Array<{ note_id: string; expected_revision: number }> }> = []
   const evidenceContextBodies: Record<string, unknown>[] = []
   let markBaselineStarted: (() => void) | undefined
   let finishBaselineResponse: (() => void) | undefined
@@ -758,7 +781,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
     created_at: 1_800_000_000,
     updated_at: 1_800_000_000,
   }
-  const failedNote: ResearchNoteRecord = {
+  let failedNote: ResearchNoteRecord = {
     ...note,
     id: 'note-failed-check',
     title: 'Evidence check failed',
@@ -803,7 +826,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
     },
     updated_at: 1_799_999_980,
   }
-  const needsDecisionNote: ResearchNoteRecord = {
+  let needsDecisionNote: ResearchNoteRecord = {
     ...note,
     id: 'note-needs-decision',
     title: 'Ambiguous source evidence',
@@ -856,6 +879,77 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
     }
     await fulfillJson(route, { detail: 'unexpected research note request' }, 404)
   })
+  await page.route('**/api/chat/research-notes/evidence-maintenance', async (route) => {
+    const body = route.request().postDataJSON() as {
+      notes?: Array<{ note_id: string; expected_revision: number }>
+    }
+    maintenanceBodies.push(body)
+    expect(body.notes).toEqual([
+      { note_id: failedNote.id, expected_revision: 1 },
+      { note_id: needsDecisionNote.id, expected_revision: 1 },
+    ])
+
+    failedNote = {
+      ...failedNote,
+      revision: 2,
+      source_state: {
+        ...failedNote.source_state,
+        links: (failedNote.source_state.links || []).map(link => ({
+          ...link,
+          evidence_baseline_check: {
+            ...link.evidence_baseline_check,
+            version: 1,
+            checked_at: 1_800_000_100,
+            status: 'failed',
+            reason: 'verification_failed',
+            maintenance_version: 1,
+            retry_count: 1,
+            retry_after: 1_900_000_000,
+          },
+        })),
+      },
+    }
+    needsDecisionNote = {
+      ...needsDecisionNote,
+      revision: 2,
+      source_state: {
+        ...needsDecisionNote.source_state,
+        links: (needsDecisionNote.source_state.links || []).map(link => ({
+          ...link,
+          evidence_baseline_check: {
+            ...link.evidence_baseline_check,
+            version: 1,
+            checked_at: 1_800_000_100,
+            status: 'skipped',
+            reason: 'candidate',
+            maintenance_version: 1,
+          },
+        })),
+      },
+    }
+    await fulfillJson(route, {
+      notes: [
+        { ...failedNote, content_markdown: '' },
+        { ...needsDecisionNote, content_markdown: '' },
+      ],
+      summary: {
+        requested: 2,
+        processed: 2,
+        updated: 2,
+        deferred: 0,
+        conflicted: 0,
+        not_found: 0,
+        errors: 0,
+        resolved_links: 0,
+        decision_links: 1,
+        has_more: false,
+      },
+      items: [
+        { note_id: failedNote.id, status: 'processed', revision: 2 },
+        { note_id: needsDecisionNote.id, status: 'processed', revision: 2 },
+      ],
+    })
+  })
   await page.route(`**/api/chat/research-notes/${note.id}/evidence-context-baseline`, async (route) => {
     baselineBody = route.request().postDataJSON() as Record<string, unknown>
     markBaselineStarted?.()
@@ -874,7 +968,6 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
     note = {
       ...note,
       revision: 2,
-      updated_at: 1_800_000_100,
       source_state: {
         ...note.source_state,
         links: (note.source_state.links || []).map((link, index) => {
@@ -1018,6 +1111,14 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   expect(note.source_state.links?.[1]?.evidence_baseline_check).toBeUndefined()
   expect(note.source_state.links?.[1]?.evidence_verification?.reason).toBe('source_change_auto_verified')
   expect(note.source_state.links?.[1]?.evidence_auto_resolution_history?.[0]?.action).toBe('source_change_auto_verified')
+  expect(maintenanceBodies).toHaveLength(1)
+  expect(failedNote.content_markdown).toBe('A separate saved note.')
+  expect(failedNote.updated_at).toBe(1_799_999_990)
+  expect(failedNote.source_state.links?.[0]?.evidence_baseline_check?.retry_count).toBe(1)
+  expect(failedNote.source_state.links?.[0]?.evidence_baseline_check?.retry_after).toBe(1_900_000_000)
+  expect(needsDecisionNote.content_markdown).toBe('A saved quote with multiple possible locations.')
+  expect(needsDecisionNote.updated_at).toBe(1_799_999_985)
+  expect(needsDecisionNote.source_state.links?.[0]?.evidence_baseline_check?.maintenance_version).toBe(1)
   expect(evidenceContextBodies).toHaveLength(0)
 
   await page.reload()
@@ -1025,4 +1126,5 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   await expect(page.getByTestId('workspace-note-evidence-review-note-baseline')).toHaveCount(0)
   await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('需处理（1）')
   await expect(page.getByTestId('research-note-evidence-baseline')).toHaveCount(0)
+  expect(maintenanceBodies).toHaveLength(1)
 })

@@ -3,11 +3,13 @@ from pathlib import Path
 import pytest
 
 from kb.research_note_evidence import (
+    RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
     auto_resolve_research_note_source_state,
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
+    research_note_evidence_maintenance_due,
     resolve_research_note_source_baseline_check,
     review_research_note_source_state,
     source_content_fingerprint,
@@ -207,6 +209,45 @@ def test_baseline_check_audit_is_idempotent_bounded_and_resolvable() -> None:
             "line_end": None,
         },
     }
+
+
+def test_evidence_maintenance_due_respects_version_and_persisted_retry_schedule() -> None:
+    local_link = {
+        "kind": "source",
+        "source_path": "library/example.pdf",
+        "block_id": "block-1",
+        "evidence_quote": "Saved evidence long enough to verify.",
+    }
+    assert research_note_evidence_maintenance_due({"links": [local_link]}, now=100.0) is True
+
+    decision_state = record_research_note_source_baseline_check(
+        {"links": [local_link]},
+        source_index=0,
+        status="skipped",
+        reason="candidate",
+        checked_at=90.0,
+        maintenance_version=RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+    )
+    assert research_note_evidence_maintenance_due(decision_state, now=100.0) is False
+
+    retry_state = record_research_note_source_baseline_check(
+        {"links": [local_link]},
+        source_index=0,
+        status="failed",
+        reason="verification_failed",
+        checked_at=90.0,
+        maintenance_version=RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+        retry_count=2,
+        retry_after=120.0,
+    )
+    retry_check = retry_state["links"][0]["evidence_baseline_check"]
+    assert retry_check["retry_count"] == 2
+    assert retry_check["retry_after"] == 120.0
+    assert research_note_evidence_maintenance_due(retry_state, now=100.0) is False
+    assert research_note_evidence_maintenance_due(retry_state, now=120.0) is True
+
+    external_state = {"links": [{"kind": "source", "evidence_quote": "External evidence"}]}
+    assert research_note_evidence_maintenance_due(external_state, now=100.0) is False
 
 
 def test_current_context_baseline_rejects_existing_changed_or_invalid_evidence(tmp_path: Path) -> None:

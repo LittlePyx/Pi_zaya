@@ -24,6 +24,9 @@ _AUTO_RESOLUTION_HISTORY_LIMIT = 12
 _BASELINE_CHECK_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
+RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 1
+_SYSTEM_RETRY_REASONS = {"unavailable", "verification_failed", "source_changed_during_capture"}
+_USER_DECISION_REASONS = {"candidate", "source_changed", "location_changed"}
 
 
 def _clean_text(value: Any, *, limit: int = _TEXT_LIMIT) -> str:
@@ -205,6 +208,52 @@ def _baseline_check_locator(link: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def research_note_evidence_maintenance_due(
+    source_state: dict[str, Any] | None,
+    *,
+    now: float | None = None,
+) -> bool:
+    """Return whether any local note evidence needs a system maintenance pass."""
+    state = source_state if isinstance(source_state, dict) else {}
+    links = state.get("links")
+    if not isinstance(links, list):
+        return False
+    timestamp = float(now if now is not None else time.time())
+    if not math.isfinite(timestamp) or timestamp <= 0:
+        timestamp = time.time()
+    for link in links:
+        if not isinstance(link, dict) or _clean_text(link.get("kind"), limit=24) == "answer":
+            continue
+        if not _clean_text(link.get("source_path"), limit=1_200):
+            continue
+        if link.get("evidence_context_snapshot") is not None:
+            continue
+        verification = link.get("evidence_verification")
+        if isinstance(verification, dict) and _clean_text(verification.get("status"), limit=24) == "invalid":
+            continue
+        check = link.get("evidence_baseline_check")
+        if not isinstance(check, dict):
+            return True
+        reason = _clean_text(check.get("reason"), limit=80)
+        status = _clean_text(check.get("status"), limit=24)
+        maintenance_version = _positive_int(check.get("maintenance_version")) or 0
+        if reason in _USER_DECISION_REASONS:
+            if maintenance_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION:
+                return True
+            continue
+        if status == "failed" or reason in _SYSTEM_RETRY_REASONS:
+            try:
+                retry_after = float(check.get("retry_after") or 0)
+            except (TypeError, ValueError):
+                retry_after = 0.0
+            if not math.isfinite(retry_after) or retry_after <= timestamp:
+                return True
+            continue
+        if maintenance_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION:
+            return True
+    return False
+
+
 def record_research_note_source_baseline_check(
     source_state: dict[str, Any],
     *,
@@ -213,6 +262,9 @@ def record_research_note_source_baseline_check(
     reason: str,
     source_fingerprint: str = "",
     checked_at: float | None = None,
+    maintenance_version: int | None = None,
+    retry_count: int | None = None,
+    retry_after: float | None = None,
 ) -> dict[str, Any]:
     """Persist one unresolved baseline-check outcome without rewriting evidence.
 
@@ -236,11 +288,23 @@ def record_research_note_source_baseline_check(
     if fingerprint and not fingerprint.startswith("sha256:"):
         fingerprint = ""
     locator = _baseline_check_locator(link)
+    normalized_maintenance_version = _positive_int(maintenance_version)
+    normalized_retry_count = _positive_int(retry_count)
+    try:
+        normalized_retry_after = float(retry_after or 0)
+    except (TypeError, ValueError):
+        normalized_retry_after = 0.0
+    if not math.isfinite(normalized_retry_after) or normalized_retry_after <= 0:
+        normalized_retry_after = 0.0
     previous = link.get("evidence_baseline_check")
     try:
         previous_checked_at = float(previous.get("checked_at") or 0) if isinstance(previous, dict) else 0.0
     except (TypeError, ValueError):
         previous_checked_at = 0.0
+    try:
+        previous_retry_after = float(previous.get("retry_after") or 0) if isinstance(previous, dict) else 0.0
+    except (TypeError, ValueError):
+        previous_retry_after = 0.0
     if (
         isinstance(previous, dict)
         and previous.get("version") == 1
@@ -248,6 +312,9 @@ def record_research_note_source_baseline_check(
         and _clean_text(previous.get("reason"), limit=80) == normalized_reason
         and _clean_text(previous.get("source_fingerprint"), limit=96) == fingerprint
         and previous.get("locator") == locator
+        and (_positive_int(previous.get("maintenance_version")) == normalized_maintenance_version)
+        and (_positive_int(previous.get("retry_count")) == normalized_retry_count)
+        and previous_retry_after == normalized_retry_after
         and math.isfinite(previous_checked_at)
         and previous_checked_at > 0
     ):
@@ -264,6 +331,12 @@ def record_research_note_source_baseline_check(
         "source_fingerprint": fingerprint,
         "locator": locator,
     }
+    if normalized_maintenance_version is not None:
+        record["maintenance_version"] = normalized_maintenance_version
+    if normalized_retry_count is not None:
+        record["retry_count"] = normalized_retry_count
+    if normalized_retry_after > 0:
+        record["retry_after"] = normalized_retry_after
     link["evidence_baseline_check"] = record
     raw_history = link.get("evidence_baseline_check_history")
     history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []

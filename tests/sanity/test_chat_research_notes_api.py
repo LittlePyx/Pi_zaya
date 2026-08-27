@@ -365,6 +365,141 @@ Dark counts were measured with the shutter closed.
     assert unresolved_repeat.json()["items"][0]["checked_at"] == unresolved_check["checked_at"]
 
 
+def test_chat_research_note_evidence_maintenance_batches_updates_and_persists_backoff(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+    from kb.research_note_evidence import research_note_evidence_maintenance_due
+    from kb.source_blocks import load_source_blocks
+
+    md_path = tmp_path / "converted.md"
+    md_path.write_text(
+        """# Paper
+
+## Results
+
+Photon arrival is a stochastic process governed by Poisson statistics.
+""",
+        encoding="utf-8",
+    )
+    target = next(block for block in load_source_blocks(md_path) if "Photon arrival" in block["text"])
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    exact = store.create_research_note(
+        title="Exact evidence",
+        content_markdown="User note body must remain unchanged",
+        source_state={
+            "links": [{
+                "kind": "source",
+                "source_path": "library/exact.pdf",
+                "block_id": target["block_id"],
+                "anchor_id": target["anchor_id"],
+                "evidence_quote": target["text"],
+            }]
+        },
+    )
+    missing = store.create_research_note(
+        title="Temporarily missing evidence",
+        content_markdown="Missing-source note body",
+        source_state={
+            "links": [{
+                "kind": "source",
+                "source_path": "library/missing.pdf",
+                "evidence_quote": "Saved evidence from a temporarily missing source.",
+            }]
+        },
+    )
+    decision = store.create_research_note(
+        title="Ambiguous evidence",
+        content_markdown="Ambiguous note body",
+        source_state={
+            "links": [{
+                "kind": "source",
+                "source_path": "library/exact.pdf",
+                "block_id": "stale-block",
+                "evidence_quote": "photon arrivals follow Poisson behavior",
+            }]
+        },
+    )
+    conflict = store.create_research_note(title="Edited elsewhere", content_markdown="Current body")
+    assert exact is not None and missing is not None and decision is not None and conflict is not None
+    conflict_latest, conflicted = store.update_research_note(
+        conflict["id"],
+        expected_revision=1,
+        content_markdown="Edited body",
+    )
+    assert conflicted is False and conflict_latest is not None
+
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda path: path)
+    monkeypatch.setattr(
+        chat_router,
+        "_resolve_paper_guide_md_path",
+        lambda source_path, **_kwargs: md_path if "exact.pdf" in str(source_path) else None,
+    )
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/chat/research-notes/evidence-maintenance",
+        json={
+            "notes": [
+                {"note_id": exact["id"], "expected_revision": 1},
+                {"note_id": missing["id"], "expected_revision": 1},
+                {"note_id": decision["id"], "expected_revision": 1},
+                {"note_id": conflict["id"], "expected_revision": 1},
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"] == {
+        "requested": 4,
+        "processed": 3,
+        "updated": 3,
+        "deferred": 0,
+        "conflicted": 1,
+        "not_found": 0,
+        "errors": 0,
+        "resolved_links": 1,
+        "decision_links": 1,
+        "has_more": False,
+    }
+    assert {item["status"] for item in payload["items"]} == {"processed", "conflicted"}
+    assert all(note["content_markdown"] == "" for note in payload["notes"])
+
+    exact_after = store.get_research_note(exact["id"])
+    missing_after = store.get_research_note(missing["id"])
+    decision_after = store.get_research_note(decision["id"])
+    assert exact_after is not None and missing_after is not None and decision_after is not None
+    assert exact_after["updated_at"] == exact["updated_at"]
+    assert exact_after["content_markdown"] == "User note body must remain unchanged"
+    assert exact_after["source_state"]["links"][0]["evidence_context_snapshot"]
+    retry_check = missing_after["source_state"]["links"][0]["evidence_baseline_check"]
+    assert retry_check["retry_count"] == 1
+    assert retry_check["retry_after"] > retry_check["checked_at"]
+    assert research_note_evidence_maintenance_due(missing_after["source_state"], now=retry_check["checked_at"]) is False
+    decision_check = decision_after["source_state"]["links"][0]["evidence_baseline_check"]
+    assert decision_check["reason"] == "candidate"
+    assert decision_check["maintenance_version"] == 1
+
+    immediate_repeat = client.post(
+        "/api/chat/research-notes/evidence-maintenance",
+        json={
+            "notes": [
+                {"note_id": missing["id"], "expected_revision": 2},
+                {"note_id": decision["id"], "expected_revision": 2},
+            ]
+        },
+    )
+    assert immediate_repeat.status_code == 200
+    assert immediate_repeat.json()["summary"]["processed"] == 0
+    assert immediate_repeat.json()["summary"]["deferred"] == 2
+    assert store.get_research_note(missing["id"])["revision"] == 2
+
+
 def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(
     monkeypatch,
     tmp_path: Path,

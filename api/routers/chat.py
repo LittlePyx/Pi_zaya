@@ -58,11 +58,13 @@ from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
 from kb.research_note_evidence import (
+    RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
     auto_resolve_research_note_source_state,
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
+    research_note_evidence_maintenance_due,
     resolve_research_note_source_baseline_check,
     review_research_note_source_state,
     source_content_fingerprint,
@@ -94,6 +96,9 @@ _CHAT_CITATION_SHELF_MAX_JSON_CHARS = 260_000
 _CHAT_CITATION_SHELF_ITEM_MAX_JSON_CHARS = 40_000
 _CHAT_RESEARCH_NOTE_MAX_CHARS = 160_000
 _CHAT_RESEARCH_NOTE_SOURCE_STATE_MAX_JSON_CHARS = 240_000
+_RESEARCH_NOTE_EVIDENCE_MAINTENANCE_LIMIT = 64
+_RESEARCH_NOTE_EVIDENCE_MAINTENANCE_BUDGET_S = 3.0
+_RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S = (5.0, 30.0, 300.0, 3_600.0, 21_600.0)
 
 
 def _bounded_json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -300,6 +305,31 @@ class ResearchNoteEvidenceBaselineBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     expected_revision: int = Field(..., ge=1)
+
+
+class ResearchNoteEvidenceMaintenanceItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    note_id: str = Field(..., min_length=1, max_length=120)
+    expected_revision: int = Field(..., ge=1)
+
+    @field_validator("note_id")
+    @classmethod
+    def _clean_note_id(cls, value: str) -> str:
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("note_id must not be blank")
+        return clean
+
+
+class ResearchNoteEvidenceMaintenanceBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    notes: list[ResearchNoteEvidenceMaintenanceItem] = Field(
+        ...,
+        min_length=1,
+        max_length=_RESEARCH_NOTE_EVIDENCE_MAINTENANCE_LIMIT,
+    )
 
 
 class ResearchNoteCreateBody(BaseModel):
@@ -1473,6 +1503,32 @@ def capture_chat_research_note_evidence_context_baseline(
                 resolved_at=checked_at,
             )
         elif reason not in {"already_present", "invalid"}:
+            persisted_links = next_source_state.get("links")
+            persisted_link = (
+                persisted_links[source_index]
+                if isinstance(persisted_links, list) and 0 <= source_index < len(persisted_links)
+                else None
+            )
+            previous_check = (
+                persisted_link.get("evidence_baseline_check")
+                if isinstance(persisted_link, dict)
+                else None
+            )
+            retry_count: int | None = None
+            retry_after: float | None = None
+            is_system_retry = bool(
+                str(link.get("source_path") or "").strip()
+                and (status == "failed" or reason in {"unavailable", "source_changed_during_capture"})
+            )
+            if is_system_retry:
+                previous_reason = str(previous_check.get("reason") or "") if isinstance(previous_check, dict) else ""
+                try:
+                    previous_count = int(previous_check.get("retry_count") or 0) if isinstance(previous_check, dict) else 0
+                except (TypeError, ValueError):
+                    previous_count = 0
+                retry_count = max(1, previous_count + 1) if previous_reason == reason else 1
+                delay_index = min(retry_count - 1, len(_RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S) - 1)
+                retry_after = checked_at + _RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S[delay_index]
             next_source_state = record_research_note_source_baseline_check(
                 next_source_state,
                 source_index=source_index,
@@ -1480,6 +1536,9 @@ def capture_chat_research_note_evidence_context_baseline(
                 reason=reason,
                 source_fingerprint=source_fingerprint,
                 checked_at=checked_at,
+                maintenance_version=RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+                retry_count=retry_count,
+                retry_after=retry_after,
             )
         elif reason in {"already_present", "invalid"}:
             next_source_state = resolve_research_note_source_baseline_check(
@@ -1724,7 +1783,7 @@ def capture_chat_research_note_evidence_context_baseline(
         record_result(source_index, raw_link, status="created", reason="baseline_created")
 
     if next_source_state != source_state:
-        record, conflicted = store.update_research_note(
+        record, conflicted = store.update_research_note_evidence_state(
             note_id,
             expected_revision=body.expected_revision,
             source_state=next_source_state,
@@ -1740,6 +1799,85 @@ def capture_chat_research_note_evidence_context_baseline(
         if int(record.get("revision") or 1) != body.expected_revision:
             raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
     return {"note": record, "summary": summary, "items": items}
+
+
+@router.post("/chat/research-notes/evidence-maintenance")
+def maintain_chat_research_note_evidence(body: ResearchNoteEvidenceMaintenanceBody):
+    """Run bounded system-owned evidence maintenance for note list summaries."""
+    store = get_chat_store()
+    started = time.monotonic()
+    now = time.time()
+    summary: dict[str, Any] = {
+        "requested": len(body.notes),
+        "processed": 0,
+        "updated": 0,
+        "deferred": 0,
+        "conflicted": 0,
+        "not_found": 0,
+        "errors": 0,
+        "resolved_links": 0,
+        "decision_links": 0,
+        "has_more": False,
+    }
+    notes: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    for item_index, item in enumerate(body.notes):
+        if item_index > 0 and time.monotonic() - started >= _RESEARCH_NOTE_EVIDENCE_MAINTENANCE_BUDGET_S:
+            remaining = len(body.notes) - item_index
+            summary["deferred"] = int(summary["deferred"]) + remaining
+            summary["has_more"] = True
+            items.extend(
+                {"note_id": pending.note_id, "status": "budget_deferred"}
+                for pending in body.notes[item_index:]
+            )
+            break
+        note = store.get_research_note(item.note_id)
+        if note is None:
+            summary["not_found"] = int(summary["not_found"]) + 1
+            items.append({"note_id": item.note_id, "status": "not_found"})
+            continue
+        current_revision = int(note.get("revision") or 1)
+        if current_revision != item.expected_revision:
+            summary["conflicted"] = int(summary["conflicted"]) + 1
+            items.append({"note_id": item.note_id, "status": "conflicted"})
+            continue
+        source_state = note.get("source_state") if isinstance(note.get("source_state"), dict) else {}
+        if not research_note_evidence_maintenance_due(source_state, now=now):
+            summary["deferred"] = int(summary["deferred"]) + 1
+            items.append({"note_id": item.note_id, "status": "not_due"})
+            continue
+        try:
+            result = capture_chat_research_note_evidence_context_baseline(
+                item.note_id,
+                ResearchNoteEvidenceBaselineBody(expected_revision=item.expected_revision),
+            )
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                summary["conflicted"] = int(summary["conflicted"]) + 1
+                status = "conflicted"
+            elif exc.status_code == 404:
+                summary["not_found"] = int(summary["not_found"]) + 1
+                status = "not_found"
+            else:
+                summary["errors"] = int(summary["errors"]) + 1
+                summary["has_more"] = True
+                status = "system_deferred"
+            items.append({"note_id": item.note_id, "status": status})
+            continue
+        record = result["note"]
+        result_summary = result["summary"]
+        summary["processed"] = int(summary["processed"]) + 1
+        if int(record.get("revision") or 1) != item.expected_revision:
+            summary["updated"] = int(summary["updated"]) + 1
+        summary["resolved_links"] = int(summary["resolved_links"]) + int(result_summary.get("created") or 0)
+        reasons = result_summary.get("reasons") if isinstance(result_summary.get("reasons"), dict) else {}
+        summary["decision_links"] = int(summary["decision_links"]) + sum(
+            int(reasons.get(reason) or 0)
+            for reason in ("candidate", "source_changed", "location_changed")
+        )
+        notes.append({**record, "content_markdown": ""})
+        items.append({"note_id": item.note_id, "status": "processed"})
+    return {"notes": notes, "summary": summary, "items": items}
 
 
 @router.post("/chat/research-notes/{note_id}/evidence-repair")
