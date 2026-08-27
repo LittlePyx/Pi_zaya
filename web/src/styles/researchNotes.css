@@ -345,6 +345,46 @@
   font-size: 10px;
 }
 
+.kb-notes-evidence-baseline-issues {
+  display: grid;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--notes-border) 78%, transparent);
+}
+
+.kb-notes-evidence-baseline-issue {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, #d89614 24%, var(--notes-border));
+  border-radius: 7px;
+  background: color-mix(in srgb, #d89614 5%, var(--panel));
+}
+
+.kb-notes-evidence-baseline-issue > strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-notes-evidence-baseline-issue > span {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.kb-notes-evidence-baseline-issue > .ant-btn {
+  justify-self: start;
+  height: auto;
+  padding: 1px 0;
+  font-size: 10px;
+  white-space: normal;
+}
+
 .kb-notes-evidence-health {
   display: grid;
   gap: 7px;
@@ -575,6 +615,11 @@
   margin-top: 8px;
   padding: 7px 9px;
   font-size: 11px;
+}
+
+.kb-notes-source-card.is-baseline-focus {
+  border-color: color-mix(in srgb, #d89614 65%, var(--notes-border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, #d89614 16%, transparent);
 }
 
 .kb-notes-evidence-review {

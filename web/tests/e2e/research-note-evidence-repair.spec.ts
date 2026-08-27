@@ -636,6 +636,7 @@ test('legacy note creates only safe current evidence baselines and reports skipp
 
   const quote = 'SCI compresses a short video into one coded measurement.'
   let baselineBody: Record<string, unknown> | null = null
+  const evidenceContextBodies: Record<string, unknown>[] = []
   let markBaselineStarted: (() => void) | undefined
   let finishBaselineResponse: (() => void) | undefined
   const baselineStarted = new Promise<void>((resolve) => { markBaselineStarted = resolve })
@@ -747,6 +748,41 @@ test('legacy note creates only safe current evidence baselines and reports skipp
       ],
     })
   })
+  await page.route('**/api/chat/research-note/evidence-context', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    evidenceContextBodies.push(body)
+    await fulfillJson(route, {
+      status: 'exact',
+      reason: 'exact_block',
+      source_name: 'Changed paper',
+      heading_path: 'Changed paper / Results',
+      before: [],
+      target: {
+        block_id: 'changed-block',
+        anchor_id: '',
+        kind: 'paragraph',
+        heading_path: 'Changed paper / Results',
+        line_start: 12,
+        line_end: 12,
+        text: 'Changed evidence must be skipped.',
+        markdown: 'Changed evidence must be skipped.',
+      },
+      after: [],
+      candidates: [],
+      can_open_exact: true,
+      reader_open: {
+        sourcePath: 'db/paper/changed.md',
+        sourceName: 'Changed paper',
+        headingPath: 'Changed paper / Results',
+        snippet: 'Changed evidence must be skipped.',
+        highlightSnippet: 'Changed evidence must be skipped.',
+        blockId: 'changed-block',
+        strictLocate: true,
+      },
+      source_fingerprint: 'sha256:new-source',
+      source_changed: true,
+    })
+  })
 
   await page.goto('/notes?note=note-baseline')
   const baseline = page.getByTestId('research-note-evidence-baseline')
@@ -761,14 +797,31 @@ test('legacy note creates only safe current evidence baselines and reports skipp
   await editor.fill('A note body edited while baselines are checked.')
   finishBaselineResponse?.()
 
-  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('已建立 1')
-  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('已跳过 1')
+  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('已直接建立 1')
+  await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('需核查 1')
   await expect(page.getByTestId('research-note-evidence-baseline-result')).toContainText('失败 0')
-  await expect(baseline).toContainText('缺少当前语境基线 1')
+  await expect(baseline).toContainText('需要逐条核查 1')
+  const issue = page.getByTestId('research-note-evidence-baseline-issue-1')
+  await expect(issue).toContainText('Changed paper')
+  await expect(issue).toContainText('来源版本已变化')
+  await expect(page.getByTestId('research-note-evidence-baseline-create')).toHaveCount(0)
   await expect(editor).toHaveValue('A note body edited while baselines are checked.')
   expect(baselineBody).toEqual({ expected_revision: 1 })
   expect(note.content_markdown).toBe('A note body that must not be rewritten.')
   expect(note.source_state.links?.[0]?.block_id).toBe('quote-1')
   expect(note.source_state.links?.[0]?.evidence_quote).toBe(quote)
   expect(note.source_state.links?.[0]?.evidence_context_history?.[0]?.action).toBe('baseline_backfilled')
+
+  await issue.getByRole('button', { name: '定位并核查' }).click()
+  await expect.poll(() => evidenceContextBodies.length).toBe(1)
+  expect(evidenceContextBodies[0]).toMatchObject({
+    source_path: 'db/paper/changed.md',
+    block_id: 'changed-block',
+    evidence_quote: 'Changed evidence must be skipped.',
+    source_fingerprint: 'sha256:old-source',
+  })
+  await expect(page.getByTestId('research-note-source-1')).toHaveClass(/is-baseline-focus/)
+  await expect(page.getByTestId('research-note-source-1')).toBeFocused()
+  await expect(page.getByTestId('research-note-source-1')).toContainText('原文转换结果已变化')
+  await expect(editor).toHaveValue('A note body edited while baselines are checked.')
 })

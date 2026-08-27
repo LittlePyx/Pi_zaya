@@ -38,6 +38,7 @@ import {
   chatApi,
   type MessageProvenanceReaderOpen,
   type ResearchNoteEvidenceBlock,
+  type ResearchNoteEvidenceBaselineItem,
   type ResearchNoteEvidenceBaselineSummary,
   type ResearchNoteEvidenceContext,
   type ResearchNoteEvidenceRepairIntent,
@@ -97,6 +98,8 @@ interface EvidenceHealthRunState {
 interface EvidenceBaselineRunState {
   running: boolean
   summary?: ResearchNoteEvidenceBaselineSummary
+  items?: ResearchNoteEvidenceBaselineItem[]
+  sourceSignature?: string
 }
 
 interface EvidenceLinkEntry {
@@ -152,6 +155,21 @@ function sourceReviewKey(link: ResearchNoteSourceLink, index: number): string {
     link.anchor_id,
     index,
   ].map(value => String(value || '')).join(':')
+}
+
+function evidenceBaselineSourceSignature(sourceState: ResearchNoteSourceState | null | undefined): string {
+  return JSON.stringify(sourceStateLinks(sourceState).map((link, index) => [
+    index,
+    link.kind,
+    link.capture_id,
+    link.source_path,
+    link.block_id,
+    link.anchor_id,
+    link.evidence_quote,
+    link.evidence_verification?.status,
+    link.evidence_verification?.source_fingerprint,
+    link.evidence_context_snapshot?.source_fingerprint,
+  ].map(value => String(value || ''))))
 }
 
 function mergeEvidenceContextBaselines(
@@ -233,6 +251,19 @@ function evidenceReasonLabel(S: ReturnType<typeof useT>, reason: string): string
     no_match: S.research_notes_evidence_reason_no_match,
   }
   return labels[reason] || S.research_notes_evidence_reason_unknown
+}
+
+function evidenceBaselineReasonLabel(S: ReturnType<typeof useT>, reason: string): string {
+  const labels: Record<string, string> = {
+    source_changed: S.research_notes_evidence_baseline_reason_source_changed,
+    location_changed: S.research_notes_evidence_baseline_reason_location_changed,
+    candidate: S.research_notes_evidence_baseline_reason_candidate,
+    invalid: S.research_notes_evidence_baseline_reason_invalid,
+    unavailable: S.research_notes_evidence_baseline_reason_unavailable,
+    verification_failed: S.research_notes_evidence_baseline_reason_verification_failed,
+    source_changed_during_capture: S.research_notes_evidence_baseline_reason_source_changed_during_capture,
+  }
+  return labels[reason] || S.research_notes_evidence_baseline_reason_unknown
 }
 
 function noteSourceNames(note: ResearchNoteRecord): string[] {
@@ -328,6 +359,7 @@ export default function ResearchNotesPage() {
   const [evidenceHealthRun, setEvidenceHealthRun] = useState<EvidenceHealthRunState>(EMPTY_EVIDENCE_HEALTH_RUN)
   const [evidenceHealthFilter, setEvidenceHealthFilter] = useState<EvidenceHealthFilter>('all')
   const [evidenceBaselineRun, setEvidenceBaselineRun] = useState<EvidenceBaselineRunState>(EMPTY_EVIDENCE_BASELINE_RUN)
+  const [focusedEvidenceIndex, setFocusedEvidenceIndex] = useState<number | null>(null)
   const evidenceHealthRunRef = useRef(0)
   const evidenceBaselineRunRef = useRef(0)
   const links = useMemo(() => sourceStateLinks(draftSourceState), [draftSourceState])
@@ -355,6 +387,7 @@ export default function ResearchNotesPage() {
     setEvidenceHealthRun(EMPTY_EVIDENCE_HEALTH_RUN)
     setEvidenceHealthFilter('all')
     setEvidenceBaselineRun(EMPTY_EVIDENCE_BASELINE_RUN)
+    setFocusedEvidenceIndex(null)
   }, [activeId])
 
   const markDirty = useCallback(() => {
@@ -1103,7 +1136,12 @@ export default function ResearchNotesPage() {
         ))
         setDirty(true)
       }
-      setEvidenceBaselineRun({ running: false, summary: result.summary })
+      setEvidenceBaselineRun({
+        running: false,
+        summary: result.summary,
+        items: result.items,
+        sourceSignature: evidenceBaselineSourceSignature(result.note.source_state),
+      })
       const feedback = S.research_notes_evidence_baseline_result
         .replace('{created}', String(result.summary.created))
         .replace('{skipped}', String(result.summary.skipped))
@@ -1217,6 +1255,39 @@ export default function ResearchNotesPage() {
   const missingEvidenceBaselineCount = paperLinkEntries.filter(
     entry => entry.link.evidence_context_snapshot == null,
   ).length
+  const missingEvidenceBaselineIndices = new Set(
+    paperLinkEntries
+      .filter(entry => entry.link.evidence_context_snapshot == null)
+      .map(entry => entry.index),
+  )
+  const baselineResultIsCurrent = Boolean(
+    evidenceBaselineRun.sourceSignature
+    && evidenceBaselineRun.sourceSignature === evidenceBaselineSourceSignature(draftSourceState),
+  )
+  const currentEvidenceBaselineSummary = baselineResultIsCurrent ? evidenceBaselineRun.summary : undefined
+  const evidenceBaselineIssues = baselineResultIsCurrent
+    ? (evidenceBaselineRun.items || []).filter(item => (
+      missingEvidenceBaselineIndices.has(item.source_index)
+      && item.status !== 'created'
+      && item.reason !== 'already_present'
+    ))
+    : []
+  const evidenceBaselineIssueCount = evidenceBaselineIssues.length
+  const hasUnclassifiedEvidenceBaselines = missingEvidenceBaselineCount > evidenceBaselineIssueCount
+  const locateEvidenceBaselineIssue = (item: ResearchNoteEvidenceBaselineItem) => {
+    const entry = linkEntries.find(candidate => candidate.index === item.source_index)
+    if (!entry) return
+    setEvidenceHealthFilter('all')
+    setFocusedEvidenceIndex(item.source_index)
+    window.requestAnimationFrame(() => {
+      const sourceCard = document.querySelector<HTMLElement>(
+        `[data-testid="research-note-source-${item.source_index}"]`,
+      )
+      sourceCard?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+      sourceCard?.focus({ preventScroll: true })
+    })
+    if (entry.link.source_path) void reviewEvidence(entry.link, entry.reviewKey)
+  }
   const evidenceHealthCounts = paperLinkEntries.reduce((counts, entry) => {
     const status = evidenceHealthStatus(
       entry,
@@ -1569,7 +1640,7 @@ export default function ResearchNotesPage() {
               </Button>
             </div>
             {paperLinkEntries.length > 0 && (
-              missingEvidenceBaselineCount > 0 || evidenceBaselineRun.summary
+              missingEvidenceBaselineCount > 0 || currentEvidenceBaselineSummary
             ) ? (
               <section
                 className="kb-notes-evidence-baseline"
@@ -1581,18 +1652,22 @@ export default function ResearchNotesPage() {
                   <div>
                     <HistoryOutlined />
                     <strong>
-                      {missingEvidenceBaselineCount > 0
-                        ? S.research_notes_evidence_baseline_missing.replace('{n}', String(missingEvidenceBaselineCount))
+                      {evidenceBaselineIssueCount > 0
+                        ? S.research_notes_evidence_baseline_needs_review.replace('{n}', String(evidenceBaselineIssueCount))
+                        : missingEvidenceBaselineCount > 0
+                          ? S.research_notes_evidence_baseline_missing.replace('{n}', String(missingEvidenceBaselineCount))
                         : S.research_notes_evidence_baseline_complete}
                     </strong>
                   </div>
                   <p>
-                    {missingEvidenceBaselineCount > 0
-                      ? S.research_notes_evidence_baseline_hint
+                    {evidenceBaselineIssueCount > 0
+                      ? S.research_notes_evidence_baseline_review_hint
+                      : missingEvidenceBaselineCount > 0
+                        ? S.research_notes_evidence_baseline_hint
                       : S.research_notes_evidence_baseline_complete_hint}
                   </p>
                 </div>
-                {missingEvidenceBaselineCount > 0 ? (
+                {missingEvidenceBaselineCount > 0 && hasUnclassifiedEvidenceBaselines ? (
                   <Popconfirm
                     title={S.research_notes_evidence_baseline_confirm}
                     description={S.research_notes_evidence_baseline_confirm_hint}
@@ -1610,29 +1685,62 @@ export default function ResearchNotesPage() {
                     </Button>
                   </Popconfirm>
                 ) : null}
-                {evidenceBaselineRun.summary ? (
+                {currentEvidenceBaselineSummary ? (
                   <div
                     className="kb-notes-evidence-baseline-result"
                     data-testid="research-note-evidence-baseline-result"
                   >
                     <Tag color="green">
-                      {S.research_notes_evidence_baseline_created.replace(
+                      {S.research_notes_evidence_baseline_direct_created.replace(
                         '{n}',
-                        String(evidenceBaselineRun.summary.created),
+                        String(currentEvidenceBaselineSummary.created),
                       )}
                     </Tag>
-                    <Tag>
-                      {S.research_notes_evidence_baseline_skipped.replace(
+                    <Tag color={evidenceBaselineIssueCount > 0 ? 'gold' : 'default'}>
+                      {S.research_notes_evidence_baseline_needs_review_count.replace(
                         '{n}',
-                        String(evidenceBaselineRun.summary.skipped),
+                        String(evidenceBaselineIssueCount),
                       )}
                     </Tag>
-                    <Tag color={evidenceBaselineRun.summary.failed > 0 ? 'red' : 'default'}>
+                    <Tag color={currentEvidenceBaselineSummary.failed > 0 ? 'red' : 'default'}>
                       {S.research_notes_evidence_baseline_failed_count.replace(
                         '{n}',
-                        String(evidenceBaselineRun.summary.failed),
+                        String(currentEvidenceBaselineSummary.failed),
                       )}
                     </Tag>
+                  </div>
+                ) : null}
+                {evidenceBaselineIssues.length > 0 ? (
+                  <div
+                    className="kb-notes-evidence-baseline-issues"
+                    data-testid="research-note-evidence-baseline-issues"
+                  >
+                    {evidenceBaselineIssues.map(item => {
+                      const entry = linkEntries.find(candidate => candidate.index === item.source_index)
+                      const canReview = Boolean(entry?.link.source_path)
+                      return (
+                        <div
+                          key={`${item.source_index}:${item.reason}`}
+                          className="kb-notes-evidence-baseline-issue"
+                          data-testid={`research-note-evidence-baseline-issue-${item.source_index}`}
+                        >
+                          <strong>{item.source_name || (entry ? sourceLabel(entry.link) : '') || S.research_note_untitled_source}</strong>
+                          <span>{evidenceBaselineReasonLabel(S, item.reason)}</span>
+                          <Button
+                            type="link"
+                            size="small"
+                            icon={canReview ? <SearchOutlined /> : <ArrowRightOutlined />}
+                            loading={Boolean(entry && evidenceReviews[entry.reviewKey]?.loading)}
+                            disabled={evidenceHealthRun.running}
+                            onClick={() => locateEvidenceBaselineIssue(item)}
+                          >
+                            {canReview
+                              ? S.research_notes_evidence_baseline_locate_and_review
+                              : S.research_notes_evidence_baseline_locate}
+                          </Button>
+                        </div>
+                      )
+                    })}
                   </div>
                 ) : null}
               </section>
@@ -1847,8 +1955,9 @@ export default function ResearchNotesPage() {
                   return (
                     <article
                       key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`}
-                      className="kb-notes-source-card"
+                      className={`kb-notes-source-card${focusedEvidenceIndex === index ? ' is-baseline-focus' : ''}`}
                       data-testid={`research-note-source-${index}`}
+                      tabIndex={-1}
                     >
                       <div className="kb-notes-source-kind">
                         {link.kind === 'answer' ? <FileTextOutlined /> : <LinkOutlined />}
