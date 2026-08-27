@@ -26,7 +26,7 @@ _BASELINE_CHECK_HISTORY_LIMIT = 12
 _SOURCE_PATH_MIGRATION_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
-RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 1
+RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 2
 _SYSTEM_RETRY_REASONS = {"unavailable", "verification_failed", "source_changed_during_capture"}
 _USER_DECISION_REASONS = {"candidate", "source_changed", "location_changed"}
 
@@ -407,12 +407,25 @@ def research_note_evidence_maintenance_due(
             continue
         if not _clean_text(link.get("source_path"), limit=1_200):
             continue
-        if link.get("evidence_context_snapshot") is not None:
-            continue
         verification = link.get("evidence_verification")
         if isinstance(verification, dict) and _clean_text(verification.get("status"), limit=24) == "invalid":
             continue
         check = link.get("evidence_baseline_check")
+        if link.get("evidence_context_snapshot") is not None:
+            if not isinstance(check, dict):
+                continue
+            saved_reason = _clean_text(check.get("reason"), limit=80)
+            saved_status = _clean_text(check.get("status"), limit=24)
+            saved_version = _positive_int(check.get("maintenance_version")) or 0
+            if (
+                not (
+                    saved_reason in _USER_DECISION_REASONS
+                    and saved_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION
+                )
+                and saved_status != "failed"
+                and saved_reason not in _SYSTEM_RETRY_REASONS
+            ):
+                continue
         if not isinstance(check, dict):
             return True
         reason = _clean_text(check.get("reason"), limit=80)
@@ -811,8 +824,14 @@ def auto_resolve_research_note_source_state(
         "source_change_auto_verified",
         "exact_quote_auto_relocated",
         "stable_locator_auto_aligned",
+        "saved_context_auto_disambiguated",
     }
-    if normalized_match_reason not in {"exact_block", "exact_anchor", "quote_relocated"}:
+    if normalized_match_reason not in {
+        "exact_block",
+        "exact_anchor",
+        "quote_relocated",
+        "context_disambiguated",
+    }:
         raise ValueError("evidence match requires user review")
     if normalized_action not in allowed_actions:
         raise ValueError("unsupported automatic evidence resolution")
@@ -878,7 +897,11 @@ def auto_resolve_research_note_source_state(
         else:
             link[key] = value
     link.pop("location_label", None)
-    if normalized_action in {"exact_quote_auto_relocated", "stable_locator_auto_aligned"}:
+    if normalized_action in {
+        "exact_quote_auto_relocated",
+        "stable_locator_auto_aligned",
+        "saved_context_auto_disambiguated",
+    }:
         for key in (
             "start_offset",
             "end_offset",
@@ -1111,14 +1134,37 @@ def _context_neighbors(
 def _candidate_payload(
     row: dict[str, Any],
     *,
+    blocks: list[SourceBlock],
     source_path: str,
     source_name: str,
+    saved_context_snapshot: Any = None,
 ) -> dict[str, Any] | None:
     block = row.get("block")
     if not isinstance(block, dict):
         return None
+    try:
+        block_index = int(row.get("index"))
+    except (TypeError, ValueError):
+        block_index = -1
+    if not 0 <= block_index < len(blocks) or blocks[block_index] is not block:
+        block_index = next(
+            (index for index, candidate in enumerate(blocks) if candidate is block),
+            -1,
+        )
+    before = _context_neighbors(blocks, block_index, direction=-1) if block_index >= 0 else []
+    after = _context_neighbors(blocks, block_index, direction=1) if block_index >= 0 else []
     payload = _serialize_block(block)
     payload["score"] = round(float(row.get("score") or 0.0), 4)
+    payload["before"] = before
+    payload["after"] = after
+    context_match = _saved_context_candidate_match(
+        saved_context_snapshot,
+        block=block,
+        before=before,
+        after=after,
+    )
+    if context_match["available_fields"]:
+        payload["context_match"] = context_match
     payload["reader_open"] = _reader_open(
         block,
         source_path=source_path,
@@ -1126,6 +1172,130 @@ def _candidate_payload(
         evidence_quote=_clean_text(block.get("text")),
     )
     return payload
+
+
+def _saved_context_text_matches(saved_block: Any, current_block: Any) -> bool:
+    if not isinstance(saved_block, dict) or not isinstance(current_block, dict):
+        return False
+    saved_text = normalize_match_text(_clean_text(saved_block.get("text"), limit=_SNAPSHOT_NEIGHBOR_TEXT_LIMIT))
+    current_text = normalize_match_text(_clean_text(current_block.get("text"), limit=_TEXT_LIMIT))
+    if not saved_text or not current_text:
+        return False
+    if saved_text == current_text:
+        return True
+    return len(saved_text) >= 80 and current_text.startswith(saved_text)
+
+
+def _saved_context_candidate_match(
+    saved_context_snapshot: Any,
+    *,
+    block: SourceBlock,
+    before: list[dict[str, Any]],
+    after: list[dict[str, Any]],
+) -> dict[str, Any]:
+    snapshot = _normalize_context_snapshot(saved_context_snapshot)
+    if snapshot is None:
+        return {"available_fields": [], "matched_fields": []}
+    target = snapshot["target"]
+    available_fields: list[str] = []
+    matched_fields: list[str] = []
+
+    saved_before = snapshot["before"][-1] if snapshot["before"] else None
+    if saved_before is not None:
+        available_fields.append("before")
+        current_before = before[-1] if before else None
+        if _saved_context_text_matches(saved_before, current_before):
+            matched_fields.append("before")
+
+    saved_after = snapshot["after"][0] if snapshot["after"] else None
+    if saved_after is not None:
+        available_fields.append("after")
+        current_after = after[0] if after else None
+        if _saved_context_text_matches(saved_after, current_after):
+            matched_fields.append("after")
+
+    saved_heading = normalize_match_text(_clean_text(target.get("heading_path"), limit=500))
+    if saved_heading:
+        available_fields.append("heading")
+        current_heading = normalize_match_text(_clean_text(block.get("heading_path"), limit=500))
+        if current_heading == saved_heading:
+            matched_fields.append("heading")
+
+    saved_page_start = _positive_int(target.get("page_start"))
+    saved_page_end = _positive_int(target.get("page_end")) or saved_page_start
+    if saved_page_start is not None:
+        available_fields.append("page")
+        current_page_start = _positive_int(block.get("page_start"))
+        current_page_end = _positive_int(block.get("page_end")) or current_page_start
+        if current_page_start == saved_page_start and (
+            saved_page_end is None or current_page_end is None or current_page_end == saved_page_end
+        ):
+            matched_fields.append("page")
+
+    return {
+        "available_fields": available_fields,
+        "matched_fields": matched_fields,
+    }
+
+
+def _disambiguate_exact_quote_with_saved_context(
+    blocks: list[SourceBlock],
+    quote_matches: list[int],
+    saved_context_snapshot: Any,
+) -> tuple[int | None, dict[str, Any] | None]:
+    snapshot = _normalize_context_snapshot(saved_context_snapshot)
+    if snapshot is None or len(quote_matches) <= 1:
+        return None, None
+    rows: list[tuple[int, dict[str, Any]]] = []
+    for index in quote_matches:
+        match = _saved_context_candidate_match(
+            snapshot,
+            block=blocks[index],
+            before=_context_neighbors(blocks, index, direction=-1),
+            after=_context_neighbors(blocks, index, direction=1),
+        )
+        rows.append((index, match))
+
+    has_saved_neighbors = any(
+        field in {"before", "after"}
+        for field in rows[0][1]["available_fields"]
+    )
+
+    def qualifies(match: dict[str, Any]) -> bool:
+        matched = set(match["matched_fields"])
+        if has_saved_neighbors:
+            return bool(matched.intersection({"before", "after"})) and len(matched) >= 2
+        return {"heading", "page"}.issubset(matched)
+
+    qualified = [(index, match) for index, match in rows if qualifies(match)]
+    if not qualified:
+        return None, None
+    ranked = sorted(
+        qualified,
+        key=lambda row: (
+            len(row[1]["matched_fields"]),
+            len(set(row[1]["matched_fields"]).intersection({"before", "after"})),
+        ),
+        reverse=True,
+    )
+    top_rank = (
+        len(ranked[0][1]["matched_fields"]),
+        len(set(ranked[0][1]["matched_fields"]).intersection({"before", "after"})),
+    )
+    if len(ranked) > 1:
+        second_rank = (
+            len(ranked[1][1]["matched_fields"]),
+            len(set(ranked[1][1]["matched_fields"]).intersection({"before", "after"})),
+        )
+        if second_rank == top_rank:
+            return None, None
+    index, match = ranked[0]
+    return index, {
+        "mode": "saved_context",
+        "candidate_count": len(quote_matches),
+        "matched_fields": list(match["matched_fields"]),
+        "available_fields": list(match["available_fields"]),
+    }
 
 
 def build_research_note_evidence_context(
@@ -1141,6 +1311,7 @@ def build_research_note_evidence_context(
     page_start: int | None = None,
     page_end: int | None = None,
     source_fingerprint: str = "",
+    saved_context_snapshot: Any = None,
 ) -> dict[str, Any]:
     """Verify a saved note citation against converted source blocks.
 
@@ -1205,6 +1376,7 @@ def build_research_note_evidence_context(
             exact_reason = "exact_anchor"
 
     quote_matches: list[int] = []
+    context_disambiguation: dict[str, Any] | None = None
     if target_index is None and len(quote_norm) >= 16:
         quote_matches = [
             index
@@ -1214,6 +1386,14 @@ def build_research_note_evidence_context(
         if len(quote_matches) == 1:
             target_index = quote_matches[0]
             exact_reason = "quote_relocated"
+        elif len(quote_matches) > 1:
+            target_index, context_disambiguation = _disambiguate_exact_quote_with_saved_context(
+                blocks,
+                quote_matches,
+                saved_context_snapshot,
+            )
+            if target_index is not None:
+                exact_reason = "context_disambiguated"
 
     if target_index is not None:
         target = blocks[target_index]
@@ -1240,6 +1420,8 @@ def build_research_note_evidence_context(
             "source_changed": source_changed,
         }
         result["context_snapshot"] = research_note_evidence_context_snapshot(result)
+        if context_disambiguation is not None:
+            result["context_disambiguation"] = context_disambiguation
         return result
 
     ranked = match_source_blocks(
@@ -1252,20 +1434,32 @@ def build_research_note_evidence_context(
     candidates = [
         candidate
         for candidate in (
-            _candidate_payload(row, source_path=source_path_clean, source_name=source_name_clean)
+            _candidate_payload(
+                row,
+                blocks=blocks,
+                source_path=source_path_clean,
+                source_name=source_name_clean,
+                saved_context_snapshot=saved_context_snapshot,
+            )
             for row in ranked
         )
         if candidate is not None
     ]
     if len(quote_matches) > 1:
         exact_rows = [
-            {"score": 1.0, "block": blocks[index]}
+            {"score": 1.0, "block": blocks[index], "index": index}
             for index in quote_matches[:_CANDIDATE_LIMIT]
         ]
         candidates = [
             candidate
             for candidate in (
-                _candidate_payload(row, source_path=source_path_clean, source_name=source_name_clean)
+                _candidate_payload(
+                    row,
+                    blocks=blocks,
+                    source_path=source_path_clean,
+                    source_name=source_name_clean,
+                    saved_context_snapshot=saved_context_snapshot,
+                )
                 for row in exact_rows
             )
             if candidate is not None

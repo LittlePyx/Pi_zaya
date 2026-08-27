@@ -82,7 +82,7 @@ test('research note evidence review summary counts only unresolved saved checks'
       evidence_baseline_check: {
         status: 'failed',
         reason: 'verification_failed',
-        maintenance_version: 1,
+        maintenance_version: 2,
         retry_count: 1,
         retry_after: 120,
       },
@@ -91,6 +91,46 @@ test('research note evidence review summary counts only unresolved saved checks'
   expect(researchNoteEvidenceMaintenanceDue(scheduledRetryState, 100)).toBe(false)
   expect(researchNoteEvidenceMaintenanceDue(scheduledRetryState, 120)).toBe(true)
   expect(researchNoteEvidenceNextRetryAt(scheduledRetryState)).toBe(120)
+
+  const legacyContextDecisionState = {
+    links: [{
+      kind: 'source',
+      source_path: 'db/paper/repeated.md',
+      evidence_context_snapshot: {
+        version: 1,
+        source_fingerprint: 'sha256:saved',
+        target: { block_id: 'old-repeat', text: 'The same sentence appears more than once.' },
+      },
+      evidence_baseline_check: {
+        status: 'skipped',
+        reason: 'candidate',
+        maintenance_version: 1,
+      },
+    }],
+  }
+  expect(researchNoteEvidenceMaintenanceDue(legacyContextDecisionState, 100)).toBe(true)
+  legacyContextDecisionState.links[0].evidence_baseline_check.maintenance_version = 2
+  expect(researchNoteEvidenceMaintenanceDue(legacyContextDecisionState, 100)).toBe(false)
+
+  const savedContextRetryState = {
+    links: [{
+      kind: 'source',
+      source_path: 'db/paper/repeated.md',
+      evidence_context_snapshot: {
+        version: 1,
+        source_fingerprint: 'sha256:saved',
+        target: { block_id: 'old-repeat', text: 'The same sentence appears more than once.' },
+      },
+      evidence_baseline_check: {
+        status: 'failed',
+        reason: 'verification_failed',
+        maintenance_version: 2,
+        retry_after: 120,
+      },
+    }],
+  }
+  expect(researchNoteEvidenceMaintenanceDue(savedContextRetryState, 100)).toBe(false)
+  expect(researchNoteEvidenceMaintenanceDue(savedContextRetryState, 120)).toBe(true)
 })
 
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
@@ -155,6 +195,15 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
           capture_kind: 'selection',
           start_offset: 4,
           end_offset: 49,
+          evidence_context_snapshot: {
+            version: 1,
+            captured_at: 1_799_999_800,
+            source_fingerprint: 'sha256:fixture',
+            reason: 'exact_block',
+            before: [{ block_id: 'before-old', text: 'The coded exposure follows detector calibration.' }],
+            target: { block_id: 'stale-block', text: 'SCI records one compressed video measurement.' },
+            after: [{ block_id: 'after-old', text: 'The reconstruction is evaluated on the same sequence.' }],
+          },
         },
         {
           kind: 'source',
@@ -451,10 +500,40 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
       reason: 'saved_target_missing',
       source_name: READER_REGRESSION_SOURCE_NAME,
       heading_path: 'Fixture Paper / Old section',
-      before: [],
+      before: [{
+        block_id: 'before-candidate',
+        kind: 'paragraph',
+        text: 'The coded exposure follows detector calibration.',
+        markdown: 'The coded exposure follows detector calibration.',
+      }],
       target: null,
-      after: [],
-      candidates: [{ ...target, score: 0.82, reader_open: readerOpen }],
+      after: [{
+        block_id: 'after-candidate',
+        kind: 'paragraph',
+        text: 'The reconstruction is evaluated on the same sequence.',
+        markdown: 'The reconstruction is evaluated on the same sequence.',
+      }],
+      candidates: [{
+        ...target,
+        score: 0.82,
+        before: [{
+          block_id: 'before-candidate',
+          kind: 'paragraph',
+          text: 'The coded exposure follows detector calibration.',
+          markdown: 'The coded exposure follows detector calibration.',
+        }],
+        after: [{
+          block_id: 'after-candidate',
+          kind: 'paragraph',
+          text: 'The reconstruction is evaluated on the same sequence.',
+          markdown: 'The reconstruction is evaluated on the same sequence.',
+        }],
+        context_match: {
+          available_fields: ['before', 'after', 'heading'],
+          matched_fields: ['before', 'after'],
+        },
+        reader_open: readerOpen,
+      }],
       can_open_exact: false,
       reader_open: null,
       source_fingerprint: 'sha256:fixture',
@@ -574,6 +653,21 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(page.getByText('需处理 3', { exact: true })).toBeVisible()
 
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('需要核查')
+  await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('前文')
+  await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('后文')
+  await expect(page.getByTestId('research-note-evidence-result-0')).toContainText(
+    'The coded exposure follows detector calibration.',
+  )
+  await expect(page.getByTestId('research-note-evidence-result-0')).toContainText(
+    'The reconstruction is evaluated on the same sequence.',
+  )
+  expect(evidenceContextBodies.find(body => body.source_path === READER_REGRESSION_SOURCE_PATH)).toEqual(
+    expect.objectContaining({
+      evidence_context_snapshot: expect.objectContaining({
+        source_fingerprint: 'sha256:fixture',
+      }),
+    }),
+  )
   await page.getByTestId('research-note-evidence-repair-candidate-0-0').click()
 
   await expect(page).toHaveURL(/\/reader\/session\/repair-session/)
@@ -902,7 +996,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
             checked_at: 1_800_000_100,
             status: 'failed',
             reason: 'verification_failed',
-            maintenance_version: 1,
+            maintenance_version: 2,
             retry_count: 1,
             retry_after: 1_900_000_000,
           },
@@ -922,7 +1016,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
             checked_at: 1_800_000_100,
             status: 'skipped',
             reason: 'candidate',
-            maintenance_version: 1,
+            maintenance_version: 2,
           },
         })),
       },
@@ -1118,7 +1212,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   expect(failedNote.source_state.links?.[0]?.evidence_baseline_check?.retry_after).toBe(1_900_000_000)
   expect(needsDecisionNote.content_markdown).toBe('A saved quote with multiple possible locations.')
   expect(needsDecisionNote.updated_at).toBe(1_799_999_985)
-  expect(needsDecisionNote.source_state.links?.[0]?.evidence_baseline_check?.maintenance_version).toBe(1)
+  expect(needsDecisionNote.source_state.links?.[0]?.evidence_baseline_check?.maintenance_version).toBe(2)
   expect(evidenceContextBodies).toHaveLength(0)
 
   await page.reload()

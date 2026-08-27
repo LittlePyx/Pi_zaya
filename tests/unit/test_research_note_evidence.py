@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -324,6 +325,34 @@ def test_evidence_maintenance_due_respects_version_and_persisted_retry_schedule(
     )
     assert research_note_evidence_maintenance_due(decision_state, now=100.0) is False
 
+    legacy_context_decision = deepcopy(decision_state)
+    legacy_context_decision["links"][0]["evidence_context_snapshot"] = {
+        "version": 1,
+        "captured_at": 80.0,
+        "source_fingerprint": "sha256:saved",
+        "reason": "exact_block",
+        "before": [],
+        "target": {"block_id": "block-1", "text": "Saved evidence long enough to verify."},
+        "after": [],
+    }
+    legacy_context_decision["links"][0]["evidence_baseline_check"]["maintenance_version"] = (
+        RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION - 1
+    )
+    assert research_note_evidence_maintenance_due(legacy_context_decision, now=100.0) is True
+    legacy_context_decision["links"][0]["evidence_baseline_check"]["maintenance_version"] = (
+        RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION
+    )
+    assert research_note_evidence_maintenance_due(legacy_context_decision, now=100.0) is False
+    legacy_context_decision["links"][0]["evidence_baseline_check"].update(
+        {
+            "status": "failed",
+            "reason": "verification_failed",
+            "retry_after": 120.0,
+        }
+    )
+    assert research_note_evidence_maintenance_due(legacy_context_decision, now=100.0) is False
+    assert research_note_evidence_maintenance_due(legacy_context_decision, now=120.0) is True
+
     retry_state = record_research_note_source_baseline_check(
         {"links": [local_link]},
         source_index=0,
@@ -474,6 +503,118 @@ The same calibration sentence appears here verbatim.
     assert result["reason"] == "ambiguous_quote"
     assert len(result["candidates"]) == 2
     assert result["reader_open"] is None
+
+
+def test_saved_context_strictly_disambiguates_a_repeated_exact_quote(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Repeated evidence
+
+<!-- kb_page: 2 -->
+
+## First experiment
+
+The first detector was calibrated against a stable reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The first run then measured dark counts with the shutter closed.
+
+<!-- kb_page: 3 -->
+
+## Second experiment
+
+The second detector used a different reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The second run then measured saturation under bright illumination.
+""",
+    )
+    blocks = load_source_blocks(path)
+    first_target = next(
+        block
+        for block in blocks
+        if "same calibration sentence" in str(block.get("text") or "")
+        and int(block.get("page_start") or 0) == 2
+    )
+    saved = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id=str(first_target["block_id"]),
+        anchor_id=str(first_target["anchor_id"]),
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id="stale-block-id",
+        anchor_id="stale-anchor-id",
+        saved_context_snapshot=saved["context_snapshot"],
+    )
+
+    assert result["status"] == "exact"
+    assert result["reason"] == "context_disambiguated"
+    assert result["target"]["block_id"] == first_target["block_id"]
+    assert result["context_disambiguation"]["candidate_count"] == 2
+    assert set(result["context_disambiguation"]["matched_fields"]) == {
+        "before",
+        "after",
+        "heading",
+        "page",
+    }
+
+
+def test_saved_context_keeps_a_true_repeated_context_ambiguous(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Repeated evidence
+
+<!-- kb_page: 4 -->
+
+## Shared experiment
+
+The shared detector context appears immediately before the evidence.
+
+The same calibration sentence appears here verbatim.
+
+The shared detector context appears immediately after the evidence.
+
+The shared detector context appears immediately before the evidence.
+
+The same calibration sentence appears here verbatim.
+
+The shared detector context appears immediately after the evidence.
+""",
+    )
+    blocks = load_source_blocks(path)
+    targets = [block for block in blocks if "same calibration sentence" in str(block.get("text") or "")]
+    saved = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id=str(targets[0]["block_id"]),
+        anchor_id=str(targets[0]["anchor_id"]),
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id="stale-block-id",
+        saved_context_snapshot=saved["context_snapshot"],
+    )
+
+    assert result["status"] == "candidate"
+    assert result["reason"] == "ambiguous_quote"
+    assert len(result["candidates"]) == 2
+    assert all(candidate["before"] and candidate["after"] for candidate in result["candidates"])
+    assert all(
+        set(candidate["context_match"]["matched_fields"]) == {"before", "after", "heading", "page"}
+        for candidate in result["candidates"]
+    )
 
 
 def test_unrelated_quote_does_not_create_a_false_location(tmp_path: Path) -> None:

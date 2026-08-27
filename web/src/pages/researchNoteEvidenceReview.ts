@@ -17,7 +17,7 @@ export interface ResearchNoteEvidenceReviewSummary {
 
 const USER_DECISION_REASONS = new Set(['candidate', 'source_changed', 'location_changed'])
 const SYSTEM_RETRY_REASONS = new Set(['unavailable', 'verification_failed', 'source_changed_during_capture'])
-const EVIDENCE_MAINTENANCE_VERSION = 1
+const EVIDENCE_MAINTENANCE_VERSION = 2
 
 function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | undefined) {
   const links = Array.isArray(sourceState?.links) ? sourceState.links : []
@@ -25,7 +25,15 @@ function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | und
     Boolean(link && typeof link === 'object')
     && link.kind !== 'answer'
     && Boolean(String(link.source_path || '').trim())
-    && link.evidence_context_snapshot == null
+    && (
+      link.evidence_context_snapshot == null
+      || (
+        USER_DECISION_REASONS.has(String(link.evidence_baseline_check?.reason || ''))
+        && Number(link.evidence_baseline_check?.maintenance_version || 0) < EVIDENCE_MAINTENANCE_VERSION
+      )
+      || link.evidence_baseline_check?.status === 'failed'
+      || SYSTEM_RETRY_REASONS.has(String(link.evidence_baseline_check?.reason || ''))
+    )
     && link.evidence_verification?.status !== 'invalid'
   ))
 }

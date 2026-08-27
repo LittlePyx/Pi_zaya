@@ -749,6 +749,45 @@
   white-space: normal;
 }
 
+.kb-notes-evidence-candidate-matches {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.kb-notes-evidence-candidate-matches .ant-tag {
+  margin-inline-end: 0;
+  font-size: 10px;
+  line-height: 17px;
+}
+
+.kb-notes-evidence-candidate-passage {
+  display: grid;
+  gap: 5px;
+}
+
+.kb-notes-evidence-candidate-block {
+  padding: 6px 7px;
+  border-left: 2px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--panel) 75%, transparent);
+}
+
+.kb-notes-evidence-candidate-block.is-target {
+  border-left-color: color-mix(in srgb, var(--primary) 70%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, var(--panel));
+}
+
+.kb-notes-evidence-candidate-block > small {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .kb-notes-centered {
   min-height: 120px;
   display: flex;

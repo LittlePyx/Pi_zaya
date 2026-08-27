@@ -264,6 +264,7 @@ function evidenceReasonLabel(S: ReturnType<typeof useT>, reason: string): string
     exact_block: S.research_notes_evidence_reason_exact_block,
     exact_anchor: S.research_notes_evidence_reason_exact_anchor,
     quote_relocated: S.research_notes_evidence_reason_quote_relocated,
+    context_disambiguated: S.research_notes_evidence_reason_context_disambiguated,
     ambiguous_quote: S.research_notes_evidence_reason_ambiguous,
     saved_target_missing: S.research_notes_evidence_reason_target_missing,
     converted_markdown_missing: S.research_notes_evidence_reason_markdown_missing,
@@ -271,6 +272,16 @@ function evidenceReasonLabel(S: ReturnType<typeof useT>, reason: string): string
     no_match: S.research_notes_evidence_reason_no_match,
   }
   return labels[reason] || S.research_notes_evidence_reason_unknown
+}
+
+function evidenceContextMatchFieldLabel(S: ReturnType<typeof useT>, field: string): string {
+  const labels: Record<string, string> = {
+    before: S.research_notes_evidence_candidate_match_before,
+    after: S.research_notes_evidence_candidate_match_after,
+    heading: S.research_notes_evidence_candidate_match_heading,
+    page: S.research_notes_evidence_candidate_match_page,
+  }
+  return labels[field] || field
 }
 
 function evidenceBaselineReasonLabel(S: ReturnType<typeof useT>, reason: string): string {
@@ -2346,30 +2357,63 @@ export default function ResearchNotesPage() {
                               {result.status === 'candidate' ? (
                                 <div className="kb-notes-evidence-candidates">
                                   <strong>{S.research_notes_evidence_candidates_title}</strong>
-                                  {result.candidates.map((candidate, candidateIndex) => (
-                                    <article key={candidate.block_id || candidateIndex}>
-                                      <small>
-                                        {evidenceLocationLabel(
-                                          S,
-                                          candidate.heading_path,
-                                          candidate.page_start,
-                                          candidate.page_end,
-                                        ) || S.research_notes_evidence_location_unknown}
-                                      </small>
-                                      <MarkdownRenderer content={candidate.markdown || candidate.text} citeDetails={[]} linkifyPlainCitations={false} />
-                                      <Button
-                                        type="link"
-                                        icon={<ArrowRightOutlined />}
-                                        disabled={saving || saveIssue === 'conflict'}
-                                        data-testid={`research-note-evidence-repair-candidate-${index}-${candidateIndex}`}
-                                        onClick={() => {
-                                          void openRepairCandidate(link, index, candidate, candidate.reader_open, result)
-                                        }}
-                                      >
-                                        {S.research_notes_evidence_review_candidate}
-                                      </Button>
-                                    </article>
-                                  ))}
+                                  {result.candidates.map((candidate, candidateIndex) => {
+                                    const matchedFields = candidate.context_match?.matched_fields || []
+                                    return (
+                                      <article key={candidate.block_id || candidateIndex}>
+                                        <small>
+                                          {evidenceLocationLabel(
+                                            S,
+                                            candidate.heading_path,
+                                            candidate.page_start,
+                                            candidate.page_end,
+                                          ) || S.research_notes_evidence_location_unknown}
+                                        </small>
+                                        {matchedFields.length > 0 ? (
+                                          <div
+                                            className="kb-notes-evidence-candidate-matches"
+                                            data-testid={`research-note-evidence-candidate-matches-${index}-${candidateIndex}`}
+                                          >
+                                            <span>{S.research_notes_evidence_candidate_context_matches}</span>
+                                            {matchedFields.map(field => (
+                                              <Tag key={field} color="blue">
+                                                {evidenceContextMatchFieldLabel(S, field)}
+                                              </Tag>
+                                            ))}
+                                          </div>
+                                        ) : null}
+                                        <div className="kb-notes-evidence-candidate-passage">
+                                          {(candidate.before || []).map((block, blockIndex) => (
+                                            <div key={`before-${block.block_id || blockIndex}`} className="kb-notes-evidence-candidate-block">
+                                              <small>{S.research_notes_evidence_before}</small>
+                                              <MarkdownRenderer content={block.markdown || block.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                            </div>
+                                          ))}
+                                          <div className="kb-notes-evidence-candidate-block is-target">
+                                            <small>{S.research_notes_evidence_target}</small>
+                                            <MarkdownRenderer content={candidate.markdown || candidate.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                          </div>
+                                          {(candidate.after || []).map((block, blockIndex) => (
+                                            <div key={`after-${block.block_id || blockIndex}`} className="kb-notes-evidence-candidate-block">
+                                              <small>{S.research_notes_evidence_after}</small>
+                                              <MarkdownRenderer content={block.markdown || block.text} citeDetails={[]} linkifyPlainCitations={false} />
+                                            </div>
+                                          ))}
+                                        </div>
+                                        <Button
+                                          type="link"
+                                          icon={<ArrowRightOutlined />}
+                                          disabled={saving || saveIssue === 'conflict'}
+                                          data-testid={`research-note-evidence-repair-candidate-${index}-${candidateIndex}`}
+                                          onClick={() => {
+                                            void openRepairCandidate(link, index, candidate, candidate.reader_open, result)
+                                          }}
+                                        >
+                                          {S.research_notes_evidence_review_candidate}
+                                        </Button>
+                                      </article>
+                                    )
+                                  })}
                                 </div>
                               ) : null}
                             </section>

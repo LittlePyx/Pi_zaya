@@ -212,6 +212,7 @@ class ResearchNoteEvidenceContextBody(BaseModel):
     page_start: int | None = Field(None, ge=1, le=100_000)
     page_end: int | None = Field(None, ge=1, le=100_000)
     source_fingerprint: str = Field("", max_length=96)
+    evidence_context_snapshot: dict[str, Any] | None = None
 
     @field_validator("source_path")
     @classmethod
@@ -1448,6 +1449,7 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
             page_start=body.page_start,
             page_end=body.page_end,
             source_fingerprint=body.source_fingerprint,
+            saved_context_snapshot=body.evidence_context_snapshot,
         )
     except Exception as exc:
         raise HTTPException(500, "research note evidence context failed") from exc
@@ -1578,7 +1580,38 @@ def _capture_chat_research_note_evidence_context_baseline(
             continue
         summary["total"] = int(summary["total"]) + 1
         existing_context_snapshot = raw_link.get("evidence_context_snapshot")
-        if existing_context_snapshot is not None and not refresh_existing:
+        existing_baseline_check = raw_link.get("evidence_baseline_check")
+        try:
+            existing_maintenance_version = (
+                int(existing_baseline_check.get("maintenance_version") or 0)
+                if isinstance(existing_baseline_check, dict)
+                else 0
+            )
+        except (TypeError, ValueError):
+            existing_maintenance_version = 0
+        existing_check_reason = (
+            str(existing_baseline_check.get("reason") or "").strip()
+            if isinstance(existing_baseline_check, dict)
+            else ""
+        )
+        existing_check_status = (
+            str(existing_baseline_check.get("status") or "").strip()
+            if isinstance(existing_baseline_check, dict)
+            else ""
+        )
+        refresh_saved_issue = bool(
+            isinstance(existing_baseline_check, dict)
+            and (
+                (
+                    existing_check_reason in {"candidate", "source_changed", "location_changed"}
+                    and existing_maintenance_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION
+                )
+                or existing_check_status == "failed"
+                or existing_check_reason
+                in {"unavailable", "verification_failed", "source_changed_during_capture"}
+            )
+        )
+        if existing_context_snapshot is not None and not refresh_existing and not refresh_saved_issue:
             record_result(source_index, raw_link, status="skipped", reason="already_present")
             continue
         verification = raw_link.get("evidence_verification")
@@ -1628,6 +1661,7 @@ def _capture_chat_research_note_evidence_context_baseline(
                 page_start=raw_link.get("page_start"),
                 page_end=raw_link.get("page_end"),
                 source_fingerprint=saved_fingerprint,
+                saved_context_snapshot=existing_context_snapshot,
             )
         except Exception:
             record_result(source_index, raw_link, status="failed", reason="verification_failed")
@@ -1648,12 +1682,19 @@ def _capture_chat_research_note_evidence_context_baseline(
         automatic_action = ""
         if (
             verified_status == "exact"
-            and verified_reason in {"exact_block", "exact_anchor", "quote_relocated"}
+            and verified_reason in {
+                "exact_block",
+                "exact_anchor",
+                "quote_relocated",
+                "context_disambiguated",
+            }
             and isinstance(target, dict)
             and isinstance(snapshot, dict)
         ):
             if verified_reason == "quote_relocated":
                 automatic_action = "exact_quote_auto_relocated"
+            elif verified_reason == "context_disambiguated":
+                automatic_action = "saved_context_auto_disambiguated"
             elif bool(verified.get("source_changed")):
                 automatic_action = "source_change_auto_verified"
             elif stable_locator_changed:

@@ -438,7 +438,7 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await page.getByTestId('research-note-evidence-review-1').click()
   const candidateReview = page.getByTestId('research-note-evidence-result-1')
   await expect(candidateReview).toContainText('需要核查')
-  await expect(candidateReview).toContainText('候选位置（不会自动跳转）')
+  await expect(candidateReview).toContainText('候选位置（请对照保存语境）')
   await expect(candidateReview).toContainText('A similar dynamic-range observation appears in this paragraph.')
   await expect(page.getByTestId('research-note-source-1').getByRole('button', { name: '打开准确位置' })).toHaveCount(0)
   await expect(page).toHaveURL(/\/notes$/)

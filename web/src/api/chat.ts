@@ -135,7 +135,7 @@ export interface ResearchNoteSourceLink {
   evidence_auto_resolution_history?: Array<{
     version?: number
     resolved_at?: number
-    action?: 'source_change_auto_verified' | 'exact_quote_auto_relocated' | 'stable_locator_auto_aligned' | string
+    action?: 'source_change_auto_verified' | 'exact_quote_auto_relocated' | 'stable_locator_auto_aligned' | 'saved_context_auto_disambiguated' | string
     match_reason?: string
     source_fingerprint?: string
     from?: Record<string, unknown>
@@ -191,6 +191,12 @@ export interface ResearchNoteEvidenceContextSnapshot {
 
 export interface ResearchNoteEvidenceCandidate extends ResearchNoteEvidenceBlock {
   score: number
+  before?: ResearchNoteEvidenceBlock[]
+  after?: ResearchNoteEvidenceBlock[]
+  context_match?: {
+    available_fields: string[]
+    matched_fields: string[]
+  }
   reader_open: MessageProvenanceReaderOpen
 }
 
@@ -210,6 +216,12 @@ export interface ResearchNoteEvidenceContext {
   source_fingerprint: string
   source_changed: boolean
   context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  context_disambiguation?: {
+    mode: 'saved_context' | string
+    candidate_count: number
+    available_fields: string[]
+    matched_fields: string[]
+  }
 }
 
 export interface ResearchNoteEvidenceRepairBody {
@@ -1807,6 +1819,7 @@ export const chatApi = {
       anchor_id: link.anchor_id,
       anchor_kind: link.anchor_kind,
       source_fingerprint: link.evidence_verification?.source_fingerprint,
+      evidence_context_snapshot: link.evidence_context_snapshot,
     }),
   repairResearchNoteEvidence: (noteId: string, body: ResearchNoteEvidenceRepairBody) =>
     api.post<ResearchNoteRecord>(

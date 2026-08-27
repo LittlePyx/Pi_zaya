@@ -406,6 +406,27 @@ Photon arrival is a stochastic process governed by Poisson statistics.
                 "kind": "source",
                 "source_path": "library/missing.pdf",
                 "evidence_quote": "Saved evidence from a temporarily missing source.",
+                "evidence_context_snapshot": {
+                    "version": 1,
+                    "captured_at": 80.0,
+                    "source_fingerprint": "sha256:saved-missing",
+                    "reason": "exact_block",
+                    "before": [],
+                    "target": {
+                        "block_id": "missing-block",
+                        "text": "Saved evidence from a temporarily missing source.",
+                    },
+                    "after": [],
+                },
+                "evidence_baseline_check": {
+                    "version": 1,
+                    "checked_at": 90.0,
+                    "status": "failed",
+                    "reason": "verification_failed",
+                    "maintenance_version": 2,
+                    "retry_count": 1,
+                    "retry_after": 95.0,
+                },
             }]
         },
     )
@@ -483,7 +504,7 @@ Photon arrival is a stochastic process governed by Poisson statistics.
     assert research_note_evidence_maintenance_due(missing_after["source_state"], now=retry_check["checked_at"]) is False
     decision_check = decision_after["source_state"]["links"][0]["evidence_baseline_check"]
     assert decision_check["reason"] == "candidate"
-    assert decision_check["maintenance_version"] == 1
+    assert decision_check["maintenance_version"] == 2
 
     immediate_repeat = client.post(
         "/api/chat/research-notes/evidence-maintenance",
@@ -606,6 +627,124 @@ Photon arrival is a stochastic process governed by Poisson statistics.
     assert decision_after["revision"] == 2
     assert decision_after["source_state"]["links"][0]["evidence_baseline_check"]["reason"] == "candidate"
     assert unrelated_after["revision"] == 1
+
+
+def test_repeated_quote_is_auto_relocated_from_saved_context_without_user_note_changes(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+    from kb.source_blocks import load_source_blocks
+
+    md_path = tmp_path / "repeated.en.md"
+    md_path.write_text(
+        """# Repeated evidence
+
+<!-- kb_page: 2 -->
+
+## First experiment
+
+The first detector was calibrated against a stable reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The first run then measured dark counts with the shutter closed.
+
+<!-- kb_page: 3 -->
+
+## Second experiment
+
+The second detector used a different reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The second run then measured saturation under bright illumination.
+""",
+        encoding="utf-8",
+    )
+    blocks = load_source_blocks(md_path)
+    first_target = next(
+        block
+        for block in blocks
+        if "same calibration sentence" in str(block.get("text") or "")
+        and int(block.get("page_start") or 0) == 2
+    )
+    saved = chat_router.build_research_note_evidence_context(
+        md_path=md_path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id=str(first_target["block_id"]),
+        anchor_id=str(first_target["anchor_id"]),
+    )
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    note = store.create_research_note(
+        title="Repeated evidence",
+        content_markdown="User reading note must remain byte-for-byte unchanged.",
+        source_state={"links": [{
+            "kind": "source",
+            "source_path": "library/repeated.pdf",
+            "block_id": "stale-block",
+            "anchor_id": "stale-anchor",
+            "heading_path": "First experiment",
+            "page_start": 2,
+            "evidence_quote": "The same calibration sentence appears here verbatim.",
+            "evidence_context_snapshot": saved["context_snapshot"],
+            "evidence_verification": {
+                "status": "exact",
+                "reason": "captured",
+                "source_fingerprint": saved["source_fingerprint"],
+            },
+            "evidence_baseline_check": {
+                "version": 1,
+                "status": "skipped",
+                "reason": "candidate",
+                "maintenance_version": 1,
+            },
+        }]},
+    )
+    assert note is not None
+
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda _path: str(md_path))
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", lambda *args, **kwargs: md_path)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    inspected = client.post(
+        "/api/chat/research-note/evidence-context",
+        json={
+            "source_path": "library/repeated.pdf",
+            "evidence_quote": "The same calibration sentence appears here verbatim.",
+            "block_id": "stale-block",
+            "anchor_id": "stale-anchor",
+            "source_fingerprint": saved["source_fingerprint"],
+            "evidence_context_snapshot": saved["context_snapshot"],
+        },
+    )
+    assert inspected.status_code == 200
+    assert inspected.json()["reason"] == "context_disambiguated"
+    assert inspected.json()["target"]["block_id"] == first_target["block_id"]
+
+    maintained = client.post(
+        "/api/chat/research-notes/evidence-maintenance",
+        json={"notes": [{"note_id": note["id"], "expected_revision": note["revision"]}]},
+    )
+    assert maintained.status_code == 200
+    summary = maintained.json()["summary"]
+    assert summary["resolved_links"] == 1
+    assert summary["decision_links"] == 0
+
+    updated = store.get_research_note(note["id"])
+    assert updated is not None
+    assert updated["revision"] == 2
+    assert updated["updated_at"] == note["updated_at"]
+    assert updated["content_markdown"] == "User reading note must remain byte-for-byte unchanged."
+    link = updated["source_state"]["links"][0]
+    assert link["block_id"] == first_target["block_id"]
+    assert link["evidence_verification"]["reason"] == "saved_context_auto_disambiguated"
+    assert link["evidence_auto_resolution_history"][-1]["action"] == "saved_context_auto_disambiguated"
+    assert "evidence_baseline_check" not in link
 
 
 def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(
