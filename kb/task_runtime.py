@@ -142,6 +142,7 @@ from kb.file_ops import _resolve_md_output_paths
 from kb.converter.quality_gate import prepare_markdown_for_index
 from kb.converter.quality_repair import append_conversion_repair_attempt
 from kb.converter.structured_indices import rebuild_structured_indices_for_markdown
+from kb.research_note_maintenance import enqueue_research_note_source_recovery
 from kb.llm import DeepSeekChat
 from kb.library_figure_runtime import (
     _build_doc_figure_card as _figure_build_doc_figure_card,
@@ -8654,6 +8655,29 @@ def _bg_finish_persisted_task(message: str, *, task_id: str) -> None:
         logger.exception("conversion_job_finish_persist_failed", extra={"task_id": task_id})
 
 
+def _bg_enqueue_research_note_recovery_if_ready(
+    *,
+    pdf_path: Path,
+    md_path: Path,
+    conversion_ok: bool,
+    quality_validated: bool,
+    quality: dict,
+    cancelled: bool,
+) -> bool:
+    if (
+        not conversion_ok
+        or not md_path.is_file()
+        or not quality_validated
+        or not bool((quality or {}).get("indexable"))
+        or cancelled
+    ):
+        return False
+    return enqueue_research_note_source_recovery(
+        (str(pdf_path), str(md_path)),
+        reason="conversion_ready",
+    )
+
+
 def _bg_worker_loop() -> None:
     while True:
         task = bg_begin_next_task_or_idle(_BG_STATE, _BG_LOCK)
@@ -8824,6 +8848,7 @@ def _bg_worker_loop() -> None:
                 )
 
             post_convert_quality: dict = {}
+            post_convert_quality_validated = False
             if ok and md_exists and not _bg_cancel_requested(_should_cancel):
                 try:
                     _bg_set_conversion_stage("finalizing", task_id=task_id)
@@ -8839,6 +8864,7 @@ def _bg_worker_loop() -> None:
                         speed_mode=speed_mode,
                         source_pdf_path=pdf,
                     )
+                    post_convert_quality_validated = True
                     if not bool(post_convert_quality.get("indexable")):
                         msg = f"OK+QUALITY_BLOCKED: {out_folder}"
                     elif bool(_quality_gate_auto_repair(post_convert_quality).get("changed")):
@@ -8862,8 +8888,10 @@ def _bg_worker_loop() -> None:
                             allow_blocked=False,
                             source_pdf_path=pdf,
                         ) if md_exists else {}
+                        post_convert_quality_validated = bool(md_exists)
                     except Exception:
                         post_convert_quality = {}
+                        post_convert_quality_validated = False
                     _bg_record_repair_attempt(
                         md_main if md_exists else None,
                         event="targeted_page_retry_finished",
@@ -8998,6 +9026,7 @@ def _bg_worker_loop() -> None:
                         },
                     )
                 post_convert_quality = {}
+                post_convert_quality_validated = False
                 if ok and md_exists and not _bg_cancel_requested(_should_cancel):
                     try:
                         _on_progress(
@@ -9012,6 +9041,7 @@ def _bg_worker_loop() -> None:
                             speed_mode=effective_speed_mode,
                             source_pdf_path=pdf,
                         )
+                        post_convert_quality_validated = True
                         if not bool(post_convert_quality.get("indexable")):
                             msg = f"OK+SOURCE_RETRY_QUALITY_BLOCKED: {out_folder}"
                         elif bool(_quality_gate_auto_repair(post_convert_quality).get("changed")):
@@ -9113,6 +9143,14 @@ def _bg_worker_loop() -> None:
                             detail="background ingest failed after conversion",
                         )
                     pass
+            _bg_enqueue_research_note_recovery_if_ready(
+                pdf_path=pdf,
+                md_path=md_main,
+                conversion_ok=bool(ok and md_exists),
+                quality_validated=post_convert_quality_validated,
+                quality=post_convert_quality,
+                cancelled=_bg_cancel_requested(_should_cancel),
+            )
         except Exception as e:
             if targeted_backup_root is not None and "md_folder" in locals():
                 try:

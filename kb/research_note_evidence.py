@@ -49,8 +49,49 @@ def source_content_fingerprint(path: Path | str) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def _source_identity(value: Any) -> str:
+def research_note_source_identity(value: Any) -> str:
     return _clean_text(value, limit=1_200).replace("\\", "/").casefold()
+
+
+def research_note_source_path_matches(value: Any, source_paths: Any) -> bool:
+    """Match a saved source path to equivalent recovery-event path forms.
+
+    The basename fallback admits root-relative library paths into the bounded
+    candidate scan. The verifier still resolves and checks the real source
+    before it can update evidence state.
+    """
+    identity = research_note_source_identity(value)
+    if not identity:
+        return False
+    filename = identity.rsplit("/", 1)[-1]
+    for raw_path in source_paths or ():
+        candidate = research_note_source_identity(raw_path)
+        if candidate and (candidate == identity or candidate.rsplit("/", 1)[-1] == filename):
+            return True
+    return False
+
+
+def research_note_source_state_matches_paths(
+    source_state: Any,
+    source_paths: Any = None,
+) -> bool:
+    if not isinstance(source_state, dict):
+        return False
+    links = source_state.get("links")
+    if not isinstance(links, list):
+        return False
+    scan_all = source_paths is None
+    return any(
+        isinstance(link, dict)
+        and str(link.get("kind") or "").strip() != "answer"
+        and bool(research_note_source_identity(link.get("source_path")))
+        and (scan_all or research_note_source_path_matches(link.get("source_path"), source_paths))
+        for link in links
+    )
+
+
+def _source_identity(value: Any) -> str:
+    return research_note_source_identity(value)
 
 
 def _locator_snapshot(link: dict[str, Any]) -> dict[str, Any]:

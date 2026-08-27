@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 from kb.path_safety import clean_file_source_path_input
+from kb.research_note_evidence import research_note_source_state_matches_paths
 
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
 MAX_CITATION_SHELF_ITEMS = 120
@@ -1647,6 +1648,33 @@ class ChatStore:
                 (nid,),
             ).fetchone()
         return _research_note_record(row) if row else None
+
+    def list_research_notes_for_source_paths(
+        self,
+        source_paths: list[str] | tuple[str, ...] | None,
+        *,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Return note summaries that may reference recovered library sources."""
+        lim = max(1, min(500, int(limit or 500)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_id, source_conv_id, title,
+                       '' AS content_markdown, source_state_json, tags_json,
+                       pinned, archived, revision, created_at, updated_at
+                FROM research_notes
+                ORDER BY updated_at DESC, created_at DESC
+                """
+            ).fetchall()
+        records: list[dict] = []
+        for row in rows:
+            record = _research_note_record(row, include_content=False)
+            if research_note_source_state_matches_paths(record.get("source_state"), source_paths):
+                records.append(record)
+                if len(records) >= lim:
+                    break
+        return records
 
     def update_research_note(
         self,

@@ -65,6 +65,7 @@ from kb.research_note_evidence import (
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
     research_note_evidence_maintenance_due,
+    research_note_source_path_matches,
     resolve_research_note_source_baseline_check,
     review_research_note_source_state,
     source_content_fingerprint,
@@ -1452,16 +1453,18 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
         raise HTTPException(500, "research note evidence context failed") from exc
 
 
-@router.post("/chat/research-notes/{note_id}/evidence-context-baseline")
-def capture_chat_research_note_evidence_context_baseline(
+def _capture_chat_research_note_evidence_context_baseline(
     note_id: str,
-    body: ResearchNoteEvidenceBaselineBody,
+    expected_revision: int,
+    *,
+    source_path_filter: tuple[str, ...] | None = None,
+    refresh_existing: bool = False,
 ):
     store = get_chat_store()
     note = store.get_research_note(note_id)
     if note is None:
         raise HTTPException(404, "research note not found")
-    if int(note.get("revision") or 1) != body.expected_revision:
+    if int(note.get("revision") or 1) != expected_revision:
         raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
 
     source_state = note.get("source_state") if isinstance(note.get("source_state"), dict) else {}
@@ -1567,8 +1570,15 @@ def capture_chat_research_note_evidence_context_baseline(
     for source_index, raw_link in enumerate(links):
         if not isinstance(raw_link, dict) or str(raw_link.get("kind") or "").strip() == "answer":
             continue
+        source_path_raw = str(raw_link.get("source_path") or "").strip()
+        if source_path_filter is not None and not research_note_source_path_matches(
+            source_path_raw,
+            source_path_filter,
+        ):
+            continue
         summary["total"] = int(summary["total"]) + 1
-        if raw_link.get("evidence_context_snapshot") is not None:
+        existing_context_snapshot = raw_link.get("evidence_context_snapshot")
+        if existing_context_snapshot is not None and not refresh_existing:
             record_result(source_index, raw_link, status="skipped", reason="already_present")
             continue
         verification = raw_link.get("evidence_verification")
@@ -1576,7 +1586,6 @@ def capture_chat_research_note_evidence_context_baseline(
         if str(verification.get("status") or "").strip().lower() == "invalid":
             record_result(source_index, raw_link, status="skipped", reason="invalid")
             continue
-        source_path_raw = str(raw_link.get("source_path") or "").strip()
         if not source_path_raw:
             record_result(source_index, raw_link, status="skipped", reason="unavailable")
             continue
@@ -1598,7 +1607,14 @@ def capture_chat_research_note_evidence_context_baseline(
             record_result(source_index, raw_link, status="skipped", reason="unavailable")
             continue
 
-        saved_fingerprint = str(verification.get("source_fingerprint") or "").strip()
+        snapshot_fingerprint = (
+            str(existing_context_snapshot.get("source_fingerprint") or "").strip()
+            if isinstance(existing_context_snapshot, dict)
+            else ""
+        )
+        saved_fingerprint = str(
+            verification.get("source_fingerprint") or snapshot_fingerprint or ""
+        ).strip()
         try:
             verified = build_research_note_evidence_context(
                 md_path=md_path,
@@ -1762,6 +1778,15 @@ def capture_chat_research_note_evidence_context_baseline(
                 source_fingerprint=current_fingerprint,
             )
             continue
+        if existing_context_snapshot is not None:
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="already_present",
+                source_fingerprint=current_fingerprint,
+            )
+            continue
         try:
             next_source_state = capture_research_note_source_context_baseline(
                 next_source_state,
@@ -1785,7 +1810,7 @@ def capture_chat_research_note_evidence_context_baseline(
     if next_source_state != source_state:
         record, conflicted = store.update_research_note_evidence_state(
             note_id,
-            expected_revision=body.expected_revision,
+            expected_revision=expected_revision,
             source_state=next_source_state,
         )
         if conflicted:
@@ -1796,9 +1821,85 @@ def capture_chat_research_note_evidence_context_baseline(
         record = store.get_research_note(note_id)
         if record is None:
             raise HTTPException(404, "research note not found")
-        if int(record.get("revision") or 1) != body.expected_revision:
+        if int(record.get("revision") or 1) != expected_revision:
             raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
     return {"note": record, "summary": summary, "items": items}
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-context-baseline")
+def capture_chat_research_note_evidence_context_baseline(
+    note_id: str,
+    body: ResearchNoteEvidenceBaselineBody,
+):
+    return _capture_chat_research_note_evidence_context_baseline(
+        note_id,
+        body.expected_revision,
+    )
+
+
+def maintain_research_note_evidence_for_recovered_sources(
+    *,
+    source_paths: tuple[str, ...] | None,
+    reason: str,
+) -> dict[str, Any]:
+    """Revalidate notes after source recovery without changing user note text."""
+    store = get_chat_store()
+    candidates = store.list_research_notes_for_source_paths(source_paths, limit=500)
+    summary: dict[str, Any] = {
+        "reason": str(reason or "source_recovered")[:240],
+        "candidates": len(candidates),
+        "processed": 0,
+        "updated": 0,
+        "resolved_links": 0,
+        "decision_links": 0,
+        "conflicted": 0,
+        "errors": 0,
+    }
+    for candidate in candidates:
+        note_id = str(candidate.get("id") or "").strip()
+        if not note_id:
+            continue
+        result: dict[str, Any] | None = None
+        for attempt in range(2):
+            current = store.get_research_note(note_id)
+            if current is None:
+                break
+            expected_revision = int(current.get("revision") or 1)
+            try:
+                result = _capture_chat_research_note_evidence_context_baseline(
+                    note_id,
+                    expected_revision,
+                    source_path_filter=source_paths,
+                    refresh_existing=True,
+                )
+                break
+            except HTTPException as exc:
+                if exc.status_code == 409 and attempt == 0:
+                    continue
+                if exc.status_code == 409:
+                    summary["conflicted"] = int(summary["conflicted"]) + 1
+                else:
+                    summary["errors"] = int(summary["errors"]) + 1
+                break
+            except Exception:
+                summary["errors"] = int(summary["errors"]) + 1
+                break
+        if result is None:
+            continue
+        result_summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        if int(result_summary.get("total") or 0) <= 0:
+            continue
+        summary["processed"] = int(summary["processed"]) + 1
+        record = result.get("note") if isinstance(result.get("note"), dict) else {}
+        if int(record.get("revision") or 1) != int(candidate.get("revision") or 1):
+            summary["updated"] = int(summary["updated"]) + 1
+        summary["resolved_links"] = int(summary["resolved_links"]) + int(result_summary.get("created") or 0)
+        reasons = result_summary.get("reasons") if isinstance(result_summary.get("reasons"), dict) else {}
+        summary["decision_links"] = int(summary["decision_links"]) + sum(
+            int(reasons.get(item) or 0)
+            for item in ("candidate", "source_changed", "location_changed")
+        )
+    return summary
 
 
 @router.post("/chat/research-notes/evidence-maintenance")

@@ -754,6 +754,56 @@ def test_post_convert_quality_gate_passes_source_pdf_path(monkeypatch, tmp_path:
     assert captured["source_pdf_path"] == pdf_path
 
 
+def test_conversion_recovery_event_requires_a_present_quality_accepted_source(monkeypatch, tmp_path: Path):
+    pdf_path = tmp_path / "paper.pdf"
+    md_path = tmp_path / "paper.en.md"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    md_path.write_text("<!-- kb_page: 1 -->\n# Paper\n", encoding="utf-8")
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        task_runtime,
+        "enqueue_research_note_source_recovery",
+        lambda paths, *, reason: calls.append({"paths": tuple(paths), "reason": reason}) or True,
+    )
+
+    assert task_runtime._bg_enqueue_research_note_recovery_if_ready(
+        pdf_path=pdf_path,
+        md_path=md_path,
+        conversion_ok=True,
+        quality_validated=True,
+        quality={"indexable": True},
+        cancelled=False,
+    ) is True
+    assert task_runtime._bg_enqueue_research_note_recovery_if_ready(
+        pdf_path=pdf_path,
+        md_path=md_path,
+        conversion_ok=True,
+        quality_validated=False,
+        quality={"indexable": True},
+        cancelled=False,
+    ) is False
+    assert task_runtime._bg_enqueue_research_note_recovery_if_ready(
+        pdf_path=pdf_path,
+        md_path=md_path,
+        conversion_ok=True,
+        quality_validated=True,
+        quality={"indexable": False},
+        cancelled=False,
+    ) is False
+    assert task_runtime._bg_enqueue_research_note_recovery_if_ready(
+        pdf_path=pdf_path,
+        md_path=md_path,
+        conversion_ok=True,
+        quality_validated=True,
+        quality={"indexable": True},
+        cancelled=True,
+    ) is False
+    assert calls == [{
+        "paths": (str(pdf_path), str(md_path)),
+        "reason": "conversion_ready",
+    }]
+
+
 def test_post_convert_quality_gate_blocks_damaged_markdown_before_indexing(monkeypatch, tmp_path: Path):
     from kb import task_runtime
 

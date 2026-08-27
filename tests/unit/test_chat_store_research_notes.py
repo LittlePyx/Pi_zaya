@@ -122,6 +122,37 @@ def test_research_note_evidence_maintenance_preserves_user_edit_time_and_guards_
     assert stale["revision"] == 2
 
 
+def test_research_notes_can_be_selected_for_recovered_source_paths(tmp_path: Path) -> None:
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    paper = store.create_research_note(
+        title="Paper evidence",
+        content_markdown="Keep this body private to the full record.",
+        source_state={"links": [{"kind": "source", "source_path": "library/Paper.pdf"}]},
+        archived=True,
+    )
+    other = store.create_research_note(
+        title="Other evidence",
+        content_markdown="",
+        source_state={"links": [{"kind": "source", "source_path": "library/other.pdf"}]},
+    )
+    answer_only = store.create_research_note(
+        title="Answer only",
+        content_markdown="",
+        source_state={"links": [{"kind": "answer", "source_path": "library/Paper.pdf"}]},
+    )
+    assert paper is not None and other is not None and answer_only is not None
+
+    matched = store.list_research_notes_for_source_paths(
+        (r"C:\library\paper.pdf", r"C:\converted\paper.en.md"),
+    )
+    scanned = store.list_research_notes_for_source_paths(None)
+
+    assert [item["id"] for item in matched] == [paper["id"]]
+    assert matched[0]["archived"] is True
+    assert matched[0]["content_markdown"] == ""
+    assert {item["id"] for item in scanned} == {paper["id"], other["id"]}
+
+
 def test_research_note_delete_is_explicit(tmp_path: Path) -> None:
     store = ChatStore(tmp_path / "chat.sqlite3")
     created = store.create_research_note(title="Delete me", content_markdown="Content")

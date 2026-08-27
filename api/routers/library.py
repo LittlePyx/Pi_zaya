@@ -92,6 +92,10 @@ from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
 from kb.reference_sync import start_reference_sync
+from kb.research_note_maintenance import (
+    enqueue_research_note_source_recovery,
+    enqueue_research_note_source_recovery_scan,
+)
 from kb.store import (
     atomic_write_json,
     compute_doc_id,
@@ -8582,6 +8586,11 @@ def reindex_file(body: ReindexFileBody):
         started_at=started_at,
         detail=error,
     )
+    if ready:
+        enqueue_research_note_source_recovery(
+            (str(pdf_path), str(md_main)),
+            reason="file_reindex_ready",
+        )
     return {
         "ok": ready,
         "task_id": task_id,
@@ -8660,6 +8669,8 @@ def _run_library_reindex() -> dict:
             )
         except Exception as exc:
             refsync_error = str(exc)
+    if ok:
+        enqueue_research_note_source_recovery_scan(reason="library_reindex_ready")
     return {
         "ok": bool(ok),
         "stdout": result.stdout[-500:],

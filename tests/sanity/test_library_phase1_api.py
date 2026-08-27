@@ -669,6 +669,11 @@ def test_reindex_file_retries_only_target_index(
     monkeypatch.setattr(library_router, "_bg_record_task_result", fake_record)
     monkeypatch.setattr(
         library_router,
+        "enqueue_research_note_source_recovery",
+        lambda paths, *, reason: calls.setdefault("recovery", {"paths": tuple(paths), "reason": reason}),
+    )
+    monkeypatch.setattr(
+        library_router,
         "run_pdf_to_md",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("index retry must not reconvert the PDF")),
     )
@@ -686,6 +691,13 @@ def test_reindex_file_retries_only_target_index(
     assert calls["record"]["operation"] == "index_retry"
     assert calls["record"]["outcome"] == expected_outcome
     assert calls["record"]["detail"] == str(ingest_result.get("error") or "")
+    if expected_ok:
+        assert calls["recovery"] == {
+            "paths": (str(pdf), str(md)),
+            "reason": "file_reindex_ready",
+        }
+    else:
+        assert "recovery" not in calls
 
 
 def test_reindex_file_passes_explicit_quality_override_and_returns_audit_state(monkeypatch, tmp_path: Path):
@@ -743,6 +755,48 @@ def test_reindex_file_passes_explicit_quality_override_and_returns_audit_state(m
     assert calls["ingest"]["allow_blocked_quality"] is True
     assert calls["audit"]["event"] == "quality_override_confirmed"
     assert calls["audit"]["issue_codes"] == ["source_text_loss"]
+
+
+def test_successful_library_reindex_queues_recovered_source_scan(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    db_dir = tmp_path / "db"
+    ingest_py = tmp_path / "ingest.py"
+    md_dir.mkdir()
+    pdf_dir.mkdir()
+    ingest_py.write_text("# test fixture\n", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir, library_db_path=tmp_path / "library.sqlite3"),
+    )
+    monkeypatch.setattr(
+        library_router.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="indexed", stderr=""),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda *args, **kwargs: {"rebuilt": 1, "failed": 0},
+    )
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: {"queued": 0})
+    monkeypatch.setattr(
+        library_router,
+        "enqueue_research_note_source_recovery_scan",
+        lambda *, reason: calls.append(reason) or True,
+    )
+
+    result = library_router._run_library_reindex()
+
+    assert result["ok"] is True
+    assert calls == ["library_reindex_ready"]
 
 
 def test_convert_status_ignores_stale_total_without_active_or_queue(monkeypatch):

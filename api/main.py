@@ -17,6 +17,10 @@ from api.routers import app as app_router
 from api.routers import auth, chat, evidence_matrices, generate, library, maintenance, references, research_briefs, research_gaps, settings, user_issues
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 from kb.config import load_settings
+from kb.research_note_maintenance import (
+    register_research_note_recovery_handler,
+    unregister_research_note_recovery_handler,
+)
 from kb.retriever_cache import warm_retriever_async
 from kb.task_runtime import _bg_reconcile_persisted_jobs
 from kb.user_issue_store import start_remote_outbox_worker
@@ -24,6 +28,8 @@ from kb.user_issue_store import start_remote_outbox_worker
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    recovery_handler = chat.maintain_research_note_evidence_for_recovered_sources
+    register_research_note_recovery_handler(recovery_handler)
     try:
         _bg_reconcile_persisted_jobs()
     except Exception:
@@ -36,7 +42,10 @@ async def lifespan(app: FastAPI):
         warm_retriever_async(load_settings().db_dir)
     except Exception:
         pass
-    yield
+    try:
+        yield
+    finally:
+        unregister_research_note_recovery_handler(recovery_handler)
 
 
 app = FastAPI(title="Pi-zaya API", version=read_app_version(), lifespan=lifespan)

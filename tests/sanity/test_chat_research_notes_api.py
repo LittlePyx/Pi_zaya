@@ -500,6 +500,114 @@ Photon arrival is a stochastic process governed by Poisson statistics.
     assert store.get_research_note(missing["id"])["revision"] == 2
 
 
+def test_recovered_source_event_refreshes_exact_note_evidence_and_leaves_only_real_decisions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+    from kb.research_note_maintenance import (
+        enqueue_research_note_source_recovery,
+        register_research_note_recovery_handler,
+        unregister_research_note_recovery_handler,
+        wait_for_research_note_recovery_idle,
+    )
+    from kb.source_blocks import load_source_blocks
+
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        """# Paper
+
+## Results
+
+Photon arrival is a stochastic process governed by Poisson statistics.
+""",
+        encoding="utf-8",
+    )
+    target = next(block for block in load_source_blocks(md_path) if "Photon arrival" in block["text"])
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    exact = store.create_research_note(
+        title="Exact recovered evidence",
+        content_markdown="User reading note remains unchanged.",
+        source_state={"links": [{
+            "kind": "source",
+            "source_path": "library/paper.pdf",
+            "block_id": target["block_id"],
+            "anchor_id": target["anchor_id"],
+            "evidence_quote": target["text"],
+        }]},
+    )
+    decision = store.create_research_note(
+        title="Ambiguous recovered evidence",
+        content_markdown="",
+        source_state={"links": [{
+            "kind": "source",
+            "source_path": "library/paper.pdf",
+            "block_id": "stale-block",
+            "anchor_id": "stale-anchor",
+            "evidence_quote": "photon arrivals follow Poisson behavior",
+        }]},
+    )
+    unrelated = store.create_research_note(
+        title="Unrelated source",
+        content_markdown="",
+        source_state={"links": [{
+            "kind": "source",
+            "source_path": "library/other.pdf",
+            "evidence_quote": "Other evidence.",
+        }]},
+    )
+    assert exact is not None and decision is not None and unrelated is not None
+
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda _path: str(md_path))
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", lambda *args, **kwargs: md_path)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    baseline = chat_router.capture_chat_research_note_evidence_context_baseline(
+        exact["id"],
+        chat_router.ResearchNoteEvidenceBaselineBody(expected_revision=1),
+    )
+    before = baseline["note"]
+    before_fingerprint = before["source_state"]["links"][0]["evidence_context_snapshot"]["source_fingerprint"]
+    assert before["revision"] == 2
+
+    md_path.write_text(
+        md_path.read_text(encoding="utf-8") + "\n## Notes\n\nConversion repair restored this source.\n",
+        encoding="utf-8",
+    )
+    handler = chat_router.maintain_research_note_evidence_for_recovered_sources
+    unregister_research_note_recovery_handler()
+    register_research_note_recovery_handler(handler)
+    try:
+        assert enqueue_research_note_source_recovery(
+            (str(tmp_path / "paper.pdf"), str(md_path)),
+            reason="conversion_ready",
+        ) is True
+        assert wait_for_research_note_recovery_idle(timeout=5.0) is True
+        assert enqueue_research_note_source_recovery(
+            (str(tmp_path / "paper.pdf"), str(md_path)),
+            reason="file_reindex_ready",
+        ) is True
+        assert wait_for_research_note_recovery_idle(timeout=5.0) is True
+    finally:
+        unregister_research_note_recovery_handler(handler)
+
+    exact_after = store.get_research_note(exact["id"])
+    decision_after = store.get_research_note(decision["id"])
+    unrelated_after = store.get_research_note(unrelated["id"])
+    assert exact_after is not None and decision_after is not None and unrelated_after is not None
+    exact_link = exact_after["source_state"]["links"][0]
+    assert exact_after["revision"] == 3
+    assert exact_after["updated_at"] == exact["updated_at"]
+    assert exact_after["content_markdown"] == "User reading note remains unchanged."
+    assert exact_link["evidence_context_snapshot"]["source_fingerprint"] != before_fingerprint
+    assert exact_link["evidence_verification"]["reason"] == "source_change_auto_verified"
+    assert exact_link["evidence_auto_resolution_history"][-1]["action"] == "source_change_auto_verified"
+    assert decision_after["revision"] == 2
+    assert decision_after["source_state"]["links"][0]["evidence_baseline_check"]["reason"] == "candidate"
+    assert unrelated_after["revision"] == 1
+
+
 def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(
     monkeypatch,
     tmp_path: Path,
