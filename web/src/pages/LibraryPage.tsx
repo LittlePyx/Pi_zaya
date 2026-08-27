@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons'
 import type {
   LibraryFileItem,
+  LibraryDeleteImpactResponse,
   LibraryQualityActionHistoryItem,
   LibraryQualityFeatureHealthItem,
   LibraryQualityPriorityAction,
@@ -1184,7 +1185,15 @@ export default function LibraryPage() {
     }
     const res = await store.deleteFile(item.name, true)
     if (res.ok) {
-      message.success(S.lib_msg_deleted_name.replace('{name}', item.name))
+      if (res.evidence_preserved) {
+        message.success(
+          S.lib_msg_delete_evidence_preserved
+            .replace('{name}', item.name)
+            .replace('{n}', String(res.dependency_protection?.note_count || 0)),
+        )
+      } else {
+        message.success(S.lib_msg_deleted_name.replace('{name}', item.name))
+      }
       if (Number(res.removed_queued || 0) > 0) {
         message.info(S.lib_msg_delete_removed_queued.replace('{n}', String(res.removed_queued)))
       }
@@ -1193,23 +1202,71 @@ export default function LibraryPage() {
       }
       return
     }
+    if (res.deletion_blocked) {
+      message.warning(
+        res.dependency_protection?.preservation_available === false
+          ? S.lib_menu_delete_dependency_blocked
+          : S.lib_menu_delete_dependency_check_failed,
+      )
+      return
+    }
     const warning = Array.isArray(res.warnings) && res.warnings.length > 0
       ? `: ${res.warnings.join('; ')}`
       : ''
     message.warning(S.lib_msg_delete_not_complete.replace('{warning}', warning))
   }
 
-  const confirmDeleteOne = (item: LibraryFileItem) => {
+  const confirmDeleteOne = async (item: LibraryFileItem) => {
+    if (item.task_state !== 'idle') {
+      message.warning(S.lib_menu_delete_busy)
+      return
+    }
+    const hide = message.loading(S.lib_menu_delete_checking, 0)
+    let impact: LibraryDeleteImpactResponse
+    try {
+      impact = await libraryApi.inspectDeleteImpact(item.name, true)
+    } catch {
+      hide()
+      message.error(S.lib_menu_delete_dependency_check_failed)
+      return
+    }
+    hide()
+    if (impact.busy) {
+      message.warning(S.lib_menu_delete_busy)
+      return
+    }
+    if (!impact.ok) {
+      message.error(S.lib_menu_delete_dependency_check_failed)
+      return
+    }
+    if (impact.deletion_blocked || (impact.note_count > 0 && !impact.preservation_available)) {
+      message.warning(S.lib_menu_delete_dependency_blocked)
+      return
+    }
+    const preserveEvidence = impact.note_count > 0 && impact.preservation_available
     Modal.confirm({
-      title: S.lib_menu_delete_confirm_title,
+      title: preserveEvidence ? S.lib_menu_delete_dependency_title : S.lib_menu_delete_confirm_title,
       content: (
         <div className="kb-lib-delete-confirm">
           <Text strong>{item.name}</Text>
-          <Text type="secondary">{S.lib_menu_delete_confirm_detail}</Text>
-          <Text type="secondary">{S.lib_menu_delete_confirm_index}</Text>
+          {preserveEvidence ? (
+            <>
+              <Text type="secondary">
+                {S.lib_menu_delete_dependency_detail
+                  .replace('{notes}', String(impact.note_count))
+                  .replace('{links}', String(impact.link_count))}
+              </Text>
+              <Text type="secondary">{S.lib_menu_delete_dependency_preserve}</Text>
+            </>
+          ) : (
+            <>
+              <Text type="secondary">{S.lib_menu_delete_confirm_detail}</Text>
+              <Text type="secondary">{S.lib_menu_delete_confirm_index}</Text>
+            </>
+          )}
         </div>
       ),
-      okText: S.lib_menu_delete_ok,
+      okText: preserveEvidence ? S.lib_menu_delete_dependency_ok : S.lib_menu_delete_ok,
       okType: 'danger',
       cancelText: S.lib_menu_delete_cancel,
       onOk: async () => {

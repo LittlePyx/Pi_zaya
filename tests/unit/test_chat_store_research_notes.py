@@ -173,6 +173,16 @@ def test_research_note_source_path_migration_is_atomic_system_maintenance(tmp_pa
     )
     assert active is not None and archived is not None and answer is not None
 
+    dependencies = store.summarize_research_note_source_dependencies(
+        exact_source_paths=["F:/library/old.pdf"],
+        prefix_source_paths=["kb-source/0/old"],
+    )
+    assert dependencies["note_count"] == 2
+    assert dependencies["active_note_count"] == 1
+    assert dependencies["archived_note_count"] == 1
+    assert dependencies["link_count"] == 2
+    assert {item["id"] for item in dependencies["notes"]} == {active["id"], archived["id"]}
+
     result = store.migrate_research_note_source_paths(
         exact_path_migrations={"F:/library/old.pdf": "F:/library/new.pdf"},
         prefix_path_migrations=[("kb-source/0/old", "kb-source/0/new")],

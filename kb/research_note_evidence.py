@@ -101,6 +101,46 @@ def _source_path_leaf(value: Any) -> str:
     return clean_file_source_path_input(value).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
 
 
+def research_note_source_state_dependency_count(
+    source_state: Any,
+    *,
+    exact_source_paths: list[str] | tuple[str, ...] | None = None,
+    prefix_source_paths: list[str] | tuple[str, ...] | None = None,
+) -> int:
+    """Count non-answer links that exactly depend on an explicit source set."""
+    if not isinstance(source_state, dict):
+        return 0
+    links = source_state.get("links")
+    if not isinstance(links, list):
+        return 0
+    exact = {
+        identity
+        for value in exact_source_paths or ()
+        if (identity := _source_migration_identity(value))
+    }
+    prefixes = sorted(
+        {
+            identity
+            for value in prefix_source_paths or ()
+            if (identity := _source_migration_identity(value))
+        },
+        key=len,
+        reverse=True,
+    )
+    if not exact and not prefixes:
+        return 0
+    count = 0
+    for link in links:
+        if not isinstance(link, dict) or str(link.get("kind") or "").strip() == "answer":
+            continue
+        identity = _source_migration_identity(link.get("source_path"))
+        if not identity:
+            continue
+        if identity in exact or any(identity == prefix or identity.startswith(f"{prefix}/") for prefix in prefixes):
+            count += 1
+    return count
+
+
 def migrate_research_note_source_state_paths(
     source_state: Any,
     *,
@@ -108,6 +148,7 @@ def migrate_research_note_source_state_paths(
     prefix_path_migrations: list[tuple[str, str]] | tuple[tuple[str, str], ...] | None = None,
     reason: str = "library_source_renamed",
     migrated_at: float | None = None,
+    update_source_name: bool = True,
 ) -> tuple[dict[str, Any], int]:
     """Rewrite exact library source identities while retaining a bounded audit.
 
@@ -182,7 +223,7 @@ def migrate_research_note_source_state_paths(
         link["source_path"] = new_path
         old_leaf = _source_path_leaf(old_path)
         source_name = _clean_text(link.get("source_name"), limit=500)
-        if source_name and source_name.casefold() == old_leaf.casefold():
+        if update_source_name and source_name and source_name.casefold() == old_leaf.casefold():
             link["source_name"] = _source_path_leaf(new_path)
         migrated += 1
 

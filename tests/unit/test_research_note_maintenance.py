@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from kb.research_note_maintenance import (
+    dispatch_research_note_source_dependency_inspection,
     dispatch_research_note_source_migration,
     enqueue_research_note_source_recovery,
     enqueue_research_note_source_recovery_scan,
     register_research_note_recovery_handler,
+    register_research_note_source_dependency_handler,
     register_research_note_source_migration_handler,
     unregister_research_note_recovery_handler,
+    unregister_research_note_source_dependency_handler,
     unregister_research_note_source_migration_handler,
     wait_for_research_note_recovery_idle,
 )
@@ -44,6 +47,35 @@ def test_source_migration_dispatch_is_synchronous_and_reports_handler_failures()
         "handled": True,
     }
     assert calls[0]["exact_path_migrations"] == {"old.pdf": "new.pdf"}
+
+
+def test_source_dependency_dispatch_is_synchronous_and_bounded_to_registered_app() -> None:
+    calls: list[dict] = []
+
+    def handler(**kwargs):
+        calls.append(kwargs)
+        return {"ok": True, "note_count": 1, "link_count": 2, "notes": [{"id": "note-1"}]}
+
+    unregister_research_note_source_dependency_handler()
+    inactive = dispatch_research_note_source_dependency_inspection(
+        exact_source_paths=["old.pdf"],
+        prefix_source_paths=[],
+    )
+    assert inactive["handled"] is False
+
+    register_research_note_source_dependency_handler(handler)
+    try:
+        handled = dispatch_research_note_source_dependency_inspection(
+            exact_source_paths=["old.pdf"],
+            prefix_source_paths=["old"],
+        )
+    finally:
+        unregister_research_note_source_dependency_handler(handler)
+
+    assert handled["handled"] is True
+    assert handled["note_count"] == 1
+    assert handled["link_count"] == 2
+    assert calls == [{"exact_source_paths": ["old.pdf"], "prefix_source_paths": ["old"]}]
 
 
 def test_source_recovery_queue_deduplicates_paths_and_drains_in_background() -> None:

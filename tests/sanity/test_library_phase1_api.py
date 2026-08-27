@@ -3126,6 +3126,160 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
     assert fake_store.deleted == [str(pdf_d)]
 
 
+def test_delete_library_file_preserves_converted_source_for_dependent_notes(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path = md_dir / "paper" / "paper.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# Paper\n\nTraceable evidence.\n", encoding="utf-8")
+
+    deleted_metadata: list[str] = []
+    migration_calls: list[dict] = []
+    recovery_calls: list[dict] = []
+    purge_calls: list[str] = []
+
+    class FakeStore:
+        def delete_by_path(self, path: Path) -> int:
+            deleted_metadata.append(str(path))
+            return 1
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+    monkeypatch.setattr(library_router, "_bg_remove_queued_tasks_for_pdf", lambda path: 0)
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_dependency_inspection",
+        lambda **kwargs: {
+            "ok": True,
+            "handled": True,
+            "note_count": 2,
+            "active_note_count": 1,
+            "archived_note_count": 1,
+            "link_count": 3,
+            "notes": [{"id": "note-1", "title": "Reading note", "archived": False, "link_count": 2}],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_migration",
+        lambda **kwargs: migration_calls.append(kwargs) or {
+            "ok": True,
+            "handled": True,
+            "notes_updated": 1,
+            "links_updated": 1,
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_purge_library_index_for_markdown",
+        lambda db_root, source: purge_calls.append(str(source)) or {
+            "docs_removed": 1,
+            "chunks_removed": 2,
+            "reference_docs_removed": 1,
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "enqueue_research_note_source_recovery",
+        lambda paths, reason: recovery_calls.append({"paths": list(paths), "reason": reason}) or True,
+    )
+
+    client = TestClient(app)
+    impact_response = client.post(
+        "/api/library/file/delete-impact",
+        json={"pdf_name": pdf_path.name, "also_md": True},
+    )
+    assert impact_response.status_code == 200
+    impact = impact_response.json()
+    assert impact["note_count"] == 2
+    assert impact["preservation_available"] is True
+    assert impact["deletion_blocked"] is False
+
+    response = client.post(
+        "/api/library/file/delete",
+        json={"pdf_name": pdf_path.name, "also_md": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["pdf_deleted"] is True
+    assert payload["md_deleted"] is False
+    assert payload["evidence_preserved"] is True
+    assert payload["needs_reindex"] is False
+    assert payload["dependency_protection"]["note_count"] == 2
+    assert not pdf_path.exists()
+    assert md_path.exists()
+    assert deleted_metadata == [str(pdf_path)]
+    assert purge_calls == [str(md_path)]
+    assert migration_calls[0]["exact_path_migrations"][str(pdf_path).replace("\\", "/")] == str(md_path).replace("\\", "/")
+    assert migration_calls[0]["update_source_name"] is False
+    assert recovery_calls == [{
+        "paths": [str(md_path).replace("\\", "/")],
+        "reason": "library_source_preserved_before_delete",
+    }]
+
+
+def test_delete_library_file_blocks_dependent_notes_without_converted_source(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    class FakeStore:
+        def delete_by_path(self, path: Path) -> int:
+            raise AssertionError("protected source must not be deleted")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_dependency_inspection",
+        lambda **kwargs: {
+            "ok": True,
+            "handled": True,
+            "note_count": 1,
+            "active_note_count": 1,
+            "archived_note_count": 0,
+            "link_count": 1,
+            "notes": [{"id": "note-1", "title": "Reading note", "archived": False, "link_count": 1}],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/file/delete",
+        json={"pdf_name": pdf_path.name, "also_md": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["deletion_blocked"] is True
+    assert payload["dependency_protection"]["preservation_available"] is False
+    assert pdf_path.exists()
+
+
 def test_delete_library_file_route_keeps_markdown_and_metadata_when_pdf_delete_fails(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

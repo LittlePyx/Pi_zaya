@@ -93,6 +93,7 @@ from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf
 from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
 from kb.reference_sync import start_reference_sync
 from kb.research_note_maintenance import (
+    dispatch_research_note_source_dependency_inspection,
     dispatch_research_note_source_migration,
     enqueue_research_note_source_recovery,
     enqueue_research_note_source_recovery_scan,
@@ -5512,6 +5513,18 @@ def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: P
         return {"ok": False, "msg": str(exc)}
 
 
+def _portable_research_note_source_path(value: Path | str) -> str:
+    raw = str(value or "").replace("\x00", "").strip()
+    if not raw:
+        return ""
+    try:
+        candidate = Path(raw).expanduser()
+        text = str(candidate.resolve(strict=False)) if candidate.is_absolute() else str(candidate)
+    except Exception:
+        text = raw
+    return text.replace("\\", "/").strip().rstrip("/")
+
+
 def _research_note_source_migrations_for_library_rename(
     *,
     src_pdf: Path,
@@ -5526,32 +5539,21 @@ def _research_note_source_migrations_for_library_rename(
     exact: dict[str, str] = {}
     prefixes: list[tuple[str, str]] = []
 
-    def portable(value: Path | str) -> str:
-        raw = str(value or "").replace("\x00", "").strip()
-        if not raw:
-            return ""
-        try:
-            candidate = Path(raw).expanduser()
-            text = str(candidate.resolve(strict=False)) if candidate.is_absolute() else str(candidate)
-        except Exception:
-            text = raw
-        return text.replace("\\", "/").strip().rstrip("/")
-
     def add_exact(old_value: Path | str, new_value: Path | str) -> None:
-        old_text = portable(old_value)
-        new_text = portable(new_value)
+        old_text = _portable_research_note_source_path(old_value)
+        new_text = _portable_research_note_source_path(new_value)
         if old_text and new_text and old_text.casefold() != new_text.casefold():
             exact[old_text] = new_text
 
     def add_prefix(old_value: Path | str, new_value: Path | str) -> None:
-        old_text = portable(old_value)
-        new_text = portable(new_value)
+        old_text = _portable_research_note_source_path(old_value)
+        new_text = _portable_research_note_source_path(new_value)
         if old_text and new_text and old_text.casefold() != new_text.casefold():
             prefixes.append((old_text, new_text))
 
     add_exact(src_pdf, dest_pdf)
     add_exact(src_pdf.name, dest_pdf.name)
-    recovery_paths = [portable(dest_pdf)]
+    recovery_paths = [_portable_research_note_source_path(dest_pdf)]
     if not (bool(also_md) and bool(old_md_exists)):
         return exact, prefixes, recovery_paths
 
@@ -5587,8 +5589,92 @@ def _research_note_source_migrations_for_library_rename(
     if old_public_folder and new_public_folder:
         add_prefix(old_public_folder, new_public_folder)
 
-    recovery_paths.append(portable(new_md_main))
+    recovery_paths.append(_portable_research_note_source_path(new_md_main))
     return exact, prefixes, recovery_paths
+
+
+def _research_note_source_aliases_for_library_file(
+    *,
+    pdf_path: Path,
+    md_root: Path,
+    md_main: Path,
+    md_exists: bool,
+    db_dir: Path | str | None,
+) -> dict[str, list[str]]:
+    """Return explicit, collision-conscious source identities for one library paper."""
+    pdf_exact: list[str] = []
+    md_exact: list[str] = []
+    md_prefix: list[str] = []
+
+    def add(target: list[str], value: Path | str) -> None:
+        text = _portable_research_note_source_path(value)
+        if text and text.casefold() not in {item.casefold() for item in target}:
+            target.append(text)
+
+    add(pdf_exact, pdf_path)
+    add(pdf_exact, pdf_path.name)
+    if not md_exists:
+        return {"pdf_exact": pdf_exact, "md_exact": md_exact, "md_prefix": md_prefix}
+
+    md_folder = Path(md_root) / pdf_path.stem
+    add(md_exact, md_main)
+    if md_main.name.casefold() == f"{pdf_path.stem}.en.md".casefold():
+        add(md_exact, md_main.name)
+    add(md_prefix, md_folder)
+    add(md_prefix, md_folder.name)
+
+    project_root = Path(__file__).resolve().parents[2]
+    for base in (project_root, Path(md_root).parent):
+        try:
+            add(md_exact, md_main.relative_to(base))
+        except Exception:
+            pass
+        try:
+            add(md_prefix, md_folder.relative_to(base))
+        except Exception:
+            pass
+
+    roots = reference_source_roots(md_root=md_root, db_dir=db_dir)
+    public_main = root_relative_file_id(md_main, roots)
+    if public_main:
+        add(md_exact, public_main)
+    public_folder = root_relative_file_id(md_folder, roots)
+    if public_folder:
+        add(md_prefix, public_folder)
+    return {"pdf_exact": pdf_exact, "md_exact": md_exact, "md_prefix": md_prefix}
+
+
+def _research_note_delete_impact(
+    *,
+    pdf_path: Path,
+    md_root: Path,
+    md_main: Path,
+    md_exists: bool,
+    db_dir: Path | str | None,
+) -> tuple[dict, dict[str, list[str]]]:
+    aliases = _research_note_source_aliases_for_library_file(
+        pdf_path=pdf_path,
+        md_root=md_root,
+        md_main=md_main,
+        md_exists=md_exists,
+        db_dir=db_dir,
+    )
+    dependency = dispatch_research_note_source_dependency_inspection(
+        exact_source_paths=[*aliases["pdf_exact"], *aliases["md_exact"]],
+        prefix_source_paths=aliases["md_prefix"],
+    )
+    note_count = max(0, int(dependency.get("note_count") or 0))
+    inspection_ok = bool(dependency.get("ok")) or not bool(dependency.get("handled"))
+    preservation_available = note_count <= 0 or bool(md_exists)
+    return {
+        **dependency,
+        "ok": inspection_ok,
+        "pdf_name": pdf_path.name,
+        "note_count": note_count,
+        "preservation_available": preservation_available,
+        "deletion_blocked": not inspection_ok or not preservation_available,
+        "preservation_mode": "converted_source" if note_count > 0 and md_exists else "none",
+    }, aliases
 
 
 def _build_rename_suggestion_item(*, pdf_path: Path, pdf_dir: Path, md_dir: Path, use_llm: bool) -> dict:
@@ -8357,22 +8443,107 @@ def repair_library_quality(body: QualityRepairBody):
     }
 
 
+@router.post("/file/delete-impact", dependencies=[Depends(require_management_api)])
+def inspect_library_file_delete_impact(body: DeleteLibraryFileBody):
+    pdf_name = str(body.pdf_name or "").strip()
+    md_d = _md_dir()
+    pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
+    _, md_main, md_exists_before = _resolve_library_md_output_paths(md_d, pdf_path)
+    settings = get_settings()
+
+    snap = _bg_snapshot()
+    busy = _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name)
+    impact, _aliases = _research_note_delete_impact(
+        pdf_path=pdf_path,
+        md_root=md_d,
+        md_main=md_main,
+        md_exists=bool(md_exists_before),
+        db_dir=getattr(settings, "db_dir", None),
+    )
+    return {
+        **impact,
+        "busy": bool(busy),
+        "deletion_blocked": bool(busy) or bool(impact.get("deletion_blocked")),
+    }
+
+
 @router.post("/file/delete", dependencies=[Depends(require_management_api)])
 def delete_library_file(body: DeleteLibraryFileBody):
     pdf_name = str(body.pdf_name or "").strip()
     md_d = _md_dir()
     pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
     _, md_main, md_exists_before = _resolve_library_md_output_paths(md_d, pdf_path)
+    settings = get_settings()
 
     snap = _bg_snapshot()
     if _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name):
         raise HTTPException(409, "file is currently converting")
+
+    dependency, aliases = _research_note_delete_impact(
+        pdf_path=pdf_path,
+        md_root=md_d,
+        md_main=md_main,
+        md_exists=bool(md_exists_before),
+        db_dir=getattr(settings, "db_dir", None),
+    )
+    if bool(dependency.get("handled")) and not bool(dependency.get("ok")):
+        return {
+            "ok": False,
+            "deletion_blocked": True,
+            "pdf_deleted": False,
+            "md_deleted": False,
+            "removed_queued": 0,
+            "warnings": ["research note dependency inspection failed"],
+            "needs_reindex": False,
+            "dependency_protection": dependency,
+        }
+    dependent_note_count = max(0, int(dependency.get("note_count") or 0))
+    if dependent_note_count > 0 and not bool(md_exists_before):
+        return {
+            "ok": False,
+            "deletion_blocked": True,
+            "pdf_deleted": False,
+            "md_deleted": False,
+            "removed_queued": 0,
+            "warnings": ["converted source required to preserve research note evidence"],
+            "needs_reindex": False,
+            "dependency_protection": dependency,
+        }
 
     auto_backup = _dangerous_auto_snapshot(
         "library_file_delete",
         label=pdf_path.stem,
         metadata={"pdf_name": pdf_name, "also_md": bool(body.also_md), "remove_queued": bool(body.remove_queued)},
     )
+
+    note_source_sync = {
+        "ok": True,
+        "handled": False,
+        "notes_updated": 0,
+        "links_updated": 0,
+    }
+    evidence_preserved = dependent_note_count > 0 and bool(md_exists_before)
+    if evidence_preserved:
+        preserved_source = _portable_research_note_source_path(md_main)
+        note_source_sync = dispatch_research_note_source_migration(
+            exact_path_migrations={path: preserved_source for path in aliases["pdf_exact"]},
+            prefix_path_migrations=[],
+            reason="library_source_preserved_before_delete",
+            update_source_name=False,
+        )
+        if not bool(note_source_sync.get("handled")) or not bool(note_source_sync.get("ok")):
+            return {
+                "ok": False,
+                "deletion_blocked": True,
+                "pdf_deleted": False,
+                "md_deleted": False,
+                "removed_queued": 0,
+                "warnings": ["research note evidence preservation failed"],
+                "needs_reindex": False,
+                "dependency_protection": dependency,
+                "note_source_sync": note_source_sync,
+                "auto_backup": auto_backup,
+            }
 
     removed_queued = 0
     if bool(body.remove_queued):
@@ -8384,7 +8555,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
     pdf_ok, pdf_err = _safe_delete_file(pdf_path)
     md_deleted = False
     md_warn = ""
-    if bool(pdf_ok) and bool(body.also_md):
+    if bool(pdf_ok) and bool(body.also_md) and not evidence_preserved:
         try:
             md_root = md_d.resolve()
             target = (md_d / pdf_path.stem).resolve()
@@ -8412,12 +8583,24 @@ def delete_library_file(body: DeleteLibraryFileBody):
         "reference_docs_removed": 0,
         "errors": [],
     }
-    if bool(pdf_ok) and bool(body.also_md) and (bool(md_deleted) or not bool(md_exists_before)):
+    should_purge_index = bool(pdf_ok) and bool(body.also_md) and (
+        evidence_preserved or bool(md_deleted) or not bool(md_exists_before)
+    )
+    if should_purge_index:
         try:
             _clear_conversion_quality_cache(md_main)
-            index_cleanup = _purge_library_index_for_markdown(get_settings().db_dir, md_main)
+            index_cleanup = _purge_library_index_for_markdown(settings.db_dir, md_main)
         except Exception as exc:
             index_cleanup["errors"] = [str(exc)[:240]]
+
+    if evidence_preserved:
+        try:
+            enqueue_research_note_source_recovery(
+                [_portable_research_note_source_path(md_main)],
+                reason="library_source_preserved_before_delete",
+            )
+        except Exception:
+            pass
 
     warnings: list[str] = []
     if (not pdf_ok) and pdf_err:
@@ -8429,14 +8612,25 @@ def delete_library_file(body: DeleteLibraryFileBody):
     for err in list(index_cleanup.get("errors") or []):
         if str(err or "").strip():
             warnings.append(f"index: {str(err)[:240]}")
+    needs_reindex = bool(pdf_ok) and (
+        not bool(body.also_md)
+        or not should_purge_index
+        or bool(metadata_warn)
+        or bool(index_cleanup.get("errors"))
+    )
     return {
-        "ok": bool(pdf_ok) and (not bool(body.also_md) or bool(md_deleted)),
+        "ok": bool(pdf_ok) and (not bool(body.also_md) or bool(md_deleted) or evidence_preserved),
+        "deletion_blocked": False,
         "pdf_deleted": bool(pdf_ok),
         "md_deleted": bool(md_deleted) if bool(body.also_md) else False,
+        "evidence_preserved": evidence_preserved,
+        "preserved_md_path": _portable_research_note_source_path(md_main) if evidence_preserved else "",
+        "dependency_protection": dependency,
+        "note_source_sync": note_source_sync,
         "removed_queued": int(removed_queued),
         "index_cleanup": index_cleanup,
         "warnings": warnings,
-        "needs_reindex": bool(pdf_ok),
+        "needs_reindex": needs_reindex,
         "auto_backup": auto_backup,
     }
 

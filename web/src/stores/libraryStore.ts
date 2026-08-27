@@ -3,6 +3,7 @@ import {
   libraryApi,
   type CancelConversionResponse,
   type ConvertActiveTask,
+  type LibraryDeleteResponse,
   type LibraryFilesResponse,
   type LibraryFileItem,
   type LibraryQualityOverviewResponse,
@@ -88,7 +89,7 @@ interface LibraryState {
     options?: { autoReindexAfterQueued?: boolean },
   ) => Promise<LibraryQualityRepairResponse>
   openFile: (pdfName: string, target?: 'pdf' | 'md' | 'pdf_dir' | 'md_dir') => Promise<void>
-  deleteFile: (pdfName: string, alsoMd?: boolean) => Promise<{ ok: boolean; pdf_deleted: boolean; md_deleted: boolean; removed_queued: number; warnings: string[]; needs_reindex: boolean }>
+  deleteFile: (pdfName: string, alsoMd?: boolean) => Promise<LibraryDeleteResponse>
   updatePaperMeta: (body: LibraryMetaUpdateBody) => Promise<LibraryFileItem | null>
   batchUpdatePaperMeta: (body: LibraryMetaBatchUpdateBody) => Promise<number>
   regenerateSuggestions: (body?: LibrarySuggestionRegenerateBody) => Promise<number>

@@ -11,6 +11,7 @@ from pathlib import Path
 from kb.path_safety import clean_file_source_path_input
 from kb.research_note_evidence import (
     migrate_research_note_source_state_paths,
+    research_note_source_state_dependency_count,
     research_note_source_state_matches_paths,
 )
 
@@ -1826,6 +1827,7 @@ class ChatStore:
         prefix_path_migrations: list[tuple[str, str]] | tuple[tuple[str, str], ...] | None = None,
         reason: str = "library_source_renamed",
         migrated_at: float | None = None,
+        update_source_name: bool = True,
     ) -> dict:
         """Atomically migrate library paths in all research-note evidence links.
 
@@ -1849,6 +1851,7 @@ class ChatStore:
                     prefix_path_migrations=prefix_path_migrations,
                     reason=reason,
                     migrated_at=timestamp,
+                    update_source_name=update_source_name,
                 )
                 if link_count <= 0:
                     continue
@@ -1870,6 +1873,59 @@ class ChatStore:
             "notes_updated": len(updates),
             "links_updated": migrated_links,
             "note_ids": [note_id for _json, _revision, note_id, _count in updates],
+        }
+
+    def summarize_research_note_source_dependencies(
+        self,
+        *,
+        exact_source_paths: list[str] | tuple[str, ...] | None = None,
+        prefix_source_paths: list[str] | tuple[str, ...] | None = None,
+        limit: int = 100,
+    ) -> dict:
+        """Describe notes whose traceable source links depend on a library file."""
+        lim = max(1, min(500, int(limit or 100)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_id, title, source_state_json, archived
+                FROM research_notes
+                ORDER BY archived ASC, updated_at DESC, created_at DESC
+                """
+            ).fetchall()
+        notes: list[dict] = []
+        link_count = 0
+        active_count = 0
+        archived_count = 0
+        for row in rows:
+            current = dict(row)
+            source_state = _research_brief_json(current.get("source_state_json") or "{}", default={})
+            dependent_links = research_note_source_state_dependency_count(
+                source_state,
+                exact_source_paths=exact_source_paths,
+                prefix_source_paths=prefix_source_paths,
+            )
+            if dependent_links <= 0:
+                continue
+            archived = bool(current.get("archived"))
+            link_count += dependent_links
+            active_count += int(not archived)
+            archived_count += int(archived)
+            if len(notes) < lim:
+                notes.append({
+                    "id": str(current.get("id") or ""),
+                    "project_id": str(current.get("project_id") or "") or None,
+                    "title": str(current.get("title") or ""),
+                    "archived": archived,
+                    "link_count": dependent_links,
+                })
+        return {
+            "ok": True,
+            "note_count": active_count + archived_count,
+            "active_note_count": active_count,
+            "archived_note_count": archived_count,
+            "link_count": link_count,
+            "notes": notes,
+            "truncated": active_count + archived_count > len(notes),
         }
 
     def delete_research_note(self, note_id: str) -> bool:

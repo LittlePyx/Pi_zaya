@@ -1007,6 +1007,26 @@ test.beforeEach(async ({ page }) => {
       }),
     })
   })
+  await page.route('**/api/library/file/delete-impact', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        handled: true,
+        pdf_name: 'paper.pdf',
+        note_count: 0,
+        active_note_count: 0,
+        archived_note_count: 0,
+        link_count: 0,
+        notes: [],
+        busy: false,
+        preservation_available: true,
+        preservation_mode: 'none',
+        deletion_blocked: false,
+      }),
+    })
+  })
   await page.route('**/api/conversations**', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) })
   })
@@ -2772,8 +2792,75 @@ test('library delete action requires an explicit destructive confirmation', asyn
   await expect(dialog).toContainText(/PDF/)
   await expect(dialog).toContainText(/Markdown/)
   await expect(dialog).toContainText(/知识库|knowledge base/)
+  await expect(dialog).toContainText(/无需手动|no manual/i)
   await dialog.getByRole('button', { name: /取\s*消|Cancel/ }).click()
   await expect(dialog).toHaveCount(0)
+})
+
+test('library delete preserves traceable note evidence instead of creating broken links', async ({ page }) => {
+  await page.unroute('**/api/library/file/delete-impact')
+  await page.route('**/api/library/file/delete-impact', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        handled: true,
+        pdf_name: 'Optica-2024-Broken conversion.pdf',
+        note_count: 2,
+        active_note_count: 1,
+        archived_note_count: 1,
+        link_count: 3,
+        notes: [
+          { id: 'note-1', title: 'Photon evidence', archived: false, link_count: 2 },
+          { id: 'note-2', title: 'Archived evidence', archived: true, link_count: 1 },
+        ],
+        busy: false,
+        preservation_available: true,
+        preservation_mode: 'converted_source',
+        deletion_blocked: false,
+      }),
+    })
+  })
+  let deletePayload: { pdf_name?: string; also_md?: boolean } = {}
+  await page.route('**/api/library/file/delete', async (route) => {
+    deletePayload = route.request().postDataJSON() as typeof deletePayload
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        deletion_blocked: false,
+        pdf_deleted: true,
+        md_deleted: false,
+        evidence_preserved: true,
+        preserved_md_path: 'F:/kb/md/broken/broken.en.md',
+        dependency_protection: { note_count: 2, link_count: 3, preservation_available: true },
+        note_source_sync: { ok: true, handled: true, notes_updated: 1, links_updated: 1 },
+        removed_queued: 0,
+        warnings: [],
+        needs_reindex: false,
+      }),
+    })
+  })
+
+  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.goto('/library')
+  const row = page.getByTestId('library-file-row').filter({ hasText: 'Optica-2024-Broken conversion.pdf' })
+  await row.locator('.kb-lib-file-more-btn').click()
+  await page.getByRole('menuitem', { name: /删除文献|Delete paper/ }).click()
+
+  const dialog = page.getByRole('dialog')
+  await expect(dialog).toContainText(/保留笔记证据|preserve note evidence/i)
+  await expect(dialog).toContainText('2')
+  await expect(dialog).toContainText('3')
+  await expect(dialog).toContainText(/自动核验|automatically verifiable/i)
+  await dialog.getByRole('button', { name: /保留证据|preserve evidence/i }).click()
+
+  await expect.poll(() => deletePayload.pdf_name || '').toBe('Optica-2024-Broken conversion.pdf')
+  expect(deletePayload.also_md).toBe(true)
+  await expect(page.locator('.ant-message')).toContainText(/保留了可定位的原文证据|preserved locatable source evidence/i)
+  await expect(page.locator('.ant-message')).not.toContainText(/建议更新知识库|Consider updating the knowledge base/i)
 })
 
 test('library cancels one concurrent conversion while its sibling keeps running', async ({ page }) => {

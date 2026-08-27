@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 ResearchNoteRecoveryHandler = Callable[..., object]
 ResearchNoteSourceMigrationHandler = Callable[..., object]
+ResearchNoteSourceDependencyHandler = Callable[..., object]
 
 _LOCK = threading.Condition(threading.RLock())
 _PENDING_PATHS: OrderedDict[str, str] = OrderedDict()
@@ -19,6 +20,8 @@ _HANDLER: ResearchNoteRecoveryHandler | None = None
 _HANDLER_USERS = 0
 _SOURCE_MIGRATION_HANDLER: ResearchNoteSourceMigrationHandler | None = None
 _SOURCE_MIGRATION_HANDLER_USERS = 0
+_SOURCE_DEPENDENCY_HANDLER: ResearchNoteSourceDependencyHandler | None = None
+_SOURCE_DEPENDENCY_HANDLER_USERS = 0
 _WORKER: threading.Thread | None = None
 _PATH_BATCH_LIMIT = 32
 
@@ -101,8 +104,9 @@ def dispatch_research_note_source_migration(
     exact_path_migrations: dict[str, str],
     prefix_path_migrations: list[tuple[str, str]],
     reason: str,
+    update_source_name: bool = True,
 ) -> dict:
-    """Synchronously migrate note paths before a library rename is reported done."""
+    """Synchronously migrate note paths before a library source change completes."""
     with _LOCK:
         handler = _SOURCE_MIGRATION_HANDLER
     if handler is None:
@@ -117,6 +121,7 @@ def dispatch_research_note_source_migration(
             exact_path_migrations=dict(exact_path_migrations or {}),
             prefix_path_migrations=list(prefix_path_migrations or []),
             reason=str(reason or "library_source_renamed")[:80],
+            update_source_name=bool(update_source_name),
         )
     except Exception as exc:
         logger.exception("research_note_source_migration_failed", extra={"reason": reason})
@@ -125,6 +130,76 @@ def dispatch_research_note_source_migration(
             "handled": True,
             "notes_updated": 0,
             "links_updated": 0,
+            "error": str(exc)[:240],
+        }
+    payload = dict(result) if isinstance(result, dict) else {}
+    payload.setdefault("ok", True)
+    payload["handled"] = True
+    return payload
+
+
+def register_research_note_source_dependency_handler(
+    handler: ResearchNoteSourceDependencyHandler,
+) -> None:
+    """Register the synchronous dependency inspector used before file deletion."""
+    if not callable(handler):
+        raise TypeError("research note source dependency handler must be callable")
+    global _SOURCE_DEPENDENCY_HANDLER, _SOURCE_DEPENDENCY_HANDLER_USERS
+    with _LOCK:
+        if _SOURCE_DEPENDENCY_HANDLER is handler:
+            _SOURCE_DEPENDENCY_HANDLER_USERS += 1
+        else:
+            _SOURCE_DEPENDENCY_HANDLER = handler
+            _SOURCE_DEPENDENCY_HANDLER_USERS = 1
+
+
+def unregister_research_note_source_dependency_handler(
+    handler: ResearchNoteSourceDependencyHandler | None = None,
+) -> None:
+    global _SOURCE_DEPENDENCY_HANDLER, _SOURCE_DEPENDENCY_HANDLER_USERS
+    with _LOCK:
+        if handler is not None and _SOURCE_DEPENDENCY_HANDLER is not handler:
+            return
+        if handler is not None and _SOURCE_DEPENDENCY_HANDLER_USERS > 1:
+            _SOURCE_DEPENDENCY_HANDLER_USERS -= 1
+            return
+        _SOURCE_DEPENDENCY_HANDLER = None
+        _SOURCE_DEPENDENCY_HANDLER_USERS = 0
+
+
+def dispatch_research_note_source_dependency_inspection(
+    *,
+    exact_source_paths: list[str],
+    prefix_source_paths: list[str],
+) -> dict:
+    """Inspect note dependencies without exposing the chat store to library code."""
+    with _LOCK:
+        handler = _SOURCE_DEPENDENCY_HANDLER
+    if handler is None:
+        return {
+            "ok": True,
+            "handled": False,
+            "note_count": 0,
+            "active_note_count": 0,
+            "archived_note_count": 0,
+            "link_count": 0,
+            "notes": [],
+        }
+    try:
+        result = handler(
+            exact_source_paths=list(exact_source_paths or []),
+            prefix_source_paths=list(prefix_source_paths or []),
+        )
+    except Exception as exc:
+        logger.exception("research_note_source_dependency_inspection_failed")
+        return {
+            "ok": False,
+            "handled": True,
+            "note_count": 0,
+            "active_note_count": 0,
+            "archived_note_count": 0,
+            "link_count": 0,
+            "notes": [],
             "error": str(exc)[:240],
         }
     payload = dict(result) if isinstance(result, dict) else {}

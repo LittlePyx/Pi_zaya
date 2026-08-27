@@ -1902,17 +1902,31 @@ def maintain_research_note_evidence_for_recovered_sources(
     return summary
 
 
-def migrate_research_note_sources_after_library_rename(
+def migrate_research_note_sources_for_library_action(
     *,
     exact_path_migrations: dict[str, str],
     prefix_path_migrations: list[tuple[str, str]],
     reason: str,
+    update_source_name: bool = True,
 ) -> dict[str, Any]:
-    """Atomically move note evidence links with a renamed library source."""
+    """Atomically move note evidence links for a library source change."""
     return get_chat_store().migrate_research_note_source_paths(
         exact_path_migrations=exact_path_migrations,
         prefix_path_migrations=prefix_path_migrations,
         reason=reason,
+        update_source_name=update_source_name,
+    )
+
+
+def inspect_research_note_source_dependencies(
+    *,
+    exact_source_paths: list[str],
+    prefix_source_paths: list[str],
+) -> dict[str, Any]:
+    """Return bounded note dependency details for a prospective library action."""
+    return get_chat_store().summarize_research_note_source_dependencies(
+        exact_source_paths=exact_source_paths,
+        prefix_source_paths=prefix_source_paths,
     )
 
 

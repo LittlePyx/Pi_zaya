@@ -469,6 +469,57 @@ export interface RenameApplyResponse {
   items: Array<Record<string, unknown>>
 }
 
+export interface LibraryDeleteDependencyNote {
+  id: string
+  project_id?: string | null
+  title: string
+  archived: boolean
+  link_count: number
+}
+
+export interface LibraryDeleteImpactResponse {
+  ok: boolean
+  handled: boolean
+  pdf_name: string
+  note_count: number
+  active_note_count: number
+  archived_note_count: number
+  link_count: number
+  notes: LibraryDeleteDependencyNote[]
+  truncated?: boolean
+  busy: boolean
+  preservation_available: boolean
+  preservation_mode: 'converted_source' | 'none'
+  deletion_blocked: boolean
+  error?: string
+}
+
+export interface LibraryDeleteResponse {
+  ok: boolean
+  deletion_blocked?: boolean
+  pdf_deleted: boolean
+  md_deleted: boolean
+  evidence_preserved?: boolean
+  preserved_md_path?: string
+  dependency_protection?: Partial<LibraryDeleteImpactResponse>
+  note_source_sync?: {
+    ok?: boolean
+    handled?: boolean
+    notes_updated?: number
+    links_updated?: number
+    error?: string
+  }
+  removed_queued: number
+  index_cleanup?: {
+    docs_removed?: number
+    chunks_removed?: number
+    reference_docs_removed?: number
+    errors?: string[]
+  }
+  warnings: string[]
+  needs_reindex: boolean
+}
+
 export interface UploadInspectResponse {
   name: string
   sha1: string
@@ -1325,21 +1376,16 @@ export const libraryApi = {
       pdf_name: pdfName,
       target,
     }),
+  inspectDeleteImpact: (pdfName: string, alsoMd = true) =>
+    api.post<LibraryDeleteImpactResponse>(
+      '/api/library/file/delete-impact',
+      {
+        pdf_name: pdfName,
+        also_md: alsoMd,
+      },
+    ),
   deleteFile: (pdfName: string, alsoMd = true) =>
-    api.post<{
-      ok: boolean
-      pdf_deleted: boolean
-      md_deleted: boolean
-      removed_queued: number
-      index_cleanup?: {
-        docs_removed?: number
-        chunks_removed?: number
-        reference_docs_removed?: number
-        errors?: string[]
-      }
-      warnings: string[]
-      needs_reindex: boolean
-    }>(
+    api.post<LibraryDeleteResponse>(
       '/api/library/file/delete',
       {
         pdf_name: pdfName,

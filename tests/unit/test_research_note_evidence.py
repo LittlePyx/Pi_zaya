@@ -11,6 +11,7 @@ from kb.research_note_evidence import (
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
     research_note_evidence_maintenance_due,
+    research_note_source_state_dependency_count,
     resolve_research_note_source_baseline_check,
     review_research_note_source_state,
     source_content_fingerprint,
@@ -71,6 +72,43 @@ def test_source_path_migration_is_exact_audited_and_idempotent() -> None:
     )
     assert repeated_count == 0
     assert repeated == migrated
+
+
+def test_source_dependency_count_is_explicit_and_skips_answer_links() -> None:
+    state = {
+        "links": [
+            {"kind": "source", "source_path": "file:///F:/Library/Paper.pdf#page=2"},
+            {"kind": "source", "source_path": "kb-source/0/Paper/assets/table.md"},
+            {"kind": "source", "source_path": "kb-source/0/Paper-Other/table.md"},
+            {"kind": "answer", "source_path": "F:/Library/Paper.pdf"},
+        ]
+    }
+
+    assert research_note_source_state_dependency_count(
+        state,
+        exact_source_paths=["F:/Library/Paper.pdf"],
+        prefix_source_paths=["kb-source/0/Paper"],
+    ) == 2
+
+
+def test_source_preservation_migration_keeps_the_paper_display_name() -> None:
+    migrated, count = migrate_research_note_source_state_paths(
+        {
+            "links": [{
+                "kind": "source",
+                "source_path": "F:/Library/Paper.pdf",
+                "source_name": "Paper.pdf",
+            }]
+        },
+        exact_path_migrations={"F:/Library/Paper.pdf": "F:/Markdown/Paper/Paper.en.md"},
+        reason="library_source_preserved_before_delete",
+        update_source_name=False,
+        migrated_at=1_800_000_002,
+    )
+
+    assert count == 1
+    assert migrated["links"][0]["source_path"] == "F:/Markdown/Paper/Paper.en.md"
+    assert migrated["links"][0]["source_name"] == "Paper.pdf"
 
 
 def _write_source(tmp_path: Path, body: str) -> Path:
