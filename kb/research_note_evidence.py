@@ -14,6 +14,7 @@ from kb.source_blocks import (
     load_source_blocks,
     match_source_blocks,
     normalize_match_text,
+    tokenize_match_text,
 )
 
 _TEXT_LIMIT = 2_400
@@ -29,6 +30,42 @@ _SOURCE_PATH_MIGRATION_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
 _CONTEXT_SCORE_MARGIN = 0.10
+_CANDIDATE_TEXT_MATCH_FLOOR = 0.45
+_CANDIDATE_MATCH_STOPWORDS = frozenset({
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "into",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "this",
+    "to",
+    "was",
+    "were",
+    "with",
+})
+_TEXTUAL_EVIDENCE_CANDIDATE_KINDS = frozenset({
+    "paragraph",
+    "blockquote",
+    "list_item",
+    "code",
+})
+_STRUCTURED_EVIDENCE_CANDIDATE_KINDS = frozenset({"table", "equation", "figure"})
+_EVIDENCE_CANDIDATE_KINDS = (
+    _TEXTUAL_EVIDENCE_CANDIDATE_KINDS | _STRUCTURED_EVIDENCE_CANDIDATE_KINDS
+)
 _CONTEXT_FIELD_WEIGHTS = {
     "target": 0.20,
     "before": 0.25,
@@ -1227,6 +1264,93 @@ def _candidate_payload(
     return payload
 
 
+def _candidate_expected_kind(anchor_kind: str, saved_context_snapshot: Any) -> str:
+    requested = _clean_text(anchor_kind, limit=40).lower()
+    snapshot = _normalize_context_snapshot(saved_context_snapshot)
+    saved = (
+        _clean_text(snapshot["target"].get("kind"), limit=40).lower()
+        if snapshot is not None
+        else ""
+    )
+    return saved or requested
+
+
+def _candidate_text_match_score(saved_text: Any, current_text: Any) -> float:
+    saved = normalize_match_text(_clean_text(saved_text, limit=_SNAPSHOT_TARGET_TEXT_LIMIT))
+    current = normalize_match_text(_clean_text(current_text, limit=_SNAPSHOT_TARGET_TEXT_LIMIT))
+    if not saved or not current:
+        return 0.0
+    if saved == current:
+        return 1.0
+
+    containment_score = 0.0
+    if saved in current or current in saved:
+        containment_score = min(len(saved), len(current)) / max(len(saved), len(current))
+
+    saved_tokens = {
+        token
+        for token in tokenize_match_text(saved)
+        if token not in _CANDIDATE_MATCH_STOPWORDS
+    }
+    current_tokens = {
+        token
+        for token in tokenize_match_text(current)
+        if token not in _CANDIDATE_MATCH_STOPWORDS
+    }
+    token_score = 0.0
+    token_coverage = 0.0
+    if saved_tokens and current_tokens:
+        overlap = len(saved_tokens.intersection(current_tokens))
+        token_score = overlap / math.sqrt(
+            len(saved_tokens) * len(current_tokens)
+        )
+        if overlap >= 2:
+            token_coverage = overlap / len(saved_tokens)
+
+    sequence_score = SequenceMatcher(None, saved, current, autojunk=False).ratio()
+    return round(max(containment_score, token_score, token_coverage, sequence_score), 4)
+
+
+def _candidate_allowed_kinds(expected_kind: str) -> frozenset[str]:
+    expected = _clean_text(expected_kind, limit=40).lower()
+    if expected == "heading":
+        return frozenset({"heading"})
+    if expected in _STRUCTURED_EVIDENCE_CANDIDATE_KINDS:
+        return frozenset({expected})
+    if expected in _TEXTUAL_EVIDENCE_CANDIDATE_KINDS or expected in {"selection", "sentence"}:
+        return _TEXTUAL_EVIDENCE_CANDIDATE_KINDS
+    return _EVIDENCE_CANDIDATE_KINDS
+
+
+def _reviewable_candidate_rows(
+    rows: list[dict[str, Any]],
+    *,
+    evidence_quote: str,
+    expected_kind: str,
+) -> list[dict[str, Any]]:
+    """Keep only source blocks that can plausibly carry the saved evidence.
+
+    Section proximity remains useful for ranking a textually relevant passage,
+    but cannot make a paper title, section heading, or unrelated neighboring
+    block into evidence by itself. A saved heading may still be reviewed as a
+    heading, preserving intentionally captured heading locators.
+    """
+    allowed_kinds = _candidate_allowed_kinds(expected_kind)
+    reviewable: list[dict[str, Any]] = []
+    for row in rows:
+        block = row.get("block")
+        if not isinstance(block, dict):
+            continue
+        kind = _clean_text(block.get("kind"), limit=40).lower()
+        if kind not in allowed_kinds:
+            continue
+        text_match_score = _candidate_text_match_score(evidence_quote, block.get("text"))
+        if text_match_score + 1e-9 < _CANDIDATE_TEXT_MATCH_FLOOR:
+            continue
+        reviewable.append(row)
+    return reviewable
+
+
 def _normalized_text_similarity(saved_text: Any, current_text: Any, *, limit: int) -> float:
     saved = normalize_match_text(_clean_text(saved_text, limit=limit))
     current = normalize_match_text(_clean_text(current_text, limit=limit))
@@ -1471,6 +1595,8 @@ def build_research_note_evidence_context(
     requested_block_id = _clean_text(block_id, limit=160)
     requested_anchor_id = _clean_text(anchor_id, limit=160)
     requested_kind = _clean_text(anchor_kind, limit=40).lower()
+    expected_candidate_kind = _candidate_expected_kind(requested_kind, saved_context_snapshot)
+    candidate_kinds = _candidate_allowed_kinds(expected_candidate_kind)
     quote_norm = normalize_match_text(quote)
     current_fingerprint = source_content_fingerprint(md_path)
     saved_fingerprint = _clean_text(source_fingerprint, limit=96)
@@ -1527,7 +1653,10 @@ def build_research_note_evidence_context(
         quote_matches = [
             index
             for index, block in enumerate(blocks)
-            if quote_norm in normalize_match_text(str(block.get("text") or ""))
+            if (
+                _clean_text(block.get("kind"), limit=40).lower() in candidate_kinds
+                and quote_norm in normalize_match_text(str(block.get("text") or ""))
+            )
         ]
         if len(quote_matches) == 1:
             target_index = quote_matches[0]
@@ -1570,12 +1699,22 @@ def build_research_note_evidence_context(
             result["context_disambiguation"] = context_disambiguation
         return result
 
+    candidate_blocks = [
+        block
+        for block in blocks
+        if _clean_text(block.get("kind"), limit=40).lower() in candidate_kinds
+    ]
     ranked = match_source_blocks(
-        blocks,
+        candidate_blocks,
         snippet=quote,
         heading_path=requested_heading,
         prefer_kind=requested_kind,
         limit=_CANDIDATE_SCAN_LIMIT,
+    )
+    ranked = _reviewable_candidate_rows(
+        ranked,
+        evidence_quote=quote,
+        expected_kind=expected_candidate_kind,
     )
     candidates = _rank_candidate_payloads([
         candidate
@@ -1596,6 +1735,11 @@ def build_research_note_evidence_context(
             {"score": 1.0, "block": blocks[index], "index": index}
             for index in quote_matches
         ]
+        exact_rows = _reviewable_candidate_rows(
+            exact_rows,
+            evidence_quote=quote,
+            expected_kind=expected_candidate_kind,
+        )
         candidates = _rank_candidate_payloads([
             candidate
             for candidate in (

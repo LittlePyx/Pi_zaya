@@ -477,6 +477,197 @@ def test_fuzzy_match_is_only_a_review_candidate(tmp_path: Path) -> None:
     assert result["candidates"][0]["reader_open"]["strictLocate"] is True
 
 
+def test_fuzzy_candidates_exclude_headings_and_unrelated_section_neighbors(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Detector paper
+
+<!-- kb_page: 4 -->
+
+## Results
+
+The coded exposure follows detector calibration.
+
+SCI compresses a short video into one coded measurement.
+
+The reconstruction is evaluated on the same sequence.
+""",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/detector.pdf",
+        source_name="Detector paper",
+        heading_path="Detector paper / Results",
+        evidence_quote="SCI records one compressed video measurement.",
+        block_id="stale-block-id",
+        anchor_kind="blockquote",
+    )
+
+    assert result["status"] == "candidate"
+    assert [(candidate["kind"], candidate["text"]) for candidate in result["candidates"]] == [
+        ("paragraph", "SCI compresses a short video into one coded measurement."),
+    ]
+
+
+def test_section_proximity_alone_cannot_create_a_candidate(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Detector paper
+
+## Results
+
+The coded exposure follows detector calibration.
+
+The reconstruction is evaluated on the same sequence.
+""",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/detector.pdf",
+        heading_path="Detector paper / Results",
+        evidence_quote="Quantum efficiency reached ninety percent after cooling the sensor.",
+        block_id="stale-block-id",
+        anchor_kind="paragraph",
+    )
+
+    assert result["status"] == "unavailable"
+    assert result["reason"] == "no_match"
+    assert result["candidates"] == []
+
+
+@pytest.mark.parametrize(
+    ("evidence_quote", "anchor_kind", "expected_text"),
+    [
+        ("| Photon efficiency | 90 percent |", "table", "Photon efficiency | 92 percent"),
+        ("E = m c^2 + noise", "equation", "E = m c^2 + background"),
+        ("Detector output", "figure", "Detector response"),
+        (
+            "Figure 1. Detector response improves under low light.",
+            "paragraph",
+            "Figure 1. Detector sensitivity improves under low light.",
+        ),
+    ],
+)
+def test_structured_and_caption_evidence_remain_reviewable_candidates(
+    tmp_path: Path,
+    evidence_quote: str,
+    anchor_kind: str,
+    expected_text: str,
+) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Evidence paper
+
+<!-- kb_page: 5 -->
+
+## Results
+
+Table 1. Detector measurements.
+
+| Metric | Value |
+|---|---|
+| Photon efficiency | 92 percent |
+
+$$ E = m c^2 + background \\tag{1} $$
+
+![Detector response](assets/figure1.png)
+
+Figure 1. Detector sensitivity improves under low light.
+""",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/evidence.pdf",
+        heading_path="Evidence paper / Results",
+        evidence_quote=evidence_quote,
+        block_id="stale-block-id",
+        anchor_kind=anchor_kind,
+    )
+
+    assert result["status"] == "candidate"
+    assert len(result["candidates"]) == 1
+    assert expected_text in result["candidates"][0]["text"]
+    assert result["candidates"][0]["kind"] == anchor_kind
+
+
+def test_changed_short_selection_can_match_inside_a_long_evidence_block(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Evidence paper
+
+## Results
+
+After calibration, the cooled scientific detector measured photon arrivals under low light while the control channel remained closed and the acquisition software recorded every exposure for later verification.
+""",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/evidence.pdf",
+        heading_path="Evidence paper / Results",
+        evidence_quote="The detector recorded photon arrivals under low light.",
+        block_id="stale-block-id",
+        anchor_kind="paragraph",
+    )
+
+    assert result["status"] == "candidate"
+    assert len(result["candidates"]) == 1
+    assert "measured photon arrivals under low light" in result["candidates"][0]["text"]
+
+
+def test_exact_quote_relocation_ignores_a_same_text_heading_for_paragraph_evidence(
+    tmp_path: Path,
+) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Evidence paper
+
+## The detector response remains stable.
+
+The detector response remains stable.
+""",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/evidence.pdf",
+        evidence_quote="The detector response remains stable.",
+        block_id="stale-block-id",
+        anchor_kind="paragraph",
+    )
+
+    assert result["status"] == "exact"
+    assert result["reason"] == "quote_relocated"
+    assert result["target"]["kind"] == "paragraph"
+
+
+def test_saved_heading_kind_keeps_heading_relocation_reviewable(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Evidence paper
+
+## Detection findings
+""",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/evidence.pdf",
+        heading_path="Evidence paper",
+        evidence_quote="Detector findings",
+        block_id="stale-block-id",
+        anchor_kind="heading",
+    )
+
+    assert result["status"] == "candidate"
+    assert len(result["candidates"]) == 1
+    assert result["candidates"][0]["kind"] == "heading"
+    assert result["candidates"][0]["text"] == "Detection findings"
+
+
 def test_ambiguous_exact_quote_requires_candidate_review(tmp_path: Path) -> None:
     path = _write_source(
         tmp_path,
