@@ -1000,11 +1000,13 @@ def review_research_note_source_state(
     context_snapshot: dict[str, Any] | None = None,
     reviewed_at: float | None = None,
 ) -> dict[str, Any]:
-    """Record an explicit review of unchanged evidence after source drift.
+    """Record an explicit evidence decision without rewriting the saved excerpt.
 
-    This never changes the saved quote or locator. A changed locator must use
-    the separate candidate-repair path. Both confirmation and invalidation
-    retain the previous verification and locator in a bounded audit trail.
+    Confirmation is limited to the saved locator; a changed locator must use
+    the separate candidate-repair path. Invalidation may record a re-verified
+    candidate at a changed locator because it does not adopt that candidate as
+    evidence. Both decisions retain the saved locator and reviewed target in a
+    bounded audit trail.
     """
     normalized_decision = _clean_text(decision, limit=24).lower()
     if normalized_decision not in {"confirmed", "invalid"}:
@@ -1032,9 +1034,22 @@ def review_research_note_source_state(
 
     previous_verification = link.get("evidence_verification")
     previous_verification = deepcopy(previous_verification) if isinstance(previous_verification, dict) else {}
+    previous_context_snapshot = _normalize_context_snapshot(link.get("evidence_context_snapshot"))
     saved_fingerprint = _clean_text(previous_verification.get("source_fingerprint"), limit=96)
+    if not saved_fingerprint and previous_context_snapshot is not None:
+        saved_fingerprint = _clean_text(previous_context_snapshot.get("source_fingerprint"), limit=96)
     expected_fingerprint = _clean_text(expected_source_fingerprint, limit=96)
-    if not expected_fingerprint or saved_fingerprint != expected_fingerprint:
+    fingerprint = _clean_text(source_fingerprint, limit=96)
+    if not fingerprint.startswith("sha256:"):
+        raise ValueError("verified source fingerprint required")
+    if (
+        not expected_fingerprint
+        or (saved_fingerprint and saved_fingerprint != expected_fingerprint)
+        or (
+            not saved_fingerprint
+            and (normalized_decision != "invalid" or expected_fingerprint != fingerprint)
+        )
+    ):
         raise ValueError("research note evidence verification changed")
 
     target_snapshot = _locator_snapshot(target)
@@ -1042,20 +1057,24 @@ def review_research_note_source_state(
         raise ValueError("verified evidence target has no stable locator")
     if not target_snapshot["evidence_quote"]:
         raise ValueError("verified evidence target has no text")
-    if expected_identity["block_id"] and target_snapshot["block_id"] != expected_identity["block_id"]:
+    if (
+        normalized_decision == "confirmed"
+        and expected_identity["block_id"]
+        and target_snapshot["block_id"] != expected_identity["block_id"]
+    ):
         raise ValueError("evidence location changed; repair required")
-    if expected_identity["anchor_id"] and target_snapshot["anchor_id"] != expected_identity["anchor_id"]:
+    if (
+        normalized_decision == "confirmed"
+        and expected_identity["anchor_id"]
+        and target_snapshot["anchor_id"] != expected_identity["anchor_id"]
+    ):
         raise ValueError("evidence location changed; repair required")
 
-    fingerprint = _clean_text(source_fingerprint, limit=96)
-    if not fingerprint.startswith("sha256:"):
-        raise ValueError("verified source fingerprint required")
     verified_snapshot = _verified_context_snapshot(
         context_snapshot,
         target=target,
         source_fingerprint=fingerprint,
     )
-    previous_context_snapshot = _normalize_context_snapshot(link.get("evidence_context_snapshot"))
     confirmed_at = float(reviewed_at if reviewed_at is not None else time.time())
     raw_history = link.get("evidence_review_history")
     history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []

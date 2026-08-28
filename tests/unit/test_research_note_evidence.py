@@ -1163,6 +1163,86 @@ def test_source_change_review_can_confirm_or_invalidate_without_rewriting_eviden
     assert confirmed_link["evidence_context_snapshot"]["before"][0]["text"] == "Updated preceding context."
 
 
+def test_candidate_can_be_invalidated_without_adopting_its_changed_locator() -> None:
+    saved_quote = "The saved detector claim is no longer supported."
+    state = {
+        "links": [
+            {
+                "source_path": "library/example.pdf",
+                "capture_id": "capture-1",
+                "block_id": "stale-block",
+                "anchor_id": "stale-anchor",
+                "evidence_quote": saved_quote,
+                "evidence_context_snapshot": {
+                    "version": 1,
+                    "captured_at": 1_700_000_000,
+                    "source_fingerprint": "sha256:old",
+                    "before": [],
+                    "target": {
+                        "block_id": "stale-block",
+                        "anchor_id": "stale-anchor",
+                        "text": saved_quote,
+                    },
+                    "after": [],
+                },
+                "evidence_baseline_check": {
+                    "status": "skipped",
+                    "reason": "candidate",
+                    "checked_at": 1_799_999_900,
+                },
+            }
+        ]
+    }
+    candidate = {
+        "block_id": "candidate-block",
+        "anchor_id": "candidate-anchor",
+        "kind": "paragraph",
+        "heading_path": "Results",
+        "text": "The current source now states a different detector result.",
+    }
+
+    invalidated = review_research_note_source_state(
+        state,
+        source_index=0,
+        source_path="LIBRARY\\example.pdf",
+        decision="invalid",
+        capture_id="capture-1",
+        old_block_id="stale-block",
+        old_anchor_id="stale-anchor",
+        old_evidence_quote=saved_quote,
+        expected_source_fingerprint="sha256:old",
+        target=candidate,
+        source_fingerprint="sha256:new",
+        reviewed_at=1_800_000_000,
+    )
+
+    link = invalidated["links"][0]
+    assert link["block_id"] == "stale-block"
+    assert link["anchor_id"] == "stale-anchor"
+    assert link["evidence_quote"] == saved_quote
+    assert link["evidence_verification"]["status"] == "invalid"
+    assert "evidence_baseline_check" not in link
+    audit = link["evidence_review_history"][-1]
+    assert audit["saved_locator"]["block_id"] == "stale-block"
+    assert audit["reviewed_target"]["block_id"] == "candidate-block"
+    assert audit["reviewed_target"]["evidence_quote"] == candidate["text"]
+
+    with pytest.raises(ValueError, match="repair required"):
+        review_research_note_source_state(
+            state,
+            source_index=0,
+            source_path="library/example.pdf",
+            decision="confirmed",
+            capture_id="capture-1",
+            old_block_id="stale-block",
+            old_anchor_id="stale-anchor",
+            old_evidence_quote=saved_quote,
+            expected_source_fingerprint="sha256:old",
+            target=candidate,
+            source_fingerprint="sha256:new",
+        )
+
+
 def test_source_change_review_ignores_malformed_legacy_context_lists() -> None:
     target = {
         "block_id": "block-1",

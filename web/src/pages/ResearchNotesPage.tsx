@@ -297,6 +297,39 @@ function evidenceContextMatchFieldLabel(S: ReturnType<typeof useT>, field: strin
   return labels[field] || field
 }
 
+function renderEvidenceTextDifference(
+  savedText: string,
+  candidateText: string,
+  side: 'saved' | 'candidate',
+) {
+  const left = Array.from(savedText)
+  const right = Array.from(candidateText)
+  let prefixLength = 0
+  while (prefixLength < left.length && prefixLength < right.length && left[prefixLength] === right[prefixLength]) {
+    prefixLength += 1
+  }
+  let suffixLength = 0
+  while (
+    suffixLength < left.length - prefixLength
+    && suffixLength < right.length - prefixLength
+    && left[left.length - 1 - suffixLength] === right[right.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1
+  }
+  const source = side === 'saved' ? left : right
+  const prefix = source.slice(0, prefixLength).join('')
+  const changed = source.slice(prefixLength, source.length - suffixLength).join('')
+  const suffix = suffixLength > 0 ? source.slice(source.length - suffixLength).join('') : ''
+  if (!changed && savedText === candidateText) return <>{source.join('')}</>
+  return (
+    <>
+      {prefix}
+      {changed ? <mark className={`is-${side}`}>{changed}</mark> : <mark className={`is-${side} is-empty`}>∅</mark>}
+      {suffix}
+    </>
+  )
+}
+
 function evidenceBaselineReasonLabel(S: ReturnType<typeof useT>, reason: string): string {
   const labels: Record<string, string> = {
     source_changed: S.research_notes_evidence_baseline_reason_source_changed,
@@ -407,6 +440,7 @@ export default function ResearchNotesPage() {
   const [draftSourceState, setDraftSourceState] = useState<ResearchNoteSourceState>({})
   const [draftBaseRevision, setDraftBaseRevision] = useState(1)
   const [evidenceReviews, setEvidenceReviews] = useState<Record<string, EvidenceReviewState>>({})
+  const [candidateDecisionKey, setCandidateDecisionKey] = useState('')
   const [evidenceHealthRun, setEvidenceHealthRun] = useState<EvidenceHealthRunState>(EMPTY_EVIDENCE_HEALTH_RUN)
   const [evidenceHealthFilter, setEvidenceHealthFilter] = useState<EvidenceHealthFilter>('all')
   const [evidenceBaselineRun, setEvidenceBaselineRun] = useState<EvidenceBaselineRunState>(EMPTY_EVIDENCE_BASELINE_RUN)
@@ -1188,6 +1222,82 @@ export default function ResearchNotesPage() {
       },
     }
     await openPaper(link, verifiedPayload, { researchNoteEvidenceRepair: intent })
+  }
+
+  const decideCandidateEvidence = async (
+    link: ResearchNoteSourceLink,
+    sourceIndex: number,
+    candidate: ResearchNoteEvidenceBlock,
+    context: ResearchNoteEvidenceContext,
+    reviewKey: string,
+    decision: 'confirmed' | 'invalid',
+  ) => {
+    if (!activeNote || !link.source_path || !context.source_fingerprint || candidateDecisionKey) return
+    if (saving) {
+      message.info(S.research_notes_evidence_wait_for_save)
+      return
+    }
+    if (saveIssue === 'conflict') {
+      message.error(S.research_notes_evidence_conflict_blocked)
+      return
+    }
+    if (dirty && !(await saveDraftNow())) return
+
+    const actionKey = `${reviewKey}:${candidate.block_id || candidate.anchor_id || 'candidate'}:${decision}`
+    const noteId = activeNote.id
+    const savedFingerprint = String(
+      link.evidence_verification?.source_fingerprint
+      || link.evidence_context_snapshot?.source_fingerprint
+      || context.source_fingerprint,
+    ).trim()
+    setCandidateDecisionKey(actionKey)
+    setSaving(true)
+    try {
+      const identity = {
+        source_index: sourceIndex,
+        source_path: link.source_path,
+        capture_id: link.capture_id,
+        old_block_id: link.block_id,
+        old_anchor_id: link.anchor_id,
+        old_evidence_quote: link.evidence_quote,
+      }
+      const record = decision === 'confirmed'
+        ? await chatApi.repairResearchNoteEvidence(noteId, {
+          ...identity,
+          candidate_block_id: candidate.block_id,
+          candidate_anchor_id: candidate.anchor_id,
+          candidate_anchor_kind: candidate.kind,
+          candidate_evidence_quote: candidate.text,
+          source_fingerprint: context.source_fingerprint,
+        })
+        : await chatApi.decideResearchNoteEvidenceReview(noteId, {
+          ...identity,
+          decision: 'invalid',
+          expected_source_fingerprint: savedFingerprint,
+          current_block_id: candidate.block_id,
+          current_anchor_id: candidate.anchor_id,
+          current_anchor_kind: candidate.kind,
+          current_evidence_quote: candidate.text,
+          source_fingerprint: context.source_fingerprint,
+        })
+      setEvidenceReviews(current => {
+        const next = { ...current }
+        delete next[reviewKey]
+        return next
+      })
+      upsertSummary(record)
+      applyRecord(record)
+      message.success(
+        decision === 'confirmed'
+          ? S.research_notes_evidence_repair_saved
+          : S.research_notes_evidence_review_invalidated,
+      )
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : S.research_notes_evidence_decision_failed)
+    } finally {
+      setSaving(false)
+      setCandidateDecisionKey('')
+    }
   }
 
   const openSourceChangeReview = async (
@@ -2432,8 +2542,43 @@ export default function ResearchNotesPage() {
                               {result.status === 'candidate' ? (
                                 <div className="kb-notes-evidence-candidates">
                                   <strong>{S.research_notes_evidence_candidates_title}</strong>
+                                  <Alert
+                                    type="info"
+                                    showIcon
+                                    title={S.research_notes_evidence_candidate_decision_title}
+                                    description={result.reason === 'ambiguous_quote'
+                                      ? S.research_notes_evidence_candidate_auto_blocked_ambiguous
+                                      : result.reason === 'saved_target_missing'
+                                        ? S.research_notes_evidence_candidate_auto_blocked_changed
+                                        : S.research_notes_evidence_candidate_auto_blocked_generic}
+                                    data-testid={`research-note-evidence-candidate-explanation-${index}`}
+                                  />
+                                  {result.candidates[0] ? (
+                                    <div className="kb-notes-evidence-candidate-resolution-actions">
+                                      <Button
+                                        danger
+                                        size="small"
+                                        loading={candidateDecisionKey === `${reviewKey}:${result.candidates[0].block_id || result.candidates[0].anchor_id || 'candidate'}:invalid`}
+                                        disabled={saving || saveIssue === 'conflict' || Boolean(candidateDecisionKey)}
+                                        data-testid={`research-note-evidence-invalidate-candidate-${index}-0`}
+                                        onClick={() => {
+                                          void decideCandidateEvidence(
+                                            link,
+                                            index,
+                                            result.candidates[0],
+                                            result,
+                                            reviewKey,
+                                            'invalid',
+                                          )
+                                        }}
+                                      >
+                                        {S.research_notes_evidence_candidate_mark_invalid}
+                                      </Button>
+                                    </div>
+                                  ) : null}
                                   {result.candidates.map((candidate, candidateIndex) => {
                                     const matchedFields = candidate.context_match?.matched_fields || []
+                                    const confirmKey = `${reviewKey}:${candidate.block_id || candidate.anchor_id || 'candidate'}:confirmed`
                                     return (
                                       <article key={candidate.block_id || candidateIndex}>
                                         <div className="kb-notes-evidence-candidate-heading">
@@ -2467,6 +2612,27 @@ export default function ResearchNotesPage() {
                                             ))}
                                           </div>
                                         ) : null}
+                                        <div
+                                          className="kb-notes-evidence-candidate-diff"
+                                          data-testid={`research-note-evidence-candidate-diff-${index}-${candidateIndex}`}
+                                        >
+                                          <section>
+                                            <small>{S.research_notes_evidence_candidate_saved_text}</small>
+                                            <p>{renderEvidenceTextDifference(
+                                              String(link.evidence_quote || '').trim(),
+                                              candidate.text,
+                                              'saved',
+                                            )}</p>
+                                          </section>
+                                          <section>
+                                            <small>{S.research_notes_evidence_candidate_current_text}</small>
+                                            <p>{renderEvidenceTextDifference(
+                                              String(link.evidence_quote || '').trim(),
+                                              candidate.text,
+                                              'candidate',
+                                            )}</p>
+                                          </section>
+                                        </div>
                                         <div className="kb-notes-evidence-candidate-passage">
                                           {(candidate.before || []).map((block, blockIndex) => (
                                             <div key={`before-${block.block_id || blockIndex}`} className="kb-notes-evidence-candidate-block">
@@ -2485,17 +2651,39 @@ export default function ResearchNotesPage() {
                                             </div>
                                           ))}
                                         </div>
-                                        <Button
-                                          type="link"
-                                          icon={<ArrowRightOutlined />}
-                                          disabled={saving || saveIssue === 'conflict'}
-                                          data-testid={`research-note-evidence-repair-candidate-${index}-${candidateIndex}`}
-                                          onClick={() => {
-                                            void openRepairCandidate(link, index, candidate, candidate.reader_open, result)
-                                          }}
-                                        >
-                                          {S.research_notes_evidence_review_candidate}
-                                        </Button>
+                                        <div className="kb-notes-evidence-candidate-actions">
+                                          <Button
+                                            type="primary"
+                                            size="small"
+                                            loading={candidateDecisionKey === confirmKey}
+                                            disabled={saving || saveIssue === 'conflict' || Boolean(candidateDecisionKey)}
+                                            data-testid={`research-note-evidence-confirm-candidate-${index}-${candidateIndex}`}
+                                            onClick={() => {
+                                              void decideCandidateEvidence(
+                                                link,
+                                                index,
+                                                candidate,
+                                                result,
+                                                reviewKey,
+                                                'confirmed',
+                                              )
+                                            }}
+                                          >
+                                            {S.research_notes_evidence_candidate_confirm_same}
+                                          </Button>
+                                          <Button
+                                            type="link"
+                                            size="small"
+                                            icon={<ArrowRightOutlined />}
+                                            disabled={saving || saveIssue === 'conflict' || Boolean(candidateDecisionKey)}
+                                            data-testid={`research-note-evidence-repair-candidate-${index}-${candidateIndex}`}
+                                            onClick={() => {
+                                              void openRepairCandidate(link, index, candidate, candidate.reader_open, result)
+                                            }}
+                                          >
+                                            {S.research_notes_evidence_review_candidate}
+                                          </Button>
+                                        </div>
                                       </article>
                                     )
                                   })}

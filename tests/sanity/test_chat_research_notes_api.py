@@ -874,6 +874,7 @@ def test_chat_research_note_candidate_repair_is_explicit_audited_and_reopenable(
     tmp_path: Path,
 ) -> None:
     from api.routers import chat as chat_router
+    from kb.research_note_evidence import source_content_fingerprint
 
     md_path = tmp_path / "converted.md"
     md_path.write_text(
@@ -892,6 +893,7 @@ Dark counts were measured with the shutter closed.
         encoding="utf-8",
     )
     store = ChatStore(tmp_path / "chat.sqlite3")
+    initial_fingerprint = source_content_fingerprint(md_path)
     note = store.create_research_note(
         title="Evidence note",
         content_markdown="Detector evidence",
@@ -908,6 +910,12 @@ Dark counts were measured with the shutter closed.
                     "evidence_quote": "stochastic photon arrivals follow Poisson behavior",
                     "start_offset": 2,
                     "end_offset": 54,
+                    "evidence_verification": {
+                        "status": "exact",
+                        "reason": "legacy_saved",
+                        "verified_at": 1_700_000_000,
+                        "source_fingerprint": initial_fingerprint,
+                    },
                 }
             ],
         },
@@ -935,6 +943,34 @@ Dark counts were measured with the shutter closed.
     assert context["status"] == "candidate"
     candidate = context["candidates"][0]
 
+    invalidated_candidate = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-review",
+        json={
+            "decision": "invalid",
+            "source_index": 0,
+            "source_path": "library/paper.pdf",
+            "capture_id": "capture-1",
+            "old_block_id": "stale-block",
+            "old_anchor_id": "stale-anchor",
+            "old_evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+            "expected_source_fingerprint": initial_fingerprint,
+            "current_block_id": candidate["block_id"],
+            "current_anchor_id": candidate["anchor_id"],
+            "current_anchor_kind": candidate["kind"],
+            "current_evidence_quote": candidate["text"],
+            "source_fingerprint": context["source_fingerprint"],
+        },
+    )
+    assert invalidated_candidate.status_code == 200
+    invalid_candidate_record = invalidated_candidate.json()
+    assert invalid_candidate_record["revision"] == 2
+    assert invalid_candidate_record["content_markdown"] == "Detector evidence"
+    invalid_candidate_link = invalid_candidate_record["source_state"]["links"][0]
+    assert invalid_candidate_link["block_id"] == "stale-block"
+    assert invalid_candidate_link["evidence_quote"] == "stochastic photon arrivals follow Poisson behavior"
+    assert invalid_candidate_link["evidence_verification"]["status"] == "invalid"
+    assert invalid_candidate_link["evidence_review_history"][-1]["reviewed_target"]["block_id"] == candidate["block_id"]
+
     repaired = client.post(
         f"/api/chat/research-notes/{note['id']}/evidence-repair",
         json={
@@ -953,7 +989,7 @@ Dark counts were measured with the shutter closed.
     )
     assert repaired.status_code == 200
     record = repaired.json()
-    assert record["revision"] == 2
+    assert record["revision"] == 3
     link = record["source_state"]["links"][0]
     assert link["block_id"] == candidate["block_id"]
     assert link["anchor_id"] == candidate["anchor_id"]
@@ -996,7 +1032,7 @@ Dark counts were measured with the shutter closed.
         },
     )
     assert conflict.status_code == 409
-    assert store.get_research_note(note["id"])["revision"] == 2
+    assert store.get_research_note(note["id"])["revision"] == 3
 
     old_fingerprint = link["evidence_verification"]["source_fingerprint"]
     md_path.write_text(
@@ -1041,7 +1077,7 @@ Dark counts were measured with the shutter closed.
     )
     assert invalidated.status_code == 200
     invalid_record = invalidated.json()
-    assert invalid_record["revision"] == 3
+    assert invalid_record["revision"] == 4
     invalid_link = invalid_record["source_state"]["links"][0]
     assert invalid_link["evidence_quote"] == candidate["text"]
     assert invalid_link["evidence_verification"]["status"] == "invalid"
@@ -1060,11 +1096,12 @@ Dark counts were measured with the shutter closed.
     )
     assert confirmed.status_code == 200
     confirmed_record = confirmed.json()
-    assert confirmed_record["revision"] == 4
+    assert confirmed_record["revision"] == 5
     confirmed_link = confirmed_record["source_state"]["links"][0]
     assert confirmed_link["evidence_verification"]["status"] == "exact"
     assert confirmed_link["evidence_verification"]["reason"] == "confirmed_source_change"
     assert [row["decision"] for row in confirmed_link["evidence_review_history"]] == [
+        "invalid",
         "invalid",
         "confirmed",
     ]
@@ -1076,7 +1113,7 @@ Dark counts were measured with the shutter closed.
         json={**review_body, "decision": "invalid"},
     )
     assert stale_review.status_code == 409
-    assert store.get_research_note(note["id"])["revision"] == 4
+    assert store.get_research_note(note["id"])["revision"] == 5
 
 
 def test_chat_research_notes_workspace_list_and_metadata(monkeypatch, tmp_path: Path) -> None:

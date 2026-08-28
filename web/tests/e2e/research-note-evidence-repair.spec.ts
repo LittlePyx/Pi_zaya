@@ -151,7 +151,7 @@ test('research note evidence review summary counts only unresolved saved checks'
 })
 
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
-  test.setTimeout(45_000)
+  test.setTimeout(75_000)
   let repairCalls = 0
   let repairBody: Record<string, unknown> | null = null
   const evidenceReviewBodies: Record<string, unknown>[] = []
@@ -469,36 +469,64 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
       const body = request.postDataJSON() as Record<string, unknown>
       evidenceReviewBodies.push(body)
       const decision = String(body.decision || '')
-      const previous = note.source_state.links?.[2] || {}
+      const sourceIndex = Number(body.source_index)
+      const previous = note.source_state.links?.[sourceIndex] || {}
       const previousVerification = previous.evidence_verification || {}
+      const reviewedContext = sourceIndex === 2
+        ? changedCurrentContext
+        : {
+          version: 1 as const,
+          captured_at: 1_800_000_200 + evidenceReviewBodies.length,
+          source_fingerprint: String(body.source_fingerprint || ''),
+          reason: 'exact_block',
+          before: [{ block_id: 'before-candidate', text: 'The coded exposure follows detector calibration.' }],
+          target: {
+            block_id: String(body.current_block_id || ''),
+            anchor_id: String(body.current_anchor_id || ''),
+            kind: String(body.current_anchor_kind || ''),
+            text: String(body.current_evidence_quote || ''),
+          },
+          after: [{ block_id: 'after-candidate', text: 'The reconstruction is evaluated on the same sequence.' }],
+        }
+      const nextLinks = (note.source_state.links || []).map((link, index) => {
+        if (index !== sourceIndex) return link
+        const nextLink = {
+          ...link,
+          evidence_context_snapshot: decision === 'confirmed'
+            ? reviewedContext
+            : link.evidence_context_snapshot,
+          evidence_verification: {
+            status: decision === 'invalid' ? 'invalid' : 'exact',
+            reason: decision === 'invalid' ? 'marked_invalid' : 'confirmed_source_change',
+            verified_at: 1_800_000_200 + evidenceReviewBodies.length,
+            source_fingerprint: String(body.source_fingerprint || ''),
+          },
+          evidence_review_history: [
+            ...(link.evidence_review_history || []),
+            {
+              version: 1,
+              reviewed_at: 1_800_000_200 + evidenceReviewBodies.length,
+              decision,
+              previous_verification: previousVerification,
+              saved_locator: { block_id: link.block_id, anchor_id: link.anchor_id },
+              reviewed_target: {
+                block_id: String(body.current_block_id || ''),
+                anchor_id: String(body.current_anchor_id || ''),
+                evidence_quote: String(body.current_evidence_quote || ''),
+              },
+              previous_context_snapshot: link.evidence_context_snapshot,
+              reviewed_context_snapshot: reviewedContext,
+            },
+          ],
+        }
+        delete nextLink.evidence_baseline_check
+        return nextLink
+      })
       note = {
         ...note,
         source_state: {
           ...note.source_state,
-          links: (note.source_state.links || []).map((link, index) => index === 2 ? {
-            ...link,
-            evidence_context_snapshot: decision === 'confirmed'
-              ? changedCurrentContext
-              : link.evidence_context_snapshot,
-            evidence_verification: {
-              status: decision === 'invalid' ? 'invalid' : 'exact',
-              reason: decision === 'invalid' ? 'marked_invalid' : 'confirmed_source_change',
-              verified_at: 1_800_000_200 + evidenceReviewBodies.length,
-              source_fingerprint: 'sha256:new-source',
-            },
-            evidence_review_history: [
-              ...(link.evidence_review_history || []),
-              {
-                version: 1,
-                reviewed_at: 1_800_000_200 + evidenceReviewBodies.length,
-                decision,
-                previous_verification: previousVerification,
-                saved_locator: { block_id: link.block_id, anchor_id: link.anchor_id },
-                previous_context_snapshot: link.evidence_context_snapshot,
-                reviewed_context_snapshot: changedCurrentContext,
-              },
-            ],
-          } : link),
+          links: nextLinks,
         },
         revision: note.revision + 1,
         updated_at: 1_800_000_200 + evidenceReviewBodies.length,
@@ -797,6 +825,19 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('证据文本')
   await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('前文')
   await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('后文')
+  await expect(page.getByTestId('research-note-evidence-candidate-explanation-0')).toContainText(
+    '系统已完成可自动完成的核验',
+  )
+  await expect(page.getByTestId('research-note-evidence-candidate-explanation-0')).toContainText(
+    '不能自行判断它是否仍表达同一证据',
+  )
+  const candidateDiff = page.getByTestId('research-note-evidence-candidate-diff-0-0')
+  await expect(candidateDiff).toContainText('保存的证据文本')
+  await expect(candidateDiff).toContainText('当前候选文本')
+  await expect(candidateDiff).toContainText('SCI records one compressed video measurement.')
+  await expect(candidateDiff).toContainText('SCI compresses a short video into one coded measurement.')
+  await expect(candidateDiff.locator('mark.is-saved')).toBeVisible()
+  await expect(candidateDiff.locator('mark.is-candidate')).toBeVisible()
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText(
     'The coded exposure follows detector calibration.',
   )
@@ -810,15 +851,33 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
       }),
     }),
   )
-  await page.getByTestId('research-note-evidence-repair-candidate-0-0').click()
+  await expect(page.getByTestId('research-note-evidence-repair-candidate-0-0')).toBeVisible()
+  const originalContent = note.content_markdown
+  await page.getByTestId('research-note-evidence-invalidate-candidate-0-0').click()
+  await expect(page).toHaveURL(/\/notes\?note=note-repair/)
+  await page.getByText('全部来源 6', { exact: true }).click()
+  await expect(page.getByTestId('research-note-evidence-health-status-0')).toHaveText('已失效')
+  await expect(page.getByTestId('research-note-evidence-result-0')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-baseline-issue-0')).toHaveCount(0)
+  expect(note.content_markdown).toBe(originalContent)
+  expect(note.source_state.links?.[0]?.block_id).toBe('stale-block')
+  expect(note.source_state.links?.[0]?.evidence_quote).toBe('SCI records one compressed video measurement.')
+  expect(note.source_state.links?.[0]?.evidence_review_history?.[0]?.reviewed_target).toEqual(
+    expect.objectContaining({ block_id: 'quote-1' }),
+  )
+  expect(evidenceReviewBodies[2]).toEqual(expect.objectContaining({
+    decision: 'invalid',
+    source_index: 0,
+    old_block_id: 'stale-block',
+    current_block_id: 'quote-1',
+    expected_source_fingerprint: 'sha256:fixture',
+    source_fingerprint: 'sha256:fixture',
+  }))
 
-  await expect(page).toHaveURL(/\/reader\/session\/repair-session/)
-  await expect(page.getByTestId('reader-evidence-repair-panel')).toBeVisible()
-  await expect(page.getByTestId('reader-content')).toContainText('Fixture Paper')
-  const confirm = page.getByTestId('reader-confirm-evidence-repair')
-  await expect(confirm).toBeEnabled()
+  await page.getByTestId('research-note-evidence-review-0').click()
+  await expect(page.getByTestId('research-note-evidence-confirm-candidate-0-0')).toBeEnabled()
   expect(repairCalls).toBe(0)
-  await confirm.click()
+  await page.getByTestId('research-note-evidence-confirm-candidate-0-0').click()
 
   await expect(page).toHaveURL(/\/notes\?note=note-repair/)
   await expect(page.locator('.kb-notes-title-input')).toHaveValue('Detector evidence')
@@ -850,14 +909,14 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await page.getByTestId('research-note-evidence-review-0').click()
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('准确定位')
   await expect(page.getByTestId('research-note-evidence-open-0')).toBeVisible()
-  expect(evidenceReviewBodies.map(body => body.decision)).toEqual(['invalid', 'confirmed'])
+  expect(evidenceReviewBodies.map(body => body.decision)).toEqual(['invalid', 'confirmed', 'invalid'])
   expect(evidenceReviewBodies[0]).toEqual(expect.objectContaining({
     source_index: 2,
     expected_source_fingerprint: 'sha256:old-source',
     source_fingerprint: 'sha256:new-source',
     current_block_id: 'quote-1',
   }))
-  expect(evidenceContextBodies).toHaveLength(6)
+  expect(evidenceContextBodies).toHaveLength(7)
   expect(evidenceContextBodies.every(body => String(body.source_path || '') !== answerSourcePath)).toBe(true)
   await page.getByTestId('research-note-evidence-open-recovery-3').click()
   await expect(page).toHaveURL(/\/library\?source=Unavailable(?:%20|\+)source/)

@@ -743,6 +743,28 @@
   font-size: 11px;
 }
 
+.kb-notes-evidence-candidates > .ant-alert {
+  padding: 8px 9px;
+  font-size: 10px;
+}
+
+.kb-notes-evidence-candidates > .ant-alert .ant-alert-message {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.kb-notes-evidence-candidates > .ant-alert .ant-alert-description {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.kb-notes-evidence-candidate-resolution-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .kb-notes-evidence-candidate-heading {
   display: flex;
   flex-wrap: wrap;
@@ -782,6 +804,59 @@
   line-height: 17px;
 }
 
+.kb-notes-evidence-candidate-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 7px;
+}
+
+.kb-notes-evidence-candidate-diff > section {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 82%, var(--bg));
+}
+
+.kb-notes-evidence-candidate-diff small {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.kb-notes-evidence-candidate-diff p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 10px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
+.kb-notes-evidence-candidate-diff mark {
+  padding: 1px 2px;
+  border-radius: 3px;
+  color: inherit;
+}
+
+.kb-notes-evidence-candidate-diff mark.is-saved {
+  background: color-mix(in srgb, #cf1322 17%, transparent);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in srgb, #cf1322 55%, transparent);
+}
+
+.kb-notes-evidence-candidate-diff mark.is-candidate {
+  background: color-mix(in srgb, #389e0d 18%, transparent);
+}
+
+.kb-notes-evidence-candidate-diff mark.is-empty {
+  font-style: italic;
+  text-decoration: none;
+}
+
 .kb-notes-evidence-candidate-passage {
   display: grid;
   gap: 5px;
@@ -803,6 +878,29 @@
   margin-bottom: 3px;
   color: var(--muted);
   font-size: 9px;
+}
+
+.kb-notes-evidence-candidate-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.kb-notes-evidence-candidate-actions .ant-btn {
+  height: auto;
+  min-height: 26px;
+  padding-block: 3px;
+  white-space: normal;
+}
+
+.kb-notes-evidence-candidate-actions .ant-btn-link {
+  padding-inline: 2px;
+}
+
+@media (max-width: 740px) {
+  .kb-notes-evidence-candidate-diff { grid-template-columns: 1fr; }
 }
 
 .kb-notes-centered {
