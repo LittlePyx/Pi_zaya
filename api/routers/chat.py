@@ -1730,6 +1730,7 @@ def _capture_chat_research_note_evidence_context_baseline(
                     context_snapshot=snapshot,
                     match_reason=verified_reason,
                     action=automatic_action,
+                    resolution_evidence=verified.get("context_disambiguation"),
                     resolved_at=checked_at,
                 )
             except ValueError:

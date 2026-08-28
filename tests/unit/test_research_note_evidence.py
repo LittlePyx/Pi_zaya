@@ -559,12 +559,98 @@ The second run then measured saturation under bright illumination.
     assert result["reason"] == "context_disambiguated"
     assert result["target"]["block_id"] == first_target["block_id"]
     assert result["context_disambiguation"]["candidate_count"] == 2
+    assert result["context_disambiguation"]["mode"] == "weighted_saved_context"
+    assert result["context_disambiguation"]["score_version"] == 1
+    assert result["context_disambiguation"]["score_gap"] >= 0.10
     assert set(result["context_disambiguation"]["matched_fields"]) == {
+        "target",
         "before",
         "after",
         "heading",
         "page",
     }
+
+
+def test_saved_context_tolerates_minor_neighbor_drift_when_disambiguating_exact_quote(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Repeated evidence
+
+<!-- kb_page: 2 -->
+
+## First experiment
+
+The first detector was calibrated against a stable reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The first run then measured dark counts with the shutter closed.
+
+<!-- kb_page: 3 -->
+
+## Second experiment
+
+The second detector used a different reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The second run then measured saturation under bright illumination.
+""",
+    )
+    first_target = next(
+        block
+        for block in load_source_blocks(path)
+        if "same calibration sentence" in str(block.get("text") or "")
+        and int(block.get("page_start") or 0) == 2
+    )
+    saved = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id=str(first_target["block_id"]),
+        anchor_id=str(first_target["anchor_id"]),
+    )
+    path.write_text(
+        """# Repeated evidence
+
+<!-- kb_page: 2 -->
+
+## First experiment
+
+The first detector was carefully calibrated against a stable reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The first run then carefully measured dark counts with the shutter closed.
+
+<!-- kb_page: 3 -->
+
+## Second experiment
+
+The second detector used a different reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The second run then measured saturation under bright illumination.
+""",
+        encoding="utf-8",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/repeated.pdf",
+        evidence_quote="The same calibration sentence appears here verbatim.",
+        block_id="stale-block-id",
+        anchor_id="stale-anchor-id",
+        saved_context_snapshot=saved["context_snapshot"],
+    )
+
+    assert result["status"] == "exact"
+    assert result["reason"] == "context_disambiguated"
+    assert result["target"]["page_start"] == 2
+    assert result["context_disambiguation"]["mode"] == "weighted_saved_context"
+    assert result["context_disambiguation"]["score_gap"] >= 0.10
+    assert {"before", "after"}.issubset(result["context_disambiguation"]["matched_fields"])
 
 
 def test_saved_context_keeps_a_true_repeated_context_ambiguous(tmp_path: Path) -> None:
@@ -612,9 +698,85 @@ The shared detector context appears immediately after the evidence.
     assert len(result["candidates"]) == 2
     assert all(candidate["before"] and candidate["after"] for candidate in result["candidates"])
     assert all(
-        set(candidate["context_match"]["matched_fields"]) == {"before", "after", "heading", "page"}
+        set(candidate["context_match"]["matched_fields"]) == {"target", "before", "after", "heading", "page"}
         for candidate in result["candidates"]
     )
+    assert all(not candidate["context_match"].get("best_match") for candidate in result["candidates"])
+
+
+def test_fuzzy_candidates_are_ranked_by_saved_context_without_becoming_exact(tmp_path: Path) -> None:
+    path = _write_source(
+        tmp_path,
+        """# Detector paper
+
+<!-- kb_page: 2 -->
+
+## Low-light results
+
+The detector was calibrated against the stable low-light reference before acquisition.
+
+The detector recorded photon arrivals under low light.
+
+Dark counts were measured with the shutter closed after acquisition.
+""",
+    )
+    target = next(
+        block
+        for block in load_source_blocks(path)
+        if "recorded photon arrivals" in str(block.get("text") or "")
+    )
+    saved = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/detector.pdf",
+        evidence_quote="The detector recorded photon arrivals under low light.",
+        block_id=str(target["block_id"]),
+        anchor_id=str(target["anchor_id"]),
+    )
+    path.write_text(
+        """# Detector paper
+
+<!-- kb_page: 2 -->
+
+## Low-light results
+
+The detector was calibrated against the stable low-light reference before acquisition.
+
+The detector measured photon arrivals under low light.
+
+Dark counts were measured with the shutter closed after acquisition.
+
+<!-- kb_page: 7 -->
+
+## Bright-light controls
+
+The instrument was prepared for the separate bright-light control.
+
+The detector observed photon arrivals under low light.
+
+Saturation was measured under bright illumination after acquisition.
+""",
+        encoding="utf-8",
+    )
+
+    result = build_research_note_evidence_context(
+        md_path=path,
+        source_path="library/detector.pdf",
+        evidence_quote="The detector recorded photon arrivals under low light.",
+        block_id="stale-block-id",
+        saved_context_snapshot=saved["context_snapshot"],
+    )
+
+    assert result["status"] == "candidate"
+    assert result["reason"] == "saved_target_missing"
+    assert result["reader_open"] is None
+    assert result["can_open_exact"] is False
+    assert len(result["candidates"]) >= 2
+    best = result["candidates"][0]
+    assert best["rank"] == 1
+    assert best["page_start"] == 2
+    assert best["context_match"]["best_match"] is True
+    assert best["context_match"]["score_gap"] >= 0.10
+    assert {"before", "after", "heading", "page"}.issubset(best["context_match"]["matched_fields"])
 
 
 def test_unrelated_quote_does_not_create_a_false_location(tmp_path: Path) -> None:

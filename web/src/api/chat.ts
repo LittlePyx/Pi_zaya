@@ -191,11 +191,16 @@ export interface ResearchNoteEvidenceContextSnapshot {
 
 export interface ResearchNoteEvidenceCandidate extends ResearchNoteEvidenceBlock {
   score: number
+  rank?: number
   before?: ResearchNoteEvidenceBlock[]
   after?: ResearchNoteEvidenceBlock[]
   context_match?: {
     available_fields: string[]
     matched_fields: string[]
+    field_scores?: Record<string, number>
+    score?: number
+    score_gap?: number
+    best_match?: boolean
   }
   reader_open: MessageProvenanceReaderOpen
 }
@@ -218,9 +223,13 @@ export interface ResearchNoteEvidenceContext {
   context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
   context_disambiguation?: {
     mode: 'saved_context' | string
+    score_version?: number
     candidate_count: number
+    score?: number
+    score_gap?: number
     available_fields: string[]
     matched_fields: string[]
+    field_scores?: Record<string, number>
   }
 }
 

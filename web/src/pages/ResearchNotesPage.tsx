@@ -288,6 +288,7 @@ function evidenceReasonLabel(S: ReturnType<typeof useT>, reason: string): string
 
 function evidenceContextMatchFieldLabel(S: ReturnType<typeof useT>, field: string): string {
   const labels: Record<string, string> = {
+    target: S.research_notes_evidence_candidate_match_target,
     before: S.research_notes_evidence_candidate_match_before,
     after: S.research_notes_evidence_candidate_match_after,
     heading: S.research_notes_evidence_candidate_match_heading,
@@ -2153,7 +2154,7 @@ export default function ResearchNotesPage() {
                       ) : null}
                     </div>
                     {outlineCheckFailed ? (
-                      <Alert type="warning" showIcon message={S.research_notes_outline_check_failed} />
+                      <Alert type="warning" showIcon title={S.research_notes_outline_check_failed} />
                     ) : null}
                     <div className="kb-notes-composition-links">
                       {displayedOutlineFreshness.map(item => (
@@ -2212,7 +2213,7 @@ export default function ResearchNotesPage() {
                   </article>
                 ) : null}
                 {displayedLinkEntries.length <= 0 && evidenceHealthFilter === 'issues' ? (
-                  <Alert type="success" showIcon message={S.research_notes_evidence_health_no_issues} />
+                  <Alert type="success" showIcon title={S.research_notes_evidence_health_no_issues} />
                 ) : null}
                 {displayedLinkEntries.map(({ link, index, reviewKey }) => {
                   const review = evidenceReviews[reviewKey]
@@ -2371,7 +2372,7 @@ export default function ResearchNotesPage() {
                             <Alert
                               type="info"
                               showIcon
-                              message={S.research_notes_evidence_context_recovering}
+                              title={S.research_notes_evidence_context_recovering}
                             />
                           ) : null}
                           {result ? (
@@ -2393,14 +2394,14 @@ export default function ResearchNotesPage() {
                                 <Alert
                                   type="warning"
                                   showIcon
-                                  message={S.research_notes_evidence_source_changed}
+                                  title={S.research_notes_evidence_source_changed}
                                 />
                               ) : null}
                               {link.evidence_verification?.status === 'invalid' ? (
                                 <Alert
                                   type="error"
                                   showIcon
-                                  message={S.research_notes_evidence_invalid_notice}
+                                  title={S.research_notes_evidence_invalid_notice}
                                 />
                               ) : null}
                               {evidenceLocationLabel(S, result.heading_path, result.page_start, result.page_end) ? (
@@ -2435,14 +2436,24 @@ export default function ResearchNotesPage() {
                                     const matchedFields = candidate.context_match?.matched_fields || []
                                     return (
                                       <article key={candidate.block_id || candidateIndex}>
-                                        <small>
-                                          {evidenceLocationLabel(
-                                            S,
-                                            candidate.heading_path,
-                                            candidate.page_start,
-                                            candidate.page_end,
-                                          ) || S.research_notes_evidence_location_unknown}
-                                        </small>
+                                        <div className="kb-notes-evidence-candidate-heading">
+                                          <small>
+                                            {evidenceLocationLabel(
+                                              S,
+                                              candidate.heading_path,
+                                              candidate.page_start,
+                                              candidate.page_end,
+                                            ) || S.research_notes_evidence_location_unknown}
+                                          </small>
+                                          {candidate.context_match?.best_match ? (
+                                            <Tag
+                                              color="blue"
+                                              data-testid={`research-note-evidence-candidate-best-${index}-${candidateIndex}`}
+                                            >
+                                              {S.research_notes_evidence_candidate_best_match}
+                                            </Tag>
+                                          ) : null}
+                                        </div>
                                         {matchedFields.length > 0 ? (
                                           <div
                                             className="kb-notes-evidence-candidate-matches"
@@ -2533,12 +2544,12 @@ export default function ResearchNotesPage() {
                 .replace('{to}', String(outlineReview.latest.revision))}
             </p>
             {outlineReview.hasManualEdits ? (
-              <Alert type="warning" showIcon message={S.research_notes_outline_manual_edits_warning} />
+              <Alert type="warning" showIcon title={S.research_notes_outline_manual_edits_warning} />
             ) : (
-              <Alert type="info" showIcon message={S.research_notes_outline_safe_refresh_hint} />
+              <Alert type="info" showIcon title={S.research_notes_outline_safe_refresh_hint} />
             )}
             {saveIssue === 'conflict' ? (
-              <Alert type="error" showIcon message={S.research_notes_outline_conflict_blocked} />
+              <Alert type="error" showIcon title={S.research_notes_outline_conflict_blocked} />
             ) : null}
             <div className="kb-notes-outline-review-columns">
               <section>

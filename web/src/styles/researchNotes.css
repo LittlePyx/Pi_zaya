@@ -743,6 +743,23 @@
   font-size: 11px;
 }
 
+.kb-notes-evidence-candidate-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.kb-notes-evidence-candidate-heading .ant-tag {
+  margin-inline-end: 0;
+  font-size: 10px;
+  line-height: 17px;
+}
+
 .kb-notes-evidence-candidates > article > .ant-btn {
   height: auto;
   margin-top: 4px;

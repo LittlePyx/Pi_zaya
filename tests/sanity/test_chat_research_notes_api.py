@@ -423,7 +423,7 @@ Photon arrival is a stochastic process governed by Poisson statistics.
                     "checked_at": 90.0,
                     "status": "failed",
                     "reason": "verification_failed",
-                    "maintenance_version": 2,
+                    "maintenance_version": 3,
                     "retry_count": 1,
                     "retry_after": 95.0,
                 },
@@ -504,7 +504,7 @@ Photon arrival is a stochastic process governed by Poisson statistics.
     assert research_note_evidence_maintenance_due(missing_after["source_state"], now=retry_check["checked_at"]) is False
     decision_check = decision_after["source_state"]["links"][0]["evidence_baseline_check"]
     assert decision_check["reason"] == "candidate"
-    assert decision_check["maintenance_version"] == 2
+    assert decision_check["maintenance_version"] == 3
 
     immediate_repeat = client.post(
         "/api/chat/research-notes/evidence-maintenance",
@@ -768,6 +768,31 @@ The second run then measured saturation under bright illumination.
         block_id=str(first_target["block_id"]),
         anchor_id=str(first_target["anchor_id"]),
     )
+    md_path.write_text(
+        """# Repeated evidence
+
+<!-- kb_page: 2 -->
+
+## First experiment
+
+The first detector was carefully calibrated against a stable reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The first run then carefully measured dark counts with the shutter closed.
+
+<!-- kb_page: 3 -->
+
+## Second experiment
+
+The second detector used a different reference before acquisition.
+
+The same calibration sentence appears here verbatim.
+
+The second run then measured saturation under bright illumination.
+""",
+        encoding="utf-8",
+    )
     store = ChatStore(tmp_path / "chat.sqlite3")
     note = store.create_research_note(
         title="Repeated evidence",
@@ -816,7 +841,9 @@ The second run then measured saturation under bright illumination.
     )
     assert inspected.status_code == 200
     assert inspected.json()["reason"] == "context_disambiguated"
-    assert inspected.json()["target"]["block_id"] == first_target["block_id"]
+    assert inspected.json()["target"]["page_start"] == 2
+    assert inspected.json()["context_disambiguation"]["mode"] == "weighted_saved_context"
+    assert inspected.json()["context_disambiguation"]["score_gap"] >= 0.10
 
     maintained = client.post(
         "/api/chat/research-notes/evidence-maintenance",
@@ -833,9 +860,12 @@ The second run then measured saturation under bright illumination.
     assert updated["updated_at"] == note["updated_at"]
     assert updated["content_markdown"] == "User reading note must remain byte-for-byte unchanged."
     link = updated["source_state"]["links"][0]
-    assert link["block_id"] == first_target["block_id"]
+    assert link["page_start"] == 2
     assert link["evidence_verification"]["reason"] == "saved_context_auto_disambiguated"
-    assert link["evidence_auto_resolution_history"][-1]["action"] == "saved_context_auto_disambiguated"
+    audit = link["evidence_auto_resolution_history"][-1]
+    assert audit["action"] == "saved_context_auto_disambiguated"
+    assert audit["resolution_evidence"]["mode"] == "weighted_saved_context"
+    assert audit["resolution_evidence"]["score_gap"] >= 0.10
     assert "evidence_baseline_check" not in link
 
 

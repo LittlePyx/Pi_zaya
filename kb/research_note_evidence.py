@@ -4,6 +4,7 @@ import hashlib
 import math
 import time
 from copy import deepcopy
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from kb.source_blocks import (
 _TEXT_LIMIT = 2_400
 _CONTEXT_RADIUS = 1
 _CANDIDATE_LIMIT = 3
+_CANDIDATE_SCAN_LIMIT = 12
 _REPAIR_HISTORY_LIMIT = 12
 _REVIEW_HISTORY_LIMIT = 12
 _CONTEXT_HISTORY_LIMIT = 12
@@ -26,7 +28,15 @@ _BASELINE_CHECK_HISTORY_LIMIT = 12
 _SOURCE_PATH_MIGRATION_HISTORY_LIMIT = 12
 _SNAPSHOT_NEIGHBOR_TEXT_LIMIT = 600
 _SNAPSHOT_TARGET_TEXT_LIMIT = 1_200
-RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 2
+_CONTEXT_SCORE_MARGIN = 0.10
+_CONTEXT_FIELD_WEIGHTS = {
+    "target": 0.20,
+    "before": 0.25,
+    "after": 0.25,
+    "heading": 0.18,
+    "page": 0.12,
+}
+RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 3
 _SYSTEM_RETRY_REASONS = {"unavailable", "verification_failed", "source_changed_during_capture"}
 _USER_DECISION_REASONS = {"candidate", "source_changed", "location_changed"}
 
@@ -809,6 +819,7 @@ def auto_resolve_research_note_source_state(
     context_snapshot: dict[str, Any],
     match_reason: str,
     action: str,
+    resolution_evidence: dict[str, Any] | None = None,
     resolved_at: float | None = None,
 ) -> dict[str, Any]:
     """Resolve only evidence matches that are deterministic without user judgment.
@@ -926,20 +937,43 @@ def auto_resolve_research_note_source_state(
     raw_history = link.get("evidence_auto_resolution_history")
     history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []
     _compact_history_contexts(history)
-    history.append(
-        {
-            "version": 1,
-            "resolved_at": timestamp,
-            "action": normalized_action,
-            "match_reason": normalized_match_reason,
-            "source_fingerprint": fingerprint,
-            "from": saved_locator,
-            "to": target_locator,
-            "previous_verification": previous_verification,
-            "previous_context_snapshot": previous_context_snapshot,
-            "resolved_context_snapshot": verified_snapshot,
+    audit_row = {
+        "version": 1,
+        "resolved_at": timestamp,
+        "action": normalized_action,
+        "match_reason": normalized_match_reason,
+        "source_fingerprint": fingerprint,
+        "from": saved_locator,
+        "to": target_locator,
+        "previous_verification": previous_verification,
+        "previous_context_snapshot": previous_context_snapshot,
+        "resolved_context_snapshot": verified_snapshot,
+    }
+    if normalized_match_reason == "context_disambiguated" and isinstance(resolution_evidence, dict):
+        fields = ("mode", "score_version", "candidate_count", "score", "score_gap")
+        cleaned_evidence = {
+            field: deepcopy(resolution_evidence[field])
+            for field in fields
+            if field in resolution_evidence
         }
-    )
+        for field in ("available_fields", "matched_fields"):
+            values = resolution_evidence.get(field)
+            if isinstance(values, list):
+                cleaned_evidence[field] = [
+                    _clean_text(value, limit=40)
+                    for value in values
+                    if _clean_text(value, limit=40)
+                ]
+        field_scores = resolution_evidence.get("field_scores")
+        if isinstance(field_scores, dict):
+            cleaned_evidence["field_scores"] = {
+                _clean_text(field, limit=40): score
+                for field, score in field_scores.items()
+                if _clean_text(field, limit=40) and isinstance(score, (int, float))
+            }
+        if cleaned_evidence:
+            audit_row["resolution_evidence"] = cleaned_evidence
+    history.append(audit_row)
     link["evidence_auto_resolution_history"] = history[-_AUTO_RESOLUTION_HISTORY_LIMIT:]
     return resolve_research_note_source_baseline_check(
         next_state,
@@ -1174,16 +1208,49 @@ def _candidate_payload(
     return payload
 
 
-def _saved_context_text_matches(saved_block: Any, current_block: Any) -> bool:
+def _normalized_text_similarity(saved_text: Any, current_text: Any, *, limit: int) -> float:
+    saved = normalize_match_text(_clean_text(saved_text, limit=limit))
+    current = normalize_match_text(_clean_text(current_text, limit=limit))
+    if not saved or not current:
+        return 0.0
+    if saved == current:
+        return 1.0
+    if min(len(saved), len(current)) < 24:
+        return 0.0
+    prefix_score = 0.0
+    if len(saved) >= 80 and current.startswith(saved):
+        prefix_score = len(saved) / max(len(saved), len(current))
+    elif len(current) >= 80 and saved.startswith(current):
+        prefix_score = len(current) / max(len(saved), len(current))
+    sequence_score = SequenceMatcher(None, saved, current, autojunk=False).ratio()
+    return round(max(prefix_score, sequence_score), 4)
+
+
+def _saved_context_text_similarity(saved_block: Any, current_block: Any) -> float:
     if not isinstance(saved_block, dict) or not isinstance(current_block, dict):
-        return False
-    saved_text = normalize_match_text(_clean_text(saved_block.get("text"), limit=_SNAPSHOT_NEIGHBOR_TEXT_LIMIT))
-    current_text = normalize_match_text(_clean_text(current_block.get("text"), limit=_TEXT_LIMIT))
-    if not saved_text or not current_text:
-        return False
-    if saved_text == current_text:
-        return True
-    return len(saved_text) >= 80 and current_text.startswith(saved_text)
+        return 0.0
+    return _normalized_text_similarity(
+        saved_block.get("text"),
+        current_block.get("text"),
+        limit=_SNAPSHOT_NEIGHBOR_TEXT_LIMIT,
+    )
+
+
+def _saved_page_similarity(saved_target: dict[str, Any], current_block: SourceBlock) -> float:
+    saved_start = _positive_int(saved_target.get("page_start"))
+    if saved_start is None:
+        return 0.0
+    saved_end = _positive_int(saved_target.get("page_end")) or saved_start
+    current_start = _positive_int(current_block.get("page_start"))
+    if current_start is None:
+        return 0.0
+    current_end = _positive_int(current_block.get("page_end")) or current_start
+    if saved_start == current_start and saved_end == current_end:
+        return 1.0
+    if max(saved_start, current_start) <= min(saved_end, current_end):
+        return 0.85
+    distance = min(abs(saved_start - current_start), abs(saved_end - current_end))
+    return 0.5 if distance == 1 else 0.0
 
 
 def _saved_context_candidate_match(
@@ -1199,43 +1266,106 @@ def _saved_context_candidate_match(
     target = snapshot["target"]
     available_fields: list[str] = []
     matched_fields: list[str] = []
+    field_scores: dict[str, float] = {}
+
+    target_similarity = _saved_context_text_similarity(target, block)
+    available_fields.append("target")
+    field_scores["target"] = target_similarity
+    if target_similarity >= 0.92:
+        matched_fields.append("target")
 
     saved_before = snapshot["before"][-1] if snapshot["before"] else None
     if saved_before is not None:
         available_fields.append("before")
         current_before = before[-1] if before else None
-        if _saved_context_text_matches(saved_before, current_before):
+        similarity = _saved_context_text_similarity(saved_before, current_before)
+        field_scores["before"] = similarity
+        if similarity >= 0.88:
             matched_fields.append("before")
 
     saved_after = snapshot["after"][0] if snapshot["after"] else None
     if saved_after is not None:
         available_fields.append("after")
         current_after = after[0] if after else None
-        if _saved_context_text_matches(saved_after, current_after):
+        similarity = _saved_context_text_similarity(saved_after, current_after)
+        field_scores["after"] = similarity
+        if similarity >= 0.88:
             matched_fields.append("after")
 
     saved_heading = normalize_match_text(_clean_text(target.get("heading_path"), limit=500))
     if saved_heading:
         available_fields.append("heading")
-        current_heading = normalize_match_text(_clean_text(block.get("heading_path"), limit=500))
-        if current_heading == saved_heading:
+        heading_similarity = _normalized_text_similarity(
+            target.get("heading_path"),
+            block.get("heading_path"),
+            limit=500,
+        )
+        field_scores["heading"] = heading_similarity
+        if heading_similarity >= 0.90:
             matched_fields.append("heading")
 
-    saved_page_start = _positive_int(target.get("page_start"))
-    saved_page_end = _positive_int(target.get("page_end")) or saved_page_start
-    if saved_page_start is not None:
+    if _positive_int(target.get("page_start")) is not None:
         available_fields.append("page")
-        current_page_start = _positive_int(block.get("page_start"))
-        current_page_end = _positive_int(block.get("page_end")) or current_page_start
-        if current_page_start == saved_page_start and (
-            saved_page_end is None or current_page_end is None or current_page_end == saved_page_end
-        ):
+        page_similarity = _saved_page_similarity(target, block)
+        field_scores["page"] = page_similarity
+        if page_similarity >= 0.99:
             matched_fields.append("page")
+
+    evidence_score = sum(
+        _CONTEXT_FIELD_WEIGHTS[field] * field_scores.get(field, 0.0)
+        for field in available_fields
+    )
 
     return {
         "available_fields": available_fields,
         "matched_fields": matched_fields,
+        "field_scores": {field: round(field_scores.get(field, 0.0), 4) for field in available_fields},
+        "score": round(evidence_score, 4),
     }
+
+
+def _context_match_qualifies(match: dict[str, Any]) -> bool:
+    available = set(match.get("available_fields") or [])
+    matched = set(match.get("matched_fields") or [])
+    supporting = matched.intersection({"before", "after", "heading", "page"})
+    try:
+        score = float(match.get("score") or 0.0)
+    except (TypeError, ValueError):
+        score = 0.0
+    if available.intersection({"before", "after"}):
+        return bool(supporting.intersection({"before", "after"})) and len(supporting) >= 2 and score >= 0.50
+    return {"heading", "page"}.issubset(supporting) and score >= 0.44
+
+
+def _rank_candidate_payloads(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    indexed_candidates = list(enumerate(candidates))
+    indexed_candidates.sort(
+        key=lambda row: (
+            -float((row[1].get("context_match") or {}).get("score") or 0.0),
+            -float(row[1].get("score") or 0.0),
+            row[0],
+        )
+    )
+    ranked = [candidate for _index, candidate in indexed_candidates]
+    for rank, candidate in enumerate(ranked, start=1):
+        candidate["rank"] = rank
+    if not ranked:
+        return ranked
+    top_match = ranked[0].get("context_match")
+    if not isinstance(top_match, dict) or not _context_match_qualifies(top_match):
+        return ranked
+    top_score = float(top_match.get("score") or 0.0)
+    second_score = (
+        float((ranked[1].get("context_match") or {}).get("score") or 0.0)
+        if len(ranked) > 1
+        else 0.0
+    )
+    score_gap = top_score - second_score
+    if score_gap + 1e-9 < _CONTEXT_SCORE_MARGIN:
+        return ranked
+    top_match["best_match"] = True
+    top_match["score_gap"] = round(score_gap, 4)
+    return ranked
 
 
 def _disambiguate_exact_quote_with_saved_context(
@@ -1256,45 +1386,40 @@ def _disambiguate_exact_quote_with_saved_context(
         )
         rows.append((index, match))
 
-    has_saved_neighbors = any(
-        field in {"before", "after"}
-        for field in rows[0][1]["available_fields"]
-    )
-
-    def qualifies(match: dict[str, Any]) -> bool:
-        matched = set(match["matched_fields"])
-        if has_saved_neighbors:
-            return bool(matched.intersection({"before", "after"})) and len(matched) >= 2
-        return {"heading", "page"}.issubset(matched)
-
-    qualified = [(index, match) for index, match in rows if qualifies(match)]
+    qualified = [(index, match) for index, match in rows if _context_match_qualifies(match)]
     if not qualified:
         return None, None
     ranked = sorted(
         qualified,
         key=lambda row: (
-            len(row[1]["matched_fields"]),
+            float(row[1].get("score") or 0.0),
             len(set(row[1]["matched_fields"]).intersection({"before", "after"})),
+            len(row[1]["matched_fields"]),
         ),
         reverse=True,
     )
-    top_rank = (
-        len(ranked[0][1]["matched_fields"]),
-        len(set(ranked[0][1]["matched_fields"]).intersection({"before", "after"})),
+    top_score = float(ranked[0][1].get("score") or 0.0)
+    second_score = max(
+        (
+            float(match.get("score") or 0.0)
+            for index, match in rows
+            if index != ranked[0][0]
+        ),
+        default=0.0,
     )
-    if len(ranked) > 1:
-        second_rank = (
-            len(ranked[1][1]["matched_fields"]),
-            len(set(ranked[1][1]["matched_fields"]).intersection({"before", "after"})),
-        )
-        if second_rank == top_rank:
-            return None, None
+    score_gap = top_score - second_score
+    if score_gap + 1e-9 < _CONTEXT_SCORE_MARGIN:
+        return None, None
     index, match = ranked[0]
     return index, {
-        "mode": "saved_context",
+        "mode": "weighted_saved_context",
+        "score_version": 1,
         "candidate_count": len(quote_matches),
+        "score": round(top_score, 4),
+        "score_gap": round(score_gap, 4),
         "matched_fields": list(match["matched_fields"]),
         "available_fields": list(match["available_fields"]),
+        "field_scores": dict(match.get("field_scores") or {}),
     }
 
 
@@ -1316,7 +1441,9 @@ def build_research_note_evidence_context(
     """Verify a saved note citation against converted source blocks.
 
     Fuzzy matches are deliberately returned as review candidates and are never
-    promoted to an exact Reader target.
+    promoted to an exact Reader target. Multiple exact-quote locations may be
+    resolved only when saved-context scoring produces a qualified, clearly
+    leading candidate.
     """
     source_path_clean = _clean_text(source_path, limit=1_200)
     source_name_clean = _clean_text(source_name, limit=500) or Path(source_path_clean).name
@@ -1429,9 +1556,9 @@ def build_research_note_evidence_context(
         snippet=quote,
         heading_path=requested_heading,
         prefer_kind=requested_kind,
-        limit=_CANDIDATE_LIMIT,
+        limit=_CANDIDATE_SCAN_LIMIT,
     )
-    candidates = [
+    candidates = _rank_candidate_payloads([
         candidate
         for candidate in (
             _candidate_payload(
@@ -1444,13 +1571,13 @@ def build_research_note_evidence_context(
             for row in ranked
         )
         if candidate is not None
-    ]
+    ])[:_CANDIDATE_LIMIT]
     if len(quote_matches) > 1:
         exact_rows = [
             {"score": 1.0, "block": blocks[index], "index": index}
-            for index in quote_matches[:_CANDIDATE_LIMIT]
+            for index in quote_matches
         ]
-        candidates = [
+        candidates = _rank_candidate_payloads([
             candidate
             for candidate in (
                 _candidate_payload(
@@ -1463,7 +1590,7 @@ def build_research_note_evidence_context(
                 for row in exact_rows
             )
             if candidate is not None
-        ]
+        ])[:_CANDIDATE_LIMIT]
 
     return {
         "status": "candidate" if candidates else "unavailable",

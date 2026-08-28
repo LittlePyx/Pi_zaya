@@ -17,7 +17,7 @@ export interface ResearchNoteEvidenceReviewSummary {
 
 export const RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS = new Set(['candidate', 'source_changed', 'location_changed'])
 export const RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS = new Set(['unavailable', 'verification_failed', 'source_changed_during_capture'])
-const EVIDENCE_MAINTENANCE_VERSION = 2
+const EVIDENCE_MAINTENANCE_VERSION = 3
 
 function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | undefined) {
   const links = Array.isArray(sourceState?.links) ? sourceState.links : []

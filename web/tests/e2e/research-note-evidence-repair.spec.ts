@@ -81,7 +81,7 @@ test('research note evidence review summary counts only unresolved saved checks'
       evidence_baseline_check: {
         status: 'failed',
         reason: 'verification_failed',
-        maintenance_version: 2,
+        maintenance_version: 3,
         retry_count: 1,
         retry_after: 120,
       },
@@ -108,7 +108,7 @@ test('research note evidence review summary counts only unresolved saved checks'
     }],
   }
   expect(researchNoteEvidenceMaintenanceDue(legacyContextDecisionState, 100)).toBe(true)
-  legacyContextDecisionState.links[0].evidence_baseline_check.maintenance_version = 2
+  legacyContextDecisionState.links[0].evidence_baseline_check.maintenance_version = 3
   expect(researchNoteEvidenceMaintenanceDue(legacyContextDecisionState, 100)).toBe(false)
 
   const savedContextRetryState = {
@@ -123,7 +123,7 @@ test('research note evidence review summary counts only unresolved saved checks'
       evidence_baseline_check: {
         status: 'failed',
         reason: 'verification_failed',
-        maintenance_version: 2,
+        maintenance_version: 3,
         retry_after: 120,
       },
     }],
@@ -143,7 +143,7 @@ test('research note evidence review summary counts only unresolved saved checks'
       evidence_baseline_check: {
         status: 'skipped',
         reason: 'source_changed',
-        maintenance_version: 2,
+        maintenance_version: 3,
       },
     }],
   }
@@ -151,6 +151,7 @@ test('research note evidence review summary counts only unresolved saved checks'
 })
 
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
+  test.setTimeout(45_000)
   let repairCalls = 0
   let repairBody: Record<string, unknown> | null = null
   const evidenceReviewBodies: Record<string, unknown>[] = []
@@ -310,7 +311,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
               status: 'skipped',
               reason: 'candidate',
               checked_at: checkedAt,
-              maintenance_version: 2,
+              maintenance_version: 3,
             },
           }
         }
@@ -321,7 +322,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
               status: 'skipped',
               reason: 'source_changed',
               checked_at: checkedAt,
-              maintenance_version: 2,
+              maintenance_version: 3,
             },
           }
         }
@@ -332,7 +333,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
               status: 'skipped',
               reason: 'unavailable',
               checked_at: checkedAt,
-              maintenance_version: 2,
+              maintenance_version: 3,
               retry_count: 1,
               retry_after: checkedAt + 5,
             },
@@ -345,7 +346,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
               status: 'failed',
               reason: 'verification_failed',
               checked_at: checkedAt,
-              maintenance_version: 2,
+              maintenance_version: 3,
               retry_count: 1,
               retry_after: checkedAt + 5,
             },
@@ -649,6 +650,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
       candidates: [{
         ...target,
         score: 0.82,
+        rank: 1,
         before: [{
           block_id: 'before-candidate',
           kind: 'paragraph',
@@ -662,8 +664,12 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
           markdown: 'The reconstruction is evaluated on the same sequence.',
         }],
         context_match: {
-          available_fields: ['before', 'after', 'heading'],
-          matched_fields: ['before', 'after'],
+          available_fields: ['target', 'before', 'after', 'heading'],
+          matched_fields: ['target', 'before', 'after'],
+          field_scores: { target: 0.94, before: 1, after: 1, heading: 0.76 },
+          score: 0.8268,
+          score_gap: 0.31,
+          best_match: true,
         },
         reader_open: readerOpen,
       }],
@@ -787,6 +793,8 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(confirmedHealth.getByText('需判断 1', { exact: true })).toBeVisible()
 
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('需要核查')
+  await expect(page.getByTestId('research-note-evidence-candidate-best-0-0')).toHaveText('最接近保存语境')
+  await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('证据文本')
   await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('前文')
   await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('后文')
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText(
@@ -1132,7 +1140,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
             checked_at: 1_800_000_100,
             status: 'failed',
             reason: 'verification_failed',
-            maintenance_version: 2,
+            maintenance_version: 3,
             retry_count: 1,
             retry_after: 1_900_000_000,
           },
@@ -1152,7 +1160,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
             checked_at: 1_800_000_100,
             status: 'skipped',
             reason: 'candidate',
-            maintenance_version: 2,
+            maintenance_version: 3,
           },
         })),
       },
@@ -1348,7 +1356,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   expect(failedNote.source_state.links?.[0]?.evidence_baseline_check?.retry_after).toBe(1_900_000_000)
   expect(needsDecisionNote.content_markdown).toBe('A saved quote with multiple possible locations.')
   expect(needsDecisionNote.updated_at).toBe(1_799_999_985)
-  expect(needsDecisionNote.source_state.links?.[0]?.evidence_baseline_check?.maintenance_version).toBe(2)
+  expect(needsDecisionNote.source_state.links?.[0]?.evidence_baseline_check?.maintenance_version).toBe(3)
   expect(evidenceContextBodies).toHaveLength(0)
 
   await page.reload()
