@@ -43,7 +43,6 @@ test('research note evidence review summary counts only unresolved saved checks'
         source_name: 'Already resolved',
         source_path: 'db/paper/resolved.md',
         evidence_context_snapshot: { source_fingerprint: 'sha256:current' },
-        evidence_baseline_check: { status: 'skipped', reason: 'candidate' },
       },
       {
         kind: 'source',
@@ -131,6 +130,24 @@ test('research note evidence review summary counts only unresolved saved checks'
   }
   expect(researchNoteEvidenceMaintenanceDue(savedContextRetryState, 100)).toBe(false)
   expect(researchNoteEvidenceMaintenanceDue(savedContextRetryState, 120)).toBe(true)
+
+  const changedSavedContextState = {
+    links: [{
+      kind: 'source',
+      source_path: 'db/paper/changed.md',
+      evidence_context_snapshot: {
+        version: 1,
+        source_fingerprint: 'sha256:old',
+        target: { block_id: 'saved', text: 'Saved evidence remains available for comparison.' },
+      },
+      evidence_baseline_check: {
+        status: 'skipped',
+        reason: 'source_changed',
+        maintenance_version: 2,
+      },
+    }],
+  }
+  expect(researchNoteEvidenceReviewIssues(changedSavedContextState).map(issue => issue.sourceIndex)).toEqual([0])
 })
 
 test('note evidence health check prioritizes issues, repairs one locator, and verifies it again', async ({ page }) => {
@@ -274,6 +291,122 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
     }
     if (request.method() === 'GET' && path === `/api/chat/research-notes/${note.id}`) {
       await fulfillJson(route, note)
+      return
+    }
+    if (request.method() === 'POST' && path === `/api/chat/research-notes/${note.id}/evidence-health`) {
+      const checkedAt = 1_800_000_050
+      const previousState = JSON.stringify(note.source_state)
+      const nextLinks = (note.source_state.links || []).map((link, index) => {
+        if (link.kind === 'answer') return link
+        if (link.evidence_verification?.status === 'invalid') {
+          const rest = { ...link }
+          delete rest.evidence_baseline_check
+          return rest
+        }
+        if (index === 0 && link.block_id === 'stale-block') {
+          return {
+            ...link,
+            evidence_baseline_check: {
+              status: 'skipped',
+              reason: 'candidate',
+              checked_at: checkedAt,
+              maintenance_version: 2,
+            },
+          }
+        }
+        if (index === 2 && link.evidence_verification?.source_fingerprint !== 'sha256:new-source') {
+          return {
+            ...link,
+            evidence_baseline_check: {
+              status: 'skipped',
+              reason: 'source_changed',
+              checked_at: checkedAt,
+              maintenance_version: 2,
+            },
+          }
+        }
+        if (index === 3) {
+          return {
+            ...link,
+            evidence_baseline_check: {
+              status: 'skipped',
+              reason: 'unavailable',
+              checked_at: checkedAt,
+              maintenance_version: 2,
+              retry_count: 1,
+              retry_after: checkedAt + 5,
+            },
+          }
+        }
+        if (index === 4) {
+          return {
+            ...link,
+            evidence_baseline_check: {
+              status: 'failed',
+              reason: 'verification_failed',
+              checked_at: checkedAt,
+              maintenance_version: 2,
+              retry_count: 1,
+              retry_after: checkedAt + 5,
+            },
+          }
+        }
+        const rest = { ...link }
+        delete rest.evidence_baseline_check
+        if (index !== 1 || rest.evidence_context_snapshot) return rest
+        return {
+          ...rest,
+          evidence_verification: {
+            status: 'exact',
+            reason: 'baseline_backfilled',
+            verified_at: checkedAt,
+            source_fingerprint: 'sha256:exact-source',
+          },
+          evidence_context_snapshot: {
+            version: 1,
+            captured_at: checkedAt,
+            source_fingerprint: 'sha256:exact-source',
+            reason: 'exact_block',
+            before: [],
+            target: { block_id: 'exact-block', text: 'This locator is still exact.' },
+            after: [],
+          },
+        }
+      })
+      note = {
+        ...note,
+        source_state: { ...note.source_state, links: nextLinks },
+        revision: previousState === JSON.stringify({ ...note.source_state, links: nextLinks })
+          ? note.revision
+          : note.revision + 1,
+      }
+      const items = nextLinks.flatMap((link, sourceIndex) => {
+        const check = link.evidence_baseline_check
+        if (!check) return []
+        return [{
+          source_index: sourceIndex,
+          source_name: link.source_name || link.label || '',
+          status: check.status,
+          reason: check.reason,
+          checked_at: check.checked_at,
+        }]
+      })
+      await fulfillJson(route, {
+        note,
+        summary: {
+          total: 5,
+          created: nextLinks[1]?.evidence_context_snapshot ? 1 : 0,
+          skipped: 3,
+          failed: 1,
+          reasons: {
+            candidate: Number(Boolean(nextLinks[0]?.evidence_baseline_check)),
+            source_changed: Number(Boolean(nextLinks[2]?.evidence_baseline_check)),
+            unavailable: 1,
+            verification_failed: 1,
+          },
+        },
+        items,
+      })
       return
     }
     if (request.method() === 'POST' && path === `/api/chat/research-notes/${note.id}/evidence-repair`) {
@@ -578,30 +711,30 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(page.locator('.kb-notes-title-input')).toHaveValue('Detector evidence')
   await page.getByTestId('research-note-evidence-check-all').click()
   const health = page.getByTestId('research-note-evidence-health')
-  await expect(health).toContainText('已核查 5/5 条文献证据')
+  await expect(health).toContainText('系统已核查 5/5 条文献证据')
   await expect(health).toContainText('准确 1')
   await expect(health).toContainText('原文变化 1')
   await expect(health).toContainText('需核查 1')
-  await expect(health).toContainText('不可用 1')
-  await expect(health).toContainText('失败 1')
-  await expect(page.locator('.kb-notes-source-card')).toHaveCount(4)
+  await expect(health).toContainText('系统处理中 2')
+  await expect(page.locator('.kb-notes-source-card')).toHaveCount(2)
   await expect(page.getByTestId('research-note-source-0')).toBeVisible()
   await expect(page.getByTestId('research-note-source-1')).toHaveCount(0)
   await expect(page.getByTestId('research-note-source-2')).toBeVisible()
-  await expect(page.getByTestId('research-note-source-3')).toBeVisible()
-  await expect(page.getByTestId('research-note-source-4')).toBeVisible()
+  await expect(page.getByTestId('research-note-source-3')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-source-4')).toHaveCount(0)
   await expect(page.getByTestId('research-note-source-5')).toHaveCount(0)
   await expect(page.getByTestId('research-note-evidence-health-status-0')).toHaveText('需核查')
   await expect(page.getByTestId('research-note-evidence-health-status-2')).toHaveText('原文变化')
-  await expect(page.getByTestId('research-note-evidence-health-status-3')).toHaveText('不可用')
-  await expect(page.getByTestId('research-note-evidence-health-status-4')).toHaveText('失败')
 
   await page.getByText('全部来源 6', { exact: true }).click()
   await expect(page.locator('.kb-notes-source-card')).toHaveCount(6)
   await expect(page.getByTestId('research-note-source-1')).toBeVisible()
   await expect(page.getByTestId('research-note-source-5')).toBeVisible()
-  await page.getByText('需处理 4', { exact: true }).click()
-  await expect(page.locator('.kb-notes-source-card')).toHaveCount(4)
+  await expect(page.getByTestId('research-note-evidence-health-status-3')).toHaveText('系统处理中')
+  await expect(page.getByTestId('research-note-evidence-health-status-4')).toHaveText('系统处理中')
+  await expect(page.getByTestId('research-note-evidence-open-recovery-3')).toHaveText('查看来源恢复')
+  await health.getByText('需判断 2', { exact: true }).click()
+  await expect(page.locator('.kb-notes-source-card')).toHaveCount(2)
 
   await expect(page.getByTestId('research-note-evidence-review-change-2')).toHaveText('在 Reader 中对照核实')
   await page.getByTestId('research-note-evidence-review-change-2').click()
@@ -625,11 +758,12 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   expect(note.source_state.links?.[2]?.evidence_context_snapshot?.source_fingerprint).toBe('sha256:old-source')
   await page.getByTestId('research-note-evidence-check-all').click()
   const invalidHealth = page.getByTestId('research-note-evidence-health')
-  await expect(invalidHealth).toContainText('已核查 5/5 条文献证据')
+  await expect(invalidHealth).toContainText('系统已核查 5/5 条文献证据')
   await expect(invalidHealth).toContainText('准确 1')
   await expect(invalidHealth).toContainText('原文变化 0')
   await expect(invalidHealth).toContainText('需核查 1')
   await expect(invalidHealth).toContainText('已失效 1')
+  await page.getByText('全部来源 6', { exact: true }).click()
   await expect(page.getByTestId('research-note-evidence-health-status-2')).toHaveText('已失效')
   await expect(page.getByTestId('research-note-evidence-review-change-2')).toHaveText('在 Reader 中重新核实')
   await page.getByTestId('research-note-evidence-review-change-2').click()
@@ -650,7 +784,7 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(confirmedHealth).toContainText('准确 2')
   await expect(confirmedHealth).toContainText('原文变化 0')
   await expect(confirmedHealth).toContainText('已失效 0')
-  await expect(page.getByText('需处理 3', { exact: true })).toBeVisible()
+  await expect(confirmedHealth.getByText('需判断 1', { exact: true })).toBeVisible()
 
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('需要核查')
   await expect(page.getByTestId('research-note-evidence-candidate-matches-0-0')).toContainText('前文')
@@ -697,16 +831,15 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
 
   await page.getByTestId('research-note-evidence-check-all').click()
   const repairedHealth = page.getByTestId('research-note-evidence-health')
-  await expect(repairedHealth).toContainText('已核查 5/5 条文献证据')
+  await expect(repairedHealth).toContainText('系统已核查 5/5 条文献证据')
   await expect(repairedHealth).toContainText('准确 3')
   await expect(repairedHealth).toContainText('原文变化 0')
   await expect(repairedHealth).toContainText('需核查 0')
   await expect(repairedHealth).toContainText('已失效 0')
-  await expect(repairedHealth).toContainText('不可用 1')
-  await expect(repairedHealth).toContainText('失败 1')
-  await expect(page.getByText('需处理 2', { exact: true })).toBeVisible()
-  await expect(page.getByTestId('research-note-source-0')).toHaveCount(0)
-  await page.getByText('全部来源 6', { exact: true }).click()
+  await expect(repairedHealth).toContainText('系统处理中 2')
+  await expect(repairedHealth.getByText('需判断 0', { exact: true })).toBeVisible()
+  await expect(page.getByTestId('research-note-source-0')).toBeVisible()
+  await page.getByTestId('research-note-evidence-review-0').click()
   await expect(page.getByTestId('research-note-evidence-result-0')).toContainText('准确定位')
   await expect(page.getByTestId('research-note-evidence-open-0')).toBeVisible()
   expect(evidenceReviewBodies.map(body => body.decision)).toEqual(['invalid', 'confirmed'])
@@ -716,8 +849,11 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
     source_fingerprint: 'sha256:new-source',
     current_block_id: 'quote-1',
   }))
-  expect(evidenceContextBodies).toHaveLength(20)
+  expect(evidenceContextBodies).toHaveLength(6)
   expect(evidenceContextBodies.every(body => String(body.source_path || '') !== answerSourcePath)).toBe(true)
+  await page.getByTestId('research-note-evidence-open-recovery-3').click()
+  await expect(page).toHaveURL(/\/library\?source=Unavailable(?:%20|\+)source/)
+  await expect(page.getByPlaceholder('搜索标题、分类、标签或备注')).toHaveValue('Unavailable source')
 })
 
 test('legacy evidence review labels a missing historical context without fabricating it', async ({ page }) => {
@@ -1044,7 +1180,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
       ],
     })
   })
-  await page.route(`**/api/chat/research-notes/${note.id}/evidence-context-baseline`, async (route) => {
+  await page.route(`**/api/chat/research-notes/${note.id}/evidence-health`, async (route) => {
     baselineBody = route.request().postDataJSON() as Record<string, unknown>
     markBaselineStarted?.()
     await baselineResponseReleased
@@ -1181,10 +1317,10 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   await expect(editor).toHaveValue('A note body that must not be rewritten.')
   await expect(page.getByTestId('workspace-note-evidence-review-note-failed-check')).toHaveCount(0)
   await expect(page.getByTestId('workspace-note-evidence-review-count-note-needs-decision')).toHaveText('需判断 1')
-  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('需处理（1）')
+  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('需判断（1）')
   await expect(page.getByTestId('workspace-note-evidence-review-note-baseline')).toHaveCount(0)
   await expect(page.getByTestId('research-note-evidence-baseline')).toHaveCount(0)
-  await page.getByTestId('research-notes-evidence-filter').getByText('需处理（1）', { exact: true }).click()
+  await page.getByTestId('research-notes-evidence-filter').getByText('需判断（1）', { exact: true }).click()
   await expect(page.getByTestId('workspace-note-note-baseline')).toHaveCount(0)
   await expect(page.getByTestId('workspace-note-note-failed-check')).toHaveCount(0)
   await expect(page.getByTestId('workspace-note-note-needs-decision')).toBeVisible()
@@ -1197,7 +1333,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   await expect(page.getByTestId('research-note-source-0')).toBeFocused()
   await page.getByTestId('workspace-note-note-baseline').click()
   await expect(page.locator('.kb-notes-title-input')).toHaveValue('Legacy evidence baseline')
-  expect(baselineBody).toEqual({ expected_revision: 1 })
+  expect(baselineBody).toEqual({ expected_revision: 2 })
   expect(note.content_markdown).toBe('A note body that must not be rewritten.')
   expect(note.source_state.links?.[0]?.block_id).toBe('quote-1')
   expect(note.source_state.links?.[0]?.evidence_quote).toBe(quote)
@@ -1218,7 +1354,7 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   await page.reload()
   await expect(page.locator('.kb-notes-editor-body textarea')).toHaveValue('A note body that must not be rewritten.')
   await expect(page.getByTestId('workspace-note-evidence-review-note-baseline')).toHaveCount(0)
-  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('需处理（1）')
+  await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('需判断（1）')
   await expect(page.getByTestId('research-note-evidence-baseline')).toHaveCount(0)
   expect(maintenanceBodies).toHaveLength(1)
 })

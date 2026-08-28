@@ -521,6 +521,98 @@ Photon arrival is a stochastic process governed by Poisson statistics.
     assert store.get_research_note(missing["id"])["revision"] == 2
 
 
+def test_chat_research_note_evidence_health_refreshes_existing_and_tracks_system_recovery(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+    from kb.source_blocks import load_source_blocks
+
+    md_path = tmp_path / "paper.en.md"
+    md_path.write_text(
+        """# Paper
+
+## Results
+
+Photon arrival is governed by Poisson statistics.
+""",
+        encoding="utf-8",
+    )
+    target = next(block for block in load_source_blocks(md_path) if "Photon arrival" in block["text"])
+    saved_context = chat_router.build_research_note_evidence_context(
+        md_path=md_path,
+        source_path="library/paper.pdf",
+        evidence_quote=target["text"],
+        block_id=target["block_id"],
+        anchor_id=target["anchor_id"],
+    )
+    md_path.write_text(
+        md_path.read_text(encoding="utf-8") + "\nConversion output was refreshed.\n",
+        encoding="utf-8",
+    )
+
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    note = store.create_research_note(
+        title="Evidence health",
+        content_markdown="The user-authored reading note must not change.",
+        source_state={"links": [
+            {
+                "kind": "source",
+                "source_path": "library/paper.pdf",
+                "block_id": target["block_id"],
+                "anchor_id": target["anchor_id"],
+                "evidence_quote": target["text"],
+                "evidence_context_snapshot": saved_context["context_snapshot"],
+                "evidence_verification": {
+                    "status": "exact",
+                    "reason": "captured",
+                    "source_fingerprint": saved_context["source_fingerprint"],
+                },
+            },
+            {
+                "kind": "source",
+                "source_path": "library/pending.pdf",
+                "evidence_quote": "Evidence waiting for its conversion output.",
+            },
+        ]},
+    )
+    assert note is not None
+
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda path: path)
+    monkeypatch.setattr(
+        chat_router,
+        "_resolve_paper_guide_md_path",
+        lambda source_path, **_kwargs: md_path if "paper.pdf" in str(source_path) else None,
+    )
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    response = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-health",
+        json={"expected_revision": note["revision"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["summary"]["total"] == 2
+    assert payload["summary"]["created"] == 1
+    assert payload["summary"]["reasons"] == {
+        "source_change_auto_verified": 1,
+        "unavailable": 1,
+    }
+    refreshed = payload["note"]
+    assert refreshed["revision"] == 2
+    assert refreshed["updated_at"] == note["updated_at"]
+    assert refreshed["content_markdown"] == "The user-authored reading note must not change."
+    exact_link, pending_link = refreshed["source_state"]["links"]
+    assert exact_link["evidence_verification"]["reason"] == "source_change_auto_verified"
+    assert exact_link["evidence_context_snapshot"]["source_fingerprint"] != saved_context["source_fingerprint"]
+    assert pending_link["evidence_baseline_check"]["reason"] == "unavailable"
+    assert pending_link["evidence_baseline_check"]["retry_after"] > pending_link["evidence_baseline_check"]["checked_at"]
+
+
 def test_recovered_source_event_refreshes_exact_note_evidence_and_leaves_only_real_decisions(
     monkeypatch,
     tmp_path: Path,

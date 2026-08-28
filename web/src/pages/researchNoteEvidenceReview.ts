@@ -15,8 +15,8 @@ export interface ResearchNoteEvidenceReviewSummary {
   firstSourceIndex: number | null
 }
 
-const USER_DECISION_REASONS = new Set(['candidate', 'source_changed', 'location_changed'])
-const SYSTEM_RETRY_REASONS = new Set(['unavailable', 'verification_failed', 'source_changed_during_capture'])
+export const RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS = new Set(['candidate', 'source_changed', 'location_changed'])
+export const RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS = new Set(['unavailable', 'verification_failed', 'source_changed_during_capture'])
 const EVIDENCE_MAINTENANCE_VERSION = 2
 
 function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | undefined) {
@@ -28,11 +28,11 @@ function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | und
     && (
       link.evidence_context_snapshot == null
       || (
-        USER_DECISION_REASONS.has(String(link.evidence_baseline_check?.reason || ''))
+        RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(String(link.evidence_baseline_check?.reason || ''))
         && Number(link.evidence_baseline_check?.maintenance_version || 0) < EVIDENCE_MAINTENANCE_VERSION
       )
       || link.evidence_baseline_check?.status === 'failed'
-      || SYSTEM_RETRY_REASONS.has(String(link.evidence_baseline_check?.reason || ''))
+      || RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(String(link.evidence_baseline_check?.reason || ''))
     )
     && link.evidence_verification?.status !== 'invalid'
   ))
@@ -45,11 +45,11 @@ export function researchNoteEvidenceReviewIssues(
   return links.flatMap((link, sourceIndex) => {
     if (!link || typeof link !== 'object' || link.kind === 'answer') return []
     if (!String(link.source_path || '').trim()) return []
-    if (link.evidence_context_snapshot != null || link.evidence_verification?.status === 'invalid') return []
+    if (link.evidence_verification?.status === 'invalid') return []
     const check = link.evidence_baseline_check
     const status = String(check?.status || '')
     const reason = String(check?.reason || '').trim()
-    if (status !== 'skipped' || !USER_DECISION_REASONS.has(reason)) return []
+    if (status !== 'skipped' || !RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(reason)) return []
     return [{
       sourceIndex,
       status,
@@ -65,7 +65,7 @@ export function researchNoteEvidenceSystemRetryRequired(
 ): boolean {
   return localMaintenanceLinks(sourceState).some(link => {
     const check = link.evidence_baseline_check
-    return check?.status === 'failed' || SYSTEM_RETRY_REASONS.has(String(check?.reason || ''))
+    return check?.status === 'failed' || RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(String(check?.reason || ''))
   })
 }
 
@@ -78,10 +78,10 @@ export function researchNoteEvidenceMaintenanceDue(
     if (!check) return true
     const reason = String(check.reason || '')
     const maintenanceVersion = Number(check.maintenance_version || 0)
-    if (USER_DECISION_REASONS.has(reason)) {
+    if (RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(reason)) {
       return maintenanceVersion < EVIDENCE_MAINTENANCE_VERSION
     }
-    if (check.status === 'failed' || SYSTEM_RETRY_REASONS.has(reason)) {
+    if (check.status === 'failed' || RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(reason)) {
       const retryAfter = Number(check.retry_after || 0)
       return !Number.isFinite(retryAfter) || retryAfter <= now
     }
@@ -101,7 +101,7 @@ export function researchNoteEvidenceNextRetryAt(
   const retryTimes = localMaintenanceLinks(sourceState).flatMap(link => {
     const check = link.evidence_baseline_check
     const reason = String(check?.reason || '')
-    if (!check || (check.status !== 'failed' && !SYSTEM_RETRY_REASONS.has(reason))) return []
+    if (!check || (check.status !== 'failed' && !RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(reason))) return []
     const retryAfter = Number(check.retry_after || 0)
     return Number.isFinite(retryAfter) && retryAfter > 0 ? [retryAfter] : []
   })

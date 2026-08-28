@@ -62,11 +62,14 @@ import {
   writeResearchNoteWorkspaceDraft,
 } from './researchNoteWorkspaceDraft'
 import {
+  RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS,
+  RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS,
   researchNoteEvidenceMaintenanceDue,
   researchNoteEvidenceMaintenanceTracked,
   researchNoteEvidenceNextRetryAt,
   researchNoteEvidenceReviewIssues,
   researchNoteEvidenceReviewSummary,
+  researchNoteEvidenceSystemRetryRequired,
   type ResearchNoteEvidenceReviewSummary,
 } from './researchNoteEvidenceReview'
 import {
@@ -87,7 +90,7 @@ const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
 type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
-type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'invalid' | 'unavailable' | 'error' | 'unchecked'
+type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'invalid' | 'recovering' | 'unchecked'
 type EvidenceHealthFilter = 'all' | 'issues'
 type DirectoryEvidenceFilter = 'all' | 'issues'
 
@@ -224,14 +227,23 @@ function evidenceHealthStatus(
   started: boolean,
 ): EvidenceHealthStatus {
   if (entry.link.evidence_verification?.status === 'invalid') return 'invalid'
-  if (!started) return 'unchecked'
-  if (!String(entry.link.source_path || '').trim()) return 'unavailable'
-  if (review?.error) return 'error'
-  if (review?.loading || !review?.data) return 'unchecked'
-  if (review.data.source_changed) return 'changed'
-  if (review.data.status === 'exact') return 'exact'
-  if (review.data.status === 'candidate') return 'candidate'
-  return 'unavailable'
+  const check = entry.link.evidence_baseline_check
+  const checkReason = String(check?.reason || '')
+  if (RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(checkReason)) {
+    return checkReason === 'candidate' ? 'candidate' : 'changed'
+  }
+  if (
+    check?.status === 'failed'
+    || RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(checkReason)
+  ) return 'recovering'
+  if (review?.data?.source_changed) return 'changed'
+  if (review?.data?.status === 'candidate') return 'candidate'
+  if (review?.data?.status === 'exact') return 'exact'
+  if (review?.error) return 'recovering'
+  if (entry.link.evidence_context_snapshot != null) return 'exact'
+  if (!started || review?.loading) return 'unchecked'
+  if (!String(entry.link.source_path || '').trim()) return 'recovering'
+  return 'unchecked'
 }
 
 function evidenceTargetMatchesSavedLocator(
@@ -492,31 +504,33 @@ export default function ResearchNotesPage() {
 
   const autoResolveEvidenceRecord = useCallback(async (
     record: ResearchNoteRecord,
-  ): Promise<ResearchNoteRecord> => {
-    if (!researchNoteEvidenceMaintenanceDue(record.source_state)) return record
+  ): Promise<{ record: ResearchNoteRecord; checked: boolean }> => {
     const localDraft = readResearchNoteWorkspaceDraft(record.id)
-    if (localDraft && !workspaceDraftMatchesRecord(localDraft, record)) return record
+    if (localDraft && !workspaceDraftMatchesRecord(localDraft, record)) return { record, checked: false }
     if (
       activeNoteRef.current?.id === record.id
       && (dirtyRef.current || savingRef.current)
-    ) return record
+    ) return { record, checked: false }
 
     try {
-      const result = await chatApi.captureResearchNoteEvidenceContextBaselines(
+      const result = await chatApi.refreshResearchNoteEvidenceHealth(
         record.id,
         record.revision,
       )
-      return result?.note?.id === record.id ? result.note : record
+      return {
+        record: result?.note?.id === record.id ? result.note : record,
+        checked: true,
+      }
     } catch (error) {
       const detail = error instanceof Error ? error.message : ''
       if (detail.includes('409')) {
         try {
-          return await chatApi.getResearchNote(record.id)
+          return { record: await chatApi.getResearchNote(record.id), checked: true }
         } catch {
-          return record
+          return { record, checked: false }
         }
       }
-      return record
+      return { record, checked: false }
     }
   }, [])
 
@@ -526,9 +540,19 @@ export default function ResearchNotesPage() {
   ): Promise<{ records: ResearchNoteRecord[]; updated: Map<string, ResearchNoteRecord> }> => {
     const candidates = records.filter(record => {
       if (
-        record.id === protectedNoteId
+        (
+          record.id === protectedNoteId
+          && (
+            activeNoteRef.current?.id !== record.id
+            || !researchNoteEvidenceSystemRetryRequired(record.source_state)
+          )
+        )
         || !researchNoteEvidenceMaintenanceTracked(record.source_state)
         || !researchNoteEvidenceMaintenanceDue(record.source_state)
+      ) return false
+      if (
+        activeNoteRef.current?.id === record.id
+        && (dirtyRef.current || savingRef.current)
       ) return false
       const localDraft = readResearchNoteWorkspaceDraft(record.id)
       return !(localDraft && !workspaceDraftMatchesRecord(localDraft, record))
@@ -578,6 +602,21 @@ export default function ResearchNotesPage() {
       const resolved = await autoResolveListedEvidence(records, protectedNoteId)
       if (requestId !== listRequestRef.current) return
       setNotes(resolved.records)
+      const activeRecord = activeNoteRef.current
+      const activeUpdate = activeRecord ? resolved.updated.get(activeRecord.id) : undefined
+      if (activeRecord && activeUpdate && !dirtyRef.current && !savingRef.current) {
+        const mergedRecord: ResearchNoteRecord = {
+          ...activeRecord,
+          ...activeUpdate,
+          content_markdown: activeRecord.content_markdown,
+        }
+        setActiveNote(mergedRecord)
+        setDraftSourceState(activeUpdate.source_state || {})
+        setDraftBaseRevision(activeUpdate.revision)
+        const total = noteLinks(mergedRecord).filter(link => link.kind !== 'answer').length
+        setEvidenceHealthRun({ started: true, running: false, total, completed: total })
+        setEvidenceHealthFilter(researchNoteEvidenceReviewIssues(mergedRecord.source_state).length > 0 ? 'issues' : 'all')
+      }
     } catch (error) {
       if (requestId === listRequestRef.current) {
         message.error(error instanceof Error ? error.message : S.research_notes_load_failed)
@@ -598,8 +637,15 @@ export default function ResearchNotesPage() {
   useEffect(() => {
     if (loading || evidenceMaintaining || notes.length <= 0) return
     const eligible = notes.filter(note => {
-      if (note.id === activeIdRef.current) return false
       if (!researchNoteEvidenceMaintenanceTracked(note.source_state)) return false
+      if (
+        note.id === activeIdRef.current
+        && (
+          dirtyRef.current
+          || savingRef.current
+          || !researchNoteEvidenceSystemRetryRequired(note.source_state)
+        )
+      ) return false
       const localDraft = readResearchNoteWorkspaceDraft(note.id)
       return !(localDraft && !workspaceDraftMatchesRecord(localDraft, note))
     })
@@ -653,10 +699,16 @@ export default function ResearchNotesPage() {
     try {
       let record = await chatApi.getResearchNote(noteId)
       if (requestId !== noteRequestRef.current) return
-      record = await autoResolveEvidenceRecord(record)
+      const evidenceRefresh = await autoResolveEvidenceRecord(record)
+      record = evidenceRefresh.record
       if (requestId !== noteRequestRef.current) return
       upsertSummary(record)
       applyRecord(record, { focusFirstEvidenceIssue: true })
+      if (evidenceRefresh.checked) {
+        const total = noteLinks(record).filter(link => link.kind !== 'answer').length
+        setEvidenceHealthRun({ started: true, running: false, total, completed: total })
+        setEvidenceHealthFilter(researchNoteEvidenceReviewIssues(record.source_state).length > 0 ? 'issues' : 'all')
+      }
     } catch (error) {
       if (requestId === noteRequestRef.current) {
         activeIdRef.current = previousId
@@ -1219,35 +1271,51 @@ export default function ResearchNotesPage() {
     }
   }
 
-  const runEvidenceHealthCheck = async () => {
+  const runEvidenceHealthCheck = async (options: { silent?: boolean } = {}) => {
     if (!activeNote || evidenceHealthRun.running || evidenceBaselineRun.running) return
     const noteId = activeNote.id
-    const paperEntries: EvidenceLinkEntry[] = links
-      .map((link, index) => ({ link, index, reviewKey: sourceReviewKey(link, index) }))
-      .filter(entry => entry.link.kind !== 'answer')
-    if (paperEntries.length <= 0) return
-    const requestEntries = paperEntries.filter(entry => String(entry.link.source_path || '').trim())
+    const initialTotal = links.filter(link => link.kind !== 'answer').length
+    if (initialTotal <= 0) return
     const runId = ++evidenceHealthRunRef.current
-    const initialReviews: Record<string, EvidenceReviewState> = {}
-    requestEntries.forEach(entry => {
-      initialReviews[entry.reviewKey] = { loading: true }
-    })
-    const results = { ...initialReviews }
-    let completed = paperEntries.length - requestEntries.length
-    setEvidenceReviews(initialReviews)
     setEvidenceHealthFilter('all')
     setEvidenceHealthRun({
       started: true,
-      running: requestEntries.length > 0,
-      total: paperEntries.length,
-      completed,
+      running: true,
+      total: initialTotal,
+      completed: 0,
     })
+    try {
+      if (dirty) {
+        if (options.silent || !(await saveDraftNow())) return
+      }
+      const latest = await chatApi.getResearchNote(noteId)
+      if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
+      const result = await chatApi.refreshResearchNoteEvidenceHealth(noteId, latest.revision)
+      if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
+      upsertSummary(result.note)
+      applyRecord(result.note, { focusFirstEvidenceIssue: true })
+      setEvidenceBaselineRun({
+        running: false,
+        summary: result.summary,
+        items: result.items,
+        sourceSignature: evidenceBaselineSourceSignature(result.note.source_state),
+      })
 
-    let cursor = 0
-    const worker = async () => {
-      while (cursor < requestEntries.length) {
-        const entry = requestEntries[cursor]
-        cursor += 1
+      const refreshedEntries = noteLinks(result.note)
+        .map((link, index) => ({ link, index, reviewKey: sourceReviewKey(link, index) }))
+        .filter(entry => entry.link.kind !== 'answer')
+      const decisionIndices = new Set(
+        researchNoteEvidenceReviewIssues(result.note.source_state).map(issue => issue.sourceIndex),
+      )
+      const decisionEntries = refreshedEntries.filter(entry => decisionIndices.has(entry.index))
+      const contextEntries = refreshedEntries.filter(entry => (
+        decisionIndices.has(entry.index)
+        || entry.link.evidence_verification?.status === 'invalid'
+      ))
+      const initialReviews: Record<string, EvidenceReviewState> = {}
+      contextEntries.forEach(entry => { initialReviews[entry.reviewKey] = { loading: true } })
+      setEvidenceReviews(initialReviews)
+      await Promise.all(contextEntries.map(async entry => {
         let nextReview: EvidenceReviewState
         try {
           const data = await chatApi.reviewResearchNoteEvidence(entry.link)
@@ -1259,35 +1327,39 @@ export default function ResearchNotesPage() {
           }
         }
         if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
-        results[entry.reviewKey] = nextReview
-        completed += 1
         setEvidenceReviews(current => ({ ...current, [entry.reviewKey]: nextReview }))
-        setEvidenceHealthRun({
-          started: true,
-          running: completed < paperEntries.length,
-          total: paperEntries.length,
-          completed,
-        })
+      }))
+      if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
+      setEvidenceHealthRun({
+        started: true,
+        running: false,
+        total: refreshedEntries.length,
+        completed: refreshedEntries.length,
+      })
+      setEvidenceHealthFilter(decisionEntries.length > 0 ? 'issues' : 'all')
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : ''
+      if (detail.includes('409')) {
+        try {
+          const latest = await chatApi.getResearchNote(noteId)
+          if (runId === evidenceHealthRunRef.current && activeIdRef.current === noteId) {
+            upsertSummary(latest)
+            applyRecord(latest, { focusFirstEvidenceIssue: true })
+            const total = noteLinks(latest).filter(link => link.kind !== 'answer').length
+            setEvidenceHealthRun({ started: true, running: false, total, completed: total })
+            setEvidenceHealthFilter(researchNoteEvidenceReviewIssues(latest.source_state).length > 0 ? 'issues' : 'all')
+          }
+        } catch {
+          // The next bounded maintenance pass will retry this transient conflict.
+        }
+      } else if (!options.silent) {
+        message.info(S.research_notes_evidence_context_recovering)
+      }
+    } finally {
+      if (runId === evidenceHealthRunRef.current && activeIdRef.current === noteId) {
+        setEvidenceHealthRun(current => ({ ...current, running: false }))
       }
     }
-
-    await Promise.all(
-      Array.from(
-        { length: Math.min(4, requestEntries.length) },
-        () => worker(),
-      ),
-    )
-    if (runId !== evidenceHealthRunRef.current || activeIdRef.current !== noteId) return
-    const hasIssues = paperEntries.some(entry => (
-      evidenceHealthStatus(entry, results[entry.reviewKey], true) !== 'exact'
-    ))
-    setEvidenceHealthRun({
-      started: true,
-      running: false,
-      total: paperEntries.length,
-      completed: paperEntries.length,
-    })
-    setEvidenceHealthFilter(hasIssues ? 'issues' : 'all')
   }
 
   const captureMissingEvidenceBaselines = async () => {
@@ -1451,9 +1523,6 @@ export default function ResearchNotesPage() {
     && entry.link.evidence_baseline_check?.reason !== 'unavailable'
   ))
   const missingEvidenceBaselineCount = missingEvidenceBaselineEntries.length
-  const missingEvidenceBaselineIndices = new Set(
-    missingEvidenceBaselineEntries.map(entry => entry.index),
-  )
   const baselineResultIsCurrent = Boolean(
     evidenceBaselineRun.sourceSignature
     && evidenceBaselineRun.sourceSignature === evidenceBaselineSourceSignature(draftSourceState),
@@ -1470,8 +1539,7 @@ export default function ResearchNotesPage() {
   }))
   const evidenceBaselineIssues = baselineResultIsCurrent
     ? (evidenceBaselineRun.items || []).filter(item => (
-      missingEvidenceBaselineIndices.has(item.source_index)
-      && item.status === 'skipped'
+      item.status === 'skipped'
       && ['candidate', 'source_changed', 'location_changed'].includes(item.reason)
     ))
     : persistedEvidenceBaselineIssues
@@ -1504,21 +1572,19 @@ export default function ResearchNotesPage() {
     changed: 0,
     candidate: 0,
     invalid: 0,
-    unavailable: 0,
-    error: 0,
+    recovering: 0,
     unchecked: 0,
   } as Record<EvidenceHealthStatus, number>)
   const evidenceIssueCount = evidenceHealthCounts.changed
     + evidenceHealthCounts.candidate
-    + evidenceHealthCounts.invalid
-    + evidenceHealthCounts.unavailable
-    + evidenceHealthCounts.error
   const displayedLinkEntries = evidenceHealthFilter === 'issues'
     && evidenceHealthRun.started
     && !evidenceHealthRun.running
     ? linkEntries.filter(entry => (
       entry.link.kind !== 'answer'
-      && evidenceHealthStatus(entry, evidenceReviews[entry.reviewKey], true) !== 'exact'
+      && ['changed', 'candidate'].includes(
+        evidenceHealthStatus(entry, evidenceReviews[entry.reviewKey], true),
+      )
     ))
     : linkEntries
   const combineHasMixedProjects = researchNoteOutlineHasMixedProjects(combineRecords)
@@ -1883,7 +1949,9 @@ export default function ResearchNotesPage() {
               </Button>
             </div>
             {paperLinkEntries.length > 0 && (
-              missingEvidenceBaselineCount > 0 || currentEvidenceBaselineSummary
+              missingEvidenceBaselineCount > 0
+              || evidenceBaselineIssueCount > 0
+              || currentEvidenceBaselineSummary
             ) ? (
               <section
                 className="kb-notes-evidence-baseline"
@@ -2019,10 +2087,7 @@ export default function ResearchNotesPage() {
                     {S.research_notes_evidence_health_invalid.replace('{n}', String(evidenceHealthCounts.invalid))}
                   </Tag>
                   <Tag>
-                    {S.research_notes_evidence_health_unavailable.replace('{n}', String(evidenceHealthCounts.unavailable))}
-                  </Tag>
-                  <Tag color="red">
-                    {S.research_notes_evidence_health_error.replace('{n}', String(evidenceHealthCounts.error))}
+                    {S.research_notes_evidence_health_recovering.replace('{n}', String(evidenceHealthCounts.recovering))}
                   </Tag>
                 </div>
                 <Segmented
@@ -2165,8 +2230,6 @@ export default function ResearchNotesPage() {
                         ? 'orange'
                         : healthStatus === 'invalid'
                           ? 'magenta'
-                        : healthStatus === 'error'
-                          ? 'red'
                           : 'default'
                   const healthLabel = healthStatus === 'exact'
                     ? S.research_notes_evidence_health_status_exact
@@ -2176,10 +2239,8 @@ export default function ResearchNotesPage() {
                         ? S.research_notes_evidence_health_status_candidate
                         : healthStatus === 'invalid'
                           ? S.research_notes_evidence_health_status_invalid
-                        : healthStatus === 'unavailable'
-                          ? S.research_notes_evidence_health_status_unavailable
-                          : healthStatus === 'error'
-                            ? S.research_notes_evidence_health_status_error
+                        : healthStatus === 'recovering'
+                          ? S.research_notes_evidence_health_status_recovering
                             : ''
                   const targetMatchesSavedLocator = evidenceTargetMatchesSavedLocator(link, result?.target)
                   const requiresLocatorRepair = Boolean(
@@ -2238,16 +2299,30 @@ export default function ResearchNotesPage() {
                       ) : (
                         <>
                           <div className="kb-notes-evidence-actions">
-                            <Button
-                              type="link"
-                              icon={<SearchOutlined />}
-                              loading={Boolean(review?.loading)}
-                              disabled={!link.source_path || evidenceHealthRun.running}
-                              data-testid={`research-note-evidence-review-${index}`}
-                              onClick={() => { void reviewEvidence(link, reviewKey) }}
-                            >
-                              {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
-                            </Button>
+                            {healthStatus !== 'recovering' ? (
+                              <Button
+                                type="link"
+                                icon={<SearchOutlined />}
+                                loading={Boolean(review?.loading)}
+                                disabled={!link.source_path || evidenceHealthRun.running}
+                                data-testid={`research-note-evidence-review-${index}`}
+                                onClick={() => { void reviewEvidence(link, reviewKey) }}
+                              >
+                                {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
+                              </Button>
+                            ) : (
+                              <Button
+                                type="link"
+                                icon={<ArrowRightOutlined />}
+                                data-testid={`research-note-evidence-open-recovery-${index}`}
+                                onClick={() => {
+                                  const source = String(link.source_name || link.label || link.source_path || '').trim()
+                                  navigate(`/library?source=${encodeURIComponent(source)}`)
+                                }}
+                              >
+                                {S.research_notes_evidence_open_recovery}
+                              </Button>
+                            )}
                             {result?.status === 'exact' && result.reader_open && !requiresLocatorRepair && !canReviewSourceVersion ? (
                               <Button
                                 type="link"
@@ -2294,10 +2369,9 @@ export default function ResearchNotesPage() {
                           ) : null}
                           {review?.error ? (
                             <Alert
-                              type="error"
+                              type="info"
                               showIcon
-                              message={S.research_notes_evidence_load_failed}
-                              description={review.error}
+                              message={S.research_notes_evidence_context_recovering}
                             />
                           ) : null}
                           {result ? (

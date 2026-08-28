@@ -1878,6 +1878,25 @@ def capture_chat_research_note_evidence_context_baseline(
     )
 
 
+@router.post("/chat/research-notes/{note_id}/evidence-health")
+def refresh_chat_research_note_evidence_health(
+    note_id: str,
+    body: ResearchNoteEvidenceBaselineBody,
+):
+    """Refresh all local evidence while persisting recoverable outcomes.
+
+    Unlike the legacy baseline action, this pass also checks evidence that
+    already has a saved context. Exact source moves and source revisions are
+    resolved automatically; only outcomes that genuinely require a reader's
+    judgment remain recorded as review decisions.
+    """
+    return _capture_chat_research_note_evidence_context_baseline(
+        note_id,
+        body.expected_revision,
+        refresh_existing=True,
+    )
+
+
 def maintain_research_note_evidence_for_recovered_sources(
     *,
     source_paths: tuple[str, ...] | None,

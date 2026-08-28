@@ -1836,6 +1836,11 @@ export const chatApi = {
       `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-context-baseline`,
       { expected_revision: expectedRevision },
     ),
+  refreshResearchNoteEvidenceHealth: (noteId: string, expectedRevision: number) =>
+    api.post<ResearchNoteEvidenceBaselineResult>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-health`,
+      { expected_revision: expectedRevision },
+    ),
   maintainResearchNoteEvidence: (notes: Array<{ note_id: string; expected_revision: number }>) =>
     api.post<ResearchNoteEvidenceMaintenanceResult>(
       '/api/chat/research-notes/evidence-maintenance',

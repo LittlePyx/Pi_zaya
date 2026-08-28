@@ -29,7 +29,7 @@ import { useChatStore } from '../stores/chatStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useOnboardingStore } from '../stores/onboardingStore'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
 import {
   WorkbenchMetricStrip,
@@ -159,6 +159,7 @@ export default function LibraryPage() {
   const store = useLibraryStore()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
+  const location = useLocation()
 
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
@@ -384,6 +385,13 @@ export default function LibraryPage() {
     convertedFiles,
     tabKey,
   })
+  useEffect(() => {
+    const source = String(new URLSearchParams(location.search).get('source') || '').trim()
+    if (!source) return
+    setBrowseMode('list')
+    setTabKey('all')
+    setFileKeyword(source)
+  }, [location.search, setFileKeyword])
   const qualityReviewCount = useMemo(() => store.files.filter((x) => hasConversionQualityIssue(x)).length, [store.files])
   const qualityReadyCount = useMemo(
     () => store.files.filter((x) => conversionQualityStatus(x.conversion_quality) === 'good').length,
