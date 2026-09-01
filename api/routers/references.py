@@ -95,6 +95,7 @@ from kb.reference_index import (
     resolve_reference_entry,
 )
 from kb.source_blocks import load_source_blocks, source_blocks_to_reader_anchors
+from kb.shelf_reader_locator import maintain_shelf_reader_locator
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
     start_reference_sync,
@@ -130,6 +131,9 @@ _REFS_META_MAX_JSON_CHARS = 90_000
 _REFS_SHELF_REPAIR_MAX_ITEMS = 120
 _REFS_SHELF_REPAIR_MAX_JSON_CHARS = 260_000
 _REFS_SHELF_REPAIR_ITEM_MAX_JSON_CHARS = 40_000
+_REFS_SHELF_READER_LOCATE_MAX_ITEMS = 120
+_REFS_SHELF_READER_LOCATE_MAX_JSON_CHARS = 220_000
+_REFS_SHELF_READER_LOCATE_ITEM_MAX_JSON_CHARS = 16_000
 
 
 def _bounded_json(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -5565,6 +5569,23 @@ class ReaderDocBody(BaseModel):
     source_path: str = Field(..., max_length=_REFS_SOURCE_PATH_MAX_CHARS)
 
 
+class ShelfReaderLocatorMaintenanceBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[dict[str, Any]] = Field(..., max_length=_REFS_SHELF_READER_LOCATE_MAX_ITEMS)
+
+    @field_validator("items")
+    @classmethod
+    def _check_items(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _bounded_dict_list(
+            value,
+            name="shelf reader locator maintenance items",
+            max_items=_REFS_SHELF_READER_LOCATE_MAX_ITEMS,
+            max_json_chars=_REFS_SHELF_READER_LOCATE_MAX_JSON_CHARS,
+            item_max_json_chars=_REFS_SHELF_READER_LOCATE_ITEM_MAX_JSON_CHARS,
+        )
+
+
 def _bibliometrics_requested_locale(body: BibliometricsBody, meta: dict | None) -> str:
     data = dict(meta or {})
     for raw in (
@@ -7686,6 +7707,101 @@ def get_reader_doc(body: ReaderDocBody):
         "blocks": blocks,
         "cite_details": cite_details,
         "reference_cite_details": cite_details,
+    }
+
+
+def _shelf_reader_locator_source_candidates(item: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in (
+        item.get("source_path"),
+        item.get("fallback_source_path"),
+        item.get("library_match_path"),
+    ):
+        value = str(raw or "").strip()
+        key = value.replace("\\", "/").lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+@router.post("/shelf/reader-locators/maintain")
+def maintain_shelf_reader_locators(body: ShelfReaderLocatorMaintenanceBody):
+    """Validate and recover persisted basket locators using local source blocks only."""
+
+    source_cache: dict[str, dict[str, Any] | None] = {}
+    results: list[dict[str, Any]] = []
+    for raw_item in body.items:
+        item = dict(raw_item or {})
+        key = str(item.get("key") or "").strip()
+        primary_source_path = str(item.get("source_path") or "").strip()
+        chosen_source_path = ""
+        source_data: dict[str, Any] | None = None
+        for candidate in _shelf_reader_locator_source_candidates(item):
+            cache_key = candidate.replace("\\", "/").lower()
+            if cache_key not in source_cache:
+                md_path = _resolve_reader_md_path(candidate)
+                if md_path is None:
+                    source_cache[cache_key] = None
+                else:
+                    try:
+                        md_text = md_path.read_text(encoding="utf-8", errors="ignore")
+                        source_cache[cache_key] = {
+                            "md_path": md_path,
+                            "doc_hash": _reader_doc_hash(md_text),
+                            "blocks": load_source_blocks(md_path, md_text=md_text),
+                            "public_source_path": root_relative_file_id(md_path, _reference_asset_roots()) or md_path.name,
+                        }
+                    except Exception:
+                        source_cache[cache_key] = None
+            cached = source_cache.get(cache_key)
+            if isinstance(cached, dict):
+                chosen_source_path = candidate
+                source_data = cached
+                break
+
+        if source_data is None:
+            results.append({
+                "key": key,
+                "ok": False,
+                "changed": False,
+                "status": "source_unavailable",
+                "reason": "reader_source_unavailable",
+                "source_path": primary_source_path,
+            })
+            continue
+
+        result = maintain_shelf_reader_locator(list(source_data.get("blocks") or []), item)
+        source_relocated = bool(
+            chosen_source_path
+            and primary_source_path
+            and chosen_source_path.replace("\\", "/").lower() != primary_source_path.replace("\\", "/").lower()
+        )
+        result.update({
+            "source_path": chosen_source_path,
+            "public_source_path": str(source_data.get("public_source_path") or ""),
+            "source_relocated": source_relocated,
+            "doc_hash": str(source_data.get("doc_hash") or ""),
+        })
+        if source_relocated and result.get("ok"):
+            result["changed"] = True
+            if str(result.get("status") or "") == "ready":
+                result["status"] = "recovered"
+            result["reason"] = f"source_relocated:{str(result.get('reason') or 'locator_ready')}"
+        results.append(result)
+
+    changed = sum(1 for item in results if item.get("ok") and item.get("changed"))
+    ready = sum(1 for item in results if item.get("ok"))
+    return {
+        "ok": True,
+        "requested": len(body.items),
+        "ready": ready,
+        "changed": changed,
+        "unresolved": max(0, len(body.items) - ready),
+        "items": results,
+        "model_calls": 0,
     }
 
 

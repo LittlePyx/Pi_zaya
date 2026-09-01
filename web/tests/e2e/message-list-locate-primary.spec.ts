@@ -1341,6 +1341,151 @@ test('citation shelf recovers and persists a stale source locator without user r
   })
 })
 
+test('citation shelf batch-recovers same-paper locators before opening and keeps them after reload', async ({ page }) => {
+  await mockReaderDoc(page)
+  const methodQuote = 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.'
+  const conclusionQuote = 'Our method achieves stable reconstruction from a single snapshot.'
+  const initialItems = [
+    {
+      key: 'batch-stale-method',
+      main: 'Fixture Paper / 2. Method',
+      num: 1,
+      anchor: 'batch-stale-method',
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      raw: methodQuote,
+      citeFmt: methodQuote,
+      isInpaper: false,
+      citationRoute: 'system_a',
+      title: 'Fixture Paper / 2. Method',
+      headingPath: 'Fixture Paper / 2. Method',
+      evidenceQuote: methodQuote,
+      evidenceSource: 'retrieval_hit',
+      blockId: 'stale-method-block',
+      anchorId: 'stale-method-anchor',
+      anchorKind: 'paragraph',
+      bibliometricsChecked: true,
+      metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+      metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+      tags: [],
+      note: '',
+    },
+    {
+      key: 'batch-stale-conclusion',
+      main: 'Fixture Paper / 3. Conclusion',
+      num: 2,
+      anchor: 'batch-stale-conclusion',
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      raw: conclusionQuote,
+      citeFmt: conclusionQuote,
+      isInpaper: false,
+      citationRoute: 'system_a',
+      title: 'Fixture Paper / 3. Conclusion',
+      headingPath: 'Fixture Paper / 3. Conclusion',
+      evidenceQuote: conclusionQuote,
+      evidenceSource: 'retrieval_hit',
+      blockId: 'stale-conclusion-block',
+      anchorId: 'stale-conclusion-anchor',
+      anchorKind: 'paragraph',
+      bibliometricsChecked: true,
+      metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+      metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+      tags: [],
+      note: '',
+    },
+  ]
+  const patchPayloads = await mockProjectCitationShelf(page, initialItems)
+  const maintenancePayloads: Array<{ items?: Array<Record<string, unknown>> }> = []
+  await page.route('**/api/references/shelf/reader-locators/maintain', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    maintenancePayloads.push(payload)
+    const requested = Array.isArray(payload.items) ? payload.items : []
+    const locatorByKey: Record<string, Record<string, unknown>> = {
+      'batch-stale-method': {
+        block_id: 'p-method-1',
+        anchor_id: 'a-p-method-1',
+        anchor_kind: 'paragraph',
+        heading_path: 'Fixture Paper / 2. Method',
+        page_start: 2,
+        page_end: 2,
+      },
+      'batch-stale-conclusion': {
+        block_id: 'p-conclusion-1',
+        anchor_id: 'a-p-conclusion-1',
+        anchor_kind: 'paragraph',
+        heading_path: 'Fixture Paper / 3. Conclusion',
+        page_start: 3,
+        page_end: 3,
+      },
+    }
+    const results = requested.map((item) => {
+      const key = String(item.key || '')
+      const locator = locatorByKey[key] || {}
+      const changed = String(item.block_id || '') !== String(locator.block_id || '')
+      return {
+        key,
+        ok: true,
+        changed,
+        status: changed ? 'recovered' : 'ready',
+        reason: changed ? 'unique_evidence_quote' : 'identity_valid',
+        source_path: item.source_path,
+        source_relocated: false,
+        locator,
+      }
+    })
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: requested.length,
+        ready: requested.length,
+        changed: results.filter((item) => item.changed).length,
+        unresolved: 0,
+        model_calls: 0,
+        items: results,
+      }),
+    })
+  })
+
+  const path = '/__message_list_test__?scenario=system-a-citation-popover&reader=1'
+  await openMessageListRegressionPage(page, path)
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(2)
+  await expect.poll(() => maintenancePayloads.some((payload) => payload.items?.length === 2)).toBe(true)
+  await expect.poll(() => patchPayloads.some((payload) => {
+    if (!Array.isArray(payload.items) || payload.items.length !== 2) return false
+    const byKey = new Map(payload.items.map((entry) => {
+      const record = entry as Record<string, unknown>
+      return [String(record.key || ''), record]
+    }))
+    return byKey.get('batch-stale-method')?.blockId === 'p-method-1'
+      && byKey.get('batch-stale-conclusion')?.blockId === 'p-conclusion-1'
+  }), { timeout: 15_000 }).toBe(true)
+
+  await page.reload()
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover', {
+    timeout: INTERNAL_ROUTE_READY_TIMEOUT_MS,
+  })
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(2)
+  await page.getByTestId('citation-shelf-open-source').nth(1).click()
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return {
+      blockId: payload.blockId,
+      anchorId: payload.anchorId,
+      strictLocate: payload.strictLocate,
+      locateMode: payload.locateMode || '',
+    }
+  }).toEqual({
+    blockId: 'p-conclusion-1',
+    anchorId: 'a-p-conclusion-1',
+    strictLocate: true,
+    locateMode: '',
+  })
+})
+
 test('citation shelf does not call source quality maintenance APIs for ordinary users', async ({ page }) => {
   await mockReaderDoc(page)
   await page.unroute('**/api/library/quality/sources').catch(() => {})

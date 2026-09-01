@@ -157,6 +157,14 @@ import {
 } from './messageListDerived'
 import { buildFallbackCiteDetailsFromRefHits } from './messageFallbackCitations'
 import { resolveLowConfidenceMeta, stripLeadingLowConfidenceNotice } from './messageLowConfidence'
+import {
+  mergeShelfReaderLocatorMaintenanceResult,
+  shelfReaderLocatorMaintenanceFingerprint,
+} from './shelfReaderLocatorMaintenance'
+import {
+  useShelfReaderLocatorMaintenance,
+  type ShelfReaderLocatorMaintenanceUpdate,
+} from './useShelfReaderLocatorMaintenance'
 import { createMessageLocateResolvers } from './messageLocateResolvers'
 import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
 import { MessageProvenanceChips } from './MessageProvenanceChips'
@@ -389,6 +397,26 @@ export function MessageList({
   const S = useT()
   const shelfScopeId = shelfProjectScopeId(shelfProjectId)
   const shelfProjectReady = Boolean(String(shelfProjectId || '').trim())
+  const applyShelfReaderLocatorMaintenance = useCallback((
+    updates: ShelfReaderLocatorMaintenanceUpdate[],
+  ) => {
+    if (updates.length <= 0) return
+    const updatesByKey = new Map(updates.map((update) => [update.result.key, update]))
+    setShelfItems((current) => {
+      const next = current.map((item) => {
+        const update = updatesByKey.get(item.key)
+        if (!update || shelfReaderLocatorMaintenanceFingerprint(item) !== update.expectedFingerprint) return item
+        return mergeShelfReaderLocatorMaintenanceResult(item, update.result)
+      })
+      return sameShelfItems(current, next) ? current : next
+    })
+  }, [])
+  const shelfReaderLocatorMaintaining = useShelfReaderLocatorMaintenance({
+    items: shelfItems,
+    scopeId: shelfScopeId,
+    sourceQualityRefreshToken,
+    onApply: applyShelfReaderLocatorMaintenance,
+  })
   useEffect(() => {
     const locateResults = Object.values(readerLocateResults)
     if (locateResults.length <= 0) return
@@ -566,15 +594,23 @@ export function MessageList({
     const summary = Boolean(shelfSummaryLoadingKey)
     const repair = Boolean(shelfRepairLoadingKey)
     const autoRepair = shelfAutoRepairingKeys.length > 0
-    const backgroundOnly = shelfBackgroundBusy && !summary && !repair && !autoRepair
+    const backgroundBusy = shelfBackgroundBusy || shelfReaderLocatorMaintaining
+    const backgroundOnly = backgroundBusy && !summary && !repair && !autoRepair
     onShelfActivityChange?.({
       summary,
       repair,
       autoRepair,
-      background: shelfBackgroundBusy,
+      background: backgroundBusy,
       count: (summary ? 1 : 0) + (repair ? 1 : 0) + shelfAutoRepairingKeys.length + (backgroundOnly ? 1 : 0),
     })
-  }, [onShelfActivityChange, shelfAutoRepairingKeys.length, shelfBackgroundBusy, shelfRepairLoadingKey, shelfSummaryLoadingKey])
+  }, [
+    onShelfActivityChange,
+    shelfAutoRepairingKeys.length,
+    shelfBackgroundBusy,
+    shelfReaderLocatorMaintaining,
+    shelfRepairLoadingKey,
+    shelfSummaryLoadingKey,
+  ])
 
   useEffect(() => () => {
     shelfAsyncScopeEpochRef.current += 1

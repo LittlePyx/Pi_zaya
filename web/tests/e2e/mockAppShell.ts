@@ -88,6 +88,26 @@ export async function installIdleReferenceMocks(page: Page) {
       items: [],
     })
   })
+  await context.route('**/api/references/shelf/reader-locators/maintain', async (route) => {
+    const payload = postJson<{ items?: Array<{ key?: string, source_path?: string }> }>(route)
+    const requestedItems = Array.isArray(payload?.items) ? payload.items : []
+    await fulfillJson(route, {
+      ok: true,
+      requested: requestedItems.length,
+      ready: 0,
+      changed: 0,
+      unresolved: requestedItems.length,
+      model_calls: 0,
+      items: requestedItems.map((item) => ({
+        key: String(item.key || ''),
+        ok: false,
+        changed: false,
+        status: 'unresolved',
+        reason: 'reader source fixture not configured',
+        source_path: String(item.source_path || ''),
+      })),
+    })
+  })
   await context.route('**/api/references/reader/doc**', async (route) => {
     await fulfillJson(route, { detail: 'reader source fixture not configured' }, 404)
   })

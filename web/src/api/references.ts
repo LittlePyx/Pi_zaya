@@ -66,6 +66,56 @@ export interface ReaderDocResponse {
   reference_cite_details?: Array<Record<string, unknown>>
 }
 
+export interface ShelfReaderLocatorMaintenanceItem {
+  key: string
+  source_path: string
+  source_name?: string
+  fallback_source_path?: string
+  library_match_path?: string
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  heading_path?: string
+  reader_evidence_quote?: string
+  evidence_quote?: string
+  shelf_excerpt?: string
+  card_evidence?: string
+  raw?: string
+  page_start?: number
+  page_end?: number
+}
+
+export interface ShelfReaderLocatorMaintenanceResult {
+  key: string
+  ok: boolean
+  changed: boolean
+  status: 'ready' | 'recovered' | 'unresolved' | 'source_unavailable' | 'skipped' | 'invalid' | string
+  reason?: string
+  score?: number
+  source_path?: string
+  public_source_path?: string
+  source_relocated?: boolean
+  doc_hash?: string
+  locator?: {
+    block_id?: string
+    anchor_id?: string
+    anchor_kind?: string
+    heading_path?: string
+    page_start?: number
+    page_end?: number
+  }
+}
+
+export interface ShelfReaderLocatorMaintenanceResponse {
+  ok: boolean
+  requested: number
+  ready: number
+  changed: number
+  unresolved: number
+  items: ShelfReaderLocatorMaintenanceResult[]
+  model_calls: number
+}
+
 export interface ShelfMetadataQualityIssue {
   code: string
   label: string
@@ -525,5 +575,9 @@ export const referencesApi = {
   readerDoc: (sourcePath: string, init?: RequestInit) =>
     api.post<ReaderDocResponse>('/api/references/reader/doc', {
       source_path: sourcePath,
+    }, init),
+  maintainShelfReaderLocators: (items: ShelfReaderLocatorMaintenanceItem[], init?: RequestInit) =>
+    api.post<ShelfReaderLocatorMaintenanceResponse>('/api/references/shelf/reader-locators/maintain', {
+      items,
     }, init),
 }

@@ -31,6 +31,12 @@ import {
   researchNoteHasCapture,
 } from '../../src/components/chat/readerResearchNoteCapture'
 import type { ResearchNoteRecord } from '../../src/api/chat'
+import type { CiteShelfItem } from '../../src/components/chat/citationState'
+import {
+  mergeShelfReaderLocatorMaintenanceResult,
+  shelfReaderLocatorMaintenanceFingerprint,
+  shelfReaderLocatorMaintenanceInput,
+} from '../../src/components/chat/shelfReaderLocatorMaintenance'
 
 const payload: ReaderOpenPayload = {
   sourcePath: 'db/Fixture/Fixture.en.md',
@@ -158,6 +164,64 @@ test('reader locate recovery removes stale identities and keeps evidence signals
   expect(recovered.alternatives?.[0].snippet).toBe('A second evidence sentence.')
   expect(shouldRecoverReaderLocateHeuristically(result, recovered)).toBe(false)
   expect(shouldRecoverReaderLocateHeuristically({ ...result, ok: true, status: 'exact' }, strictPayload)).toBe(false)
+})
+
+test('shelf locator maintenance sends only source-bound evidence and merges recovered identity', () => {
+  const item = {
+    key: 'shelf-maintain-1',
+    isInpaper: false,
+    sourcePath: 'db/Old/Old.en.md',
+    sourceName: 'Old.pdf',
+    libraryMatchStatus: 'in_library',
+    libraryMatchPath: 'db/Renamed/Renamed.en.md',
+    blockId: 'stale-block',
+    anchorId: 'stale-anchor',
+    anchorKind: 'paragraph',
+    headingPath: 'Paper / Methods',
+    evidenceQuote: 'A traceable evidence sentence.',
+    readerEvidenceQuote: 'A traceable evidence sentence.',
+    shelfExcerpt: '',
+    cardEvidence: '',
+    raw: '',
+    pageStart: 1,
+    pageEnd: 1,
+  } as CiteShelfItem
+  const input = shelfReaderLocatorMaintenanceInput(item)
+  expect(input).toMatchObject({
+    key: item.key,
+    source_path: item.sourcePath,
+    fallback_source_path: item.libraryMatchPath,
+    block_id: 'stale-block',
+    evidence_quote: 'A traceable evidence sentence.',
+  })
+  expect(shelfReaderLocatorMaintenanceFingerprint(item)).toContain('stale-block')
+
+  const recovered = mergeShelfReaderLocatorMaintenanceResult(item, {
+    key: item.key,
+    ok: true,
+    changed: true,
+    status: 'recovered',
+    source_path: item.libraryMatchPath,
+    source_relocated: true,
+    locator: {
+      block_id: 'fresh-block',
+      anchor_id: 'fresh-anchor',
+      anchor_kind: 'paragraph',
+      heading_path: 'Paper / Updated methods',
+      page_start: 4,
+      page_end: 4,
+    },
+  })
+  expect(recovered).toMatchObject({
+    sourcePath: item.libraryMatchPath,
+    blockId: 'fresh-block',
+    anchorId: 'fresh-anchor',
+    anchorKind: 'paragraph',
+    headingPath: 'Paper / Updated methods',
+    pageStart: 4,
+    pageEnd: 4,
+  })
+  expect(shelfReaderLocatorMaintenanceInput({ ...item, isInpaper: true })).toBeNull()
 })
 
 test('reader note capture preserves structured markdown, page, and exact locator identity', () => {
