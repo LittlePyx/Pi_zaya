@@ -1277,6 +1277,105 @@ Dark counts were measured with the shutter closed.
     assert store.get_research_note(note["id"])["revision"] == 5
 
 
+def test_chat_research_note_repair_reverifies_a_trusted_candidate_after_source_update(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from api.routers import chat as chat_router
+    from kb.research_note_evidence import source_content_fingerprint
+
+    md_path = tmp_path / "converted.md"
+    md_path.write_text(
+        """# Paper
+
+## Results
+
+Photon arrival is a stochastic process governed by Poisson statistics.
+""",
+        encoding="utf-8",
+    )
+    initial_fingerprint = source_content_fingerprint(md_path)
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    note = store.create_research_note(
+        title="Evidence note",
+        content_markdown="Detector evidence",
+        source_state={
+            "version": 1,
+            "links": [
+                {
+                    "kind": "source",
+                    "label": "Paper",
+                    "source_path": "library/paper.pdf",
+                    "capture_id": "capture-1",
+                    "block_id": "stale-block",
+                    "anchor_id": "stale-anchor",
+                    "evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+                    "evidence_verification": {
+                        "status": "exact",
+                        "reason": "legacy_saved",
+                        "verified_at": 1_700_000_000,
+                        "source_fingerprint": initial_fingerprint,
+                    },
+                }
+            ],
+        },
+    )
+    assert note is not None
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", lambda _path: str(md_path))
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", lambda *args, **kwargs: md_path)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    reviewed = client.post(
+        "/api/chat/research-note/evidence-context",
+        json={
+            "source_path": "library/paper.pdf",
+            "source_name": "Paper",
+            "evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+            "block_id": "stale-block",
+            "anchor_id": "stale-anchor",
+        },
+    )
+    assert reviewed.status_code == 200
+    context = reviewed.json()
+    assert context["status"] == "candidate"
+    candidate = context["candidates"][0]
+    assert context["source_fingerprint"] == initial_fingerprint
+
+    md_path.write_text(
+        md_path.read_text(encoding="utf-8") + "\n## Appendix\n\nAdditional conversion output.\n",
+        encoding="utf-8",
+    )
+    current_fingerprint = source_content_fingerprint(md_path)
+    assert current_fingerprint != initial_fingerprint
+
+    repaired = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-repair",
+        json={
+            "source_index": 0,
+            "source_path": "library/paper.pdf",
+            "capture_id": "capture-1",
+            "old_block_id": "stale-block",
+            "old_anchor_id": "stale-anchor",
+            "old_evidence_quote": "stochastic photon arrivals follow Poisson behavior",
+            "candidate_block_id": candidate["block_id"],
+            "candidate_anchor_id": candidate["anchor_id"],
+            "candidate_anchor_kind": candidate["kind"],
+            "candidate_evidence_quote": candidate["text"],
+            "source_fingerprint": context["source_fingerprint"],
+        },
+    )
+
+    assert repaired.status_code == 200
+    link = repaired.json()["source_state"]["links"][0]
+    assert link["block_id"] == candidate["block_id"]
+    assert link["evidence_quote"] == candidate["text"]
+    assert link["evidence_verification"]["source_fingerprint"] == current_fingerprint
+    assert link["locator_repair_history"][-1]["source_fingerprint"] == current_fingerprint
+
+
 def test_chat_research_notes_workspace_list_and_metadata(monkeypatch, tmp_path: Path) -> None:
     from api.routers import chat as chat_router
 

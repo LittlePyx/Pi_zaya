@@ -581,7 +581,7 @@ export const S = {
   reader_evidence_repair_exact_hint: '确认后只会更新这条笔记来源的定位，并保留原定位、修复时间和原文版本记录。',
   reader_evidence_repair_cancel: '返回笔记，不修复',
   reader_evidence_repair_confirm: '确认并修复笔记定位',
-  reader_evidence_repair_failed: '定位修复失败，请重新核查候选',
+  reader_evidence_repair_failed: '本次定位未写入；系统已保留原证据，返回笔记并重新核验当前原文。',
   reader_evidence_review_title: '核对原文版本变化',
   reader_evidence_review_locating: '正在定位当前原文',
   reader_evidence_review_locating_hint: '只有 Reader 精确命中本次核对位置后，才可以保存核对结果。',

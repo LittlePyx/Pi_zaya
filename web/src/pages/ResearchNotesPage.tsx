@@ -457,6 +457,7 @@ export default function ResearchNotesPage() {
   const [evidenceHealthFilter, setEvidenceHealthFilter] = useState<EvidenceHealthFilter>('all')
   const [evidenceBaselineRun, setEvidenceBaselineRun] = useState<EvidenceBaselineRunState>(EMPTY_EVIDENCE_BASELINE_RUN)
   const [focusedEvidenceIndex, setFocusedEvidenceIndex] = useState<number | null>(null)
+  const [pendingEvidenceRecheckNoteId, setPendingEvidenceRecheckNoteId] = useState('')
   const evidenceHealthRunRef = useRef(0)
   const evidenceBaselineRunRef = useRef(0)
   const links = useMemo(() => sourceStateLinks(draftSourceState), [draftSourceState])
@@ -799,11 +800,14 @@ export default function ResearchNotesPage() {
     const params = new URLSearchParams(location.search)
     const repaired = params.get('evidence_repaired') === '1'
     const reviewDecision = params.get('evidence_reviewed')
-    if (!repaired && reviewDecision !== 'confirmed' && reviewDecision !== 'invalid') return
+    const recheck = params.get('evidence_recheck') === '1'
+    if (!repaired && !recheck && reviewDecision !== 'confirmed' && reviewDecision !== 'invalid') return
     if (repaired) message.success(S.research_notes_evidence_repair_saved)
+    if (recheck && requestedNoteId) setPendingEvidenceRecheckNoteId(requestedNoteId)
     if (reviewDecision === 'confirmed') message.success(S.research_notes_evidence_review_confirmed)
     if (reviewDecision === 'invalid') message.success(S.research_notes_evidence_review_invalidated)
     params.delete('evidence_repaired')
+    params.delete('evidence_recheck')
     params.delete('evidence_reviewed')
     navigate({ pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' }, { replace: true })
   }, [
@@ -813,6 +817,7 @@ export default function ResearchNotesPage() {
     location.pathname,
     location.search,
     navigate,
+    requestedNoteId,
   ])
 
   useEffect(() => {
@@ -1484,6 +1489,27 @@ export default function ResearchNotesPage() {
       }
     }
   }
+
+  const runEvidenceHealthCheckRef = useRef(runEvidenceHealthCheck)
+  runEvidenceHealthCheckRef.current = runEvidenceHealthCheck
+
+  useEffect(() => {
+    if (
+      !pendingEvidenceRecheckNoteId
+      || activeNote?.id !== pendingEvidenceRecheckNoteId
+      || loadingNote
+      || evidenceHealthRun.running
+      || evidenceBaselineRun.running
+    ) return
+    setPendingEvidenceRecheckNoteId('')
+    void runEvidenceHealthCheckRef.current({ silent: true })
+  }, [
+    activeNote?.id,
+    evidenceBaselineRun.running,
+    evidenceHealthRun.running,
+    loadingNote,
+    pendingEvidenceRecheckNoteId,
+  ])
 
   const captureMissingEvidenceBaselines = async () => {
     if (!activeNote || saving || evidenceHealthRun.running || evidenceBaselineRun.running) return

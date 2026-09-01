@@ -2206,6 +2206,29 @@ def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceR
     if md_path is None:
         raise HTTPException(409, "converted source changed; verify the candidate again")
 
+    links = (
+        note.get("source_state", {}).get("links", [])
+        if isinstance(note.get("source_state"), dict)
+        else []
+    )
+    saved_link = (
+        links[body.source_index]
+        if isinstance(links, list)
+        and 0 <= body.source_index < len(links)
+        and isinstance(links[body.source_index], dict)
+        else {}
+    )
+    known_fingerprints = {
+        str(container.get("source_fingerprint") or "").strip()
+        for container in (
+            saved_link.get("evidence_verification"),
+            saved_link.get("evidence_context_snapshot"),
+            saved_link.get("evidence_baseline_check"),
+        )
+        if isinstance(container, dict)
+        and str(container.get("source_fingerprint") or "").strip().startswith("sha256:")
+    }
+
     try:
         verified = build_research_note_evidence_context(
             md_path=md_path,
@@ -2222,20 +2245,25 @@ def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceR
         fingerprint_after_verification = source_content_fingerprint(md_path)
     except OSError as exc:
         raise HTTPException(409, "converted source changed; verify the candidate again") from exc
+    verified_fingerprint = str(verified.get("source_fingerprint") or "").strip()
+    if verified_fingerprint != fingerprint_after_verification:
+        raise HTTPException(409, "converted source changed during verification")
     if (
-        str(verified.get("source_fingerprint") or "") != body.source_fingerprint
-        or fingerprint_after_verification != body.source_fingerprint
+        body.source_fingerprint != fingerprint_after_verification
+        and body.source_fingerprint not in known_fingerprints
     ):
-        raise HTTPException(409, "converted source changed; verify the candidate again")
+        raise HTTPException(409, "candidate source version is no longer current")
     target = verified.get("target")
     if str(verified.get("status") or "") != "exact" or not isinstance(target, dict):
-        raise HTTPException(409, "candidate is no longer an exact source location")
-    if str(verified.get("reason") or "") not in {"exact_block", "exact_anchor"}:
-        raise HTTPException(409, "candidate location changed; verify it again")
-    if body.candidate_block_id and str(target.get("block_id") or "") != body.candidate_block_id:
-        raise HTTPException(409, "candidate block changed; verify it again")
-    if body.candidate_anchor_id and str(target.get("anchor_id") or "") != body.candidate_anchor_id:
-        raise HTTPException(409, "candidate anchor changed; verify it again")
+        raise HTTPException(409, "candidate now requires a new evidence choice")
+    verification_reason = str(verified.get("reason") or "").strip()
+    if verification_reason not in {"exact_block", "exact_anchor", "quote_relocated"}:
+        raise HTTPException(409, "candidate now requires a new evidence choice")
+    if verification_reason != "quote_relocated":
+        if body.candidate_block_id and str(target.get("block_id") or "") != body.candidate_block_id:
+            raise HTTPException(409, "candidate block changed during verification")
+        if body.candidate_anchor_id and str(target.get("anchor_id") or "") != body.candidate_anchor_id:
+            raise HTTPException(409, "candidate anchor changed during verification")
 
     try:
         source_state = repair_research_note_source_state(
@@ -2247,7 +2275,7 @@ def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceR
             old_anchor_id=body.old_anchor_id,
             old_evidence_quote=body.old_evidence_quote,
             target=target,
-            source_fingerprint=body.source_fingerprint,
+            source_fingerprint=fingerprint_after_verification,
             context_snapshot=(
                 verified.get("context_snapshot")
                 if isinstance(verified.get("context_snapshot"), dict)
@@ -2263,7 +2291,39 @@ def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceR
         source_state=source_state,
     )
     if conflicted:
-        raise HTTPException(409, "research note changed; verify the candidate again")
+        latest_note = store.get_research_note(note_id)
+        if latest_note is None:
+            raise HTTPException(404, "research note not found")
+        try:
+            if source_content_fingerprint(md_path) != fingerprint_after_verification:
+                raise HTTPException(409, "converted source changed during repair")
+            source_state = repair_research_note_source_state(
+                latest_note.get("source_state") if isinstance(latest_note.get("source_state"), dict) else {},
+                source_index=body.source_index,
+                source_path=body.source_path,
+                capture_id=body.capture_id,
+                old_block_id=body.old_block_id,
+                old_anchor_id=body.old_anchor_id,
+                old_evidence_quote=body.old_evidence_quote,
+                target=target,
+                source_fingerprint=fingerprint_after_verification,
+                context_snapshot=(
+                    verified.get("context_snapshot")
+                    if isinstance(verified.get("context_snapshot"), dict)
+                    else None
+                ),
+            )
+        except HTTPException:
+            raise
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        record, conflicted = store.update_research_note(
+            note_id,
+            expected_revision=int(latest_note.get("revision") or 1),
+            source_state=source_state,
+        )
+        if conflicted:
+            raise HTTPException(409, "research note changed during repair")
     if record is None:
         raise HTTPException(404, "research note not found")
     return record

@@ -29,6 +29,10 @@ import {
 } from '../components/chat/reader/readerTypes'
 import { readerSourcePathsMatch } from '../components/chat/reader/readerLocateGuard'
 import {
+  buildHeuristicReaderLocateRecoveryPayload,
+  shouldRecoverReaderLocateHeuristically,
+} from '../components/chat/reader/readerLocateRecovery'
+import {
   sanitizeReaderLocateCandidates,
   sanitizeReaderLocateTarget,
 } from '../components/chat/reader/readerOpenPayloadUtils'
@@ -434,6 +438,7 @@ export default function ReaderPage() {
   const [reloadToken, setReloadToken] = useState(0)
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
   const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
+  const [standaloneRecoveryPayload, setStandaloneRecoveryPayload] = useState<ReaderOpenPayload | null>(null)
   const [repairingEvidence, setRepairingEvidence] = useState(false)
   const [repairError, setRepairError] = useState('')
   const [evidenceReviewDecision, setEvidenceReviewDecision] = useState<'confirmed' | 'invalid' | null>(null)
@@ -465,6 +470,7 @@ export default function ReaderPage() {
         if (cancelled) return
         stateHydratedRef.current = false
         setSession(res)
+        setStandaloneRecoveryPayload(null)
         const state = (res.state && typeof res.state === 'object')
           ? res.state as Record<string, unknown>
           : {}
@@ -498,6 +504,7 @@ export default function ReaderPage() {
         setSession(null)
         setSessionHighlights([])
         setLocateResult(null)
+        setStandaloneRecoveryPayload(null)
         setError(err instanceof Error ? err.message : (S.reader_standalone_missing || 'Reader session not found.'))
       })
       .finally(() => {
@@ -508,7 +515,7 @@ export default function ReaderPage() {
     }
   }, [S.reader_standalone_missing, location.search, reloadToken, sessionId])
 
-  const payload = useMemo(() => normalizeReaderPayload(session), [session])
+  const sessionPayload = useMemo(() => normalizeReaderPayload(session), [session])
   const repairIntent = useMemo(
     () => normalizeEvidenceRepairIntent(
       session?.state && typeof session.state === 'object'
@@ -525,6 +532,7 @@ export default function ReaderPage() {
     ),
     [session?.state],
   )
+  const payload = standaloneRecoveryPayload || sessionPayload
   const payloadSourcePath = String(payload?.sourcePath || '').trim()
   const sessionConversationId = String(session?.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
   const sessionProjectId = String(
@@ -871,6 +879,22 @@ export default function ReaderPage() {
   }, [])
 
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
+    if (
+      !repairIntent
+      && !evidenceReviewIntent
+      && payload
+      && shouldRecoverReaderLocateHeuristically(result, payload)
+    ) {
+      const nextRequestId = Math.max(
+        Number(result.locateRequestId || 0),
+        Number(payload.locateRequestId || 0),
+      ) + 1
+      setLocateResult(null)
+      setStandaloneRecoveryPayload(
+        buildHeuristicReaderLocateRecoveryPayload(payload, nextRequestId),
+      )
+      return
+    }
     setLocateResult(result)
     setRepairError('')
     setEvidenceReviewError('')
@@ -880,7 +904,7 @@ export default function ReaderPage() {
         updatedAt: Date.now(),
       },
     })
-  }, [publishState])
+  }, [evidenceReviewIntent, payload, publishState, repairIntent])
 
   const repairCandidateLocated = useMemo(() => {
     if (!repairIntent || !locateResult) return false
@@ -902,10 +926,13 @@ export default function ReaderPage() {
       navigate(
         `/notes?note=${encodeURIComponent(repairIntent.note_id)}&evidence_repaired=1`,
       )
-    } catch (err) {
-      const detail = err instanceof Error ? err.message : S.reader_evidence_repair_failed
-      setRepairError(detail)
-      message.error(S.reader_evidence_repair_failed)
+    } catch {
+      setRepairError('')
+      message.info(S.reader_evidence_repair_failed)
+      flushPendingState()
+      navigate(
+        `/notes?note=${encodeURIComponent(repairIntent.note_id)}&evidence_recheck=1`,
+      )
     } finally {
       setRepairingEvidence(false)
     }

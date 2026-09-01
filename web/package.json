@@ -11,7 +11,7 @@
     "preview": "vite preview",
     "test:e2e": "node scripts/playwright-with-port.mjs",
     "test:e2e:smoke": "node scripts/playwright-with-port.mjs auth-gate.spec.ts api-client.spec.ts chat-refs-perf.spec.ts reader-locate-guard.spec.ts reader-research-note-capture.spec.ts settings-api-guidance.spec.ts first-run-success.spec.ts library-conversion-recovery.spec.ts agent-trace-actions.spec.ts research-qa-acceptance.spec.ts research-notes-workspace.spec.ts research-note-evidence-repair.spec.ts evidence-matrix-workspace.spec.ts research-brief-workspace.spec.ts research-gap-workspace.spec.ts project-action-center.spec.ts",
-    "test:e2e:core": "node scripts/playwright-with-port.mjs library-metadata-draft.spec.ts citation-metadata-quality.spec.ts refs-panel-regression.spec.ts message-list-locate-primary.spec.ts citation-shelf-context-pack.spec.ts reader-regression.spec.ts",
+    "test:e2e:core": "node scripts/playwright-with-port.mjs library-metadata-draft.spec.ts citation-metadata-quality.spec.ts refs-panel-regression.spec.ts message-list-locate-primary.spec.ts citation-shelf-context-pack.spec.ts reader-regression.spec.ts reader-return-window.spec.ts",
     "test:e2e:public-surface": "node scripts/playwright-public-surface.mjs",
     "test:e2e:evidence-workspace-hidden": "node scripts/playwright-public-surface.mjs evidence-matrix-workspace.spec.ts --grep \"ordinary build\"",
     "test:e2e:headed": "node scripts/playwright-with-port.mjs --headed"

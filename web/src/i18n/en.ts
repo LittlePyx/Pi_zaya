@@ -580,7 +580,7 @@ export const S = {
   reader_evidence_repair_exact_hint: 'Confirmation updates only this source locator and retains the old locator, repair time, and source-version record.',
   reader_evidence_repair_cancel: 'Back without repairing',
   reader_evidence_repair_confirm: 'Confirm and repair note location',
-  reader_evidence_repair_failed: 'Location repair failed; verify the candidate again',
+  reader_evidence_repair_failed: 'The locator was not written. The system kept the evidence, returned to the note, and is verifying the current source.',
   reader_evidence_review_title: 'Review a changed source version',
   reader_evidence_review_locating: 'Locating the current source text',
   reader_evidence_review_locating_hint: 'The review can be saved only after Reader exactly locates this evidence target.',
