@@ -4,29 +4,19 @@ import type { ShelfMetadataRepairItem } from '../../api/references'
 import { referencesApi } from '../../api/references'
 import { useT } from '../../i18n'
 import {
-  citationDisplay,
-  shelfItemNeedsMetadataRepair,
+  shelfItemNeedsExportMetadataPass,
+  shelfItemRepairFingerprint,
   strictRepairMerge,
   type CiteShelfItem,
 } from './citationState'
 import type { ShelfExportKind } from './citeShelfDisplay'
 
-type ApplyRepairCandidates = (
-  updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>,
-) => boolean
-
-function repairPayloadsForExport(item: CiteShelfItem): Array<Record<string, unknown>> {
-  const basePayload = item as unknown as Record<string, unknown>
-  return [
-    basePayload,
-    {
-      ...basePayload,
-      raw: '',
-      cite_fmt: '',
-      citeFmt: '',
-    },
-  ]
+export type CiteShelfRepairedItemUpdate = {
+  item: CiteShelfItem
+  requestedFingerprint: string
 }
+
+type ApplyRepairedItems = (updates: CiteShelfRepairedItemUpdate[]) => void
 
 function repairMetaFromEntry(entry: ShelfMetadataRepairItem): Record<string, unknown> {
   return {
@@ -39,7 +29,7 @@ function repairMetaFromEntry(entry: ShelfMetadataRepairItem): Record<string, unk
   }
 }
 
-export function useCiteShelfMetadataRepair(onApplyRepairCandidates?: ApplyRepairCandidates) {
+export function useCiteShelfMetadataRepair(onApplyRepairedItems?: ApplyRepairedItems) {
   const S = useT()
   const [exportRepairingKind, setExportRepairingKind] = useState<ShelfExportKind | ''>('')
   const exportRepairRunTokenRef = useRef(0)
@@ -54,10 +44,14 @@ export function useCiteShelfMetadataRepair(onApplyRepairCandidates?: ApplyRepair
     kind: ShelfExportKind,
     exportItems: CiteShelfItem[],
   ): Promise<CiteShelfItem[] | null> => {
-    const candidates = exportItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
+    const candidates = exportItems.filter(shelfItemNeedsExportMetadataPass)
     if (candidates.length <= 0) return exportItems
 
-    const payloads = candidates.flatMap((item) => repairPayloadsForExport(item))
+    const requestedFingerprints = new Map(candidates.map(item => [
+      item.key,
+      shelfItemRepairFingerprint(item),
+    ]))
+    const payloads = candidates as unknown as Array<Record<string, unknown>>
     const noticeKey = `cite-shelf-export-repair-${kind}`
     const repairToken = exportRepairRunTokenRef.current + 1
     exportRepairRunTokenRef.current = repairToken
@@ -80,63 +74,30 @@ export function useCiteShelfMetadataRepair(onApplyRepairCandidates?: ApplyRepair
         if (!key) continue
         metasByKey.set(key, [...(metasByKey.get(key) || []), meta])
       }
-      const updates = Array.from(metasByKey.entries()).map(([key, metas]) => ({ key, metas }))
-      onApplyRepairCandidates?.(updates)
-
-      let repairedReadyCount = 0
-      let unresolvedCount = 0
       const repairedItems = exportItems.map((item) => {
-        const wasReady = !shelfItemNeedsMetadataRepair(item, citationDisplay(item))
         const metas = metasByKey.get(item.key) || []
         let next = item
         for (const meta of metas) {
           const accepted = strictRepairMerge(next, meta)
           if (accepted) next = accepted
         }
-        const isReady = !shelfItemNeedsMetadataRepair(next, citationDisplay(next))
-        if (!wasReady && isReady) repairedReadyCount += 1
-        if (!isReady) unresolvedCount += 1
         return next
       })
-
-      if (repairedReadyCount > 0 && unresolvedCount <= 0) {
-        message.success({
-          key: noticeKey,
-          content: S.shelf_export_repaired.replace('{n}', String(repairedReadyCount)),
-          duration: 2,
-        })
-      } else if (repairedReadyCount > 0) {
-        message.warning({
-          key: noticeKey,
-          content: S.shelf_export_repaired_partial
-            .replace('{n}', String(repairedReadyCount))
-            .replace('{m}', String(unresolvedCount)),
-          duration: 3,
-        })
-      } else {
-        message.warning({
-          key: noticeKey,
-          content: S.shelf_export_repair_no_change,
-          duration: 3,
-        })
-      }
+      onApplyRepairedItems?.(repairedItems.flatMap((item) => {
+        const requestedFingerprint = requestedFingerprints.get(item.key)
+        return requestedFingerprint ? [{ item, requestedFingerprint }] : []
+      }))
       return repairedItems
     } catch {
-      if (isCurrentExportRepair()) {
-        message.warning({
-          key: noticeKey,
-          content: S.shelf_export_repair_failed,
-          duration: 3,
-        })
-      }
       return isCurrentExportRepair() ? exportItems : null
     } finally {
       if (isCurrentExportRepair()) {
+        message.destroy(noticeKey)
         exportRepairingKindRef.current = ''
         setExportRepairingKind((current) => (current === kind ? '' : current))
       }
     }
-  }, [S, onApplyRepairCandidates])
+  }, [S, onApplyRepairedItems])
 
   return {
     exportRepairingKind,

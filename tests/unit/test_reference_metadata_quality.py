@@ -132,6 +132,157 @@ def test_metadata_rejects_and_repairs_doi_conflicting_with_exact_library_match()
     assert "summary_line" not in repaired
 
 
+def test_metadata_rejects_related_work_doi_and_recovers_raw_reference_identity(monkeypatch) -> None:
+    raw = (
+        "Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K. "
+        "The missing cone problem and low-pass distortion in optical serial sectioning microscopy. "
+        "IEEE Trans. Acoust., Speech, Signal Process. 2, 890-893 (1988)."
+    )
+    detail = {
+        "source_path": "citing-paper.en.md",
+        "citation_route": "system_b",
+        "is_inpaper": True,
+        "raw": raw,
+        "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+        "authors": "Macias-Garza F, Diller K, Bovik A",
+        "venue": "Optical Engineering",
+        "year": "1988",
+        "volume": "27",
+        "pages": "890-893",
+        "doi": "10.1117/12.7976703",
+        "doi_url": "https://doi.org/10.1117/12.7976703",
+        "citation_count": 22,
+        "journal_if": 1.2,
+        "summary_line": "Summary fetched for the related journal work.",
+        "summary_source": "abstract",
+        "summary_provider": "openalex",
+    }
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda _seed: dict(detail))
+
+    quality = mq.citation_metadata_quality(detail)
+    acceptance = mq.citation_metadata_export_acceptance({**detail, "metadata_quality": quality})
+    repaired = mq.repair_citation_metadata_item(detail)
+    meta = repaired["meta"]
+
+    issue_codes = {item["code"] for item in quality["issues"]}
+    assert quality["status"] == "error"
+    assert "raw_reference_title_conflict" in issue_codes
+    assert "raw_reference_doi_identity_conflict" in issue_codes
+    assert "raw_reference_venue_conflict" in issue_codes
+    assert acceptance["export_ready"] is False
+    assert meta["title"] == "The missing cone problem and low-pass distortion in optical serial sectioning microscopy"
+    assert meta["authors"].startswith("Macias-Garza, F., Bovik, A. C.")
+    assert meta["venue"] == "IEEE Trans. Acoust"
+    assert meta["year"] == "1988"
+    assert "doi" not in meta
+    assert "doi_url" not in meta
+    assert "citation_count" not in meta
+    assert "journal_if" not in meta
+    assert "summary_line" not in meta
+    assert repaired["export_acceptance"]["export_ready"] is True
+    assert repaired["export_acceptance"]["export_mode"] == "complete_bibliography"
+
+
+def test_repair_rejects_inferred_doi_when_visible_title_was_already_recovered(monkeypatch) -> None:
+    raw = (
+        "Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K. "
+        "The missing cone problem and low-pass distortion in optical serial sectioning microscopy. "
+        "IEEE Trans. Acoust., Speech, Signal Process. 2, 890-893 (1988)."
+    )
+    detail = {
+        "source_path": "citing-paper.en.md",
+        "citation_route": "system_b",
+        "is_inpaper": True,
+        "raw": raw,
+        "title": "The missing cone problem and low-pass distortion in optical serial sectioning microscopy",
+        "authors": "Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K",
+        "venue": "IEEE Trans. Acoust., Speech, Signal Process.",
+        "year": "1988",
+        "doi": "10.1117/12.7976703",
+        "doiUrl": "https://doi.org/10.1117/12.7976703",
+        "citationCount": 22,
+        "journalIf": 1.2,
+        "journalQuartile": "Q4",
+    }
+    monkeypatch.setattr(
+        mq,
+        "fetch_crossref_work_by_doi_status",
+        lambda _doi: (
+            {"title": ["Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images"]},
+            "ready",
+        ),
+    )
+    monkeypatch.setattr(mq, "enrich_citation_detail_meta", lambda seed: dict(seed))
+
+    result = mq.repair_citation_metadata_item(detail)
+    meta = result["meta"]
+
+    assert result["changed_fields"] == ["doi", "doi_url", "citation_count", "journal_if", "journal_quartile"]
+    assert meta["title"] == detail["title"]
+    assert meta["raw_reference_rejected_doi"] == "10.1117/12.7976703"
+    assert "doi" not in meta
+    assert "citation_count" not in meta
+    assert "journal_if" not in meta
+    assert "journal_quartile" not in meta
+    assert result["export_acceptance"]["export_ready"] is True
+
+    second_rejection = mq.verify_inferred_doi_against_raw_reference(
+        {**meta, "doi": "10.1145/1073204.1073257"}
+    )
+    assert "doi" not in second_rejection
+    assert set(second_rejection["raw_reference_rejected_dois"]) == {
+        "10.1117/12.7976703",
+        "10.1145/1073204.1073257",
+    }
+
+
+def test_repair_rechecks_replacement_doi_after_transient_registry_failure(monkeypatch) -> None:
+    raw = (
+        "Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K. "
+        "The missing cone problem and low-pass distortion in optical serial sectioning microscopy. "
+        "IEEE Trans. Acoust., Speech, Signal Process. 2, 890-893 (1988)."
+    )
+    detail = {
+        "source_path": "citing-paper.en.md",
+        "citation_route": "system_b",
+        "is_inpaper": True,
+        "raw": raw,
+        "title": "The missing cone problem and low-pass distortion in optical serial sectioning microscopy",
+        "authors": "Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K",
+        "venue": "IEEE Trans. Acoust., Speech, Signal Process.",
+        "year": "1988",
+        "doi": "10.1117/12.7976703",
+    }
+    alternate_doi = "10.1145/1073204.1073257"
+    registry_calls = iter(
+        [
+            (
+                {"title": ["Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images"]},
+                "ready",
+            ),
+            (None, "error"),
+            ({"title": ["Dual photography"]}, "ready"),
+        ]
+    )
+    monkeypatch.setattr(mq, "fetch_crossref_work_by_doi_status", lambda _doi: next(registry_calls))
+    monkeypatch.setattr(
+        mq,
+        "hydrate_repaired_citation_metadata",
+        lambda seed, **_kwargs: {**seed, "doi": alternate_doi, "doi_url": f"https://doi.org/{alternate_doi}"},
+    )
+
+    result = mq.repair_citation_metadata_item(detail)
+    meta = result["meta"]
+
+    assert "doi" not in meta
+    assert "doi_url" not in meta
+    assert set(meta["raw_reference_rejected_dois"]) == {
+        "10.1117/12.7976703",
+        alternate_doi,
+    }
+    assert result["export_acceptance"]["export_ready"] is True
+
+
 def test_metadata_accepts_single_word_journal_venue() -> None:
     detail = {
         "source_path": "spd_review.en.md",

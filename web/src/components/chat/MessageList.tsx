@@ -1219,6 +1219,7 @@ export function MessageList({
     if (!options?.force && shelfItemHasDisplayableArticleSummary(item)) return
     const itemIdentity = shelfPaperIdentity(item)
     const scopeToken = captureShelfAsyncScope()
+    const requestedFingerprint = shelfItemRepairFingerprint(item)
     const requestItem = (lowValueSummary || options?.force)
       ? {
         ...item,
@@ -1240,7 +1241,7 @@ export function MessageList({
     setShelfSummaryStatusByKey((current) => ({ ...current, [item.key]: 'loading' }))
     loadBibliometrics(withBibliometricsLocale(requestItem as unknown as Record<string, unknown>))
       .then((meta) => {
-        const currentItem = currentShelfItemForAsync(scopeToken, item.key)
+        const currentItem = currentShelfItemForAsync(scopeToken, item.key, requestedFingerprint)
         if (!currentItem) return
         if (!meta || Object.keys(meta).length === 0) {
           setShelfSummaryStatusByKey((current) => ({ ...current, [item.key]: 'unavailable' }))
@@ -1255,6 +1256,7 @@ export function MessageList({
         })
         setShelfItems((current) => current.map((entry) => {
           if (entry.key !== item.key && shelfPaperIdentity(entry) !== itemIdentity) return entry
+          if (shelfItemRepairFingerprint(entry) !== requestedFingerprint) return entry
           const merged = mergeCiteMeta(entry, meta)
           const articleSummaryPatch = articleSummaryPatchFromMeta(entry, meta)
           const next = {
@@ -1294,7 +1296,7 @@ export function MessageList({
     shelfSummaryBackfillTimerRef.current = window.setTimeout(() => {
       shelfSummaryBackfillTimerRef.current = null
       const now = Date.now()
-      const targets: Array<{ item: CiteShelfItem; attemptKey: string }> = []
+      const targets: Array<{ item: CiteShelfItem; attemptKey: string; repairFingerprint: string }> = []
       const targetIdentities = new Set<string>()
       for (const item of shelfItems) {
         if (targets.length >= SHELF_SUMMARY_BACKFILL_BATCH_SIZE) break
@@ -1306,7 +1308,7 @@ export function MessageList({
         if (targetIdentities.has(identity)) continue
         const lastAttempt = Number(shelfSummaryBackfillAttemptedAtRef.current[attemptKey] || 0)
         if (lastAttempt > 0 && now - lastAttempt < SHELF_SUMMARY_BACKFILL_RETRY_MS) continue
-        targets.push({ item, attemptKey })
+        targets.push({ item, attemptKey, repairFingerprint: shelfItemRepairFingerprint(item) })
         targetIdentities.add(identity)
       }
       if (targets.length <= 0) return
@@ -1369,12 +1371,14 @@ export function MessageList({
         setShelfSummaryStatusByKey((current) => ({ ...current, ...statusPatch }))
         const usable = results.filter((entry) => !entry.failed && entry.meta && Object.keys(entry.meta).length > 0)
         setShelfItems((current) => current.map((entry) => {
-          if (!currentShelfItemForAsync(scopeToken, entry.key)) return entry
           const result = usable.find((item) => {
             const target = targetByKey.get(item.key)
             return target && shelfPaperIdentity(target) === shelfPaperIdentity(entry)
           })
           if (!result) return entry
+          const target = targets.find(candidate => candidate.item.key === result.key)
+          if (!target || shelfItemRepairFingerprint(entry) !== target.repairFingerprint) return entry
+          if (!currentShelfItemForAsync(scopeToken, entry.key, target.repairFingerprint)) return entry
           const merged = mergeCiteMeta(entry, result.meta)
           const articleSummaryPatch = articleSummaryPatchFromMeta(entry, result.meta)
           return {
@@ -1431,6 +1435,29 @@ export function MessageList({
       return entry
     }))
     return didUpdate
+  }, [])
+
+  const applyShelfMetadataRepairedItems = useCallback((updates: Array<{
+    item: CiteShelfItem
+    requestedFingerprint: string
+  }>): void => {
+    const byKey = new Map(
+      updates
+        .filter((update) => update.item && String(update.item.key || '').trim())
+        .map((update) => [update.item.key, update]),
+    )
+    if (byKey.size <= 0) return
+    setShelfItems((current) => current.map((entry) => {
+      const update = byKey.get(entry.key)
+      if (!update || shelfItemRepairFingerprint(entry) !== update.requestedFingerprint) return entry
+      const repaired = {
+        ...update.item,
+        tags: normalizeShelfTags(entry.tags),
+        note: normalizeShelfNote(entry.note),
+      }
+      if (sameShelfItem(repaired, entry)) return entry
+      return repaired
+    }))
   }, [])
 
   const repairShelfItemMeta = (item: CiteShelfItem, options?: { silent?: boolean }) => {
@@ -2401,7 +2428,7 @@ export function MessageList({
       onRepair={(item, options) => {
         repairShelfItemMeta(item, options)
       }}
-      onApplyRepairCandidates={applyShelfMetadataRepairCandidates}
+      onApplyRepairedItems={applyShelfMetadataRepairedItems}
       onSelectSnapshot={setSelectedSavedSnapshotId}
       onSaveSnapshot={saveShelfSnapshot}
       onLoadSnapshot={loadShelfSnapshot}

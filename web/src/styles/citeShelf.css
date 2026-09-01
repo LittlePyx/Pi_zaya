@@ -759,16 +759,6 @@
   min-width: 0;
 }
 
-.kb-shelf-export-preflight {
-  margin: 6px 2px 0;
-  display: grid;
-  gap: 8px;
-  border: 1px solid color-mix(in srgb, #ef4444 26%, var(--border));
-  border-radius: 8px;
-  background: color-mix(in srgb, #ef4444 8%, var(--panel));
-  padding: 8px;
-}
-
 .kb-shelf-empty {
   display: grid;
   min-height: 132px;
@@ -781,39 +771,6 @@
   text-align: center;
   font-size: 12px;
   line-height: 1.55;
-}
-
-.kb-shelf-export-preflight-copy {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
-}
-
-.kb-shelf-export-preflight-copy strong {
-  color: color-mix(in srgb, #b91c1c 82%, var(--text-main));
-  font-size: 11.5px;
-  line-height: 1.25;
-}
-
-.kb-shelf-export-preflight-copy span {
-  color: color-mix(in srgb, var(--text-main) 64%, transparent);
-  font-size: 10.8px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
-}
-
-.kb-shelf-export-preflight-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.kb-shelf-export-preflight-actions .ant-btn {
-  min-height: 25px;
-  border-radius: 8px;
-  font-size: 10.5px;
-  line-height: 1.2;
-  white-space: normal;
 }
 
 .kb-shelf-source-repair-btn.ant-btn {
@@ -849,10 +806,6 @@
     justify-content: center;
   }
 
-  .kb-shelf-export-preflight-actions .ant-btn {
-    width: 100%;
-    justify-content: center;
-  }
 }
 
 .kb-shelf-group-title {

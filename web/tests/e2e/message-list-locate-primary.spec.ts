@@ -1235,9 +1235,6 @@ test('citation shelf reflects actual reader locate result after opening source',
   await page.getByTestId('citation-shelf-export-selected').click()
   const csvDownloadPromise = page.waitForEvent('download')
   await page.getByTestId('citation-shelf-export-main-csv').click()
-  if (await page.getByTestId('citation-shelf-export-preflight').isVisible().catch(() => false)) {
-    await page.getByTestId('citation-shelf-export-preflight-continue').click()
-  }
   const csvDownload = await csvDownloadPromise
   const csvPath = await csvDownload.path()
   expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
@@ -1840,14 +1837,11 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await page.getByTestId('citation-shelf-export-selected').click()
-  await page.getByTestId('citation-shelf-export-main-bib').click()
-  await expect(page.getByTestId('citation-shelf-export-preflight')).toBeVisible()
-
   const exportRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
   const bibDownloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-preflight-continue').click()
+  await page.getByTestId('citation-shelf-export-main-bib').click()
   const exportRepairPayload = (await exportRepairRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
-  expect(exportRepairPayload.items?.length || 0).toBeGreaterThan(0)
+  expect(exportRepairPayload.items).toHaveLength(1)
   const bibDownload = await bibDownloadPromise
   const bibPath = await bibDownload.path()
   expect(bibPath, 'BibTeX export should produce a downloadable file').not.toBeNull()
@@ -1861,6 +1855,65 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   await expandFocusedShelfDetails(page)
   await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
+})
+
+test('citation shelf export omits rejected metadata when automatic repair is unavailable', async ({ page }) => {
+  await mockReaderDoc(page)
+  let repairCalls = 0
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairCalls += 1
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    if (repairCalls === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(shelfMetadataRepairFixture(items, false)),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'temporary repair outage' }),
+    })
+  })
+
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+
+  const initialRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await initialRepairRequest
+
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await page.locator('.kb-shelf-advanced-toggle').click()
+  await page.getByTestId('citation-shelf-add-visible').click()
+  await page.getByTestId('citation-shelf-export-selected').click()
+
+  const failedRepairResponse = page.waitForResponse('**/api/references/shelf/metadata/repair')
+  const bibDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-bib').click()
+  expect((await failedRepairResponse).status()).toBe(503)
+  const bibDownload = await bibDownloadPromise
+  const bibPath = await bibDownload.path()
+  expect(bibPath, 'BibTeX export should continue with safe fields').not.toBeNull()
+  if (bibPath) {
+    const bib = await readFile(bibPath, 'utf8')
+    expect(bib).toContain('file={NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf}')
+    expect(bib).not.toContain('10.1117/12.7976703')
+    expect(bib).not.toContain('author={')
+    expect(bib).not.toContain('journal={')
+    expect(bib).not.toContain('volume={')
+    expect(bib).not.toMatch(/pending|failed|retryable|待核验|核验失败/i)
+  }
+  await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
+  await expect(page.locator('.ant-message')).not.toContainText(/自动补全暂时失败|auto-complete is temporarily unavailable/i)
 })
 
 test('citation shelf copy auto-completes metadata before writing clipboard citations', async ({ page }) => {
@@ -2161,7 +2214,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
     expect(md).toContain('## 1. The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
     expect(md).toContain('DOI: 10.1109/tassp.1988.1164940')
   }
-  expect(repairRequestCount).toBe(repairCountAfterAutoFill)
+  expect(repairRequestCount).toBe(repairCountAfterAutoFill + 4)
 })
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {

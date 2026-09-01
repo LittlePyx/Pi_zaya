@@ -26,8 +26,6 @@ export type ScopeFilter = 'all' | 'conversation' | 'paper'
 export type SourceQualityByPath = Record<string, LibrarySourceQualityItem>
 export type ShelfExportKind = 'bib' | 'csv' | 'md' | 'ris'
 export type ShelfExportScope = 'selected' | 'visible' | 'all'
-export type ShelfExportOptions = { skipPreflight?: boolean; onlyMetadataReady?: boolean; autoRepair?: boolean }
-export type ShelfExportRequest = { kind: ShelfExportKind; scope: ShelfExportScope }
 export type SourceOpenQualityTone = 'ready' | 'partial' | 'review' | 'missing'
 export type ShelfCardSurface = 'reference' | 'citation' | 'figure' | 'table' | 'equation' | 'selection' | 'excerpt'
 

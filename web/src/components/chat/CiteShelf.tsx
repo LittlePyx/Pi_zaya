@@ -15,6 +15,7 @@ import {
   normalizeShelfItemKind,
   normalizeShelfTags,
   shelfItemKindLabel,
+  shelfItemMetadataFieldRejected,
   shelfItemDoiExportValue,
   shelfItemHasConflictingVenueSignals,
   shelfItemNeedsMetadataRepair,
@@ -47,12 +48,13 @@ import {
   type ShelfCardPresentation,
   type ShelfCardSurface,
   type ShelfExportKind,
-  type ShelfExportOptions,
-  type ShelfExportRequest,
   type ShelfExportScope,
 } from './citeShelfDisplay'
 import { useCiteShelfSourceQuality } from './useCiteShelfSourceQuality'
-import { useCiteShelfMetadataRepair } from './useCiteShelfMetadataRepair'
+import {
+  useCiteShelfMetadataRepair,
+  type CiteShelfRepairedItemUpdate,
+} from './useCiteShelfMetadataRepair'
 import { shelfItemHasUsableLibraryFullText } from './citeShelfRuntime'
 import { useT } from '../../i18n'
 import { qualityDiagnosticsVisible } from '../../utils/qualityDiagnostics'
@@ -91,7 +93,7 @@ interface Props {
   onUpdateNote: (key: string, note: string) => void
   onRepair: (item: CiteShelfItem, options?: { silent?: boolean }) => void
   onRetrySummary?: (item: CiteShelfItem) => void
-  onApplyRepairCandidates?: (updates: Array<{ key: string; metas: Array<Record<string, unknown>> }>) => boolean
+  onApplyRepairedItems?: (updates: CiteShelfRepairedItemUpdate[]) => void
   onSelectSnapshot: (id: string) => void
   onSaveSnapshot: () => void
   onLoadSnapshot: () => void
@@ -133,7 +135,7 @@ export function CiteShelf({
   onUpdateNote,
   onRepair,
   onRetrySummary,
-  onApplyRepairCandidates,
+  onApplyRepairedItems,
   onSelectSnapshot,
   onSaveSnapshot,
   onLoadSnapshot,
@@ -154,7 +156,6 @@ export function CiteShelf({
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false)
   const [organizeOpen, setOrganizeOpen] = useState(false)
   const [batchOrganizeOpen, setBatchOrganizeOpen] = useState(false)
-  const [preflightExportRequest, setPreflightExportRequest] = useState<ShelfExportRequest | null>(null)
   const [exportPanelOpen, setExportPanelOpen] = useState(false)
   const [exportScope, setExportScope] = useState<ShelfExportScope>('all')
   const [batchTagInput, setBatchTagInput] = useState('')
@@ -205,7 +206,7 @@ export function CiteShelf({
     exportRepairingKind,
     exportRepairingKindRef,
     repairMetadataBeforeExport,
-  } = useCiteShelfMetadataRepair(onApplyRepairCandidates)
+  } = useCiteShelfMetadataRepair(onApplyRepairedItems)
 
   const shelfBackgroundBusy = Boolean(
     summaryLoadingKey
@@ -753,9 +754,6 @@ export function CiteShelf({
     if (scope === 'visible') return S.shelf_export_scope_visible.replace('{n}', String(visibleItems.length))
     return S.shelf_export_scope_all.replace('{n}', String(items.length))
   }
-  const preflightExportItems = preflightExportRequest ? exportItemsByScope(preflightExportRequest.scope) : []
-  const preflightMetadataReviewItems = preflightExportItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
-  const preflightMetadataReviewCount = preflightMetadataReviewItems.length
   const organizeReviewCount = shelfReadiness.metadataReview
     + shelfReadiness.sourceOpenReview
   const organizeStatusLabel = slowTaskVisible
@@ -830,11 +828,45 @@ export function CiteShelf({
   }
 
   const publicExportItem = (item: CiteShelfItem): CiteShelfItem => {
-    const cardTitle = citationCardView(item).header.title || item.title || item.main
-    const title = publicShelfTitleText(item, cardTitle)
-    return {
+    const titleRejected = shelfItemMetadataFieldRejected(item, 'title')
+    const venueRejected = shelfItemMetadataFieldRejected(item, 'venue')
+    const doiRejected = shelfItemMetadataFieldRejected(item, 'doi')
+    const safeItem: CiteShelfItem = {
       ...item,
-      sourceName: publicExportSourceName(item),
+      authors: shelfItemMetadataFieldRejected(item, 'authors') ? '' : item.authors,
+      venue: venueRejected ? '' : item.venue,
+      volume: venueRejected ? '' : item.volume,
+      issue: venueRejected ? '' : item.issue,
+      pages: venueRejected ? '' : item.pages,
+      openalexVenue: venueRejected ? '' : item.openalexVenue,
+      venueKind: venueRejected ? '' : item.venueKind,
+      venueVerifiedBy: venueRejected ? '' : item.venueVerifiedBy,
+      journalIf: venueRejected ? '' : item.journalIf,
+      journalQuartile: venueRejected ? '' : item.journalQuartile,
+      journalIfSource: venueRejected ? '' : item.journalIfSource,
+      conferenceTier: venueRejected ? '' : item.conferenceTier,
+      conferenceRankSource: venueRejected ? '' : item.conferenceRankSource,
+      conferenceCcf: venueRejected ? '' : item.conferenceCcf,
+      conferenceCcfSource: venueRejected ? '' : item.conferenceCcfSource,
+      conferenceName: venueRejected ? '' : item.conferenceName,
+      conferenceAcronym: venueRejected ? '' : item.conferenceAcronym,
+      year: shelfItemMetadataFieldRejected(item, 'year') ? '' : item.year,
+      doi: doiRejected ? '' : item.doi,
+      doiUrl: doiRejected ? '' : item.doiUrl,
+      citationCount: titleRejected || doiRejected ? 0 : item.citationCount,
+      citationSource: titleRejected || doiRejected ? '' : item.citationSource,
+    }
+    const cardTitle = titleRejected ? '' : citationCardView(safeItem).header.title
+    const titleCandidate = titleRejected
+      ? publicExportSourceName(safeItem)
+      : cardTitle || safeItem.title || safeItem.main || publicExportSourceName(safeItem)
+    const title = publicShelfTitleText(
+      safeItem,
+      titleCandidate,
+    ) || publicExportSourceName(safeItem)
+    return {
+      ...safeItem,
+      sourceName: publicExportSourceName(safeItem),
       title,
       main: title,
     }
@@ -845,7 +877,7 @@ export function CiteShelf({
     const card = citationCardView(publicItem)
     const title = publicShelfTitleText(
       publicItem,
-      card.header.title || publicItem.title || publicItem.main || `${S.shelf_export_reference_fallback} ${index + 1}`,
+      publicItem.title || card.header.title || publicItem.main || `${S.shelf_export_reference_fallback} ${index + 1}`,
     )
     const authors = cleanCitationDisplayText(publicItem.authors || '')
     const year = cleanCitationDisplayText(publicItem.year || '')
@@ -900,17 +932,9 @@ export function CiteShelf({
       message.warning(S.shelf_export_no_items)
       return
     }
-    const reviewItems = copyItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
-    if (reviewItems.length > 0) {
-      const repairedItems = await repairMetadataBeforeExport(exportKindForClipboardRepair(kind), copyItems)
-      if (!repairedItems) return
-      copyItems = repairedItems.filter((item) => !shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
-      if (copyItems.length <= 0) {
-        if (scope === 'selected' && (kind === 'gbt' || kind === 'bibtex')) setTransientCopyState('error')
-        message.warning(S.shelf_export_preflight_no_healthy)
-        return
-      }
-    }
+    const repairedItems = await repairMetadataBeforeExport(exportKindForClipboardRepair(kind), copyItems)
+    if (!repairedItems) return
+    copyItems = repairedItems
     const text = kind === 'md'
       ? markdownForExportItems(copyItems)
       : copyItems.map((item) => citationFormats(publicExportItem(item))[kind]).join('\n\n')
@@ -988,32 +1012,16 @@ export function CiteShelf({
     return `"${text.replace(/"/g, '""')}"`
   }
 
-  const exportShelfItemsAs = async (scope: ShelfExportScope, kind: ShelfExportKind, options: ShelfExportOptions = {}) => {
-    const targetItems = exportItemsByScope(scope)
-    if (targetItems.length <= 0) {
+  const exportShelfItemsAs = async (scope: ShelfExportScope, kind: ShelfExportKind) => {
+    let exportItems = exportItemsByScope(scope)
+    if (exportItems.length <= 0) {
       message.warning(S.shelf_export_no_items)
       return
     }
     if (exportRepairingKindRef.current) return
-    const reviewItems = targetItems.filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
-    const reviewKeySet = new Set(reviewItems.map((item) => item.key))
-    if (reviewItems.length > 0 && !options.skipPreflight) {
-      setPreflightExportRequest({ kind, scope })
-      setExportPanelOpen(true)
-      return
-    }
-    let exportItems = options.onlyMetadataReady
-      ? targetItems.filter((item) => !reviewKeySet.has(item.key))
-      : targetItems
-    if (exportItems.length <= 0) {
-      message.warning(S.shelf_export_preflight_no_healthy)
-      return
-    }
-    if (options.autoRepair) {
-      const repairedExportItems = await repairMetadataBeforeExport(kind, exportItems)
-      if (!repairedExportItems) return
-      exportItems = repairedExportItems
-    }
+    const repairedExportItems = await repairMetadataBeforeExport(kind, exportItems)
+    if (!repairedExportItems) return
+    exportItems = repairedExportItems
     try {
       const base = `cite_shelf_${scope}_${nowStamp()}`
       if (kind === 'bib') {
@@ -1108,33 +1116,34 @@ export function CiteShelf({
       ]
       const headers = includeDiagnosticColumns ? diagnosticHeaders : publicHeaders
       const rows = exportItems.map((item) => {
+        const publicItem = publicExportItem(item)
         const sourceQuality = sourceQualityForItem(item, sourceQualityByPath)
         const sourceOpen = sourceOpenQualityView(item, sourceQuality, S, readerLocateResults[item.key])
         const summaryDisplay = shelfSummaryDisplay(item, citationCardView(item), S)
         const summaryQuality = summaryDisplay.quality
         const hasArticleSummary = summaryDisplay.kind === 'article' && Boolean(summaryDisplay.line)
         const publicFields = [
-          publicShelfTitleText(item, citationCardView(item).header.title || item.title || item.main),
-          item.authors,
-          item.year,
-          item.venue,
-          shelfItemDoiExportValue(item),
-          publicExportSourceName(item),
-          item.headingPath,
-          item.locationLabel,
-          item.pageStart || '',
-          item.pageEnd || '',
-          cleanCitationDisplayText(item.shelfExcerpt || ''),
-          cleanCitationDisplayText(item.answerClaim || ''),
-          cleanCitationDisplayText(item.whyLine || item.supportRelation || item.upstreamWorkRole || ''),
-          item.note || '',
-          normalizeShelfTags(item.tags).join('; '),
-          item.num || '',
-          item.citationCount || 0,
-          item.journalIf,
-          item.journalQuartile,
-          item.conferenceTier,
-          item.conferenceCcf,
+          publicItem.title,
+          publicItem.authors,
+          publicItem.year,
+          publicItem.venue,
+          shelfItemDoiExportValue(publicItem),
+          publicExportSourceName(publicItem),
+          publicItem.headingPath,
+          publicItem.locationLabel,
+          publicItem.pageStart || '',
+          publicItem.pageEnd || '',
+          cleanCitationDisplayText(publicItem.shelfExcerpt || ''),
+          cleanCitationDisplayText(publicItem.answerClaim || ''),
+          cleanCitationDisplayText(publicItem.whyLine || publicItem.supportRelation || publicItem.upstreamWorkRole || ''),
+          publicItem.note || '',
+          normalizeShelfTags(publicItem.tags).join('; '),
+          publicItem.num || '',
+          publicItem.citationCount || 0,
+          publicItem.journalIf,
+          publicItem.journalQuartile,
+          publicItem.conferenceTier,
+          publicItem.conferenceCcf,
           hasArticleSummary ? summaryDisplay.line : '',
         ]
         const diagnosticFields = [
@@ -1193,8 +1202,8 @@ export function CiteShelf({
     }
   }
 
-  const exportActiveScopeAs = async (kind: ShelfExportKind, options: ShelfExportOptions = {}) => {
-    await exportShelfItemsAs(activeExportScope, kind, options)
+  const exportActiveScopeAs = async (kind: ShelfExportKind) => {
+    await exportShelfItemsAs(activeExportScope, kind)
   }
 
   const openSelectedExportPanel = () => {
@@ -1353,15 +1362,6 @@ export function CiteShelf({
   useEffect(() => {
     if (selectedCount <= 0) setBatchOrganizeOpen(false)
   }, [selectedCount])
-
-  useEffect(() => {
-    if (!preflightExportRequest) return
-    const reviewCount = exportItemsByScope(preflightExportRequest.scope)
-      .filter((item) => shelfItemNeedsMetadataRepair(item, citationDisplay(item)))
-      .length
-    if (reviewCount > 0) return
-    setPreflightExportRequest(null)
-  }, [exportItemsByScope, preflightExportRequest])
 
   useEffect(() => {
     return () => {
@@ -1611,40 +1611,6 @@ export function CiteShelf({
                   <button type="button" className="kb-shelf-export-command" onClick={() => void copyShelfItemsAs(activeExportScope, 'md')} data-testid="citation-shelf-export-copy-md">
                     {S.shelf_export_copy_markdown}
                   </button>
-                </div>
-              </div>
-            ) : null}
-            {preflightExportRequest && preflightMetadataReviewCount > 0 ? (
-              <div className="kb-shelf-export-preflight" data-testid="citation-shelf-export-preflight">
-                <div className="kb-shelf-export-preflight-copy">
-                  <strong>{S.shelf_export_preflight_title}</strong>
-                  <span>{S.shelf_export_preflight_body.replace('{n}', String(preflightMetadataReviewCount))}</span>
-                </div>
-                <div className="kb-shelf-export-preflight-actions">
-                  <Button
-                    size="small"
-                    onClick={() => {
-                      const request = preflightExportRequest
-                      void exportShelfItemsAs(request.scope, request.kind, { skipPreflight: true, onlyMetadataReady: true })
-                      setPreflightExportRequest((current) => (current === request ? null : current))
-                    }}
-                    disabled={Boolean(exportRepairingKind)}
-                    data-testid="citation-shelf-export-preflight-healthy"
-                  >
-                    {S.shelf_export_preflight_healthy}
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={async () => {
-                      const request = preflightExportRequest
-                      await exportShelfItemsAs(request.scope, request.kind, { skipPreflight: true, autoRepair: true })
-                      setPreflightExportRequest((current) => (current === request ? null : current))
-                    }}
-                    loading={Boolean(exportRepairingKind)}
-                    data-testid="citation-shelf-export-preflight-continue"
-                  >
-                    {S.shelf_export_preflight_autofill}
-                  </Button>
                 </div>
               </div>
             ) : null}
@@ -1981,7 +1947,20 @@ export function CiteShelf({
                       </div>
                     ) : null}
                     {group.items.map((item) => {
-                      const display = citationDisplay(item)
+                      const doiRejectedForDisplay = shelfItemMetadataFieldRejected(item, 'doi')
+                      const bibliographicItem = doiRejectedForDisplay
+                        ? {
+                          ...item,
+                          doi: '',
+                          doiUrl: '',
+                          citationCount: 0,
+                          citationSource: '',
+                          journalIf: '',
+                          journalQuartile: '',
+                          journalIfSource: '',
+                        }
+                        : item
+                      const display = citationDisplay(bibliographicItem)
                       const cardView = citationCardView(item)
                       const shelfKind = normalizeShelfItemKind(item.shelfItemKind)
                       const shelfKindText = shelfItemKindLabel(shelfKind, S)
@@ -2024,7 +2003,10 @@ export function CiteShelf({
                       })
                       const shelfTitle = publicShelfTitleText(item, shelfCard.title)
                       const publicationParts = shelfCard.showArticleSummary
-                        ? uniqueCitationMetrics(citeVenueYearParts(item, display), citeImpactMetrics(item, S))
+                        ? uniqueCitationMetrics(
+                          citeVenueYearParts(bibliographicItem, display),
+                          citeImpactMetrics(bibliographicItem, S),
+                        )
                         : []
                       const itemSourceLabel = shelfCard.sourceLabel
                       const itemSourceQuality = sourceQualityForItem(item, sourceQualityByPath)
@@ -2334,17 +2316,17 @@ export function CiteShelf({
                               </div>
                             </div>
                           ) : null}
-                          {isDetailsExpanded && shelfCard.showArticleSummary && (item.doiUrl || !itemSourceLabel) ? (
+                          {isDetailsExpanded && shelfCard.showArticleSummary && (bibliographicItem.doiUrl || !itemSourceLabel) ? (
                             <div className="kb-shelf-doi">
-                              {item.doiUrl ? (
+                              {bibliographicItem.doiUrl ? (
                                 <a
                                   className="kb-shelf-doi-link"
-                                  href={item.doiUrl}
+                                  href={bibliographicItem.doiUrl}
                                   rel="noreferrer"
                                   target="_blank"
                                   onClick={(event) => event.stopPropagation()}
                                 >
-                                  {item.doi || item.doiUrl}
+                                  {bibliographicItem.doi || bibliographicItem.doiUrl}
                                 </a>
                               ) : (
                                 <span className="kb-shelf-doi-empty">{S.shelf_no_doi_link}</span>

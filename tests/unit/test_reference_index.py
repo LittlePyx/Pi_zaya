@@ -375,6 +375,75 @@ def test_raw_reference_meta_replaces_venue_fragment_title_and_noisy_authors():
     assert ref_index._extract_query_title(raw) == "Real-time terahertz imaging with a single-pixel detector"
 
 
+def test_raw_reference_meta_rejects_related_work_doi_when_title_identity_conflicts():
+    raw = (
+        "[3] Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K. "
+        "The missing cone problem and low-pass distortion in optical serial sectioning microscopy. "
+        "IEEE Trans. Acoust., Speech, Signal Process. 2, 890-893 (1988)."
+    )
+    related_work = {
+        "title": "Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images",
+        "authors": "Macias-Garza F, Diller K, Bovik A",
+        "venue": "Optical Engineering",
+        "year": "1988",
+        "volume": "27",
+        "pages": "890-893",
+        "doi": "10.1117/12.7976703",
+        "doi_url": "https://doi.org/10.1117/12.7976703",
+        "citation_count": 22,
+        "summary_line": "Summary for the related journal work.",
+        "match_method": "source_work_reference_order_exact",
+    }
+
+    merged = ref_index._merge_raw_reference_meta(
+        related_work,
+        ref_index.parse_reference_line_metadata(raw),
+        raw_reference=raw,
+    )
+
+    assert merged["title"] == "The missing cone problem and low-pass distortion in optical serial sectioning microscopy"
+    assert merged["venue"] == "IEEE Trans. Acoust"
+    assert merged["raw_reference_rejected_doi"] == "10.1117/12.7976703"
+    assert merged["raw_reference_identity_conflict"] is True
+    assert merged["crossref_ok"] is False
+    assert "doi" not in merged
+    assert "doi_url" not in merged
+    assert "citation_count" not in merged
+    assert "summary_line" not in merged
+
+
+def test_raw_reference_identity_keeps_doi_when_visible_title_is_verbatim_in_raw():
+    raw = (
+        "Emerging single-photon detection technique for high-performance photodetector. "
+        "Frontiers of Physics, 2024."
+    )
+    meta = {
+        "title": "Emerging single-photon detection technique for high-performance photodetector",
+        "venue": "Frontiers of Physics",
+        "year": "2024",
+        "doi": "10.1007/s11467-024-1400-0",
+    }
+
+    conflict = ref_index.reference_metadata_raw_identity_conflict(meta, raw)
+
+    assert conflict["conflict"] is False
+    assert conflict["title_similarity"] == 1.0
+
+
+def test_raw_reference_identity_keeps_doi_for_substantial_truncated_title_prefix():
+    raw = "[3] Macias-Garza F et al. The missing cone problem and low-pass distortion. 1988."
+    meta = {
+        "title": "The missing cone problem and low-pass distortion in optical serial sectioning microscopy",
+        "year": "1988",
+        "doi": "10.1109/TASSP.1988.1164940",
+    }
+
+    conflict = ref_index.reference_metadata_raw_identity_conflict(meta, raw)
+
+    assert conflict["conflict"] is False
+    assert conflict["title_similarity"] >= 0.67
+
+
 def test_raw_reference_fallback_keeps_signal_processing_magazine_together():
     raw = (
         "[9] Duarte, M. F. et al. Single-pixel imaging via compressive sampling. "

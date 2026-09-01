@@ -1359,11 +1359,105 @@ def _fallback_meta_from_raw_reference(raw: str) -> dict[str, str]:
     return {k: v for k, v in out.items() if str(v or "").strip()}
 
 
-def _merge_raw_reference_meta(meta: dict | None, raw_meta: dict[str, str]) -> dict | None:
+def parse_reference_line_metadata(raw: str) -> dict[str, str]:
+    """Return conservative bibliographic fields parsed directly from one reference line."""
+    return dict(_fallback_meta_from_raw_reference(raw))
+
+
+def reference_metadata_raw_identity_conflict(
+    meta: Mapping[str, Any] | None,
+    raw_reference: str,
+) -> dict[str, Any]:
+    """Detect a DOI-backed identity that disagrees with the cited reference text."""
+    data = dict(meta or {})
+    raw = str(raw_reference or "").strip()
+    doi = _clean_doi_for_url(str(data.get("doi") or data.get("doi_url") or ""))
+    if not raw or not doi or extract_first_doi(raw):
+        return {"conflict": False}
+    parsed = parse_reference_line_metadata(raw)
+    raw_title = str(parsed.get("title") or "").strip()
+    visible_title = str(data.get("title") or "").strip()
+    if not raw_title or not visible_title:
+        return {"conflict": False, "parsed": parsed}
+    raw_norm = normalize_title_for_match(raw)
+    visible_norm = normalize_title_for_match(visible_title)
+    if len(visible_norm) >= 24 and visible_norm in raw_norm:
+        return {
+            "conflict": False,
+            "title_conflict": False,
+            "parsed": parsed,
+            "title_similarity": 1.0,
+        }
+    raw_title_norm = normalize_title_for_match(raw_title)
+    if len(raw_title_norm) >= 24 and visible_norm.startswith(raw_title_norm):
+        return {
+            "conflict": False,
+            "title_conflict": False,
+            "parsed": parsed,
+            "title_similarity": round(_similarity(raw_title, visible_title), 4),
+        }
+    title_score = _similarity(raw_title, visible_title)
+    if title_score >= 0.72:
+        return {
+            "conflict": False,
+            "title_conflict": False,
+            "parsed": parsed,
+            "title_similarity": round(title_score, 4),
+        }
+    raw_venue = str(parsed.get("venue") or "").strip()
+    visible_venue = str(data.get("venue") or "").strip()
+    venue_score = _similarity(raw_venue, visible_venue) if raw_venue and visible_venue else 0.0
+    return {
+        "conflict": True,
+        "title_conflict": True,
+        "parsed": parsed,
+        "doi": doi,
+        "title_similarity": round(title_score, 4),
+        "venue_conflict": bool(raw_venue and visible_venue and venue_score < 0.42),
+        "venue_similarity": round(venue_score, 4),
+    }
+
+
+def _merge_raw_reference_meta(
+    meta: dict | None,
+    raw_meta: dict[str, str],
+    *,
+    raw_reference: str = "",
+) -> dict | None:
     if not isinstance(raw_meta, dict) or not raw_meta:
         return dict(meta) if isinstance(meta, dict) else None
     merged = dict(meta) if isinstance(meta, dict) else {}
     changed = False
+
+    identity_conflict = reference_metadata_raw_identity_conflict(merged, raw_reference)
+    if bool(identity_conflict.get("conflict")):
+        rejected_doi = _clean_doi_for_url(str(merged.get("doi") or merged.get("doi_url") or ""))
+        for key in (
+            "doi",
+            "doi_url",
+            "citation_count",
+            "journal_if",
+            "journal_quartile",
+            "summary_line",
+            "summary_source",
+            "summary_provider",
+            "volume",
+            "issue",
+            "pages",
+        ):
+            merged.pop(key, None)
+        for key in ("title", "authors", "venue", "year", "volume", "issue", "pages"):
+            value = str(raw_meta.get(key) or "").strip()
+            if value:
+                merged[key] = value
+        merged["crossref_ok"] = False
+        merged["raw_reference_identity_conflict"] = True
+        if rejected_doi:
+            merged["raw_reference_rejected_doi"] = rejected_doi
+        base_mm = str(merged.get("match_method") or "").strip()
+        marker = "raw_identity_conflict_rejected"
+        merged["match_method"] = f"{base_mm}+{marker}" if base_mm and marker not in base_mm else (base_mm or marker)
+        return merged
 
     for key in ("year", "volume", "issue", "pages", "doi"):
         value = str(raw_meta.get(key) or "").strip()
@@ -4510,7 +4604,7 @@ def build_reference_index(
                                 crossref_budget_exhausted = True
 
                 raw_meta = _fallback_meta_from_raw_reference(raw)
-                meta = _merge_raw_reference_meta(meta, raw_meta)
+                meta = _merge_raw_reference_meta(meta, raw_meta, raw_reference=raw)
                 doi = ""
                 doi_url = ""
                 if isinstance(meta, dict):
