@@ -591,6 +591,7 @@ export interface ResearchAgentRequest {
   temperature?: number
   max_tokens?: number
   query_scope?: string
+  external_supplement_mode?: ExternalSupplementMode
   prompt_context?: Record<string, unknown> | null
   source_lock_path?: string
   source_lock_name?: string
@@ -832,6 +833,7 @@ export interface ConversationResearchStateRecord {
 }
 
 export type QueryScope = 'current_paper' | 'basket' | 'library'
+export type ExternalSupplementMode = 'disabled' | 'model' | 'web'
 
 export interface MessageProvenanceSegment {
   segment_id: string

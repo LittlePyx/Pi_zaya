@@ -1215,7 +1215,7 @@ textarea.kb-chat-textarea:focus {
     padding-inline: 9px;
   }
 
-  .kb-agent-mode-btn.ant-btn {
+  .kb-external-source-btn.ant-btn {
     min-width: 0;
     grid-row: 2;
     grid-column: 2;

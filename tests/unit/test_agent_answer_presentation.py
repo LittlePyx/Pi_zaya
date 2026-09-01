@@ -46,7 +46,10 @@ def test_generate_grounded_answer_can_blend_local_evidence_with_external_context
         [{"text": "The paper uses retrieval before generation.", "meta": {"source_name": "Paper A"}}],
         settings=_Settings(),
         agent_notes={
-            "evidence_gate": {"answer_mode": "hybrid_local_external"},
+            "evidence_gate": {
+                "answer_mode": "hybrid_local_external",
+                "external_supplement_mode": "model",
+            },
             "research_run": {
                 "status": "synthesizing",
                 "source_policy": "local_plus_external_background",
@@ -234,7 +237,7 @@ def test_generate_grounded_answer_skips_llm_without_evidence(monkeypatch):
     assert "No relevant indexed evidence" in result["answer"]
 
 
-def test_generate_grounded_answer_allows_general_llm_without_evidence(monkeypatch):
+def test_generate_grounded_answer_allows_explicit_model_supplement_without_evidence(monkeypatch):
     captured = {}
 
     class _Settings:
@@ -254,14 +257,20 @@ def test_generate_grounded_answer_allows_general_llm_without_evidence(monkeypatc
         "How do Python lists work?",
         [],
         settings=_Settings(),
-        agent_notes={"evidence_gate": {"answer_mode": "general_llm"}},
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "model",
+            }
+        },
     )
 
     assert result["llm_used"] is True
-    assert result["answer_mode"] == "general_llm"
-    assert result["source_blend"] == "general_llm"
-    assert result["answer"] == "Python lists are mutable ordered sequences."
-    assert "knowledge-base-grounded answer" not in result["answer"]
+    assert result["answer_mode"] == "external_academic_llm"
+    assert result["source_blend"] == "external_academic"
+    assert result["web_search_used"] is False
+    assert "Python lists are mutable ordered sequences." in result["answer"]
+    assert "not a knowledge-base-grounded answer" in result["answer"]
     assert "Retrieved snippets" not in captured["messages"][-1]["content"]
 
 
@@ -289,7 +298,12 @@ def test_generate_grounded_answer_uses_web_search_for_external_academic_no_hit(m
         "Why do diffusion models work?",
         [],
         settings=_Settings(),
-        agent_notes={"evidence_gate": {"answer_mode": "external_academic_llm"}},
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "web",
+            }
+        },
     )
 
     assert result["llm_used"] is True
@@ -324,7 +338,12 @@ def test_generate_grounded_answer_uses_web_search_for_hybrid_answer(monkeypatch)
         "How does the paper use RAG?",
         [{"text": "The paper uses retrieval before generation.", "meta": {"source_name": "Paper A"}}],
         settings=_Settings(),
-        agent_notes={"evidence_gate": {"answer_mode": "hybrid_local_external"}},
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "hybrid_local_external",
+                "external_supplement_mode": "web",
+            }
+        },
     )
 
     assert result["llm_used"] is True
@@ -333,3 +352,138 @@ def test_generate_grounded_answer_uses_web_search_for_hybrid_answer(monkeypatch)
     assert result["web_search_used"] is True
     assert "external model and web context" in result["answer"]
     assert result["web_citations"][0]["url"] == "https://example.org/rag"
+
+
+def test_generate_grounded_answer_model_supplement_never_uses_configured_web_search(monkeypatch):
+    captured = {"model_calls": 0}
+
+    class _Settings:
+        text_api_key = "test-key"
+        agent_web_search_enabled = True
+        agent_web_search_api_key = "web-key"
+        agent_web_search_model = "gpt-5-search-api"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat_with_web_search(self, messages, *, temperature=0.2, max_tokens=1200):
+            raise AssertionError("model supplementation must not use web search")
+
+        def chat(self, messages, *, temperature=0.2, max_tokens=1200):
+            captured["model_calls"] += 1
+            return "Diffusion models learn a reverse process."
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer(
+        "Why do diffusion models work?",
+        [],
+        settings=_Settings(),
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "model",
+            }
+        },
+    )
+
+    assert captured["model_calls"] == 1
+    assert result["llm_used"] is True
+    assert result["web_search_used"] is False
+    assert "Diffusion models learn a reverse process." in result["answer"]
+
+
+def test_generate_grounded_answer_web_supplement_does_not_substitute_model_when_unconfigured(monkeypatch):
+    class _Settings:
+        text_api_key = "test-key"
+        agent_web_search_enabled = False
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            raise AssertionError("no model call is allowed when the selected web supplement is unavailable")
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer(
+        "Why do diffusion models work?",
+        [],
+        settings=_Settings(),
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "web",
+            }
+        },
+    )
+
+    assert result["llm_used"] is False
+    assert result["web_search_used"] is False
+    assert result["external_supplement_unavailable"] == "web"
+    assert result["answer_mode"] == "evidence_grounded"
+
+
+def test_generate_grounded_answer_web_failure_does_not_fall_back_to_model(monkeypatch):
+    captured = {"web_calls": 0}
+
+    class _Settings:
+        text_api_key = "test-key"
+        agent_web_search_enabled = True
+        agent_web_search_api_key = "web-key"
+        agent_web_search_model = "gpt-5-search-api"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat_with_web_search(self, messages, *, temperature=0.2, max_tokens=1200):
+            captured["web_calls"] += 1
+            raise RuntimeError("web unavailable")
+
+        def chat(self, messages, *, temperature=0.2, max_tokens=1200):
+            raise AssertionError("web failure must not silently fall back to model knowledge")
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer(
+        "Why do diffusion models work?",
+        [],
+        settings=_Settings(),
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "web",
+            }
+        },
+    )
+
+    assert captured["web_calls"] == 1
+    assert result["llm_used"] is False
+    assert result["external_supplement_unavailable"] == "web"
+
+
+def test_generate_grounded_answer_disabled_mode_blocks_external_generation(monkeypatch):
+    class _Settings:
+        text_api_key = "test-key"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            raise AssertionError("external generation must remain disabled")
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+
+    result = tools.generate_grounded_answer(
+        "Why do diffusion models work?",
+        [],
+        settings=_Settings(),
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "disabled",
+            }
+        },
+    )
+
+    assert result["llm_used"] is False
+    assert result["answer_mode"] == "evidence_grounded"
+    assert result["source_blend"] == "local_grounded"

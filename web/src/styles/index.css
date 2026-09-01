@@ -2017,13 +2017,40 @@ body.kb-reader-resizing .kb-reader-content {
   color: var(--text-main);
 }
 
-.kb-agent-mode-btn.ant-btn {
+.kb-external-source-btn.ant-btn {
   border-radius: 8px;
-  min-width: 92px;
+  min-width: 112px;
 }
 
-.kb-agent-mode-btn.is-active.ant-btn {
+.kb-external-source-btn.is-model.ant-btn,
+.kb-external-source-btn.is-web.ant-btn {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel));
   font-weight: 700;
+}
+
+.kb-external-source-chevron {
+  margin-left: 2px;
+  font-size: 9px;
+  opacity: 0.55;
+}
+
+.kb-external-source-option {
+  display: grid;
+  gap: 2px;
+  max-width: 320px;
+}
+
+.kb-external-source-option strong {
+  color: var(--text-main);
+  font-size: 12px;
+}
+
+.kb-external-source-option span {
+  color: var(--muted-text);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
 }
 
 @media (max-width: 640px) {

@@ -8,10 +8,11 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { Button, Input, Tag, message } from 'antd'
-import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, RobotOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import type { ChatImageAttachment, ChatUploadItem, QueryScope } from '../../api/chat'
+import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
+import type { ChatImageAttachment, ChatUploadItem, ExternalSupplementMode, QueryScope } from '../../api/chat'
 import { useT } from '../../i18n'
 import { ChatScopeControl } from './ChatScopeControl'
+import { ExternalSupplementControl } from './ExternalSupplementControl'
 
 const { TextArea } = Input
 
@@ -32,8 +33,8 @@ interface Props {
   queryScope: QueryScope
   queryScopeOptions: Array<{ value: QueryScope; disabled?: boolean }>
   onQueryScopeChange: (scope: QueryScope) => void
-  agentMode: boolean
-  onAgentModeChange: (enabled: boolean) => void
+  externalSupplementMode: ExternalSupplementMode
+  onExternalSupplementModeChange: (mode: ExternalSupplementMode) => void
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -162,8 +163,8 @@ export function ChatInput({
   queryScope,
   queryScopeOptions,
   onQueryScopeChange,
-  agentMode,
-  onAgentModeChange,
+  externalSupplementMode,
+  onExternalSupplementModeChange,
 }: Props) {
   const S = useT()
   const [text, setText] = useState('')
@@ -434,18 +435,11 @@ export function ChatInput({
                   {S.upload_file_btn}
                 </Button>
                 <ChatScopeControl value={queryScope} options={queryScopeOptions} onChange={onQueryScopeChange} />
-                <Button
-                  className={`kb-agent-mode-btn ${agentMode ? 'is-active' : ''}`}
-                  icon={<RobotOutlined />}
-                  type={agentMode ? 'primary' : 'default'}
-                  aria-pressed={agentMode}
-                  aria-label={agentMode ? S.chat_agent_mode_on_title : S.chat_agent_mode_off_title}
-                  title={agentMode ? S.chat_agent_mode_on_title : S.chat_agent_mode_off_title}
+                <ExternalSupplementControl
+                  value={externalSupplementMode}
                   disabled={generating}
-                  onClick={() => onAgentModeChange(!agentMode)}
-                >
-                  {agentMode ? S.chat_agent_mode_on : S.chat_agent_mode_off}
-                </Button>
+                  onChange={onExternalSupplementModeChange}
+                />
               </div>
               <div className="kb-chat-toolbar-right">
                 {generating ? (

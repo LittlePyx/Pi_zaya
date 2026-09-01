@@ -577,42 +577,14 @@ async function installBackend(
   }
 }
 
-test('default chat send does not request research agent mode', async ({ page }) => {
+test('default chat send uses the research agent with library-only supplementation', async ({ page }) => {
   const backend = await installBackend(page)
   const prompt = 'Plain default question'
 
   await page.goto('/')
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Standard')
-
-  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
-  await page.locator('button.kb-send-btn').click()
-
-  await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(1)
-  const payload = backend.getGeneratePayloads()[0]
-  expect(payload.agent_mode).toBeUndefined()
-
-  const userMeta = await page.evaluate(async (content) => {
-    const { useChatStore } = await import('/src/stores/chatStore.ts')
-    const message = useChatStore.getState().messages.find((item) => item.role === 'user' && item.content === content)
-    return message?.meta || null
-  }, prompt)
-  expect(userMeta).not.toHaveProperty('agent_mode')
-  expect(userMeta).not.toHaveProperty('agent_mode_requested')
-
-  backend.releaseStream()
-  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
-})
-
-test('agent mode URL parameter enables the composer toggle and request flag', async ({ page }) => {
-  const backend = await installBackend(page)
-  const prompt = 'Agent URL question'
-
-  await page.goto('/?agent_mode=1')
-  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
-  await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(page.locator('button.kb-agent-mode-btn')).toContainText('Research')
+  await expect(page.getByTestId('chat-external-supplement-control')).toContainText('Library only')
 
   await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
   await page.locator('button.kb-send-btn').click()
@@ -620,6 +592,7 @@ test('agent mode URL parameter enables the composer toggle and request flag', as
   await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(1)
   const payload = backend.getGeneratePayloads()[0]
   expect(payload.agent_mode).toBe(true)
+  expect(payload.external_supplement_mode).toBe('disabled')
 
   const userMeta = await page.evaluate(async (content) => {
     const { useChatStore } = await import('/src/stores/chatStore.ts')
@@ -629,31 +602,90 @@ test('agent mode URL parameter enables the composer toggle and request flag', as
   expect(userMeta).toMatchObject({
     agent_mode: 'research_agent',
     agent_mode_requested: true,
+    external_supplement_mode: 'disabled',
   })
 
   backend.releaseStream()
   await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
 })
 
-test('agent mode toggle is remembered per conversation without leaking across switches', async ({ page }) => {
-  await installBackend(page)
-  const agentButton = page.locator('button.kb-agent-mode-btn')
+test('supplement URL parameter selects model knowledge without enabling web search', async ({ page }) => {
+  const backend = await installBackend(page)
+  const prompt = 'Agent URL question'
+
+  await page.goto('/?external_supplement=model')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+  await expect(page.getByTestId('chat-external-supplement-control')).toContainText('Model supplement')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill(prompt)
+  await page.locator('button.kb-send-btn').click()
+
+  await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(1)
+  const payload = backend.getGeneratePayloads()[0]
+  expect(payload.agent_mode).toBe(true)
+  expect(payload.external_supplement_mode).toBe('model')
+
+  const userMeta = await page.evaluate(async (content) => {
+    const { useChatStore } = await import('/src/stores/chatStore.ts')
+    const message = useChatStore.getState().messages.find((item) => item.role === 'user' && item.content === content)
+    return message?.meta || null
+  }, prompt)
+  expect(userMeta).toMatchObject({
+    agent_mode: 'research_agent',
+    agent_mode_requested: true,
+    external_supplement_mode: 'model',
+  })
+
+  backend.releaseStream()
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+})
+
+test('web supplement selection is explicit in the generation request', async ({ page }) => {
+  const backend = await installBackend(page)
 
   await page.goto('/')
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(agentButton).toContainText('Standard')
 
-  await agentButton.click()
-  await expect(agentButton).toContainText('Research')
+  const supplementButton = page.getByTestId('chat-external-supplement-control')
+  await supplementButton.click()
+  await page.getByRole('menuitem', { name: /Web supplement/ }).click()
+  await expect(supplementButton).toContainText('Web supplement')
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Web supplement question')
+  await page.locator('button.kb-send-btn').click()
+
+  await expect.poll(() => backend.getGeneratePayloads().length, { timeout: 5_000 }).toBe(1)
+  expect(backend.getGeneratePayloads()[0]).toMatchObject({
+    agent_mode: true,
+    external_supplement_mode: 'web',
+  })
+
+  backend.releaseStream()
+  await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+})
+
+test('supplement choice is remembered per conversation without leaking across switches', async ({ page }) => {
+  await installBackend(page)
+  const supplementButton = page.getByTestId('chat-external-supplement-control')
+
+  await page.goto('/')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+  await expect(supplementButton).toContainText('Library only')
+
+  await supplementButton.click()
+  await page.getByRole('menuitem', { name: /Model supplement/ }).click()
+  await expect(supplementButton).toContainText('Model supplement')
 
   await page.locator('.kb-conv-row', { hasText: 'Generation Race B' }).click()
   await expect(page.locator('body')).toContainText(B_STABLE_ANSWER)
-  await expect(agentButton).toContainText('Standard')
+  await expect(supplementButton).toContainText('Library only')
 
   await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
   await expect(page.locator('body')).toContainText('Existing answer A')
-  await expect(agentButton).toContainText('Research')
+  await expect(supplementButton).toContainText('Model supplement')
 })
 
 test('stale generation stream cannot overwrite the active conversation after switching', async ({ page }) => {
@@ -1071,12 +1103,12 @@ test('paper-guide polling settles when per-entity coverage stabilizes below its 
   await expect.poll(
     () => backend.getConvADonePageLoads(),
     { timeout: 5_000 },
-  ).toBeGreaterThanOrEqual(6)
+  ).toBeGreaterThanOrEqual(5)
 
   await page.waitForTimeout(1_600)
   const settledLoads = backend.getConvADonePageLoads()
   const elapsedMs = Date.now() - pollingStartedAt
-  expect(settledLoads).toBe(6)
+  expect(settledLoads).toBe(5)
   expect(elapsedMs).toBeLessThan(7_000)
   await page.waitForTimeout(1_000)
   expect(backend.getConvADonePageLoads()).toBe(settledLoads)
@@ -1133,10 +1165,11 @@ test('paper-guide polling stops on the exact turn legal zero-citation terminal',
   await expect.poll(
     () => backend.getConvADonePageLoads(),
     { timeout: 5_000 },
-  ).toBeGreaterThanOrEqual(5)
+  ).toBeGreaterThanOrEqual(1)
 
   await page.waitForTimeout(500)
   const settledLoads = backend.getConvADonePageLoads()
+  expect(settledLoads).toBe(1)
   await page.waitForTimeout(1_600)
   expect(backend.getConvADonePageLoads()).toBe(settledLoads)
 })

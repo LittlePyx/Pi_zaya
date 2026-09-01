@@ -11,7 +11,7 @@ from kb.reference_query_family import prompt_requests_answer_audit
 
 from .planner import plan_research_intent, plan_research_question
 from .research_run import build_research_run
-from .source_policy import decide_answer_source
+from .source_policy import decide_answer_source, normalize_external_supplement_mode
 from .tools import (
     build_reading_guide,
     compare_papers,
@@ -532,6 +532,9 @@ def _pre_generation_evidence_gate(
             scope_context=scope_context or {},
             question_type=question_type,
         ),
+        external_supplement_mode=str(
+            (scope_context or {}).get("external_supplement_mode") or "disabled"
+        ),
     )
     return decision.to_evidence_gate()
 
@@ -925,6 +928,7 @@ def run_research_agent(
     current_source_path: str = "",
     current_source_name: str = "",
     answer_contract: str = "",
+    external_supplement_mode: str = "disabled",
 ) -> dict[str, Any]:
     intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
@@ -936,6 +940,9 @@ def run_research_agent(
         source="direct_research_agent",
     )
     scope_context["research_run_id"] = f"rr_{uuid.uuid4().hex[:16]}"
+    scope_context["external_supplement_mode"] = normalize_external_supplement_mode(
+        external_supplement_mode
+    )
     scope_context["planner_intent"] = intent.to_dict()
     scope_context["planner_confidence"] = intent.confidence
     scope_context["evidence_need"] = intent.evidence_need

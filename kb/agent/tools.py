@@ -722,6 +722,16 @@ def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
     return str(gate.get("answer_mode") or "").strip()
 
 
+def _external_supplement_mode(agent_notes: dict[str, Any] | None) -> str:
+    if not isinstance(agent_notes, dict):
+        return "disabled"
+    gate = agent_notes.get("evidence_gate")
+    if not isinstance(gate, dict):
+        return "disabled"
+    mode = str(gate.get("external_supplement_mode") or "disabled").strip().lower()
+    return mode if mode in {"model", "web"} else "disabled"
+
+
 def _answer_contract(agent_notes: dict[str, Any] | None) -> str:
     if not isinstance(agent_notes, dict):
         return ""
@@ -866,6 +876,16 @@ def _fallback_general_answer(query: str, *, reason: str = "", academic: bool = F
     if academic:
         return f"No matching local knowledge-base evidence was found, and no text model API is available to generate an external academic answer.{suffix}"
     return f"This question does not require indexed evidence, but no text model API is available to generate a general answer.{suffix}"
+
+
+def _web_supplement_unavailable_answer(query: str, *, has_local_evidence: bool) -> str:
+    if _has_cjk(query):
+        if has_local_evidence:
+            return "网页检索当前不可用；本次没有改用模型知识，以下仅保留文献库中的可定位证据。"
+        return "文献库中没有找到足够证据，网页检索当前不可用；本次没有改用模型知识。"
+    if has_local_evidence:
+        return "Web search is unavailable. Model knowledge was not substituted; this response keeps only located library evidence."
+    return "The library did not provide enough evidence, and web search is unavailable. Model knowledge was not substituted."
 
 
 def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = False) -> str:
@@ -1167,11 +1187,22 @@ def generate_grounded_answer(
     defer_quality_gate_repair: bool = False,
 ) -> dict[str, Any]:
     source_blend = _source_blend(agent_notes)
+    supplement_mode = _external_supplement_mode(agent_notes)
     if not hits:
         if _is_general_llm_mode(agent_notes):
+            if supplement_mode == "disabled":
+                answer = _fallback_grounded_answer(query, hits, reason="external supplement disabled", agent_notes=agent_notes)
+                return {
+                    "answer": answer,
+                    "llm_used": False,
+                    "answer_mode": "evidence_grounded",
+                    "source_blend": "local_grounded",
+                    "web_search_used": False,
+                    "observation": "Skipped external generation because supplementation was disabled.",
+                }
             mode = _answer_mode(agent_notes)
             academic = mode == "external_academic_llm"
-            if academic and _web_search_configured(settings):
+            if supplement_mode == "web" and _web_search_configured(settings):
                 try:
                     chat = DeepSeekChat(settings)
                     web_result = chat.chat_with_web_search(
@@ -1194,6 +1225,16 @@ def generate_grounded_answer(
                         }
                 except Exception:
                     pass
+            if supplement_mode == "web":
+                return {
+                    "answer": _web_supplement_unavailable_answer(query, has_local_evidence=False),
+                    "llm_used": False,
+                    "answer_mode": "evidence_grounded",
+                    "source_blend": "local_grounded",
+                    "web_search_used": False,
+                    "external_supplement_unavailable": "web",
+                    "observation": "Web supplement was requested but unavailable; model knowledge was not substituted.",
+                }
             if not getattr(settings, "text_api_key", None):
                 answer = _fallback_general_answer(query, reason="missing text API key", academic=academic)
                 return {
@@ -1255,8 +1296,8 @@ def generate_grounded_answer(
             "web_search_used": False,
             "observation": "Skipped LLM answer because no indexed evidence was retrieved.",
         }
-    hybrid = _is_hybrid_answer_mode(agent_notes)
-    if hybrid and _web_search_configured(settings):
+    hybrid = _is_hybrid_answer_mode(agent_notes) and supplement_mode in {"model", "web"}
+    if hybrid and supplement_mode == "web" and _web_search_configured(settings):
         try:
             notes_text = _format_agent_notes(agent_notes)
             answer_query = _hybrid_answer_query(query, notes_text, prefer_web=True)
@@ -1299,6 +1340,22 @@ def generate_grounded_answer(
                 }
         except Exception:
             pass
+    if hybrid and supplement_mode == "web":
+        fallback = _fallback_grounded_answer(
+            query,
+            hits,
+            reason="web search unavailable; model fallback disabled",
+            agent_notes=agent_notes,
+        )
+        return {
+            "answer": f"{_web_supplement_unavailable_answer(query, has_local_evidence=True)}\n\n{fallback}".strip(),
+            "llm_used": False,
+            "answer_mode": "evidence_grounded",
+            "source_blend": "local_grounded",
+            "web_search_used": False,
+            "external_supplement_unavailable": "web",
+            "observation": "Web supplement was requested but unavailable; returned only local evidence.",
+        }
     if not getattr(settings, "text_api_key", None):
         answer = _fallback_grounded_answer(query, hits, reason="missing text API key", agent_notes=agent_notes)
         return {

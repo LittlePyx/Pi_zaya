@@ -4,6 +4,7 @@ import {
   type ChatImageAttachment,
   type ChatUploadItem,
   type Conversation,
+  type ExternalSupplementMode,
   type QueryScope,
   type Message,
   type MessagePage,
@@ -1493,7 +1494,7 @@ interface ChatState {
   removePendingImage: (key: string) => void
   dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
-    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean
+    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean; externalSupplementMode?: ExternalSupplementMode
   }) => Promise<void>
   cancelGeneration: () => void
   clearGeneration: () => void
@@ -2169,6 +2170,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const beforeDelete = get()
     cancelConversationGeneration(beforeDelete, targetId)
     cancelConversationUploadJobs(beforeDelete, targetId)
+    if (wasActive) {
+      // Clear the deleted conversation before the request yields. Otherwise the
+      // sidebar can select its fallback conversation while the old message list
+      // is still mounted, leaving canceled content under the new conversation.
+      set((cur) => {
+        if (cur.activeConvId !== targetId) return {}
+        const nextCache = { ...(cur.conversationCacheById || {}) }
+        delete nextCache[targetId]
+        return {
+          activeConvId: null,
+          activeConversation: null,
+          rootConversations: cur.rootConversations.filter((conversation) => conversation.id !== targetId),
+          projectConversations: Object.fromEntries(
+            Object.entries(cur.projectConversations).map(([projectId, conversations]) => [
+              projectId,
+              conversations.filter((conversation) => conversation.id !== targetId),
+            ]),
+          ),
+          messages: [],
+          conversationLoading: false,
+          messagesLoadingMore: false,
+          messagesHasMoreBefore: false,
+          oldestLoadedMessageId: null,
+          refs: {},
+          generation: null,
+          sseController: null,
+          uploadItems: [],
+          pendingImages: [],
+          conversationCacheById: nextCache,
+        }
+      })
+    }
     await chatApi.deleteConversation(targetId)
     set((cur) => {
       const nextBindings = { ...(cur.guideBindings || {}) }
@@ -2546,6 +2579,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         max_tokens: opts.maxTokens,
         deep_read: opts.deepRead,
         agent_mode: opts.agentMode || undefined,
+        external_supplement_mode: opts.externalSupplementMode || 'disabled',
         prompt_context: opts.promptContext || undefined,
       })
     } catch (err) {
@@ -2567,6 +2601,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...(opts.promptContext ? { prompt_context: opts.promptContext } : {}),
         ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
         ...(opts.agentMode ? { agent_mode: 'research_agent', agent_mode_requested: true } : {}),
+        ...(opts.agentMode ? { external_supplement_mode: opts.externalSupplementMode || 'disabled' } : {}),
       },
     }
     const startFailureAssistantMessage: Message | null = generationStarted

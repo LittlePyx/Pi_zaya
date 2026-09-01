@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { message } from 'antd'
-import type { QueryScope } from '../../api/chat'
+import type { ExternalSupplementMode, QueryScope } from '../../api/chat'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { reportUserIssue } from '../../userIssueReporter'
@@ -44,7 +44,7 @@ export function useChatSendFlow({
   researchContext,
   queryScope,
   selectedResearchContext,
-  agentMode,
+  externalSupplementMode,
   onOpenApiSettings,
   onSelectedResearchContextConsumed,
 }: {
@@ -52,7 +52,7 @@ export function useChatSendFlow({
   researchContext: ResearchRuntimeContext
   queryScope: QueryScope
   selectedResearchContext?: SelectedResearchContextPack | null
-  agentMode: boolean
+  externalSupplementMode: ExternalSupplementMode
   onOpenApiSettings: (target: ApiSettingsTarget | '') => void
   onSelectedResearchContextConsumed?: (packId: string) => void
 }) {
@@ -93,7 +93,8 @@ export function useChatSendFlow({
       deepRead: true,
       promptContext: contextPackForSend,
       queryScope: resolvedScope,
-      agentMode,
+      agentMode: true,
+      externalSupplementMode,
     }).then(() => {
       if (!contextPackForSend) return
       onSelectedResearchContextConsumed?.(contextPackForSend.id)
@@ -124,7 +125,8 @@ export function useChatSendFlow({
           running_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && !item.ready && item.status !== 'error').length,
           selected_context: Boolean(contextPackForSend),
           selected_context_item_count: Array.isArray(contextPackForSend?.items) ? contextPackForSend.items.length : 0,
-          agent_mode: agentMode,
+          agent_mode: true,
+          external_supplement_mode: externalSupplementMode,
           prompt_length: text.trim().length,
           prompt_empty: text.trim().length === 0,
         },
@@ -147,7 +149,7 @@ export function useChatSendFlow({
     activeConversation?.bound_source_path,
     activeConversation?.mode,
     activeProjectId,
-    agentMode,
+    externalSupplementMode,
     guideBindings,
     labels,
     maxTokens,

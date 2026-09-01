@@ -1402,6 +1402,7 @@ def run_chat_research_agent(body: ResearchAgentRequest) -> ResearchAgentResponse
         selected_research_context=body.prompt_context or {},
         current_source_path=source_lock_path,
         current_source_name=source_lock_name,
+        external_supplement_mode=body.external_supplement_mode,
     )
     return ResearchAgentResponse.model_validate(payload)
 

@@ -4931,6 +4931,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "conversation_id": str(conv_id or ""),
             "user_message_id": int(task.get("user_msg_id") or 0),
             "assistant_message_id": int(task.get("assistant_msg_id") or 0),
+            "external_supplement_mode": str(task.get("external_supplement_mode") or "disabled"),
         }
         research_trace = _trace_new(
             session_id=session_id,
@@ -4972,6 +4973,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "paper_guide_bound_source": paper_guide_bound_source_name or paper_guide_bound_source_path,
                 "image_attachment_count": int(len(raw_image_atts or [])) if isinstance(raw_image_atts, list) else 0,
                 "selected_research_context_count": int(len(selected_research_context_items)),
+                "external_supplement_mode": str(task.get("external_supplement_mode") or "disabled"),
             },
         )
         if paper_guide_source_scoped:
@@ -6861,6 +6863,13 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         agent_scope_context["answer_source_blend"] = str(agent_generation_result.get("source_blend") or "")
                     if agent_answer_mode == "hybrid_local_external":
                         agent_scope_context["source_policy"] = "local_plus_external_background"
+                    elif agent_answer_mode == "evidence_grounded":
+                        agent_scope_context["source_policy"] = "local_only"
+                        agent_scope_context["answer_source_blend"] = "local_grounded"
+                    if agent_generation_result.get("external_supplement_unavailable"):
+                        agent_scope_context["external_supplement_unavailable"] = str(
+                            agent_generation_result.get("external_supplement_unavailable") or ""
+                        )
                     _trace_section(
                         "agent",
                         {

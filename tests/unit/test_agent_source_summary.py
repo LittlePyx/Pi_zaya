@@ -47,7 +47,7 @@ def test_agent_source_summary_marks_hybrid_local_external():
             }
         ],
         candidate_hits=[],
-        scope_context={"query_scope": "library"},
+        scope_context={"query_scope": "library", "external_supplement_mode": "model"},
     )
     trace = build_agent_trace_for_completed_answer(
         query,
@@ -85,7 +85,7 @@ def test_agent_source_summary_marks_external_answer_as_not_from_kb():
         query,
         evidence_hits=[],
         candidate_hits=[],
-        scope_context={"query_scope": "library"},
+        scope_context={"query_scope": "library", "external_supplement_mode": "model"},
     )
     trace = build_agent_trace_for_completed_answer(
         query,

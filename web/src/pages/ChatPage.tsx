@@ -18,7 +18,7 @@ import { ResearchBriefWorkspace } from '../components/chat/ResearchBriefWorkspac
 import { ResearchGapWorkspace } from '../components/chat/ResearchGapWorkspace'
 import { restoreShelfItems } from '../components/chat/citeShelfStorage'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
-import { useAgentMode } from '../components/chat/useAgentMode'
+import { useExternalSupplementMode } from '../components/chat/useExternalSupplementMode'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useChatUploadFlow } from '../components/chat/useChatUploadFlow'
@@ -80,7 +80,7 @@ export default function ChatPage() {
     S.first_run_question_evidence,
     S.first_run_question_limitations,
   ], [S])
-  const { agentMode, setAgentMode: handleAgentModeChange } = useAgentMode(activeConvId)
+  const { mode: externalSupplementMode, setMode: setExternalSupplementMode } = useExternalSupplementMode(activeConvId)
   const {
     readerOpen,
     readerPayload,
@@ -557,7 +557,7 @@ export default function ChatPage() {
     researchContext,
     queryScope,
     selectedResearchContext: currentSelectedResearchContext,
-    agentMode,
+    externalSupplementMode,
     onOpenApiSettings: openApiSettings,
     onSelectedResearchContextConsumed: clearSelectedResearchContextIfCurrent,
   })
@@ -683,8 +683,8 @@ export default function ChatPage() {
           { value: 'library' },
         ]}
         onQueryScopeChange={setQueryScope}
-        agentMode={agentMode}
-        onAgentModeChange={handleAgentModeChange}
+        externalSupplementMode={externalSupplementMode}
+        onExternalSupplementModeChange={setExternalSupplementMode}
       />
     </>
   )
