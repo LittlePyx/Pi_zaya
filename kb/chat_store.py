@@ -3665,7 +3665,7 @@ class ChatStore:
                 """,
                 (scope_norm, scope_id),
             ).fetchone()
-            if row and not normalized_items and not open_int and not allow_empty_overwrite:
+            if row and not normalized_items and not allow_empty_overwrite:
                 try:
                     existing_items = json.loads(row["items_json"] or "[]")
                 except Exception:

@@ -5516,6 +5516,7 @@ class BibliometricsBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     meta: dict[str, Any]
+    allow_model_calls: bool = True
     refs_card_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
     ui_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
     target_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
@@ -6798,9 +6799,39 @@ def _source_bound_system_a_bibliometrics(
     )
 
 
+def _background_bibliometrics(meta: dict | None) -> dict:
+    """Hydrate stored/local metadata without starting network model work."""
+
+    incoming = _prepare_bibliometrics_identity(meta, verify_library=True)
+    settings = get_settings()
+    hydrated = _prepare_bibliometrics_identity(
+        _strip_misbound_local_source_summary(
+            hydrate_repaired_citation_metadata(incoming, db_dir=settings.db_dir)
+        ),
+        verify_library=True,
+    )
+    result = _prepare_bibliometrics_identity({**incoming, **hydrated})
+    if _bibliometrics_accept_local_source_summary(result) or not str(
+        result.get("summary_line") or result.get("summaryLine") or ""
+    ).strip():
+        # An empty target locale keeps the extractive source language and never
+        # invokes the model-backed translation path during passive hydration.
+        local_summary = _local_source_summary_meta(
+            _bibliometrics_local_summary_input(result),
+            target_locale="",
+        )
+        if local_summary:
+            result = {**result, **local_summary}
+    return _prepare_bibliometrics_identity(
+        _attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(result))
+    )
+
+
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     incoming = _strip_misbound_local_source_summary(body.meta or {})
+    if not body.allow_model_calls:
+        return _background_bibliometrics(incoming)
     if _bibliometrics_is_source_bound_system_a(incoming):
         return _source_bound_system_a_bibliometrics(body, incoming)
     meta = _prepare_bibliometrics_identity(incoming, verify_library=True)

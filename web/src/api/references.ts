@@ -371,12 +371,21 @@ function normalizedBibliometricsDoi(meta: Record<string, unknown>): string {
     .toLowerCase()
 }
 
-export function bibliometricsCacheKey(meta: Record<string, unknown>): string {
+export function bibliometricsCacheKey(
+  meta: Record<string, unknown>,
+  options?: { allowModelCalls?: boolean },
+): string {
+  const allowModelCalls = options?.allowModelCalls !== false
   const locale = String(
     meta.refs_card_locale || meta.target_locale || meta.ui_locale || meta.summary_locale || '',
   ).trim().toLowerCase()
   const doi = normalizedBibliometricsDoi(meta)
-  if (doi) return stableStringify({ bibliometrics_client_version: 4, identity: `doi:${doi}`, locale })
+  if (doi) return stableStringify({
+    bibliometrics_client_version: 5,
+    identity: `doi:${doi}`,
+    locale,
+    allow_model_calls: allowModelCalls,
+  })
 
   const title = String(meta.title || meta.card_title || meta.cardTitle || '')
     .trim()
@@ -385,9 +394,10 @@ export function bibliometricsCacheKey(meta: Record<string, unknown>): string {
   const year = String(meta.year || '').trim()
   const source = String(meta.source_path || meta.sourcePath || '').trim().toLowerCase()
   return stableStringify({
-    bibliometrics_client_version: 4,
+    bibliometrics_client_version: 5,
     identity: title ? `title:${title}|year:${year}` : `source:${source}`,
     locale,
+    allow_model_calls: allowModelCalls,
   })
 }
 
@@ -507,15 +517,17 @@ export const referencesApi = {
         source_path: sourcePath,
       }),
     ),
-  bibliometrics: (meta: Record<string, unknown>) =>
+  bibliometrics: (meta: Record<string, unknown>, options?: { allowModelCalls?: boolean }) =>
     api.post<Record<string, unknown>>('/api/references/bibliometrics', {
       meta,
+      allow_model_calls: options?.allowModelCalls !== false,
     }),
-  bibliometricsCached: (meta: Record<string, unknown>) =>
+  bibliometricsCached: (meta: Record<string, unknown>, options?: { allowModelCalls?: boolean }) =>
     withTimedBibliometricsCache(
-      bibliometricsCacheKey(meta),
+      bibliometricsCacheKey(meta, options),
       () => api.post<Record<string, unknown>>('/api/references/bibliometrics', {
         meta,
+        allow_model_calls: options?.allowModelCalls !== false,
       }),
     ),
   repairShelfMetadata: (items: Array<Record<string, unknown>>, limit?: number) =>

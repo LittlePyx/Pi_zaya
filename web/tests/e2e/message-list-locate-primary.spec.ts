@@ -1926,7 +1926,9 @@ test('citation shelf exposes retry when abstract providers fail transiently', as
 test('citation popover upgrades to waited LLM polish when it is ready', async ({ page }) => {
   await mockReaderDoc(page)
   let observedWaitSeconds = 0
+  let observedPolishCalls = 0
   await page.route('**/api/references/citation-card-polish', async (route) => {
+    observedPolishCalls += 1
     const payload = route.request().postDataJSON() as { wait_s?: number } | undefined
     observedWaitSeconds = Number(payload?.wait_s || 0)
     await route.fulfill({
@@ -1971,11 +1973,14 @@ test('citation popover upgrades to waited LLM polish when it is ready', async ({
 
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
+  await page.waitForTimeout(350)
+  expect(observedPolishCalls).toBe(0)
   await citeChip.click()
 
   await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM section')
   await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM polished')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Given a set of input multi-view images')
+  expect(observedPolishCalls).toBe(1)
   expect(observedWaitSeconds).toBeGreaterThan(0)
 })
 

@@ -372,7 +372,6 @@ export function MessageList({
   const [evidenceMatrixSeedItems, setEvidenceMatrixSeedItems] = useState<CiteShelfItem[]>([])
   const [evidenceMatrixInitialId, setEvidenceMatrixInitialId] = useState('')
   const [researchGapOpen, setResearchGapOpen] = useState(false)
-  const citationPolishPrewarmKeysRef = useRef(new Set<string>())
   const [shelfOpen, setShelfOpen] = useState(false)
   const [shelfItems, setShelfItems] = useState<CiteShelfItem[]>([])
   const [focusedShelfKey, setFocusedShelfKey] = useState('')
@@ -555,10 +554,10 @@ export function MessageList({
     const storageKey = shelfStorageKey(projectScopeId)
     if (!shelfBackendHydratedKeysRef.current.has(storageKey)) return
     const items = shelfItemsForBackend(state.items)
-    const emptyClosed = items.length <= 0 && !state.open
+    const emptyShelf = items.length <= 0
     const emptyIntentUntil = Number(shelfEmptyBackendSaveIntentRef.current[storageKey] || 0)
     const allowEmptyOverwrite = Boolean(options?.allowEmptyOverwrite || emptyIntentUntil > Date.now())
-    if (emptyClosed && !allowEmptyOverwrite && Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0) > 0) {
+    if (emptyShelf && !allowEmptyOverwrite && Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0) > 0) {
       return
     }
     void chatApi.saveCitationShelf({
@@ -573,7 +572,7 @@ export function MessageList({
         const latestKey = shelfStorageKey(projectScopeId)
         shelfBackendRevisionByKeyRef.current[latestKey] = Math.max(0, Number(record.revision || 0))
         shelfBackendHydratedKeysRef.current.add(latestKey)
-        if (emptyClosed && allowEmptyOverwrite) {
+        if (emptyShelf && allowEmptyOverwrite) {
           delete shelfEmptyBackendSaveIntentRef.current[latestKey]
         }
       })
@@ -1227,22 +1226,6 @@ export function MessageList({
   )
 
   useEffect(() => {
-    const candidates = Array.from(liveCiteMap.values())
-      .filter(shouldRequestCitationCardPolish)
-      .slice(0, 18)
-    for (const item of candidates) {
-      const itemKey = toShelfItem(item).key
-      const warmKey = `${itemKey}|${item.citationCardPolishKey || ''}|v3`
-      if (citationPolishPrewarmKeysRef.current.has(warmKey)) continue
-      citationPolishPrewarmKeysRef.current.add(warmKey)
-      referencesApi.citationCardPolishCached(item as unknown as Record<string, unknown>, 0.25)
-        .catch(() => {
-          citationPolishPrewarmKeysRef.current.delete(warmKey)
-        })
-    }
-  }, [liveCiteMap])
-
-  useEffect(() => {
     setShelfItems((current) => {
       let changed = false
       const next = current.map((item) => {
@@ -1376,17 +1359,20 @@ export function MessageList({
       const scopeToken = captureShelfAsyncScope()
 
       void mapWithConcurrency(targets, SHELF_SUMMARY_BACKFILL_CONCURRENCY, async ({ item }) => (
-        referencesApi.bibliometricsCached(withBibliometricsLocale({
-          ...item,
-          summaryLine: '',
-          summarySource: '',
-          summaryProvider: '',
-          summaryQuality: null,
-          summary_line: '',
-          summary_source: '',
-          summary_provider: '',
-          summary_quality: null,
-        } as unknown as Record<string, unknown>))
+        referencesApi.bibliometricsCached(
+          withBibliometricsLocale({
+            ...item,
+            summaryLine: '',
+            summarySource: '',
+            summaryProvider: '',
+            summaryQuality: null,
+            summary_line: '',
+            summary_source: '',
+            summary_provider: '',
+            summary_quality: null,
+          } as unknown as Record<string, unknown>),
+          { allowModelCalls: false },
+        )
           .then((meta) => ({ key: item.key, meta, failed: false }))
           .catch(() => ({ key: item.key, meta: {} as Record<string, unknown>, failed: true }))
       )).then((results) => {
@@ -1654,7 +1640,10 @@ export function MessageList({
         shelfItemRepairFingerprint(target.item),
       ]))
       void Promise.all(targets.map(({ item }) => (
-        referencesApi.bibliometrics(withBibliometricsLocale(item as unknown as Record<string, unknown>))
+        referencesApi.bibliometricsCached(
+          withBibliometricsLocale(item as unknown as Record<string, unknown>),
+          { allowModelCalls: false },
+        )
           .catch(() => ({}))
           .then((meta) => ({ key: item.key, meta }))
       ))).then((results) => {
