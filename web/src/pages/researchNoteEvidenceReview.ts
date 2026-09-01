@@ -16,7 +16,18 @@ export interface ResearchNoteEvidenceReviewSummary {
 }
 
 export const RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS = new Set(['candidate', 'source_changed', 'location_changed'])
-export const RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS = new Set(['unavailable', 'verification_failed', 'source_changed_during_capture'])
+export const RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS = new Set([
+  'unavailable',
+  'source_missing',
+  'conversion_pending',
+  'verification_failed',
+  'source_changed_during_capture',
+])
+export const RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS = new Set([
+  'source_lost',
+  'source_unreadable',
+  'source_unstable',
+])
 const EVIDENCE_MAINTENANCE_VERSION = 3
 
 function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | undefined) {
@@ -25,6 +36,10 @@ function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | und
     Boolean(link && typeof link === 'object')
     && link.kind !== 'answer'
     && Boolean(String(link.source_path || '').trim())
+    && !RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS.has(
+      String(link.evidence_baseline_check?.reason || ''),
+    )
+    && !link.evidence_baseline_check?.terminal
     && (
       link.evidence_context_snapshot == null
       || (

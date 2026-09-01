@@ -369,6 +369,22 @@ def test_evidence_maintenance_due_respects_version_and_persisted_retry_schedule(
     assert research_note_evidence_maintenance_due(retry_state, now=100.0) is False
     assert research_note_evidence_maintenance_due(retry_state, now=120.0) is True
 
+    terminal_state = record_research_note_source_baseline_check(
+        {"links": [local_link]},
+        source_index=0,
+        status="skipped",
+        reason="source_lost",
+        checked_at=130.0,
+        maintenance_version=RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+        retry_count=6,
+        terminal=True,
+    )
+    terminal_check = terminal_state["links"][0]["evidence_baseline_check"]
+    assert terminal_check["terminal"] is True
+    assert terminal_check["terminal_at"] == 130.0
+    assert "retry_after" not in terminal_check
+    assert research_note_evidence_maintenance_due(terminal_state, now=10_000.0) is False
+
     external_state = {"links": [{"kind": "source", "evidence_quote": "External evidence"}]}
     assert research_note_evidence_maintenance_due(external_state, now=100.0) is False
 

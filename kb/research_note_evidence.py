@@ -74,7 +74,20 @@ _CONTEXT_FIELD_WEIGHTS = {
     "page": 0.12,
 }
 RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION = 3
-_SYSTEM_RETRY_REASONS = {"unavailable", "verification_failed", "source_changed_during_capture"}
+RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS = {
+    "unavailable",  # Legacy outcome retained for migration-safe retries.
+    "source_missing",
+    "conversion_pending",
+    "verification_failed",
+    "source_changed_during_capture",
+}
+RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS = {
+    "source_lost",
+    "source_unreadable",
+    "source_unstable",
+}
+_SYSTEM_RETRY_REASONS = RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS
+_SYSTEM_TERMINAL_REASONS = RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS
 _USER_DECISION_REASONS = {"candidate", "source_changed", "location_changed"}
 
 
@@ -478,6 +491,8 @@ def research_note_evidence_maintenance_due(
         reason = _clean_text(check.get("reason"), limit=80)
         status = _clean_text(check.get("status"), limit=24)
         maintenance_version = _positive_int(check.get("maintenance_version")) or 0
+        if reason in _SYSTEM_TERMINAL_REASONS or bool(check.get("terminal")):
+            continue
         if reason in _USER_DECISION_REASONS:
             if maintenance_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION:
                 return True
@@ -506,6 +521,7 @@ def record_research_note_source_baseline_check(
     maintenance_version: int | None = None,
     retry_count: int | None = None,
     retry_after: float | None = None,
+    terminal: bool = False,
 ) -> dict[str, Any]:
     """Persist one unresolved baseline-check outcome without rewriting evidence.
 
@@ -556,6 +572,7 @@ def record_research_note_source_baseline_check(
         and (_positive_int(previous.get("maintenance_version")) == normalized_maintenance_version)
         and (_positive_int(previous.get("retry_count")) == normalized_retry_count)
         and previous_retry_after == normalized_retry_after
+        and bool(previous.get("terminal")) == bool(terminal)
         and math.isfinite(previous_checked_at)
         and previous_checked_at > 0
     ):
@@ -578,6 +595,9 @@ def record_research_note_source_baseline_check(
         record["retry_count"] = normalized_retry_count
     if normalized_retry_after > 0:
         record["retry_after"] = normalized_retry_after
+    if terminal:
+        record["terminal"] = True
+        record["terminal_at"] = timestamp
     link["evidence_baseline_check"] = record
     raw_history = link.get("evidence_baseline_check_history")
     history = [deepcopy(row) for row in raw_history if isinstance(row, dict)] if isinstance(raw_history, list) else []

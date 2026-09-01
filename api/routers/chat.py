@@ -59,6 +59,8 @@ from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
 from kb.research_note_evidence import (
     RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+    RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS,
+    RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS,
     auto_resolve_research_note_source_state,
     build_research_note_evidence_context,
     capture_research_note_source_context_baseline,
@@ -100,6 +102,27 @@ _CHAT_RESEARCH_NOTE_SOURCE_STATE_MAX_JSON_CHARS = 240_000
 _RESEARCH_NOTE_EVIDENCE_MAINTENANCE_LIMIT = 64
 _RESEARCH_NOTE_EVIDENCE_MAINTENANCE_BUDGET_S = 3.0
 _RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S = (5.0, 30.0, 300.0, 3_600.0, 21_600.0)
+_RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT = len(_RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S) + 1
+
+
+def _research_note_evidence_system_issue_family(reason: str) -> str:
+    normalized = str(reason or "").strip()
+    if normalized in {"unavailable", "source_missing", "source_lost"}:
+        return "missing"
+    if normalized in {"conversion_pending", "verification_failed", "source_unreadable"}:
+        return "unreadable"
+    if normalized in {"source_changed_during_capture", "source_unstable"}:
+        return "unstable"
+    return ""
+
+
+def _research_note_evidence_terminal_reason(reason: str) -> str:
+    family = _research_note_evidence_system_issue_family(reason)
+    if family == "missing":
+        return "source_lost"
+    if family == "unstable":
+        return "source_unstable"
+    return "source_unreadable"
 
 
 def _bounded_json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -1455,6 +1478,63 @@ def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBod
         raise HTTPException(500, "research note evidence context failed") from exc
 
 
+def _resolve_research_note_evidence_md_path(
+    source_path: str,
+    *,
+    md_root: Path,
+    pdf_root: Path,
+    db_dir: Path | str | None,
+) -> tuple[Path | None, str]:
+    """Resolve readable evidence and classify failures owned by the system.
+
+    Resolve the converted Markdown first so a retained conversion remains
+    usable after its PDF is removed. Only then require the saved reader path.
+    The caller persists the returned reason and applies bounded retry policy.
+    """
+    raw = str(source_path or "").strip()
+    if not raw:
+        return None, "source_lost"
+    try:
+        direct_md = _resolve_paper_guide_md_path(
+            raw,
+            md_root=md_root,
+            db_dir=db_dir,
+            pdf_root=pdf_root,
+        )
+    except Exception:
+        return None, "verification_failed"
+    if direct_md is not None:
+        return direct_md, ""
+
+    try:
+        allowed_source = _resolve_allowed_reader_source_path(raw)
+    except HTTPException as exc:
+        if exc.status_code in {400, 404}:
+            return None, "source_missing"
+        return None, "verification_failed"
+    except Exception:
+        return None, "verification_failed"
+
+    allowed_path = Path(allowed_source)
+    if allowed_path.suffix.lower().endswith(".md") and allowed_path.is_file():
+        return allowed_path, ""
+
+    try:
+        md_path = _resolve_paper_guide_md_path(
+            allowed_source,
+            md_root=md_root,
+            db_dir=db_dir,
+            pdf_root=pdf_root,
+        )
+    except Exception:
+        return None, "verification_failed"
+    if md_path is not None:
+        return md_path, ""
+    if Path(allowed_source).suffix.lower() == ".pdf":
+        return None, "conversion_pending"
+    return None, "source_missing"
+
+
 def _capture_chat_research_note_evidence_context_baseline(
     note_id: str,
     expected_revision: int,
@@ -1521,9 +1601,9 @@ def _capture_chat_research_note_evidence_context_baseline(
             )
             retry_count: int | None = None
             retry_after: float | None = None
+            terminal = reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS
             is_system_retry = bool(
-                str(link.get("source_path") or "").strip()
-                and (status == "failed" or reason in {"unavailable", "source_changed_during_capture"})
+                status == "failed" or reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS
             )
             if is_system_retry:
                 previous_reason = str(previous_check.get("reason") or "") if isinstance(previous_check, dict) else ""
@@ -1531,19 +1611,50 @@ def _capture_chat_research_note_evidence_context_baseline(
                     previous_count = int(previous_check.get("retry_count") or 0) if isinstance(previous_check, dict) else 0
                 except (TypeError, ValueError):
                     previous_count = 0
-                retry_count = max(1, previous_count + 1) if previous_reason == reason else 1
-                delay_index = min(retry_count - 1, len(_RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S) - 1)
-                retry_after = checked_at + _RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S[delay_index]
+                same_issue = bool(
+                    _research_note_evidence_system_issue_family(previous_reason)
+                    and _research_note_evidence_system_issue_family(previous_reason)
+                    == _research_note_evidence_system_issue_family(reason)
+                )
+                retry_count = max(1, previous_count + 1) if same_issue else 1
+                if retry_count >= _RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT:
+                    reason = _research_note_evidence_terminal_reason(reason)
+                    status = "skipped"
+                    terminal = True
+                    retry_count = _RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT
+                else:
+                    delay_index = retry_count - 1
+                    retry_after = checked_at + _RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S[delay_index]
+            elif terminal:
+                try:
+                    retry_count = int(previous_check.get("retry_count") or 0) if isinstance(previous_check, dict) else 0
+                except (TypeError, ValueError):
+                    retry_count = 0
+                retry_count = max(_RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT, retry_count)
+            persisted_checked_at = checked_at
+            if (
+                terminal
+                and isinstance(previous_check, dict)
+                and str(previous_check.get("reason") or "") == reason
+                and bool(previous_check.get("terminal"))
+            ):
+                try:
+                    previous_checked_at = float(previous_check.get("checked_at") or 0)
+                except (TypeError, ValueError):
+                    previous_checked_at = 0.0
+                if previous_checked_at > 0:
+                    persisted_checked_at = previous_checked_at
             next_source_state = record_research_note_source_baseline_check(
                 next_source_state,
                 source_index=source_index,
                 status=status,
                 reason=reason,
                 source_fingerprint=source_fingerprint,
-                checked_at=checked_at,
+                checked_at=persisted_checked_at,
                 maintenance_version=RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
                 retry_count=retry_count,
                 retry_after=retry_after,
+                terminal=terminal,
             )
         elif reason in {"already_present", "invalid"}:
             next_source_state = resolve_research_note_source_baseline_check(
@@ -1607,8 +1718,7 @@ def _capture_chat_research_note_evidence_context_baseline(
                     and existing_maintenance_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION
                 )
                 or existing_check_status == "failed"
-                or existing_check_reason
-                in {"unavailable", "verification_failed", "source_changed_during_capture"}
+                or existing_check_reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS
             )
         )
         if existing_context_snapshot is not None and not refresh_existing and not refresh_saved_issue:
@@ -1619,25 +1729,19 @@ def _capture_chat_research_note_evidence_context_baseline(
         if str(verification.get("status") or "").strip().lower() == "invalid":
             record_result(source_index, raw_link, status="skipped", reason="invalid")
             continue
-        if not source_path_raw:
-            record_result(source_index, raw_link, status="skipped", reason="unavailable")
-            continue
-        try:
-            source_path = _resolve_allowed_reader_source_path(source_path_raw)
-            md_path = _resolve_paper_guide_md_path(
-                source_path,
-                md_root=md_root,
-                db_dir=getattr(settings, "db_dir", None),
-                pdf_root=pdf_root,
-            )
-        except HTTPException:
-            record_result(source_index, raw_link, status="skipped", reason="unavailable")
-            continue
-        except Exception:
-            record_result(source_index, raw_link, status="failed", reason="verification_failed")
-            continue
+        md_path, unavailable_reason = _resolve_research_note_evidence_md_path(
+            source_path_raw,
+            md_root=md_root,
+            pdf_root=pdf_root,
+            db_dir=getattr(settings, "db_dir", None),
+        )
         if md_path is None:
-            record_result(source_index, raw_link, status="skipped", reason="unavailable")
+            record_result(
+                source_index,
+                raw_link,
+                status="failed" if unavailable_reason == "verification_failed" else "skipped",
+                reason=unavailable_reason or "verification_failed",
+            )
             continue
 
         snapshot_fingerprint = (
@@ -1761,11 +1865,16 @@ def _capture_chat_research_note_evidence_context_baseline(
             )
             continue
         if verified_status != "exact":
-            reason = "candidate" if verified_status == "candidate" else "unavailable"
+            if verified_status == "candidate":
+                reason = "candidate"
+            elif verified_reason == "converted_markdown_missing":
+                reason = "conversion_pending"
+            else:
+                reason = "verification_failed"
             record_result(
                 source_index,
                 raw_link,
-                status="skipped",
+                status="failed" if reason == "verification_failed" else "skipped",
                 reason=reason,
                 source_fingerprint=str(verified.get("source_fingerprint") or ""),
             )

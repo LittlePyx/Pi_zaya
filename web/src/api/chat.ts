@@ -96,6 +96,8 @@ export interface ResearchNoteSourceLink {
     maintenance_version?: number
     retry_count?: number
     retry_after?: number
+    terminal?: boolean
+    terminal_at?: number
   }
   evidence_baseline_check_history?: Array<{
     version?: number
@@ -110,6 +112,8 @@ export interface ResearchNoteSourceLink {
     maintenance_version?: number
     retry_count?: number
     retry_after?: number
+    terminal?: boolean
+    terminal_at?: number
   }>
   locator_repair_history?: Array<{
     version?: number

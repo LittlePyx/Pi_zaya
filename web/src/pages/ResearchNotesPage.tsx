@@ -63,6 +63,7 @@ import {
 } from './researchNoteWorkspaceDraft'
 import {
   RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS,
+  RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS,
   RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS,
   researchNoteEvidenceMaintenanceDue,
   researchNoteEvidenceMaintenanceTracked,
@@ -90,7 +91,7 @@ const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
 type OutlineFreshnessStatus = 'checking' | 'current' | 'updated' | 'missing' | 'error'
-type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'invalid' | 'recovering' | 'unchecked'
+type EvidenceHealthStatus = 'exact' | 'changed' | 'candidate' | 'invalid' | 'recovering' | 'lost' | 'unreadable' | 'unchecked'
 type EvidenceHealthFilter = 'all' | 'issues'
 type DirectoryEvidenceFilter = 'all' | 'issues'
 
@@ -229,6 +230,12 @@ function evidenceHealthStatus(
   if (entry.link.evidence_verification?.status === 'invalid') return 'invalid'
   const check = entry.link.evidence_baseline_check
   const checkReason = String(check?.reason || '')
+  if (checkReason === 'source_lost') return 'lost'
+  if (
+    checkReason === 'source_unreadable'
+    || checkReason === 'source_unstable'
+    || (check?.terminal && RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS.has(checkReason))
+  ) return 'unreadable'
   if (RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(checkReason)) {
     return checkReason === 'candidate' ? 'candidate' : 'changed'
   }
@@ -337,8 +344,13 @@ function evidenceBaselineReasonLabel(S: ReturnType<typeof useT>, reason: string)
     candidate: S.research_notes_evidence_baseline_reason_candidate,
     invalid: S.research_notes_evidence_baseline_reason_invalid,
     unavailable: S.research_notes_evidence_baseline_reason_unavailable,
+    source_missing: S.research_notes_evidence_baseline_reason_source_missing,
+    conversion_pending: S.research_notes_evidence_baseline_reason_conversion_pending,
     verification_failed: S.research_notes_evidence_baseline_reason_verification_failed,
     source_changed_during_capture: S.research_notes_evidence_baseline_reason_source_changed_during_capture,
+    source_lost: S.research_notes_evidence_baseline_reason_source_lost,
+    source_unreadable: S.research_notes_evidence_baseline_reason_source_unreadable,
+    source_unstable: S.research_notes_evidence_baseline_reason_source_unstable,
   }
   return labels[reason] || S.research_notes_evidence_baseline_reason_unknown
 }
@@ -1631,7 +1643,13 @@ export default function ResearchNotesPage() {
     && entry.link.evidence_context_snapshot == null
     && entry.link.evidence_verification?.status !== 'invalid'
     && entry.link.evidence_baseline_check?.status !== 'failed'
-    && entry.link.evidence_baseline_check?.reason !== 'unavailable'
+    && !RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(
+      String(entry.link.evidence_baseline_check?.reason || ''),
+    )
+    && !RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS.has(
+      String(entry.link.evidence_baseline_check?.reason || ''),
+    )
+    && !entry.link.evidence_baseline_check?.terminal
   ))
   const missingEvidenceBaselineCount = missingEvidenceBaselineEntries.length
   const baselineResultIsCurrent = Boolean(
@@ -1684,6 +1702,8 @@ export default function ResearchNotesPage() {
     candidate: 0,
     invalid: 0,
     recovering: 0,
+    lost: 0,
+    unreadable: 0,
     unchecked: 0,
   } as Record<EvidenceHealthStatus, number>)
   const evidenceIssueCount = evidenceHealthCounts.changed
@@ -2200,6 +2220,12 @@ export default function ResearchNotesPage() {
                   <Tag>
                     {S.research_notes_evidence_health_recovering.replace('{n}', String(evidenceHealthCounts.recovering))}
                   </Tag>
+                  <Tag color="red">
+                    {S.research_notes_evidence_health_lost.replace('{n}', String(evidenceHealthCounts.lost))}
+                  </Tag>
+                  <Tag color="volcano">
+                    {S.research_notes_evidence_health_unreadable.replace('{n}', String(evidenceHealthCounts.unreadable))}
+                  </Tag>
                 </div>
                 <Segmented
                   block
@@ -2341,6 +2367,10 @@ export default function ResearchNotesPage() {
                         ? 'orange'
                         : healthStatus === 'invalid'
                           ? 'magenta'
+                          : healthStatus === 'lost'
+                            ? 'red'
+                            : healthStatus === 'unreadable'
+                              ? 'volcano'
                           : 'default'
                   const healthLabel = healthStatus === 'exact'
                     ? S.research_notes_evidence_health_status_exact
@@ -2350,8 +2380,12 @@ export default function ResearchNotesPage() {
                         ? S.research_notes_evidence_health_status_candidate
                         : healthStatus === 'invalid'
                           ? S.research_notes_evidence_health_status_invalid
-                        : healthStatus === 'recovering'
-                          ? S.research_notes_evidence_health_status_recovering
+                          : healthStatus === 'recovering'
+                            ? S.research_notes_evidence_health_status_recovering
+                            : healthStatus === 'lost'
+                              ? S.research_notes_evidence_health_status_lost
+                              : healthStatus === 'unreadable'
+                                ? S.research_notes_evidence_health_status_unreadable
                             : ''
                   const targetMatchesSavedLocator = evidenceTargetMatchesSavedLocator(link, result?.target)
                   const requiresLocatorRepair = Boolean(
@@ -2410,7 +2444,7 @@ export default function ResearchNotesPage() {
                       ) : (
                         <>
                           <div className="kb-notes-evidence-actions">
-                            {healthStatus !== 'recovering' ? (
+                            {!['recovering', 'lost', 'unreadable'].includes(healthStatus) ? (
                               <Button
                                 type="link"
                                 icon={<SearchOutlined />}
@@ -2421,19 +2455,7 @@ export default function ResearchNotesPage() {
                               >
                                 {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
                               </Button>
-                            ) : (
-                              <Button
-                                type="link"
-                                icon={<ArrowRightOutlined />}
-                                data-testid={`research-note-evidence-open-recovery-${index}`}
-                                onClick={() => {
-                                  const source = String(link.source_name || link.label || link.source_path || '').trim()
-                                  navigate(`/library?source=${encodeURIComponent(source)}`)
-                                }}
-                              >
-                                {S.research_notes_evidence_open_recovery}
-                              </Button>
-                            )}
+                            ) : null}
                             {result?.status === 'exact' && result.reader_open && !requiresLocatorRepair && !canReviewSourceVersion ? (
                               <Button
                                 type="link"
@@ -2473,6 +2495,28 @@ export default function ResearchNotesPage() {
                               </Button>
                             ) : null}
                           </div>
+                          {healthStatus === 'recovering' ? (
+                            <Alert
+                              type="info"
+                              showIcon
+                              title={S.research_notes_evidence_system_recovering_notice}
+                              data-testid={`research-note-evidence-system-outcome-${index}`}
+                            />
+                          ) : healthStatus === 'lost' ? (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              title={S.research_notes_evidence_source_lost_notice}
+                              data-testid={`research-note-evidence-system-outcome-${index}`}
+                            />
+                          ) : healthStatus === 'unreadable' ? (
+                            <Alert
+                              type="warning"
+                              showIcon
+                              title={S.research_notes_evidence_source_unreadable_notice}
+                              data-testid={`research-note-evidence-system-outcome-${index}`}
+                            />
+                          ) : null}
                           {review?.loading && !result ? (
                             <div className="kb-notes-evidence-loading">
                               <Spin size="small" /> {S.research_notes_evidence_loading}

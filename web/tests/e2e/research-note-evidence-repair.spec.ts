@@ -91,6 +91,27 @@ test('research note evidence review summary counts only unresolved saved checks'
   expect(researchNoteEvidenceMaintenanceDue(scheduledRetryState, 120)).toBe(true)
   expect(researchNoteEvidenceNextRetryAt(scheduledRetryState)).toBe(120)
 
+  const terminalSourceState = {
+    links: [{
+      kind: 'source',
+      source_path: 'db/paper/lost.md',
+      evidence_baseline_check: {
+        status: 'skipped',
+        reason: 'source_lost',
+        maintenance_version: 3,
+        retry_count: 6,
+        checked_at: 130,
+        terminal_at: 130,
+        terminal: true,
+      },
+    }],
+  }
+  expect(researchNoteEvidenceSystemRetryRequired(terminalSourceState)).toBe(false)
+  expect(researchNoteEvidenceMaintenanceTracked(terminalSourceState)).toBe(false)
+  expect(researchNoteEvidenceMaintenanceDue(terminalSourceState, 10_000)).toBe(false)
+  expect(researchNoteEvidenceNextRetryAt(terminalSourceState)).toBeNull()
+  expect(researchNoteEvidenceReviewIssues(terminalSourceState)).toEqual([])
+
   const legacyContextDecisionState = {
     links: [{
       kind: 'source',
@@ -766,7 +787,8 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   await expect(page.getByTestId('research-note-source-5')).toBeVisible()
   await expect(page.getByTestId('research-note-evidence-health-status-3')).toHaveText('系统处理中')
   await expect(page.getByTestId('research-note-evidence-health-status-4')).toHaveText('系统处理中')
-  await expect(page.getByTestId('research-note-evidence-open-recovery-3')).toHaveText('查看来源恢复')
+  await expect(page.getByTestId('research-note-evidence-open-recovery-3')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-system-outcome-3')).toContainText('不需要你操作')
   await health.getByText('需判断 2', { exact: true }).click()
   await expect(page.locator('.kb-notes-source-card')).toHaveCount(2)
 
@@ -918,9 +940,8 @@ test('note evidence health check prioritizes issues, repairs one locator, and ve
   }))
   expect(evidenceContextBodies).toHaveLength(7)
   expect(evidenceContextBodies.every(body => String(body.source_path || '') !== answerSourcePath)).toBe(true)
-  await page.getByTestId('research-note-evidence-open-recovery-3').click()
-  await expect(page).toHaveURL(/\/library\?source=Unavailable(?:%20|\+)source/)
-  await expect(page.getByPlaceholder('搜索标题、分类、标签或备注')).toHaveValue('Unavailable source')
+  await expect(page.getByTestId('research-note-evidence-open-recovery-3')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-system-outcome-3')).toContainText('不需要你操作')
 })
 
 test('legacy evidence review labels a missing historical context without fabricating it', async ({ page }) => {
@@ -1424,4 +1445,122 @@ test('legacy note automatically resolves deterministic evidence and leaves only 
   await expect(page.getByTestId('research-notes-evidence-filter')).toContainText('需判断（1）')
   await expect(page.getByTestId('research-note-evidence-baseline')).toHaveCount(0)
   expect(maintenanceBodies).toHaveLength(1)
+})
+
+test('terminal source outcomes preserve evidence without giving the user a recovery task', async ({ page }) => {
+  const terminalNote: ResearchNoteRecord = {
+    id: 'note-terminal-source',
+    project_id: null,
+    source_conv_id: null,
+    title: 'Terminal source outcomes',
+    content_markdown: 'A reading note whose saved evidence must remain visible.',
+    source_state: {
+      version: 1,
+      links: [
+        {
+          kind: 'source',
+          label: 'Lost paper',
+          source_name: 'Lost paper',
+          source_path: 'db/paper/lost.md',
+          evidence_quote: 'The original excerpt remains available in the note.',
+          evidence_baseline_check: {
+            version: 1,
+            checked_at: 1_800_000_000,
+            status: 'skipped',
+            reason: 'source_lost',
+            maintenance_version: 3,
+            retry_count: 6,
+            terminal: true,
+            terminal_at: 1_800_000_000,
+          },
+        },
+        {
+          kind: 'source',
+          label: 'Unreadable conversion',
+          source_name: 'Unreadable conversion',
+          source_path: 'db/paper/unreadable.md',
+          evidence_quote: 'A second saved excerpt is also retained.',
+          evidence_baseline_check: {
+            version: 1,
+            checked_at: 1_800_000_010,
+            status: 'skipped',
+            reason: 'source_unreadable',
+            maintenance_version: 3,
+            retry_count: 6,
+            terminal: true,
+            terminal_at: 1_800_000_010,
+          },
+        },
+      ],
+    },
+    tags: [],
+    pinned: false,
+    archived: false,
+    revision: 7,
+    created_at: 1_799_999_000,
+    updated_at: 1_799_999_100,
+  }
+  let healthCalls = 0
+  let maintenanceCalls = 0
+
+  await installAppShellMocks(page)
+  await installEmptyCitationShelfMock(page, { scopeId: terminalNote.id })
+  await installIdleReferenceMocks(page)
+  await page.route('**/api/chat/research-notes/evidence-maintenance', async (route) => {
+    maintenanceCalls += 1
+    await fulfillJson(route, { notes: [], summary: {}, items: [] })
+  })
+  await page.route('**/api/chat/research-notes**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    if (
+      request.method() === 'POST'
+      && url.pathname === `/api/chat/research-notes/${terminalNote.id}/evidence-health`
+    ) {
+      healthCalls += 1
+      await fulfillJson(route, {
+        note: terminalNote,
+        summary: {
+          total: 2,
+          created: 0,
+          skipped: 2,
+          failed: 0,
+          reasons: { source_lost: 1, source_unreadable: 1 },
+        },
+        items: [
+          { source_index: 0, source_name: 'Lost paper', status: 'skipped', reason: 'source_lost' },
+          { source_index: 1, source_name: 'Unreadable conversion', status: 'skipped', reason: 'source_unreadable' },
+        ],
+      })
+      return
+    }
+    if (request.method() === 'GET' && url.pathname === '/api/chat/research-notes') {
+      await fulfillJson(route, [{ ...terminalNote, content_markdown: '' }])
+      return
+    }
+    if (request.method() === 'GET' && url.pathname === `/api/chat/research-notes/${terminalNote.id}`) {
+      await fulfillJson(route, terminalNote)
+      return
+    }
+    await fulfillJson(route, { detail: 'unexpected research note request' }, 404)
+  })
+
+  await page.goto(`/notes?note=${terminalNote.id}`)
+
+  const health = page.getByTestId('research-note-evidence-health')
+  await expect(health).toContainText('来源已丢失 1')
+  await expect(health).toContainText('无法恢复 1')
+  await expect(page.getByTestId('research-note-evidence-health-status-0')).toHaveText('来源已丢失')
+  await expect(page.getByTestId('research-note-evidence-health-status-1')).toHaveText('无法恢复')
+  await expect(page.getByTestId('research-note-evidence-system-outcome-0')).toContainText('保存的摘录和核验历史仍保留')
+  await expect(page.getByTestId('research-note-evidence-system-outcome-1')).toContainText('保存的摘录和历史仍保留')
+  await expect(page.getByTestId('research-note-source-0')).toContainText('The original excerpt remains available in the note.')
+  await expect(page.getByTestId('research-note-source-1')).toContainText('A second saved excerpt is also retained.')
+  await expect(page.getByTestId('research-note-evidence-review-0')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-review-1')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-open-recovery-0')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-open-recovery-1')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-evidence-baseline')).toHaveCount(0)
+  expect(healthCalls).toBe(1)
+  expect(maintenanceCalls).toBe(0)
 })

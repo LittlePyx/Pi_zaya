@@ -274,7 +274,7 @@ Dark counts were measured with the shutter closed.
             "source_change_auto_verified": 1,
             "candidate": 1,
             "invalid": 1,
-            "unavailable": 1,
+                "source_lost": 1,
             "already_present": 1,
             "stable_locator_auto_aligned": 1,
         },
@@ -298,7 +298,7 @@ Dark counts were measured with the shutter closed.
     assert auto_aligned["evidence_quote"] == target["text"]
     assert auto_aligned["evidence_verification"]["reason"] == "stable_locator_auto_aligned"
     assert auto_aligned["evidence_auto_resolution_history"][-1]["action"] == "stable_locator_auto_aligned"
-    for source_index, reason in ((2, "candidate"), (4, "unavailable")):
+    for source_index, reason in ((2, "candidate"), (4, "source_lost")):
         checked = record["source_state"]["links"][source_index]["evidence_baseline_check"]
         assert checked["status"] == "skipped"
         assert checked["reason"] == reason
@@ -309,7 +309,7 @@ Dark counts were measured with the shutter closed.
     assert all(
         item.get("checked_at", 0) > 0
         for item in payload["items"]
-        if item["reason"] in {"candidate", "unavailable"}
+        if item["reason"] in {"candidate", "source_lost"}
     )
 
     repeated = client.post(
@@ -352,7 +352,9 @@ Dark counts were measured with the shutter closed.
     assert unresolved_payload["note"]["revision"] == 2
     assert unresolved_payload["note"]["content_markdown"] == "Keep this note body"
     unresolved_check = unresolved_payload["note"]["source_state"]["links"][0]["evidence_baseline_check"]
-    assert unresolved_check["reason"] == "unavailable"
+    assert unresolved_check["reason"] == "source_lost"
+    assert unresolved_check["terminal"] is True
+    assert "retry_after" not in unresolved_check
     assert client.get(f"/api/chat/research-notes/{unresolved_note['id']}").json()["source_state"]["links"][0][
         "evidence_baseline_check"
     ] == unresolved_check
@@ -499,7 +501,7 @@ Photon arrival is a stochastic process governed by Poisson statistics.
     assert exact_after["content_markdown"] == "User note body must remain unchanged"
     assert exact_after["source_state"]["links"][0]["evidence_context_snapshot"]
     retry_check = missing_after["source_state"]["links"][0]["evidence_baseline_check"]
-    assert retry_check["retry_count"] == 1
+    assert retry_check["retry_count"] == 2
     assert retry_check["retry_after"] > retry_check["checked_at"]
     assert research_note_evidence_maintenance_due(missing_after["source_state"], now=retry_check["checked_at"]) is False
     decision_check = decision_after["source_state"]["links"][0]["evidence_baseline_check"]
@@ -600,7 +602,7 @@ Photon arrival is governed by Poisson statistics.
     assert payload["summary"]["created"] == 1
     assert payload["summary"]["reasons"] == {
         "source_change_auto_verified": 1,
-        "unavailable": 1,
+        "conversion_pending": 1,
     }
     refreshed = payload["note"]
     assert refreshed["revision"] == 2
@@ -609,8 +611,167 @@ Photon arrival is governed by Poisson statistics.
     exact_link, pending_link = refreshed["source_state"]["links"]
     assert exact_link["evidence_verification"]["reason"] == "source_change_auto_verified"
     assert exact_link["evidence_context_snapshot"]["source_fingerprint"] != saved_context["source_fingerprint"]
-    assert pending_link["evidence_baseline_check"]["reason"] == "unavailable"
+    assert pending_link["evidence_baseline_check"]["reason"] == "conversion_pending"
     assert pending_link["evidence_baseline_check"]["retry_after"] > pending_link["evidence_baseline_check"]["checked_at"]
+
+
+def test_missing_note_source_reaches_terminal_outcome_and_recovers_when_source_returns(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    from fastapi import HTTPException
+
+    from api.routers import chat as chat_router
+    from kb.research_note_evidence import research_note_evidence_maintenance_due
+    from kb.source_blocks import load_source_blocks
+
+    md_path = tmp_path / "missing.en.md"
+    md_path.write_text(
+        """# Recovered paper
+
+## Results
+
+Recovered evidence remains exact after the source returns.
+""",
+        encoding="utf-8",
+    )
+    target = next(block for block in load_source_blocks(md_path) if "Recovered evidence" in block["text"])
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    note = store.create_research_note(
+        title="Missing source evidence",
+        content_markdown="The reader's note body must remain unchanged.",
+        source_state={"links": [{
+            "kind": "source",
+            "source_path": "library/missing.pdf",
+            "source_name": "Missing paper",
+            "block_id": target["block_id"],
+            "anchor_id": target["anchor_id"],
+            "evidence_quote": target["text"],
+        }]},
+    )
+    assert note is not None
+    available = {"value": False}
+
+    def resolve_md(*_args, **_kwargs):
+        return md_path if available["value"] else None
+
+    def resolve_reader(_path: str) -> str:
+        if not available["value"]:
+            raise HTTPException(404, "source PDF not found")
+        return str(md_path)
+
+    monkeypatch.setattr(chat_router, "get_chat_store", lambda: store)
+    monkeypatch.setattr(chat_router, "_resolve_allowed_reader_source_path", resolve_reader)
+    monkeypatch.setattr(chat_router, "_resolve_paper_guide_md_path", resolve_md)
+    monkeypatch.setattr(chat_router, "_md_dir", lambda: tmp_path)
+    monkeypatch.setattr(chat_router, "_pdf_dir", lambda: tmp_path)
+    client = TestClient(app)
+
+    current = note
+    for attempt in range(1, 7):
+        response = client.post(
+            f"/api/chat/research-notes/{note['id']}/evidence-health",
+            json={"expected_revision": current["revision"]},
+        )
+        assert response.status_code == 200
+        current = response.json()["note"]
+        assert current["content_markdown"] == "The reader's note body must remain unchanged."
+        check = current["source_state"]["links"][0]["evidence_baseline_check"]
+        assert check["retry_count"] == attempt
+        if attempt < 6:
+            assert check["reason"] == "source_missing"
+            assert check["retry_after"] > check["checked_at"]
+            assert not check.get("terminal")
+        else:
+            assert check["reason"] == "source_lost"
+            assert check["terminal"] is True
+            assert check["terminal_at"] == check["checked_at"]
+            assert "retry_after" not in check
+
+    terminal_revision = current["revision"]
+    terminal_check = current["source_state"]["links"][0]["evidence_baseline_check"]
+    terminal_history_count = len(current["source_state"]["links"][0]["evidence_baseline_check_history"])
+    assert research_note_evidence_maintenance_due(current["source_state"], now=10**12) is False
+
+    repeated = client.post(
+        f"/api/chat/research-notes/{note['id']}/evidence-health",
+        json={"expected_revision": terminal_revision},
+    )
+    assert repeated.status_code == 200
+    assert repeated.json()["note"]["revision"] == terminal_revision
+    repeated_link = repeated.json()["note"]["source_state"]["links"][0]
+    assert repeated_link["evidence_baseline_check"] == terminal_check
+    assert len(repeated_link["evidence_baseline_check_history"]) == terminal_history_count
+
+    available["value"] = True
+    recovery = chat_router.maintain_research_note_evidence_for_recovered_sources(
+        source_paths=("library/missing.pdf",),
+        reason="conversion_ready",
+    )
+    assert recovery["processed"] == 1
+    assert recovery["resolved_links"] == 1
+    recovered = store.get_research_note(note["id"])
+    assert recovered is not None
+    assert recovered["revision"] == terminal_revision + 1
+    assert recovered["content_markdown"] == "The reader's note body must remain unchanged."
+    recovered_link = recovered["source_state"]["links"][0]
+    assert "evidence_baseline_check" not in recovered_link
+    assert recovered_link["evidence_verification"]["status"] == "exact"
+    assert recovered_link["evidence_context_snapshot"]["target"]["block_id"] == target["block_id"]
+    assert recovered_link["evidence_baseline_check_history"][-1]["status"] == "resolved"
+    assert recovered_link["evidence_baseline_check_history"][-1]["previous_reason"] == "source_lost"
+
+
+def test_note_evidence_uses_retained_conversion_after_pdf_disappears(tmp_path: Path) -> None:
+    from api.routers.chat import _resolve_research_note_evidence_md_path
+
+    md_root = tmp_path / "md"
+    pdf_root = tmp_path / "pdf"
+    db_root = tmp_path / "db"
+    converted_dir = md_root / "retained-paper"
+    converted_dir.mkdir(parents=True)
+    pdf_root.mkdir()
+    db_root.mkdir()
+    retained_md = converted_dir / "retained-paper.en.md"
+    retained_md.write_text("# Retained paper\n\nThe converted evidence is still readable.\n", encoding="utf-8")
+
+    resolved, reason = _resolve_research_note_evidence_md_path(
+        "retained-paper.pdf",
+        md_root=md_root,
+        pdf_root=pdf_root,
+        db_dir=db_root,
+    )
+
+    assert resolved == retained_md.resolve()
+    assert reason == ""
+
+
+def test_note_evidence_uses_existing_allowed_markdown_source(monkeypatch, tmp_path: Path) -> None:
+    from api.routers import chat as chat_router
+
+    md_root = tmp_path / "md"
+    pdf_root = tmp_path / "pdf"
+    db_root = tmp_path / "db"
+    md_root.mkdir()
+    pdf_root.mkdir()
+    db_root.mkdir()
+    recovered_md = md_root / "recovered-paper.md"
+    recovered_md.write_text("# Recovered paper\n\nThe evidence is readable again.\n", encoding="utf-8")
+    monkeypatch.setattr(
+        chat_router,
+        "_resolve_allowed_reader_source_path",
+        lambda _path: str(recovered_md),
+    )
+
+    resolved, reason = chat_router._resolve_research_note_evidence_md_path(
+        str(recovered_md),
+        md_root=md_root,
+        pdf_root=pdf_root,
+        db_dir=db_root,
+    )
+
+    assert resolved == recovered_md
+    assert reason == ""
 
 
 def test_recovered_source_event_refreshes_exact_note_evidence_and_leaves_only_real_decisions(
