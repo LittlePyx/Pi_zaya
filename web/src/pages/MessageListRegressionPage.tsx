@@ -2,13 +2,12 @@ import { useCallback, useRef, useState } from 'react'
 import { MessageList } from '../components/chat/MessageList'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { Message } from '../api/chat'
-import { libraryApi } from '../api/library'
-import type { ReaderLocateResult, ReaderOpenPayload } from '../components/chat/reader/readerTypes'
+import type { ReaderOpenPayload } from '../components/chat/reader/readerTypes'
+import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
 import {
   READER_REGRESSION_SOURCE_NAME,
   READER_REGRESSION_SOURCE_PATH,
 } from '../testing/readerRegressionFixtures'
-import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
 
 const EQUATION_TEXT = '$$\nC(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt\n$$'
 
@@ -2016,9 +2015,40 @@ export default function MessageListRegressionPage() {
     ? agentTraceStreamingPartial
     : undefined
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
-  const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
-  const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
-  const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
+  const readerOpenRef = useRef(false)
+  const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
+  const openReaderDock = useCallback((nextPayload: ReaderOpenPayload) => {
+    readerOpenRef.current = true
+    readerPayloadRef.current = nextPayload
+    setPayload(nextPayload)
+  }, [])
+  const activeRegressionConversationId = `message-list-regression:${scenario}`
+  const {
+    readerLocateResults,
+    sourceQualityRefreshToken,
+    nextReaderLocateRequestId,
+    registerReaderLocateRequest,
+    handleReaderLocateResult,
+  } = useReaderLocateRepair({
+    activeConversationId: activeRegressionConversationId,
+    readerOpenRef,
+    readerPayloadRef,
+    openReaderDock,
+  })
+  const openReaderForRegression = useCallback((nextPayload: ReaderOpenPayload) => {
+    const locateRequestId = nextReaderLocateRequestId()
+    const registeredPayload: ReaderOpenPayload = { ...nextPayload, locateRequestId }
+    const feedbackKey = String(registeredPayload.locateFeedbackKey || '').trim()
+    if (feedbackKey) {
+      registerReaderLocateRequest({
+        feedbackKey,
+        locateRequestId,
+        sourcePath: registeredPayload.sourcePath,
+        payload: registeredPayload,
+      })
+    }
+    openReaderDock(registeredPayload)
+  }, [nextReaderLocateRequestId, openReaderDock, registerReaderLocateRequest])
   const readerEnabled = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('reader') === '1'
     : false
@@ -2029,45 +2059,6 @@ export default function MessageListRegressionPage() {
     ? (new URLSearchParams(window.location.search).get('switchProject') || '')
     : ''
   const [regressionShelfProjectId, setRegressionShelfProjectId] = useState(regressionShelfProjectInitialId)
-  const recordLocateResult = useCallback((result: ReaderLocateResult) => {
-    const key = String(result.locateFeedbackKey || '').trim()
-    if (!key) return
-    const submitKey = [key, result.locateRequestId, result.status, result.precision, result.hint, result.reason].join('|')
-    if (qualityDiagnosticsEnabled && !readerLocateQualitySubmittedRef.current.has(submitKey)) {
-      readerLocateQualitySubmittedRef.current.add(submitKey)
-      libraryApi.recordReaderLocateQuality({
-        source_path: String(result.sourcePath || ''),
-        source_name: result.sourceName,
-        locate_feedback_key: key,
-        locate_request_id: result.locateRequestId,
-        status: result.status,
-        precision: result.precision,
-        ok: result.ok,
-        repairable: result.repairable,
-        strict_locate: result.strictLocate,
-        hint: result.hint,
-        reason: result.reason,
-        active_alt_index: result.activeAltIndex,
-        block_id: result.blockId,
-        anchor_id: result.anchorId,
-        anchor_kind: result.anchorKind,
-        heading_path: result.headingPath,
-      }).catch(() => {})
-    }
-    setReaderLocateResults((current) => {
-      const prev = current[key]
-      if (
-        prev
-        && prev.locateRequestId === result.locateRequestId
-        && prev.status === result.status
-        && prev.precision === result.precision
-        && prev.hint === result.hint
-      ) {
-        return current
-      }
-      return { ...current, [key]: result }
-    })
-  }, [qualityDiagnosticsEnabled])
   const dispatchReaderSelectionShelfFixture = useCallback(() => {
     window.dispatchEvent(new CustomEvent('kb:reader-selection-shelf', {
       detail: {
@@ -2117,12 +2108,13 @@ export default function MessageListRegressionPage() {
 
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <MessageList
-            activeConvId={`message-list-regression:${scenario}`}
+            activeConvId={activeRegressionConversationId}
             shelfProjectId={regressionShelfProjectId}
             messages={regressionMessages}
             refs={regressionRefs}
-            onOpenReader={(nextPayload) => setPayload(nextPayload)}
+            onOpenReader={openReaderForRegression}
             readerLocateResults={readerLocateResults}
+            sourceQualityRefreshToken={sourceQualityRefreshToken}
             paperGuideSourcePath={regressionGuideSourcePath}
             paperGuideSourceName={regressionGuideSourceName}
             generationPartial={regressionGenerationPartial}
@@ -2149,7 +2141,7 @@ export default function MessageListRegressionPage() {
               onClose={() => {}}
               onAppendSelection={() => {}}
               presentation="inline"
-              onLocateResult={recordLocateResult}
+              onLocateResult={handleReaderLocateResult}
             />
           </div>
         ) : null}

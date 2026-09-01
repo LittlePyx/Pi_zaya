@@ -61,6 +61,7 @@ import {
   looksLowValueShelfSummary,
   mergeCitationDetailIntoShelfItems,
   mergeReaderSelectionDetailIntoShelfItems,
+  mergeShelfItemReaderLocateResult,
   mergeShelfItemWithLive,
   reconcilePersistedShelfSelection,
   sameShelfItem,
@@ -388,6 +389,17 @@ export function MessageList({
   const S = useT()
   const shelfScopeId = shelfProjectScopeId(shelfProjectId)
   const shelfProjectReady = Boolean(String(shelfProjectId || '').trim())
+  useEffect(() => {
+    const locateResults = Object.values(readerLocateResults)
+    if (locateResults.length <= 0) return
+    setShelfItems((current) => {
+      const next = current.map((item) => locateResults.reduce(
+        (candidate, result) => mergeShelfItemReaderLocateResult(candidate, result),
+        item,
+      ))
+      return sameShelfItems(current, next) ? current : next
+    })
+  }, [readerLocateResults])
   const loadResearchNotes = useCallback(async () => {
     const sequence = researchNotesLoadSeqRef.current + 1
     researchNotesLoadSeqRef.current = sequence

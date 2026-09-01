@@ -19,6 +19,7 @@ import {
   SHELF_MAX_ITEMS,
   articleSummaryPatchFromMeta,
   dedupeShelfItems,
+  mergeShelfItemReaderLocateResult,
   mergeShelfItemWithLive,
   shelfDiscoverySourceDetail,
   shelfItemHasDisplayableArticleSummary,
@@ -620,6 +621,64 @@ test('citation shelf source-open quality uses normalized source identity', () =>
   expect(view.status).toBe('verified')
   expect(view.precision).toBe('phrase')
   expect(view.reason).toContain('phrase matched')
+})
+
+test('citation shelf persists an automatically recovered reader locator', () => {
+  const item = shelfItem({
+    key: 'shelf-recovered-locator',
+    source_path: 'F:\\papers\\discovery.en.md',
+    library_match_status: 'in_library',
+    library_match_path: 'DB\\Fixture\\Paper.en.md',
+    heading_path: 'Old heading',
+    block_id: 'stale-block',
+    anchor_id: 'stale-anchor',
+    anchor_kind: 'paragraph',
+  })
+  const recovered = mergeShelfItemReaderLocateResult(item, {
+    locateRequestId: 15,
+    locateFeedbackKey: item.key,
+    sourcePath: 'db/fixture/paper.en.md',
+    status: 'fuzzy',
+    precision: 'fuzzy',
+    ok: true,
+    repairable: false,
+    strictLocate: false,
+    hint: 'recovered',
+    reason: 'recovered',
+    blockId: 'p-method-1',
+    anchorId: 'a-p-method-1',
+    anchorKind: 'paragraph',
+    headingPath: 'Fixture Paper / Method',
+  })
+
+  expect(recovered.blockId).toBe('p-method-1')
+  expect(recovered.anchorId).toBe('a-p-method-1')
+  expect(recovered.headingPath).toBe('Fixture Paper / Method')
+  expect(mergeShelfItemReaderLocateResult(recovered, {
+    locateRequestId: 16,
+    locateFeedbackKey: item.key,
+    sourcePath: 'db/fixture/paper.en.md',
+    status: 'source_only',
+    precision: 'source_only',
+    ok: true,
+    repairable: false,
+    strictLocate: false,
+    hint: 'source opened',
+    reason: 'source opened',
+  })).toMatchObject({ blockId: '', anchorId: '', anchorKind: '', headingPath: '' })
+  expect(mergeShelfItemReaderLocateResult(item, {
+    locateRequestId: 17,
+    locateFeedbackKey: item.key,
+    sourcePath: 'db/other/paper.en.md',
+    status: 'exact',
+    precision: 'exact_anchor',
+    ok: true,
+    repairable: false,
+    strictLocate: true,
+    hint: 'wrong source',
+    reason: 'wrong source',
+    blockId: 'other-block',
+  })).toBe(item)
 })
 
 test('citation shelf source quality lookup tolerates normalized source paths', () => {

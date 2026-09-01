@@ -1250,6 +1250,97 @@ test('citation shelf reflects actual reader locate result after opening source',
   }
 })
 
+test('citation shelf recovers and persists a stale source locator without user repair', async ({ page }) => {
+  await mockReaderDoc(page)
+  const patchPayloads = await mockProjectCitationShelf(page, [{
+    key: 'stale-source-locator',
+    main: 'Fixture Paper / 2. Method',
+    num: 1,
+    anchor: 'stale-source-locator',
+    sourceName: READER_REGRESSION_SOURCE_NAME,
+    sourcePath: READER_REGRESSION_SOURCE_PATH,
+    raw: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    citeFmt: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    isInpaper: false,
+    citationRoute: 'system_a',
+    title: 'Fixture Paper / 2. Method',
+    headingPath: 'Fixture Paper / 2. Method',
+    evidenceQuote: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    evidenceSource: 'retrieval_hit',
+    blockId: 'p-method-stale',
+    anchorId: 'a-p-method-stale',
+    anchorKind: 'paragraph',
+    bibliometricsChecked: true,
+    metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+    metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+    tags: [],
+    note: '',
+  }])
+  let sourceRepairCalls = 0
+  await page.route('**/api/library/quality/repair', async (route) => {
+    sourceRepairCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, requested: 1, repaired: 0, items: [] }),
+    })
+  })
+
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  const item = page.getByTestId('citation-shelf-item')
+  await expect(item).toHaveCount(1)
+  await item.getByTestId('citation-shelf-open-source').click()
+
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return {
+      locateMode: payload.locateMode,
+      blockId: payload.blockId || '',
+      strictLocate: payload.strictLocate,
+    }
+  }, { timeout: 15_000 }).toEqual({
+    locateMode: 'heuristic',
+    blockId: '',
+    strictLocate: false,
+  })
+  await expect(page.locator('.kb-reader-content mark')).toContainText(
+    'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    { timeout: 15_000 },
+  )
+  await expect.poll(() => patchPayloads.some((payload) => (
+    Array.isArray(payload.items)
+    && payload.items.some((entry) => {
+      const record = entry as Record<string, unknown>
+      return record.key === 'stale-source-locator'
+        && record.blockId === 'p-method-1'
+        && record.anchorId === 'a-p-method-1'
+    })
+  )), { timeout: 15_000 }).toBe(true)
+  expect(sourceRepairCalls).toBe(0)
+  await expect(item.getByTestId('citation-shelf-open-source')).toHaveAttribute(
+    'title',
+    /Open source|Open full text|打开原文|打开全文/,
+  )
+
+  await item.getByTestId('citation-shelf-open-source').click()
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return {
+      locateMode: payload.locateMode || '',
+      blockId: payload.blockId,
+      anchorId: payload.anchorId,
+      strictLocate: payload.strictLocate,
+    }
+  }).toEqual({
+    locateMode: '',
+    blockId: 'p-method-1',
+    anchorId: 'a-p-method-1',
+    strictLocate: true,
+  })
+})
+
 test('citation shelf does not call source quality maintenance APIs for ordinary users', async ({ page }) => {
   await mockReaderDoc(page)
   await page.unroute('**/api/library/quality/sources').catch(() => {})
@@ -1299,6 +1390,37 @@ test('citation shelf does not call source quality maintenance APIs for ordinary 
   await openShelfOrganizeTools(page)
   await expandFocusedShelfDetails(page)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
+})
+
+test('citation shelf automatically repairs an unreadable source for ordinary users', async ({ page }) => {
+  let sourceRepairCalls = 0
+  await page.route('**/api/library/quality/repair', async (route) => {
+    sourceRepairCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: 1,
+        repaired: 0,
+        needs_reindex: false,
+        items: [],
+      }),
+    })
+  })
+
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').last().click()
+  const openSource = page.getByTestId('citation-shelf-open-source')
+  await openSource.click()
+
+  await expect.poll(() => sourceRepairCalls, { timeout: 15_000 }).toBe(1)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
+  await expect(openSource).toHaveAttribute('title', /Open source|打开原文/)
 })
 
 test('citation shelf advances source repair run and refreshes repaired locate state', async ({ page }) => {

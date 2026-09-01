@@ -20,6 +20,8 @@ import {
   isSystemBContextSummarySource,
   resolveSystemBArticleSummary,
 } from './systemBArticleSummary'
+import { readerSourcePathsMatch } from './reader/readerLocateGuard'
+import type { ReaderLocateResult } from './reader/readerTypes'
 
 export { looksLowValueShelfSummary }
 export const SHELF_MAX_ITEMS = 120
@@ -513,6 +515,45 @@ export function sameShelfItems(a: CiteShelfItem[], b: CiteShelfItem[]): boolean 
     if (!sameShelfItem(a[i], b[i])) return false
   }
   return true
+}
+
+export function mergeShelfItemReaderLocateResult(
+  item: CiteShelfItem,
+  result: ReaderLocateResult | null | undefined,
+): CiteShelfItem {
+  if (!result || !result.ok || String(result.status || '').trim().toLowerCase() === 'failed') return item
+  const feedbackKey = String(result.locateFeedbackKey || '').trim()
+  if (feedbackKey && feedbackKey !== item.key) return item
+  const resultPath = String(result.sourcePath || '').trim()
+  const sourceMatches = [item.sourcePath, item.libraryMatchPath]
+    .some((path) => readerSourcePathsMatch(resultPath, String(path || '').trim()))
+  if (!sourceMatches) return item
+
+  const status = String(result.status || '').trim().toLowerCase()
+  const precise = ['exact', 'block', 'fuzzy'].includes(status)
+  const blockId = precise ? String(result.blockId || '').trim() : ''
+  const anchorId = precise ? String(result.anchorId || '').trim() : ''
+  const headingPath = status === 'source_only'
+    ? ''
+    : String(result.headingPath || item.headingPath || '').trim()
+  const anchorKind = blockId || anchorId
+    ? String(result.anchorKind || item.anchorKind || '').trim()
+    : ''
+  if (
+    String(item.blockId || '').trim() === blockId
+    && String(item.anchorId || '').trim() === anchorId
+    && String(item.anchorKind || '').trim() === anchorKind
+    && String(item.headingPath || '').trim() === headingPath
+  ) {
+    return item
+  }
+  return {
+    ...item,
+    blockId,
+    anchorId,
+    anchorKind,
+    headingPath,
+  }
 }
 
 export function shelfItemsForBackend(items: CiteShelfItem[]): Array<Record<string, unknown>> {

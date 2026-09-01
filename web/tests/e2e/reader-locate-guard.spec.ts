@@ -5,6 +5,10 @@ import {
   readerLocateResultMatchesActiveRequest,
   readerSourcePathsMatch,
 } from '../../src/components/chat/reader/readerLocateGuard'
+import {
+  buildHeuristicReaderLocateRecoveryPayload,
+  shouldRecoverReaderLocateHeuristically,
+} from '../../src/components/chat/reader/readerLocateRecovery'
 import { readerHighlightsSignature, stableReaderHighlightId } from '../../src/components/chat/reader/readerSessionState'
 import {
   buildBasicReaderOpenPayload,
@@ -111,6 +115,49 @@ test('reader locate guard accepts only the active reader request', () => {
     currentConversationId: 'conv-a',
     readerOpen: true,
   })).toBe(false)
+})
+
+test('reader locate recovery removes stale identities and keeps evidence signals', () => {
+  const strictPayload: ReaderOpenPayload = {
+    ...payload,
+    strictLocate: true,
+    blockId: 'stale-block',
+    anchorId: 'stale-anchor',
+    relatedBlockIds: ['stale-neighbor'],
+    locateTarget: {
+      blockId: 'stale-target-block',
+      anchorId: 'stale-target-anchor',
+      anchorKind: 'paragraph',
+      headingPath: 'Fixture Paper / Method',
+      evidenceQuote: 'The source-backed evidence sentence.',
+    },
+    alternatives: [{
+      blockId: 'stale-alt-block',
+      anchorId: 'stale-alt-anchor',
+      snippet: 'A second evidence sentence.',
+    }],
+  }
+
+  expect(shouldRecoverReaderLocateHeuristically(result, strictPayload)).toBe(true)
+  const recovered = buildHeuristicReaderLocateRecoveryPayload(strictPayload, 8)
+  expect(recovered).toMatchObject({
+    strictLocate: false,
+    locateMode: 'heuristic',
+    locateRequestId: 8,
+    snippet: 'The source-backed evidence sentence.',
+    highlightSnippet: 'The source-backed evidence sentence.',
+    initialAltIndex: 0,
+  })
+  expect(recovered.blockId).toBeUndefined()
+  expect(recovered.anchorId).toBeUndefined()
+  expect(recovered.headingPath).toBeUndefined()
+  expect(recovered.relatedBlockIds).toBeUndefined()
+  expect(recovered.locateTarget).toBeUndefined()
+  expect(recovered.alternatives?.[0].blockId).toBeUndefined()
+  expect(recovered.alternatives?.[0].anchorId).toBeUndefined()
+  expect(recovered.alternatives?.[0].snippet).toBe('A second evidence sentence.')
+  expect(shouldRecoverReaderLocateHeuristically(result, recovered)).toBe(false)
+  expect(shouldRecoverReaderLocateHeuristically({ ...result, ok: true, status: 'exact' }, strictPayload)).toBe(false)
 })
 
 test('reader note capture preserves structured markdown, page, and exact locator identity', () => {

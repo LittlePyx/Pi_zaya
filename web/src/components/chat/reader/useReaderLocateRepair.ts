@@ -8,6 +8,10 @@ import {
   readerSourcePathsMatch,
   type ReaderLocateRequestGuard,
 } from './readerLocateGuard'
+import {
+  buildHeuristicReaderLocateRecoveryPayload,
+  shouldRecoverReaderLocateHeuristically,
+} from './readerLocateRecovery'
 import type { ReaderLocateResult, ReaderOpenPayload } from './readerTypes'
 
 const READER_LOCATE_AUTO_REPAIR_RETRY_MS = 60_000
@@ -152,6 +156,18 @@ export function useReaderLocateRepair({
     })) {
       return
     }
+    if (currentPayload && shouldRecoverReaderLocateHeuristically(result, currentPayload)) {
+      const recoveryRequestId = nextReaderLocateRequestId()
+      const recoveryPayload = buildHeuristicReaderLocateRecoveryPayload(currentPayload, recoveryRequestId)
+      readerPayloadByFeedbackKeyRef.current[feedbackKey] = recoveryPayload
+      readerLocateGuardByFeedbackKeyRef.current[feedbackKey] = {
+        locateRequestId: recoveryRequestId,
+        sourcePath: String(recoveryPayload.sourcePath || '').trim(),
+        conversationId: currentConversationId,
+      }
+      openReaderDock(recoveryPayload)
+      return
+    }
     const submitKey = [
       feedbackKey,
       locateRequestId,
@@ -190,7 +206,7 @@ export function useReaderLocateRepair({
         || (result.strictLocate && !['exact', 'block'].includes(locateStatus))
       ),
     )
-    if (qualityDiagnosticsEnabled && needsSourceRepair) {
+    if (needsSourceRepair) {
       const repairKey = sourcePath || sourceName
       const now = Date.now()
       const last = Number(readerLocateSourceRepairAtRef.current[repairKey] || 0)
@@ -291,6 +307,8 @@ export function useReaderLocateRepair({
     })
   }, [
     completeReaderLocateSourceRepair,
+    nextReaderLocateRequestId,
+    openReaderDock,
     qualityDiagnosticsEnabled,
     readerOpenRef,
     readerPayloadRef,

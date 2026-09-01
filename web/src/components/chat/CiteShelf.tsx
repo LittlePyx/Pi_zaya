@@ -556,7 +556,10 @@ export function CiteShelf({
       if (isDuplicate) duplicateItems += 1
       if (hasSummary && summaryView.ok) summaryReady += 1
       else summaryReview += 1
-      if (sourceOpenView.status === 'repairing' || sourceOpenView.status === 'failed' || sourceOpenView.repairable) sourceOpenReview += 1
+      if (
+        showSourceQualityDiagnostics
+        && (sourceOpenView.status === 'repairing' || sourceOpenView.status === 'failed' || sourceOpenView.repairable)
+      ) sourceOpenReview += 1
       if (sourceOpenView.canOpen && sourceOpenView.status !== 'repairing' && sourceOpenView.status !== 'failed') sourceOpenable += 1
       if (sourceOpenView.precision === 'exact_anchor') sourceOpenExact += 1
       if (sourceOpenView.status === 'partial' || sourceOpenView.status === 'degraded') sourceOpenPartial += 1
@@ -576,7 +579,7 @@ export function CiteShelf({
       sourceOpenReview,
       status: total <= 0 ? 'empty' : (metadataReview > 0 || sourceOpenReview > 0) ? 'review' : 'ready',
     }
-  }, [S, duplicateCountByIdentity, items, readerLocateResults, sourceQualityByPath])
+  }, [S, duplicateCountByIdentity, items, readerLocateResults, showSourceQualityDiagnostics, sourceQualityByPath])
 
   const visibleItems = useMemo(() => {
     const keyword = searchText.trim().toLowerCase()
@@ -2096,7 +2099,9 @@ export function CiteShelf({
                                   type="button"
                                   className={`kb-shelf-source-open is-${hasLibraryFullText ? 'ready' : itemSourceOpenQuality.tone}`}
                                   aria-label={primaryOpenLabel}
-                                  title={hasLibraryFullText ? primaryOpenLabel : itemSourceOpenQuality.reason || primaryOpenLabel}
+                                  title={showSourceQualityDiagnostics
+                                    ? itemSourceOpenQuality.reason || primaryOpenLabel
+                                    : primaryOpenLabel}
                                   data-testid="citation-shelf-open-source"
                                   onClick={(event) => {
                                     event.stopPropagation()
