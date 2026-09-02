@@ -685,6 +685,8 @@ export default function ChatPage() {
         onQueryScopeChange={setQueryScope}
         externalSupplementMode={externalSupplementMode}
         onExternalSupplementModeChange={setExternalSupplementMode}
+        webSupplementAvailable={settings.webSearchAvailable}
+        onConfigureWebSupplement={() => openApiSettings('web')}
       />
     </>
   )

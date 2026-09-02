@@ -34,9 +34,16 @@ from kb.version import read_app_version
 
 router = APIRouter(prefix="/api", tags=["settings"])
 _PATH_PREF_KEYS = {"pdf_dir", "md_dir"}
-_API_KEY_PREF_KEYS = {"text_api_key", "vision_api_key"}
-_LLM_PREF_KEYS = {"text_base_url", "text_model", "vision_base_url", "vision_model"}
-_BOOL_PREF_KEYS = {"auto_backup_enabled", "quality_data_sharing_enabled"}
+_API_KEY_PREF_KEYS = {"text_api_key", "vision_api_key", "web_search_api_key"}
+_LLM_PREF_KEYS = {
+    "text_base_url",
+    "text_model",
+    "vision_base_url",
+    "vision_model",
+    "web_search_base_url",
+    "web_search_model",
+}
+_BOOL_PREF_KEYS = {"auto_backup_enabled", "quality_data_sharing_enabled", "web_search_enabled"}
 _PRIVATE_PREF_KEYS = _API_KEY_PREF_KEYS | {"quality_data_client_id"}
 _PUBLIC_PREF_KEYS = {
     "top_k",
@@ -208,6 +215,26 @@ def _connection_status(s) -> dict:
             "base_url": s.vision_base_url,
             "model": s.vision_model,
             "uses_text_fallback": bool(getattr(s, "vision_uses_text_fallback", False)),
+        },
+        "web_search": {
+            "available": bool(
+                getattr(s, "agent_web_search_enabled", False)
+                and getattr(s, "agent_web_search_api_key", None)
+                and str(getattr(s, "agent_web_search_model", "") or "").strip()
+            ),
+            "enabled": bool(getattr(s, "agent_web_search_enabled", False)),
+            "has_api_key": bool(getattr(s, "agent_web_search_api_key", None)),
+            "base_url": str(getattr(s, "agent_web_search_base_url", "") or ""),
+            "model": str(getattr(s, "agent_web_search_model", "") or ""),
+            "reason": (
+                "disabled"
+                if not bool(getattr(s, "agent_web_search_enabled", False))
+                else "missing_api_key"
+                if not bool(getattr(s, "agent_web_search_api_key", None))
+                else "missing_model"
+                if not str(getattr(s, "agent_web_search_model", "") or "").strip()
+                else "ready"
+            ),
         },
         "auto_route": bool(s.auto_route),
     }
@@ -745,6 +772,10 @@ class PrefsPatch(BaseModel):
     vision_api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
     vision_base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
     vision_model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
+    web_search_enabled: bool | None = None
+    web_search_api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
+    web_search_base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
+    web_search_model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
     auto_backup_enabled: bool | None = None
     quality_data_sharing_enabled: bool | None = None
 
@@ -755,7 +786,19 @@ class PrefsPatch(BaseModel):
             return None
         return str(value).replace("\x00", "").strip().lower()
 
-    @field_validator("text_api_key", "vision_api_key", "text_base_url", "vision_base_url", "text_model", "vision_model", "pdf_dir", "md_dir")
+    @field_validator(
+        "text_api_key",
+        "vision_api_key",
+        "web_search_api_key",
+        "text_base_url",
+        "vision_base_url",
+        "web_search_base_url",
+        "text_model",
+        "vision_model",
+        "web_search_model",
+        "pdf_dir",
+        "md_dir",
+    )
     @classmethod
     def _clean_text_value(cls, value: str | None) -> str | None:
         if value is None:

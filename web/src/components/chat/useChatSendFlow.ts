@@ -69,17 +69,23 @@ export function useChatSendFlow({
   const maxTokens = useSettingsStore((s) => s.maxTokens)
   const uiLocale = useSettingsStore((s) => s.uiLocale)
   const refreshReadiness = useSettingsStore((s) => s.refreshReadiness)
+  const webSearchAvailable = useSettingsStore((s) => s.webSearchAvailable)
 
   return useCallback((text: string) => {
     if (researchContext.api.sendBlockTarget === 'text') {
       message.warning(labels.chat_api_missing_toast)
       onOpenApiSettings('text')
-      return
+      return false
     }
     if (researchContext.api.sendBlockTarget === 'vision') {
       message.warning(labels.chat_vision_api_missing_toast)
       onOpenApiSettings('vision')
-      return
+      return false
+    }
+    if (externalSupplementMode === 'web' && !webSearchAvailable) {
+      message.warning(labels.chat_external_web_unavailable_toast)
+      onOpenApiSettings('web')
+      return false
     }
 
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
@@ -144,6 +150,7 @@ export function useChatSendFlow({
       }
       message.error(fallback || labels.upload_failed_generic)
     })
+    return true
   }, [
     activeConvId,
     activeConversation?.bound_source_path,
@@ -167,5 +174,6 @@ export function useChatSendFlow({
     topK,
     uiLocale,
     uploadItems,
+    webSearchAvailable,
   ])
 }

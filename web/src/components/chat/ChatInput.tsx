@@ -17,7 +17,7 @@ import { ExternalSupplementControl } from './ExternalSupplementControl'
 const { TextArea } = Input
 
 interface Props {
-  onSend: (text: string) => void
+  onSend: (text: string) => boolean
   onStop: () => void
   onUpload: (files: File[]) => Promise<void>
   onRetryUploadItem: (key: string) => Promise<void>
@@ -35,6 +35,8 @@ interface Props {
   onQueryScopeChange: (scope: QueryScope) => void
   externalSupplementMode: ExternalSupplementMode
   onExternalSupplementModeChange: (mode: ExternalSupplementMode) => void
+  webSupplementAvailable?: boolean
+  onConfigureWebSupplement?: () => void
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -165,6 +167,8 @@ export function ChatInput({
   onQueryScopeChange,
   externalSupplementMode,
   onExternalSupplementModeChange,
+  webSupplementAvailable = false,
+  onConfigureWebSupplement,
 }: Props) {
   const S = useT()
   const [text, setText] = useState('')
@@ -205,8 +209,7 @@ export function ChatInput({
   const submit = () => {
     const t = text.trim()
     if ((!t && pendingImages.length === 0) || generating || uploading) return
-    onSend(text)
-    setText('')
+    if (onSend(text)) setText('')
   }
 
   const onKey = (e: KeyboardEvent) => {
@@ -438,7 +441,9 @@ export function ChatInput({
                 <ExternalSupplementControl
                   value={externalSupplementMode}
                   disabled={generating}
+                  webAvailable={webSupplementAvailable}
                   onChange={onExternalSupplementModeChange}
+                  onConfigureWeb={onConfigureWebSupplement}
                 />
               </div>
               <div className="kb-chat-toolbar-right">

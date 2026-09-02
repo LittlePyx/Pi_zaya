@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
-import { ApiOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons'
+import { ApiOutlined, GlobalOutlined, LockOutlined, ReloadOutlined } from '@ant-design/icons'
 import { Alert, AutoComplete, Button, Drawer, Input, Popconfirm, Select, Segmented, Slider, Space, Switch, Typography, message } from 'antd'
 import { useSettingsStore } from '../../stores/settingsStore'
 import {
@@ -205,6 +205,7 @@ export function SettingsDrawer({
   const updateSectionRef = useRef<HTMLDivElement | null>(null)
   const textCredentialRef = useRef<HTMLElement | null>(null)
   const visionCredentialRef = useRef<HTMLElement | null>(null)
+  const webCredentialRef = useRef<HTMLElement | null>(null)
   const [textApiKey, setTextApiKey] = useState('')
   const [textBaseUrl, setTextBaseUrl] = useState('')
   const [textModel, setTextModel] = useState('')
@@ -213,6 +214,10 @@ export function SettingsDrawer({
   const [visionBaseUrl, setVisionBaseUrl] = useState('')
   const [visionModel, setVisionModel] = useState('')
   const [visionProvider, setVisionProvider] = useState<ModelProviderId>('auto')
+  const [webSearchEnabled, setWebSearchEnabled] = useState(false)
+  const [webSearchApiKey, setWebSearchApiKey] = useState('')
+  const [webSearchBaseUrl, setWebSearchBaseUrl] = useState('')
+  const [webSearchModel, setWebSearchModel] = useState('')
   const [modelDiscovery, setModelDiscovery] = useState<Record<DiscoveryTarget, DiscoveryUiState>>({
     text: EMPTY_DISCOVERY,
     vision: EMPTY_DISCOVERY,
@@ -326,6 +331,10 @@ export function SettingsDrawer({
     setVisionBaseUrl(hasDedicatedVision ? (s.visionBaseUrl || '') : '')
     setVisionModel(hasDedicatedVision ? (s.visionModel || '') : '')
     setVisionProvider(hasDedicatedVision ? inferProviderFromBaseUrl(s.visionBaseUrl) : 'auto')
+    setWebSearchEnabled(s.webSearchEnabled)
+    setWebSearchApiKey('')
+    setWebSearchBaseUrl(s.webSearchBaseUrl || 'https://api.openai.com/v1')
+    setWebSearchModel(s.webSearchModel || 'gpt-5-search-api')
     setModelDiscovery({ text: EMPTY_DISCOVERY, vision: EMPTY_DISCOVERY })
     setLocalTestResults({ text: null, vision: null })
   }, [
@@ -338,6 +347,9 @@ export function SettingsDrawer({
     s.visionBaseUrl,
     s.visionModel,
     s.visionUsesTextFallback,
+    s.webSearchBaseUrl,
+    s.webSearchEnabled,
+    s.webSearchModel,
   ])
 
   useEffect(() => () => {
@@ -383,7 +395,11 @@ export function SettingsDrawer({
         updateSectionRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
         return
       }
-      const card = focusTarget === 'vision' ? visionCredentialRef.current : textCredentialRef.current
+      const card = focusTarget === 'web'
+        ? webCredentialRef.current
+        : focusTarget === 'vision'
+          ? visionCredentialRef.current
+          : textCredentialRef.current
       if (!card) return
       card.scrollIntoView({ block: 'center', behavior: 'smooth' })
       const input = card.querySelector<HTMLInputElement>('input[type="password"]')
@@ -546,6 +562,15 @@ export function SettingsDrawer({
   const saveConnection = async () => {
     setSavingConnection(true)
     try {
+      if (webSearchEnabled && !(webSearchApiKey.trim() || s.hasWebSearchApiKey)) {
+        message.warning(S.settings_web_search_missing)
+        webCredentialRef.current?.querySelector<HTMLInputElement>('input[type="password"]')?.focus()
+        return
+      }
+      if (webSearchEnabled && (!webSearchBaseUrl.trim() || !webSearchModel.trim())) {
+        message.warning(S.settings_web_search_missing)
+        return
+      }
       let resolvedTextBaseUrl = textBaseUrl.trim()
       let resolvedTextModel = textModel.trim()
       let resolvedVisionBaseUrl = visionBaseUrl.trim()
@@ -624,9 +649,14 @@ export function SettingsDrawer({
         ...(visionApiKey.trim() ? { visionApiKey: visionApiKey.trim() } : {}),
         visionBaseUrl: resolvedVisionBaseUrl,
         visionModel: resolvedVisionModel,
+        webSearchEnabled,
+        ...(webSearchApiKey.trim() ? { webSearchApiKey: webSearchApiKey.trim() } : {}),
+        webSearchBaseUrl: webSearchBaseUrl.trim(),
+        webSearchModel: webSearchModel.trim(),
       })
       setTextApiKey('')
       setVisionApiKey('')
+      setWebSearchApiKey('')
       setLocalTestResults({ text: null, vision: null })
       await s.load()
       message.success(S.settings_api_settings_saved)
@@ -1421,6 +1451,54 @@ export function SettingsDrawer({
                 >
                   {S.settings_discover_models}
                 </Button>
+              </div>
+            </section>
+
+            <section
+              ref={webCredentialRef}
+              className={`kb-settings-credential ${focusTarget === 'web' ? 'is-targeted' : ''}`}
+              data-api-target="web"
+              data-testid="settings-web-search-card"
+            >
+              <div className="kb-settings-credential-head">
+                <div>
+                  <Text className="kb-settings-credential-title">{S.settings_web_search_title}</Text>
+                  <Text className="kb-settings-credential-desc">{S.settings_web_search_desc}</Text>
+                </div>
+                <SettingsValue
+                  value={s.webSearchAvailable ? S.settings_web_search_ready : S.settings_web_search_disabled}
+                  muted={!s.webSearchAvailable}
+                />
+              </div>
+              <div className="kb-settings-credential-fields">
+                <SettingsRow title={S.settings_web_search_enabled}>
+                  <Switch
+                    checked={webSearchEnabled}
+                    onChange={setWebSearchEnabled}
+                    data-testid="settings-web-search-enabled"
+                  />
+                </SettingsRow>
+                <Input.Password
+                  value={webSearchApiKey}
+                  onChange={(event) => setWebSearchApiKey(event.target.value)}
+                  placeholder={S.settings_api_key_placeholder}
+                  autoComplete="off"
+                  prefix={<GlobalOutlined />}
+                  data-testid="settings-web-search-api-key"
+                />
+                <Input
+                  value={webSearchBaseUrl}
+                  onChange={(event) => setWebSearchBaseUrl(event.target.value)}
+                  placeholder={S.settings_base_url}
+                  data-testid="settings-web-search-base-url"
+                />
+                <Input
+                  value={webSearchModel}
+                  onChange={(event) => setWebSearchModel(event.target.value)}
+                  placeholder={S.settings_model_id}
+                  data-testid="settings-web-search-model"
+                />
+                <Text className="kb-settings-model-input-hint">{S.settings_web_search_model_hint}</Text>
               </div>
             </section>
           </div>

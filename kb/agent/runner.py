@@ -789,6 +789,9 @@ def build_generation_agent_notes(
         "metrics": dict(research_run_payload.get("metrics") or {}),
     }
     hybrid_generation = _hybrid_generation_recommended(gate, public_confidence, hits)
+    external_supplement_mode = normalize_external_supplement_mode(
+        str(scoped_context.get("external_supplement_mode") or "disabled")
+    )
     return {
         "question_type": question_type,
         "planner_intent": intent.to_dict(),
@@ -805,6 +808,7 @@ def build_generation_agent_notes(
             "answer_source_blend": str(gate.get("source_blend") or ""),
             "answer_mode": str(gate.get("answer_mode") or ""),
             "source_policy": str(gate.get("source_policy") or ""),
+            "external_supplement_mode": external_supplement_mode,
             "hybrid_generation_recommended": bool(hybrid_generation),
             "pre_answer_evidence_matrix_rows": len(agent_notes["evidence_matrix"]),
             "pre_answer_source_policy": agent_notes["research_run"]["source_policy"],

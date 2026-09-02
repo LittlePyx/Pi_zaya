@@ -4,6 +4,7 @@ import {
   getMessageCiteDetailRecords,
   getMessageCopyMarkdownValue,
 } from './messageRenderPacket'
+import { getMessageAgentSourceSummary, getMessageAnswerContract } from './messageTraceUtils'
 
 export interface ResearchNoteLabels {
   question: string
@@ -49,6 +50,31 @@ export interface ResearchNoteAnswer {
   question: string
   answerMarkdown: string
   citations: ResearchNoteCitation[]
+}
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {}
+}
+
+export function researchNoteAnswerEvidenceEligible(message: Message): boolean {
+  if (message.role !== 'assistant') return false
+  const contract = record(getMessageAnswerContract(message))
+  const contractSummary = record(contract.source_summary || contract.sourceSummary)
+  const summary = Object.keys(contractSummary).length > 0
+    ? contractSummary
+    : record(getMessageAgentSourceSummary(message))
+  const policy = record(summary.source_policy_payload || summary.sourcePolicyPayload)
+  const kind = text(policy.kind ?? summary.kind).toLowerCase()
+  const externalKind = text(
+    policy.external_source_kind
+      ?? policy.externalSourceKind
+      ?? summary.external_source_kind
+      ?? summary.externalSourceKind,
+  ).toLowerCase()
+  if (externalKind === 'web' || externalKind === 'model') return false
+  return !['local_plus_external', 'external_not_kb', 'general_api'].includes(kind)
 }
 
 function text(value: unknown): string {
@@ -177,6 +203,7 @@ export function buildResearchNoteAnswers(messages: Message[]): ResearchNoteAnswe
       continue
     }
     if (message.role !== 'assistant') continue
+    if (!researchNoteAnswerEvidenceEligible(message)) continue
     const answerMarkdown = preserveLinkedCitationBrackets(text(getMessageCopyMarkdownValue(message)))
     if (!answerMarkdown) continue
     const citations = uniqueCitations(

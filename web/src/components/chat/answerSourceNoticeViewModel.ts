@@ -1,4 +1,5 @@
 import type { CiteDetail } from './citationState'
+import type { ExternalWebSource } from '../../api/chat'
 
 export interface AnswerSourceNoticeViewModel {
   label: string
@@ -6,7 +7,12 @@ export interface AnswerSourceNoticeViewModel {
   kind: string
   usesLocalKnowledgeBase: boolean
   usesExternalModel: boolean
+  usesExternalWeb?: boolean
   requiresUserNotice: boolean
+  externalSourceKind?: string
+  externalSupplementMode?: string
+  webSources?: ExternalWebSource[]
+  externalSupplementUnavailable?: string
 }
 
 export interface EvidenceDrawerViewModel {
@@ -15,6 +21,8 @@ export interface EvidenceDrawerViewModel {
   sourceLabel: string
   sourceDetail: string
   visibleDetails: CiteDetail[]
+  webSources: ExternalWebSource[]
+  externalSourceKind: string
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -51,6 +59,33 @@ function boolValue(value: unknown): boolean | null {
 
 function sourcePolicyPayload(summary: Record<string, unknown>): Record<string, unknown> {
   return asRecord(summary.source_policy_payload || summary.sourcePolicyPayload)
+}
+
+function safeWebSources(value: unknown): ExternalWebSource[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const out: ExternalWebSource[] = []
+  for (const raw of value) {
+    const item = asRecord(raw)
+    const url = textValue(item.url)
+    try {
+      const parsed = new URL(url)
+      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue
+      parsed.hash = ''
+      const cleanUrl = parsed.toString()
+      if (seen.has(cleanUrl)) continue
+      seen.add(cleanUrl)
+      out.push({
+        title: textValue(item.title).slice(0, 500),
+        url: cleanUrl,
+        domain: textValue(item.domain) || parsed.hostname,
+      })
+      if (out.length >= 8) break
+    } catch {
+      // Ignore malformed or non-http(s) URLs at the presentation boundary.
+    }
+  }
+  return out
 }
 
 export function sourceSummaryFromAnswerContract(answerContract: unknown): Record<string, unknown> | null {
@@ -110,12 +145,12 @@ export function buildAnswerSourceNoticeViewModel({
   const kind = textValue(policy.kind, summary.kind)
   const labelKey = textValue(badge.label_key, badge.labelKey, uiBadge.label_key, uiBadge.labelKey, summary.label_key, summary.labelKey)
   const fallbackLabel = textValue(badge.label, uiBadge.label, summary.label)
-  const detail = textValue(badge.detail, uiBadge.detail, summary.detail)
+  const rawDetail = textValue(badge.detail, uiBadge.detail, summary.detail)
   const hasSourceSignal = Boolean(
     (kind && kind !== 'unknown')
       || labelKey
       || fallbackLabel
-      || detail
+      || rawDetail
       || (allowFallbackNotice && fallbackNoticeText),
   )
   if (!hasSourceSignal) return null
@@ -126,17 +161,46 @@ export function buildAnswerSourceNoticeViewModel({
     || (allowFallbackNotice ? labelForSourceNoticeText(fallbackNoticeText, S) : '')
     || S.agent_trace_source_fallback
     || 'Source'
+  const detail = (labelKey && S[`${labelKey}_detail`]) || rawDetail
   const title = detail || fallbackNoticeText || fallbackLabel || label
   const policyUsesLocal = boolValue(policy.uses_local_knowledge_base ?? policy.usesLocalKnowledgeBase)
   const policyUsesExternal = boolValue(policy.uses_external_model ?? policy.usesExternalModel)
+  const policyUsesWeb = boolValue(policy.uses_external_web ?? policy.usesExternalWeb)
   const policyRequiresNotice = boolValue(policy.requires_user_notice ?? policy.requiresUserNotice)
+  const externalSourceKind = textValue(
+    policy.external_source_kind,
+    policy.externalSourceKind,
+    summary.external_source_kind,
+    summary.externalSourceKind,
+  )
+  const webSources = safeWebSources(
+    policy.web_sources || policy.webSources || summary.web_sources || summary.webSources,
+  )
   return {
     label,
     title,
     kind,
     usesLocalKnowledgeBase: policyUsesLocal ?? (kind === 'local_kb' || kind === 'local_plus_external'),
-    usesExternalModel: policyUsesExternal ?? (kind === 'local_plus_external' || kind === 'external_not_kb' || kind === 'general_api'),
+    usesExternalModel: policyUsesExternal ?? (
+      externalSourceKind !== 'web'
+      && (kind === 'local_plus_external' || kind === 'external_not_kb' || kind === 'general_api')
+    ),
+    usesExternalWeb: policyUsesWeb ?? (externalSourceKind === 'web'),
     requiresUserNotice: policyRequiresNotice ?? (kind === 'local_plus_external' || kind === 'external_not_kb'),
+    externalSourceKind,
+    externalSupplementMode: textValue(
+      policy.external_supplement_mode,
+      policy.externalSupplementMode,
+      summary.external_supplement_mode,
+      summary.externalSupplementMode,
+    ),
+    webSources,
+    externalSupplementUnavailable: textValue(
+      policy.external_supplement_unavailable,
+      policy.externalSupplementUnavailable,
+      summary.external_supplement_unavailable,
+      summary.externalSupplementUnavailable,
+    ),
   }
 }
 
@@ -158,8 +222,18 @@ export function dedupeEvidenceDrawerDetails(details: CiteDetail[]): CiteDetail[]
   return out
 }
 
-export function sourcePolicyLine(sourceNotice: AnswerSourceNoticeViewModel | null): string {
+export function sourcePolicyLine(sourceNotice: AnswerSourceNoticeViewModel | null, S: Record<string, string> = {}): string {
   if (!sourceNotice) return ''
+  if (sourceNotice.externalSourceKind === 'web') {
+    return sourceNotice.usesLocalKnowledgeBase
+      ? S.evidence_source_policy_local_web || 'Library citations are local evidence; linked web sources are separate external background.'
+      : S.evidence_source_policy_web_only || 'This answer uses linked web sources and is not grounded in the local library.'
+  }
+  if (sourceNotice.externalSourceKind === 'model') {
+    return sourceNotice.usesLocalKnowledgeBase
+      ? S.evidence_source_policy_local_model || 'Library citations are local evidence; uncited model background is not verifiable evidence.'
+      : S.evidence_source_policy_model_only || 'This is model background, not verifiable library evidence.'
+  }
   if (sourceNotice.usesLocalKnowledgeBase && sourceNotice.usesExternalModel) {
     return 'Local citations are grounded in the knowledge base; external context may supplement uncited background.'
   }
@@ -185,7 +259,9 @@ export function buildEvidenceDrawerViewModel({
     title: S.msg_evidence_label || S.agent_trace_label_evidence || 'Evidence',
     subtitle: sourceNotice?.label || S.agent_trace_source_fallback || 'Source',
     sourceLabel: sourceNotice?.label || '',
-    sourceDetail: sourcePolicyLine(sourceNotice),
+    sourceDetail: sourcePolicyLine(sourceNotice, S),
     visibleDetails: dedupeEvidenceDrawerDetails(citeDetails),
+    webSources: sourceNotice?.webSources || [],
+    externalSourceKind: sourceNotice?.externalSourceKind || '',
   }
 }

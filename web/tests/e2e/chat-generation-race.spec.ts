@@ -101,6 +101,7 @@ async function installBackend(
     legalZeroCitationTerminal?: boolean
     partialCitationCoverage?: boolean
     lateCitationPlanHydration?: boolean
+    webSearchAvailable?: boolean
   },
 ) {
   let releaseStream: (() => void) | null = null
@@ -153,6 +154,14 @@ async function installBackend(
       connection: {
         text: { configured: true, connected: true, has_api_key: true, model: 'test-model', base_url: '' },
         vision: { configured: true, connected: true, has_api_key: true, model: 'test-vision', base_url: '' },
+        web_search: {
+          available: opts?.webSearchAvailable !== false,
+          enabled: opts?.webSearchAvailable !== false,
+          has_api_key: opts?.webSearchAvailable !== false,
+          model: 'gpt-5-search-api',
+          base_url: 'https://api.openai.com/v1',
+          reason: opts?.webSearchAvailable !== false ? 'ready' : 'missing_api_key',
+        },
         auto_route: false,
       },
       readiness: {
@@ -664,6 +673,33 @@ test('web supplement selection is explicit in the generation request', async ({ 
 
   backend.releaseStream()
   await expect(page.locator('button.kb-stop-btn')).toHaveCount(0, { timeout: 5_000 })
+})
+
+test('unavailable web supplement is blocked before send and routes to configuration', async ({ page }) => {
+  const backend = await installBackend(page, { webSearchAvailable: false })
+
+  await page.goto('/?external_supplement=web')
+  await page.locator('.kb-conv-row', { hasText: 'Generation Race A' }).click()
+  await expect(page.locator('body')).toContainText('Existing answer A')
+
+  const supplementButton = page.getByTestId('chat-external-supplement-control')
+  await expect(supplementButton).toContainText('Web supplement')
+
+  await supplementButton.click()
+  await page.getByRole('menuitem', { name: /Configure web search/ }).click()
+  await expect(page.getByTestId('settings-web-search-card')).toBeVisible()
+  await page.locator('.ant-drawer-close').click()
+
+  await page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea').fill('Blocked web question')
+  await page.locator('button.kb-send-btn').click()
+
+  await expect.poll(() => backend.getGeneratePayloads().length).toBe(0)
+  await expect(page.getByText(
+    'Web search is not configured, so this turn was not sent. Connect web search first.',
+    { exact: true },
+  )).toBeVisible()
+  await expect(page.locator('textarea.kb-chat-textarea, .kb-chat-textarea textarea')).toHaveValue('Blocked web question')
+  await expect(page.getByTestId('settings-web-search-card')).toBeVisible()
 })
 
 test('supplement choice is remembered per conversation without leaking across switches', async ({ page }) => {

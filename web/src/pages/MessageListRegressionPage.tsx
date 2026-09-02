@@ -1796,6 +1796,70 @@ const agentTraceExternalNoticeMessages: Message[] = [
   },
 ]
 
+const agentWebSourceMessages: Message[] = [
+  {
+    id: 9551,
+    role: 'assistant',
+    content: 'This background answer uses a separately linked web source.',
+    rendered_body: 'This background answer uses a separately linked web source.',
+    copy_text: 'This background answer uses a separately linked web source.',
+    copy_markdown: 'This background answer uses a separately linked web source.',
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+      answer_contract: {
+        schema_version: 1,
+        answer_profile: 'external_background',
+        source_summary: {
+          kind: 'external_not_kb',
+          label_key: 'agent_trace_source_web',
+          label: 'Web sources',
+          detail: 'No matching local evidence was used; this answer comes from linked web sources.',
+          should_show: true,
+          external_source_kind: 'web',
+          external_supplement_mode: 'web',
+          web_search_used: true,
+          web_sources: [
+            {
+              title: 'Primary web source',
+              url: 'https://example.org/paper',
+              domain: 'example.org',
+            },
+          ],
+          source_policy_payload: {
+            schema_version: 2,
+            kind: 'external_not_kb',
+            source_blend: 'external_academic',
+            source_policy: 'external_allowed_with_notice',
+            answer_mode: 'external_academic_llm',
+            uses_local_knowledge_base: false,
+            uses_external_model: false,
+            uses_external_web: true,
+            requires_user_notice: true,
+            external_supplement_mode: 'web',
+            external_source_kind: 'web',
+            web_search_used: true,
+            web_source_count: 1,
+            web_sources: [
+              {
+                title: 'Primary web source',
+                url: 'https://example.org/paper',
+                domain: 'example.org',
+              },
+            ],
+            badge: {
+              label_key: 'agent_trace_source_web',
+              label: 'Web sources',
+              detail: 'No matching local evidence was used; this answer comes from linked web sources.',
+              should_show: true,
+            },
+          },
+        },
+      },
+    },
+  },
+]
+
 const agentTraceHybridNoticeMessages: Message[] = [
   {
     id: 9601,
@@ -1917,6 +1981,7 @@ type RegressionScenario =
   | 'agent-source-summary-local'
   | 'agent-answer-contract-source-precedence'
   | 'agent-trace-external-notice'
+  | 'agent-web-source'
   | 'agent-trace-hybrid-notice'
   | 'agent-trace-streaming-clean'
 
@@ -1956,6 +2021,7 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-source-summary-local') return 'agent-source-summary-local'
     if (scenarioParam === 'agent-answer-contract-source-precedence') return 'agent-answer-contract-source-precedence'
     if (scenarioParam === 'agent-trace-external-notice') return 'agent-trace-external-notice'
+    if (scenarioParam === 'agent-web-source') return 'agent-web-source'
     if (scenarioParam === 'agent-trace-hybrid-notice') return 'agent-trace-hybrid-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
     return 'structured-primary-rerank'
@@ -1991,6 +2057,7 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-source-summary-local') return agentSourceSummaryLocalMessages
     if (scenario === 'agent-answer-contract-source-precedence') return agentAnswerContractSourcePrecedenceMessages
     if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
+    if (scenario === 'agent-web-source') return agentWebSourceMessages
     if (scenario === 'agent-trace-hybrid-notice') return agentTraceHybridNoticeMessages
     if (scenario === 'agent-trace-streaming-clean') return []
     return structuredPrimaryRerankMessages

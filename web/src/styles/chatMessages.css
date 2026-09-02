@@ -246,6 +246,77 @@ button.kb-assistant-source-notice {
   gap: 10px;
 }
 
+.kb-evidence-section-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.kb-evidence-web-section {
+  display: grid;
+  gap: 9px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+  padding-top: 12px;
+}
+
+.kb-evidence-web-notice,
+.kb-evidence-model-notice {
+  border: 1px solid color-mix(in srgb, #d9911b 34%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, #d9911b 8%, var(--panel));
+  color: color-mix(in srgb, var(--text-main) 72%, transparent);
+  padding: 9px 10px;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.kb-evidence-web-list {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-evidence-web-card {
+  display: grid;
+  gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--panel) 97%, var(--bg));
+  color: inherit;
+  padding: 10px 11px;
+  text-decoration: none;
+}
+
+.kb-evidence-web-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--panel));
+}
+
+.kb-evidence-web-title {
+  color: var(--text-main);
+  font-size: 12.5px;
+  font-weight: 680;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.kb-evidence-web-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--muted-text);
+  font-size: 10.5px;
+}
+
+.kb-evidence-web-open {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: color-mix(in srgb, var(--accent) 76%, var(--text-main));
+}
+
 .kb-evidence-item {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);

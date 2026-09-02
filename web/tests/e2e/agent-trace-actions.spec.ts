@@ -1476,8 +1476,95 @@ test('answer source notice view model prefers answer contract over legacy summar
     kind: 'local_kb',
     usesLocalKnowledgeBase: true,
     usesExternalModel: false,
+    usesExternalWeb: false,
     requiresUserNotice: false,
+    externalSourceKind: '',
+    externalSupplementMode: '',
+    webSources: [],
+    externalSupplementUnavailable: '',
   })
+})
+
+test('web source notice keeps safe external links distinct from model knowledge', async ({ page }) => {
+  const model = await answerSourceNoticeViewModel(page, {
+    answerContract: {
+      source_policy_payload: {
+        kind: 'external_not_kb',
+        uses_local_knowledge_base: false,
+        uses_external_model: false,
+        uses_external_web: true,
+        external_source_kind: 'web',
+        external_supplement_mode: 'web',
+        web_sources: [
+          { title: 'Primary web source', url: 'https://example.org/paper#results', domain: 'example.org' },
+          { title: 'Unsafe', url: 'javascript:alert(1)' },
+        ],
+        badge: {
+          label_key: 'agent_trace_source_web',
+          detail: 'Backend fallback detail.',
+        },
+      },
+    },
+    S: {
+      agent_trace_source_web: 'Web sources',
+      agent_trace_source_web_detail: 'Linked web sources, not local evidence.',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+
+  expect(model).toMatchObject({
+    label: 'Web sources',
+    title: 'Linked web sources, not local evidence.',
+    usesLocalKnowledgeBase: false,
+    usesExternalModel: false,
+    usesExternalWeb: true,
+    externalSourceKind: 'web',
+    externalSupplementMode: 'web',
+    webSources: [
+      { title: 'Primary web source', url: 'https://example.org/paper', domain: 'example.org' },
+    ],
+  })
+})
+
+test('research notes reject answers that contain external supplementation', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { researchNoteAnswerEvidenceEligible, buildResearchNoteAnswers } = await import('/src/components/chat/researchNote.ts')
+    const external = {
+      id: 2,
+      role: 'assistant',
+      content: 'External answer',
+      copy_markdown: 'External answer',
+      meta: {
+        agent_source_summary: {
+          kind: 'external_not_kb',
+          external_source_kind: 'web',
+        },
+      },
+    }
+    const local = {
+      id: 4,
+      role: 'assistant',
+      content: 'Local answer [1].',
+      copy_markdown: 'Local answer [1].',
+      meta: {
+        agent_source_summary: { kind: 'local_kb' },
+        cite_details: [{ num: 1, source_path: 'paper.md', evidence_quote: 'Local evidence.' }],
+      },
+    }
+    return {
+      externalEligible: researchNoteAnswerEvidenceEligible(external as never),
+      localEligible: researchNoteAnswerEvidenceEligible(local as never),
+      answerIds: buildResearchNoteAnswers([
+        { id: 1, role: 'user', content: 'Question' },
+        external,
+        { id: 3, role: 'user', content: 'Local question' },
+        local,
+      ] as never).map((item) => item.messageId),
+    }
+  })
+
+  expect(result).toEqual({ externalEligible: false, localEligible: true, answerIds: [4] })
 })
 
 test('evidence drawer view model dedupes cards and derives compact source detail', async ({ page }) => {
@@ -3476,6 +3563,19 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('frequency-division multiplexed illumination')
   await expect(page.locator('.kb-cite-pop')).toContainText('Fixture Paper')
   await expect(page.locator('.kb-cite-pop')).toContainText('Method')
+})
+
+test('web sources stay separate from library evidence actions', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-web-source')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-web-source')
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(/Web sources|网页来源/)
+  await page.getByTestId('assistant-source-notice').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeVisible()
+  await expect(page.getByTestId('evidence-web-sources')).toContainText('Primary web source')
+  await expect(page.getByTestId('evidence-web-source-0')).toHaveAttribute('href', 'https://example.org/paper')
+  await expect(page.getByTestId('evidence-add-shelf')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-open-9551')).toBeDisabled()
 })
 
 test('external source notice is compacted outside the answer body', async ({ page }) => {

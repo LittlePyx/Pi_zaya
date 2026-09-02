@@ -435,6 +435,10 @@ def test_update_settings_persists_api_credentials_and_clears_cache(monkeypatch):
         vision_api_key="sk-vision",
         vision_base_url="https://vision.example/v1/",
         vision_model="vision-model",
+        web_search_enabled=True,
+        web_search_api_key="sk-web",
+        web_search_base_url="https://api.openai.com/v1/",
+        web_search_model="gpt-5-search-api",
     )) == {"ok": True}
 
     assert stored["text_api_key"] == "sk-text"
@@ -443,6 +447,10 @@ def test_update_settings_persists_api_credentials_and_clears_cache(monkeypatch):
     assert stored["vision_api_key"] == "sk-vision"
     assert stored["vision_base_url"] == "https://vision.example/v1"
     assert stored["vision_model"] == "vision-model"
+    assert stored["web_search_enabled"] is True
+    assert stored["web_search_api_key"] == "sk-web"
+    assert stored["web_search_base_url"] == "https://api.openai.com/v1"
+    assert stored["web_search_model"] == "gpt-5-search-api"
     assert cleared["count"] == 1
 
 
@@ -460,6 +468,10 @@ def test_get_settings_returns_text_and_vision_connection(monkeypatch):
         vision_model="vision-model",
         vision_uses_text_fallback=False,
         auto_route=True,
+        agent_web_search_enabled=True,
+        agent_web_search_api_key="sk-web",
+        agent_web_search_base_url="https://api.openai.com/v1",
+        agent_web_search_model="gpt-5-search-api",
         db_dir="db",
     )
 
@@ -488,6 +500,14 @@ def test_get_settings_returns_text_and_vision_connection(monkeypatch):
     assert payload["connection"]["vision"]["model"] == "vision-model"
     assert payload["connection"]["vision"]["uses_text_fallback"] is False
     assert payload["connection"]["auto_route"] is True
+    assert payload["connection"]["web_search"] == {
+        "available": True,
+        "enabled": True,
+        "has_api_key": True,
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-5-search-api",
+        "reason": "ready",
+    }
     assert payload["readiness"]["overall"] == {
         "status": "warning",
         "reason": "configured_not_tested",
@@ -1016,6 +1036,10 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
         "QWEN_VISION_MODEL",
         "QWEN_MODEL",
         "OPENAI_MODEL",
+        "KB_AGENT_WEB_SEARCH_API_KEY",
+        "KB_AGENT_WEB_SEARCH_BASE_URL",
+        "KB_AGENT_WEB_SEARCH_MODEL",
+        "KB_AGENT_WEB_SEARCH_ENABLED",
     ):
         monkeypatch.setenv(key, "")
 
@@ -1027,6 +1051,10 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
         "vision_base_url": "https://vision.example/v1/",
         "vision_model": "vision-model",
         "auto_backup_enabled": True,
+        "web_search_enabled": True,
+        "web_search_api_key": "sk-web",
+        "web_search_base_url": "https://api.openai.com/v1/",
+        "web_search_model": "gpt-5-search-api",
     })
 
     settings = config_module.load_settings()
@@ -1037,6 +1065,10 @@ def test_load_settings_uses_local_api_prefs_when_env_keys_missing(monkeypatch):
     assert settings.vision_api_key == "sk-vision"
     assert settings.vision_base_url == "https://vision.example/v1"
     assert settings.vision_model == "vision-model"
+    assert settings.agent_web_search_enabled is True
+    assert settings.agent_web_search_api_key == "sk-web"
+    assert settings.agent_web_search_base_url == "https://api.openai.com/v1"
+    assert settings.agent_web_search_model == "gpt-5-search-api"
 
 
 def test_load_settings_uses_separate_qwen_text_and_vision_defaults(monkeypatch):

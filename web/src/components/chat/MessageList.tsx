@@ -195,6 +195,7 @@ import { EvidenceMatrixWorkspace } from './EvidenceMatrixWorkspace'
 import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
 import { ResearchGapWorkspace } from './ResearchGapWorkspace'
 import { ResearchNoteModal } from './ResearchNoteModal'
+import { researchNoteAnswerEvidenceEligible } from './researchNote'
 import { ResearchNotesPanel } from './ResearchNotesPanel'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../../utils/featureFlags'
@@ -2557,6 +2558,7 @@ export function MessageList({
                 traceUserMsgId: Number(trace?.userMsgId || 0),
               }))
             const imageAttachments = imageAttachmentsOf(message)
+            const canSaveAsEvidenceNote = !isUser && researchNoteAnswerEvidenceEligible(message)
             const showUserText = !(isUser && imageAttachments.length > 0 && isImageOnlyPlaceholder(message.content))
             const isImageOnlyUserMessage = isUser && imageAttachments.length > 0 && !showUserText
             const prep = !isUser ? assistantLocatePrepByMsgId.get(message.id) : undefined
@@ -2817,6 +2819,8 @@ export function MessageList({
                           type="text"
                           icon={<FileTextOutlined />}
                           data-testid={`research-note-open-${message.id}`}
+                          disabled={!canSaveAsEvidenceNote}
+                          title={!canSaveAsEvidenceNote ? S.research_note_external_blocked : undefined}
                           onClick={() => {
                             setResearchNoteInitialMessageId(message.id)
                             setResearchNoteInitialNoteId('')

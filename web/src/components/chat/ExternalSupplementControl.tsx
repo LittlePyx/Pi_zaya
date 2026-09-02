@@ -1,17 +1,25 @@
 import { Button, Dropdown, Tooltip } from 'antd'
 import type { MenuProps } from 'antd'
 import type { ReactNode } from 'react'
-import { BulbOutlined, DatabaseOutlined, DownOutlined, GlobalOutlined } from '@ant-design/icons'
+import { BulbOutlined, DatabaseOutlined, DownOutlined, GlobalOutlined, SettingOutlined } from '@ant-design/icons'
 import type { ExternalSupplementMode } from '../../api/chat'
 import { useT } from '../../i18n'
 
 interface Props {
   value: ExternalSupplementMode
   disabled?: boolean
+  webAvailable?: boolean
   onChange: (mode: ExternalSupplementMode) => void
+  onConfigureWeb?: () => void
 }
 
-export function ExternalSupplementControl({ value, disabled = false, onChange }: Props) {
+export function ExternalSupplementControl({
+  value,
+  disabled = false,
+  webAvailable = false,
+  onChange,
+  onConfigureWeb,
+}: Props) {
   const S = useT()
   const meta = {
     disabled: {
@@ -26,14 +34,15 @@ export function ExternalSupplementControl({ value, disabled = false, onChange }:
     },
     web: {
       label: S.chat_external_web,
-      detail: S.chat_external_web_tip,
+      detail: webAvailable ? S.chat_external_web_tip : S.chat_external_web_unavailable_tip,
       icon: <GlobalOutlined />,
     },
   } satisfies Record<ExternalSupplementMode, { label: string; detail: string; icon: ReactNode }>
   const selected = meta[value]
-  const items: MenuProps['items'] = (Object.keys(meta) as ExternalSupplementMode[]).map((mode) => ({
+  const modeItems: MenuProps['items'] = (Object.keys(meta) as ExternalSupplementMode[]).map((mode) => ({
     key: mode,
     icon: meta[mode].icon,
+    disabled: mode === 'web' && !webAvailable,
     label: (
       <div className="kb-external-source-option">
         <strong>{meta[mode].label}</strong>
@@ -41,6 +50,17 @@ export function ExternalSupplementControl({ value, disabled = false, onChange }:
       </div>
     ),
   }))
+  const items: MenuProps['items'] = [
+    ...modeItems,
+    ...(!webAvailable && onConfigureWeb ? [
+      { type: 'divider' as const },
+      {
+        key: 'configure_web',
+        icon: <SettingOutlined />,
+        label: S.chat_external_web_configure,
+      },
+    ] : []),
+  ]
 
   return (
     <Tooltip title={`${S.chat_external_label} — ${selected.detail}`}>
@@ -51,7 +71,13 @@ export function ExternalSupplementControl({ value, disabled = false, onChange }:
           items,
           selectable: true,
           selectedKeys: [value],
-          onClick: ({ key }) => onChange(key as ExternalSupplementMode),
+          onClick: ({ key }) => {
+            if (key === 'configure_web') {
+              onConfigureWeb?.()
+              return
+            }
+            onChange(key as ExternalSupplementMode)
+          },
         }}
       >
         <Button

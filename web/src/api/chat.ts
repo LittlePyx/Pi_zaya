@@ -469,6 +469,11 @@ export interface AgentSourceSummary {
   source_notice_count?: number
   quality_gate_status?: string
   should_show?: boolean
+  external_supplement_mode?: ExternalSupplementMode
+  external_source_kind?: 'web' | 'model' | '' | string
+  web_search_used?: boolean
+  web_sources?: ExternalWebSource[]
+  external_supplement_unavailable?: string
   source_policy_payload?: AgentSourcePolicyPayload | Record<string, unknown>
   [key: string]: unknown
 }
@@ -484,9 +489,16 @@ export interface AgentSourcePolicyPayload {
   confidence?: 'high' | 'medium' | 'low' | 'external' | 'unknown' | string
   uses_local_knowledge_base?: boolean
   uses_external_model?: boolean
+  uses_external_web?: boolean
   requires_user_notice?: boolean
   notice_kind?: 'none' | 'local_plus_external' | 'external_not_kb' | string
   citation_policy?: 'local_citations_required' | 'not_applicable' | string
+  external_supplement_mode?: ExternalSupplementMode
+  external_source_kind?: 'web' | 'model' | '' | string
+  web_search_used?: boolean
+  web_source_count?: number
+  web_sources?: ExternalWebSource[]
+  external_supplement_unavailable?: string
   badge?: {
     label_key?: string
     label?: string
@@ -503,6 +515,12 @@ export interface AgentSourcePolicyPayload {
     [key: string]: unknown
   }
   [key: string]: unknown
+}
+
+export interface ExternalWebSource {
+  title?: string
+  url: string
+  domain?: string
 }
 
 export interface AnswerRuntimeCheck {

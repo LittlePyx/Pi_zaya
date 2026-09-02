@@ -149,6 +149,10 @@ def load_settings() -> Settings:
     stored_vision_api_key = _clean_env_key(str(prefs.get("vision_api_key") or ""))
     stored_vision_base_url = _clean_base_url(prefs.get("vision_base_url"))
     stored_vision_model = _clean_pref_str(prefs.get("vision_model"))
+    stored_web_search_api_key = _clean_env_key(str(prefs.get("web_search_api_key") or ""))
+    stored_web_search_base_url = _clean_base_url(prefs.get("web_search_base_url"))
+    stored_web_search_model = _clean_pref_str(prefs.get("web_search_model"))
+    stored_web_search_enabled = _clean_pref_bool(prefs.get("web_search_enabled"))
     stored_auto_backup_enabled = _clean_pref_bool(prefs.get("auto_backup_enabled"))
     requested_text_model = ""
 
@@ -338,17 +342,27 @@ def load_settings() -> Settings:
     except Exception:
         max_chat_upload_files = 12
     agent_web_search_api_key = _clean_env_key(
-        _env("KB_AGENT_WEB_SEARCH_API_KEY") or _env("OPENAI_API_KEY") or ""
+        _env("KB_AGENT_WEB_SEARCH_API_KEY")
+        or _env("OPENAI_API_KEY")
+        or stored_web_search_api_key
+        or ""
     )
     agent_web_search_base_url = (
         _env("KB_AGENT_WEB_SEARCH_BASE_URL")
         or _env("OPENAI_BASE_URL")
+        or stored_web_search_base_url
         or "https://api.openai.com/v1"
     ).strip().rstrip("/")
-    agent_web_search_model = (_env("KB_AGENT_WEB_SEARCH_MODEL") or "gpt-5-search-api").strip()
+    agent_web_search_model = (
+        _env("KB_AGENT_WEB_SEARCH_MODEL")
+        or stored_web_search_model
+        or "gpt-5-search-api"
+    ).strip()
     raw_agent_web_search_enabled = str(_env("KB_AGENT_WEB_SEARCH_ENABLED", "") or "").strip().lower()
     if raw_agent_web_search_enabled:
         agent_web_search_enabled = raw_agent_web_search_enabled in {"1", "true", "yes", "on"}
+    elif stored_web_search_enabled is not None:
+        agent_web_search_enabled = bool(stored_web_search_enabled)
     else:
         agent_web_search_enabled = bool(agent_web_search_api_key)
     raw_context_size = str(_env("KB_AGENT_WEB_SEARCH_CONTEXT_SIZE", "low") or "low").strip().lower()

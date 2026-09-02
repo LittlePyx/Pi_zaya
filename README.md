@@ -194,9 +194,15 @@ choice per conversation:
 - `Web supplement`: try configured web search only after insufficient local
   evidence; if it is unavailable or fails, never substitute model knowledge.
 
+Web search has a separate enable switch, API key, base URL, and model in
+Settings. The composer checks that capability before sending, and opens the
+matching settings card when a saved web choice is not ready.
 External and hybrid answers are visibly marked so users can tell which claims
 are library-grounded and which parts use explicitly requested model or web
-context.
+context. Linked web sources remain in a separate external-source section: they
+can be opened, but they cannot enter the literature basket or be saved as
+verified evidence notes. For hybrid answers, users can still save the individual
+library citation cards.
 The source blend is explicit in the trace: `local_grounded`,
 `hybrid_local_external`, `external_academic`, or `general_llm`. General
 non-library questions can use the normal text API without adding a knowledge-base
