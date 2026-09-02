@@ -66,6 +66,7 @@ Primary local URLs:
 | `kb/retrieval_engine.py` | Query translation, heuristic filtering, result caching |
 | `kb/candidate_retriever.py` | Minimal candidate-retrieval protocol; keeps ranking channels outside orchestration |
 | `kb/dense_retriever.py` + `kb/hybrid_retriever.py` | Internal exact-cosine and BM25+dense RRF kernels; not product-enabled until embedding persistence and consent land |
+| `kb/embedding_provider.py` + `kb/embedding_index.py` | Model-neutral local executor boundary and atomic, document-incremental exact-vector snapshots; still outside the product path |
 | `kb/cross_encoder_reranker.py` | Model-agnostic, fail-open cross-encoder reranking boundary |
 | `kb/retrieval_metrics.py` | Recall@K, MRR, and nDCG evaluation primitives |
 | `kb/retrieval_eval_fixture.py` + `kb/retrieval_benchmark.py` | Frozen real-paper chunk qrels, corpus integrity, and raw/product-query BM25 baselines |

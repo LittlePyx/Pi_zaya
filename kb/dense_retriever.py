@@ -1,26 +1,12 @@
 from __future__ import annotations
 
 import copy
-import math
 from collections.abc import Callable, Sequence
 
+from .embedding_vectors import Embedding, normalize_embedding
 
-Embedding = Sequence[float]
+
 QueryEmbedder = Callable[[str], Embedding]
-
-
-def _normalized_vector(values: Embedding, *, expected_dim: int | None = None) -> tuple[float, ...]:
-    vector = tuple(float(value) for value in values)
-    if not vector:
-        raise ValueError("embedding vector cannot be empty")
-    if expected_dim is not None and len(vector) != expected_dim:
-        raise ValueError(f"embedding dimension mismatch: expected {expected_dim}, got {len(vector)}")
-    if not all(math.isfinite(value) for value in vector):
-        raise ValueError("embedding vector must contain only finite values")
-    norm = math.sqrt(sum(value * value for value in vector))
-    if norm <= 0.0:
-        raise ValueError("embedding vector norm must be positive")
-    return tuple(value / norm for value in vector)
 
 
 class DenseRetriever:
@@ -50,7 +36,7 @@ class DenseRetriever:
         self._dimension = 0
         self._embeddings: list[tuple[float, ...]] = []
         for raw_vector in chunk_embeddings:
-            normalized = _normalized_vector(
+            normalized = normalize_embedding(
                 raw_vector,
                 expected_dim=self._dimension or None,
             )
@@ -70,7 +56,7 @@ class DenseRetriever:
         clean_query = str(query or "").strip()
         if not clean_query or not self._chunks:
             return []
-        query_vector = _normalized_vector(
+        query_vector = normalize_embedding(
             self._embed_query(clean_query),
             expected_dim=self._dimension,
         )

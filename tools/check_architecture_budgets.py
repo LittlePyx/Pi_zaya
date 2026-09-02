@@ -30,6 +30,9 @@ LINE_BUDGETS = {
     "web/src/components/chat/citationState.ts": 2_455,
     "web/src/components/chat/CiteShelf.tsx": 2_424,
     "web/src/api/chat.ts": 2_199,
+    "kb/embedding_index.py": 840,
+    "kb/embedding_provider.py": 133,
+    "kb/embedding_vectors.py": 48,
 }
 
 

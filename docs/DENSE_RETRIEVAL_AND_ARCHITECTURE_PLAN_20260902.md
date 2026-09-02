@@ -1,10 +1,10 @@
 # Dense Retrieval and Architecture Control Plan
 
-Status: `phase 1 implemented and validated; embedding product activation pending`
+Status: `phase 2A implemented and fully validated; concrete model benchmarking is next; product activation remains off`
 
 Started: `2026-09-02`
 
-Baseline: `main@48228fa6` (published version remains `v0.1.0-beta.13`, tag `9c78a763`)
+Baseline: `main@f143b43b` (published version remains `v0.1.0-beta.13`, tag `9c78a763`)
 
 ## 1. Objective and boundary
 
@@ -122,6 +122,21 @@ mixed with current chunks. BM25 remains usable while a dense rebuild is pending.
 For the current corpus size, use an on-disk numeric matrix and exact cosine
 search. Reconsider HNSW/FAISS or an external vector store only after measured
 corpus size or latency demonstrates the need.
+
+Phase 2A implements this as immutable generation directories plus one atomically
+replaced `current.json` pointer. Each generation is independently checksummed.
+The builder takes a short committed-corpus snapshot under the existing database
+lock, releases that lock while the provider runs, then rechecks the corpus
+before publishing. A concurrent library change therefore aborts the build
+instead of publishing mixed vectors.
+
+Incrementality is based on ordered per-document text hashes, not machine paths
+or the current path-derived document ID. Moving/reimporting unchanged papers
+can reuse their embeddings while still committing the new `docs.json` digest
+and ordered chunk IDs. Metadata changes create a fresh generation but do not
+recompute vectors whose input text is unchanged. Manifests and build-status
+records contain hashes and opaque document tokens, not paper text or filesystem
+paths.
 
 ## 6. Cross-encoder reranking
 
@@ -268,8 +283,9 @@ Longer-term refactoring priorities:
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | truthful README, candidate protocol, exact dense kernel, BM25+dense RRF, cross-encoder adapter, metric functions, regression seed, size ratchet | Implemented and validated in commit `ba3c3d00` |
-| 1 | frozen real-paper retrieval labels and BM25 baseline report | Implemented and validated in current working tree |
-| 2 | atomic embedding index, local/cloud provider adapters, indexing status and recovery | Planned |
+| 1 | frozen real-paper retrieval labels and BM25 baseline report | Implemented and validated in commit `f143b43b` |
+| 2A | atomic exact-vector generations, path-independent document reuse, provider fingerprint contract, indexing status and safe failure recovery | Implemented and fully validated |
+| 2B | concrete model adapters and candidate benchmark execution; no product wiring | Next |
 | 3 | explicit Off/Local/Cloud user settings and opt-in hybrid product wiring | Planned |
 | 4 | benchmark local/cloud embedding and cross-encoder candidates; promote only accepted models | Planned |
 | 5 | semantic contradiction verifier for high-risk claims | Planned |
@@ -451,3 +467,81 @@ timeout change; only the serial results above are treated as the gate outcome.
 No release version or immutable tag was changed. Product retrieval remains on
 the existing BM25/structured path; this phase adds measurement and integrity
 infrastructure, not an unmeasured Dense default.
+
+### 2026-09-02 — Phase 2A atomic incremental embedding foundation
+
+- Added `kb/embedding_provider.py` with a stable provider descriptor covering
+  local/cloud processing class, model ID, revision, weights fingerprint,
+  dimension, and normalization. `LocalEmbeddingProvider` accepts only an
+  explicitly supplied executor; it downloads no model, reads no credential,
+  and makes no network request.
+- Moved shared finite/dimension/L2 validation into
+  `kb/embedding_vectors.py`, used by both provider adapters and exact cosine
+  retrieval.
+- Added `kb/embedding_index.py` with immutable, checksummed Float32 generations
+  and an atomic current pointer. Search loading rejects stale `docs.json`,
+  changed chunk order/metadata, chunk-schema drift, model/revision/fingerprint
+  mismatch, dimension mismatch, partial document coverage, and corrupt
+  manifests or vectors.
+- Embedding calls are incremental by the ordered text sequence of each paper.
+  A relocated or reimported unchanged paper reuses vectors even when its
+  path-derived document/chunk IDs change; the replacement generation still
+  records the new committed document digest and ordered chunk IDs.
+- Builds use the existing cross-process lock for single-writer publication,
+  avoid holding the library lock during model execution, and revalidate the
+  corpus before commit. Per-document `pending`, `embedded`, `reused`, or
+  `error` states are written atomically without raw paper text or paths.
+- Provider or final-pointer failures preserve the previous committed
+  generation. BM25 and the current product path are untouched; no setting,
+  model download, cloud endpoint, or hybrid default has been activated.
+- Added nine focused tests covering descriptor/shape validation, build/load/
+  search, no-op builds, one-paper incremental rebuilds, path and document-ID
+  relocation reuse, provider failure, commit failure, provider mismatch, and
+  vector corruption, plus a concurrent corpus mutation during provider work.
+- Added the three new production modules to the architecture size ratchet; the
+  largest is 840 lines, well below the existing multi-thousand-line hotspots
+  and prevented from growing silently.
+
+#### Phase 2A validation
+
+- Focused embedding, Dense/Hybrid, and storage-transaction suites after final
+  fault injection: 23 passed, 1 Windows-platform skip.
+- Complete backend unit suite: 4,596 passed, 41 configuration-dependent skips.
+- Backend sanity suite: 305 passed, 2 configuration-dependent skips.
+- Full-repository Ruff, `git diff --check`, and the expanded 24-file
+  architecture ratchet: pass.
+- Research QA fixture: 56 cases and 41 source-grounded cases; pass.
+- Grounded replay 6/6 and reviewed Agent replay 5/5; pass.
+- Candidate retrieval seed, frozen unseen-v2 qrels/baseline integrity, version
+  A/B, evidence comparison 5, comparison candidates 5, project status 5, and
+  the complete project journey fixture: pass.
+- Converter quality: 13/13 retained Markdown cases; pass.
+- Frontend ESLint and production build: pass.
+- Browser smoke: 160 passed with 3 expected private/build-mode skips; core
+  citation/library regressions: 127/127; ordinary-user surface isolation: 4/4;
+  evidence-workspace release isolation: 1/1; dedicated library-quality and
+  automatic-recovery suite: 24/24.
+
+All browser groups ran serially to avoid cross-server resource contention. No
+release version or immutable tag changed. Dense retrieval remains unreachable
+from the product runtime, so these results validate the persistence boundary
+without changing current user behavior.
+
+### Priority assessment after Phase 2A
+
+| Priority | Work | User value | Dependency/risk | Decision |
+|---|---|---:|---|---|
+| P0.2a | Add reproducible concrete local-model benchmark adapters and measure raw Dense on the frozen multilingual qrels | Very high | Must pin model revision/fingerprint and avoid silently downloading in product code | Do next after full Phase 2A gates |
+| P0.2b | Evaluate BM25+Dense RRF; choose fusion parameters on a separate development slice, then run one locked acceptance pass on unseen-v2 | Very high | Prevents tuning to the 22-case acceptance set; exact/locator and wrong-source metrics remain hard gates | Immediately after raw Dense screening |
+| P0.3 | Benchmark bounded cross-encoder top-M reranking only after fused candidate recall improves | High | Reranking cannot recover evidence absent from the candidate pool | After an accepted hybrid candidate set |
+| P1.1 | Derive answer correctness, faithfulness, citation precision/completeness, and contradiction-repair metrics from existing Research QA contracts | Very high | Failures must trigger retry/narrowing/evidence boundary, not another user-facing status label | Before product activation |
+| P1.2 | Ship explicit Off/Local/Cloud consent, status, rebuild, and automatic BM25 fallback UI | High | Requires an accepted provider plus measured package, latency, and privacy cost | Activation gate, not the next coding step |
+| P1.3 | Add redacted OpenTelemetry-aligned local spans and optional Langfuse export | Medium-high | Exporter failures must be invisible to retrieval and raw content stays local by default | Before opt-in rollout |
+| P2 | Continue contract-preserving decomposition under the expanded size ratchet | High long-term | Avoid mixing broad runtime refactors into model-quality experiments | Incremental parallel track |
+
+The design decision after implementation is to keep exact Float32 search and
+full-generation rewrites while the corpus remains small, but reuse embedding
+computation per paper. This gives atomic recovery and simple integrity checks
+without a vector service. ANN or a vector database should be reconsidered only
+after benchmarked memory or p95 search latency, not feature fashion, shows the
+exact matrix is the bottleneck.
