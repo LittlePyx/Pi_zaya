@@ -1,7 +1,14 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import { useEffect, useRef, useState } from 'react'
-import { referencesApi, type ReaderDocAnchor, type ReaderDocBlock, type ReaderDocResponse } from '../../../api/references'
+import {
+  referencesApi,
+  type ReaderDocAnchor,
+  type ReaderDocBlock,
+  type ReaderDocLocatorRequest,
+  type ReaderDocLocatorResolution,
+  type ReaderDocResponse,
+} from '../../../api/references'
 import { normalizeCiteDetail, type CiteDetail } from '../citationState'
 
 interface UseReaderDocumentOptions {
@@ -9,6 +16,7 @@ interface UseReaderDocumentOptions {
   sourcePath: string
   sourceName: string
   documentOverride?: ReaderDocResponse | null
+  locator?: ReaderDocLocatorRequest
   onBeforeLoad?: () => void
 }
 
@@ -18,6 +26,7 @@ interface ReaderDocumentState {
   markdown: string
   readerAnchors: ReaderDocAnchor[]
   readerBlocks: ReaderDocBlock[]
+  locatorResolution: ReaderDocLocatorResolution | null
   citeDetails: CiteDetail[]
   resolvedName: string
 }
@@ -42,6 +51,7 @@ export function useReaderDocument({
   sourcePath,
   sourceName,
   documentOverride,
+  locator,
   onBeforeLoad,
 }: UseReaderDocumentOptions): ReaderDocumentState {
   const [loading, setLoading] = useState(false)
@@ -49,6 +59,7 @@ export function useReaderDocument({
   const [markdown, setMarkdown] = useState('')
   const [readerAnchors, setReaderAnchors] = useState<ReaderDocAnchor[]>([])
   const [readerBlocks, setReaderBlocks] = useState<ReaderDocBlock[]>([])
+  const [locatorResolution, setLocatorResolution] = useState<ReaderDocLocatorResolution | null>(null)
   const [citeDetails, setCiteDetails] = useState<CiteDetail[]>([])
   const [resolvedName, setResolvedName] = useState('')
   const beforeLoadRef = useRef<UseReaderDocumentOptions['onBeforeLoad']>(onBeforeLoad)
@@ -64,6 +75,7 @@ export function useReaderDocument({
       setMarkdown('')
       setReaderAnchors([])
       setReaderBlocks([])
+      setLocatorResolution(null)
       setCiteDetails([])
       setResolvedName('')
       return
@@ -75,11 +87,13 @@ export function useReaderDocument({
     setMarkdown('')
     setReaderAnchors([])
     setReaderBlocks([])
+    setLocatorResolution(null)
     setCiteDetails([])
     if (documentOverride) {
       setMarkdown(String(documentOverride.markdown || ''))
       setReaderAnchors(Array.isArray(documentOverride.anchors) ? documentOverride.anchors : [])
       setReaderBlocks(Array.isArray(documentOverride.blocks) ? documentOverride.blocks : [])
+      setLocatorResolution(documentOverride.locator_resolution || null)
       setCiteDetails(normalizeReaderCiteDetails(documentOverride.cite_details || documentOverride.reference_cite_details))
       setResolvedName(String(documentOverride.source_name || sourceName || '').trim())
       setLoading(false)
@@ -88,12 +102,13 @@ export function useReaderDocument({
       }
     }
     const ctrl = new AbortController()
-    referencesApi.readerDoc(sourcePath, { signal: ctrl.signal })
+    referencesApi.readerDoc(sourcePath, { signal: ctrl.signal }, locator)
       .then((res) => {
         if (cancelled) return
         setMarkdown(String(res.markdown || ''))
         setReaderAnchors(Array.isArray(res.anchors) ? res.anchors : [])
         setReaderBlocks(Array.isArray(res.blocks) ? res.blocks : [])
+        setLocatorResolution(res.locator_resolution || null)
         setCiteDetails(normalizeReaderCiteDetails(res.cite_details || res.reference_cite_details))
         setResolvedName(String(res.source_name || sourceName || '').trim())
       })
@@ -102,6 +117,7 @@ export function useReaderDocument({
         setMarkdown('')
         setReaderAnchors([])
         setReaderBlocks([])
+        setLocatorResolution(null)
         setCiteDetails([])
         setError(err instanceof Error ? err.message : 'Failed to load reader document')
       })
@@ -112,7 +128,7 @@ export function useReaderDocument({
       cancelled = true
       ctrl.abort()
     }
-  }, [documentOverride, open, sourceName, sourcePath])
+  }, [documentOverride, locator, open, sourceName, sourcePath])
 
   return {
     loading,
@@ -120,6 +136,7 @@ export function useReaderDocument({
     markdown,
     readerAnchors,
     readerBlocks,
+    locatorResolution,
     citeDetails,
     resolvedName,
   }

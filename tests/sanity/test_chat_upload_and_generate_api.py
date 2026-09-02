@@ -2428,6 +2428,71 @@ def test_references_reader_doc_exposes_outline_contract(monkeypatch, tmp_path: P
     assert [row.get("heading_level") for row in heading_anchors] == [1, 2, 3]
 
 
+def test_references_reader_doc_auto_recovers_strict_locator_after_repagination(monkeypatch, tmp_path: Path):
+    from api.routers import references as refs_router
+
+    md_root = tmp_path / "md_output"
+    doc_dir = md_root / "complex-paper"
+    doc_dir.mkdir(parents=True, exist_ok=True)
+    md_path = doc_dir / "complex-paper.en.md"
+    evidence = "The coded aperture preserves spectral detail across the reconstructed frame."
+    md_path.write_text(
+        "<!-- kb_page: 1 -->\n"
+        "# Complex Imaging Paper\n\n"
+        "Repeated running header for the converted two-column article.\n\n"
+        "<!-- kb_page: 2 -->\n"
+        "## 2. Acquisition method\n\n"
+        "The coded aperture is calibrated before capture and the detector is synchronized.\n\n"
+        "<!-- kb_page: 3 -->\n"
+        "## 3. Reconstruction results\n\n"
+        f"{evidence}\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(refs_router, "_md_dir", lambda: md_root)
+    monkeypatch.setattr(refs_router, "_reference_asset_roots", lambda: [md_root.resolve()])
+    monkeypatch.setattr(refs_router, "_reader_reference_index_data", lambda: {})
+    client = TestClient(app)
+
+    initial = client.post("/api/references/reader/doc", json={"source_path": str(md_path)})
+    assert initial.status_code == 200
+    stale = next(
+        row
+        for row in initial.json()["blocks"]
+        if "calibrated before capture" in str(row.get("text") or "")
+    )
+
+    response = client.post(
+        "/api/references/reader/doc",
+        json={
+            "source_path": str(md_path),
+            "locator": {
+                "block_id": stale["block_id"],
+                "anchor_id": stale["anchor_id"],
+                "anchor_kind": "paragraph",
+                "heading_path": "Complex Imaging Paper / 2. Acquisition method",
+                "evidence_quote": evidence,
+                "page_start": 2,
+                "page_end": 2,
+                "strict_locate": True,
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    resolution = payload["locator_resolution"]
+    assert resolution["ok"] is True
+    assert resolution["changed"] is True
+    assert resolution["status"] == "recovered"
+    assert resolution["reason"] == "unique_evidence_quote"
+    assert resolution["locator"]["block_id"] != stale["block_id"]
+    assert resolution["locator"]["heading_path"].endswith("3. Reconstruction results")
+    assert resolution["locator"]["page_start"] == 3
+    recovered = next(row for row in payload["blocks"] if row["block_id"] == resolution["locator"]["block_id"])
+    assert evidence in recovered["text"]
+
+
 def test_references_reader_doc_exposes_reference_cite_details(monkeypatch, tmp_path: Path):
     from api.routers import references as refs_router
 

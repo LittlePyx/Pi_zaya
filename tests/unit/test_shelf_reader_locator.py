@@ -63,6 +63,29 @@ def test_recovers_stale_locator_from_unique_evidence_quote() -> None:
     assert result["locator"]["anchor_id"] == "p_00007"
 
 
+def test_strict_reader_rejects_surviving_stale_identity_and_relocates_quote() -> None:
+    evidence = "The coded aperture preserves spectral detail across the reconstructed frame."
+    blocks = [
+        _block(2, "The coded aperture is calibrated before capture and the detector is synchronized."),
+        _block(7, evidence, heading="Paper / Results"),
+    ]
+    result = maintain_shelf_reader_locator(blocks, {
+        "key": "reader-open",
+        "block_id": "blk_doc123_00002",
+        "anchor_id": "p_00002",
+        "anchor_kind": "paragraph",
+        "heading_path": "Paper / Methods",
+        "evidence_quote": evidence,
+        "strict_evidence": True,
+    })
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["status"] == "recovered"
+    assert result["reason"] == "unique_evidence_quote"
+    assert result["locator"]["block_id"] == "blk_doc123_00007"
+
+
 def test_disambiguates_repeated_quote_with_saved_heading() -> None:
     quote = "The signal is reconstructed from the coded measurement."
     blocks = [

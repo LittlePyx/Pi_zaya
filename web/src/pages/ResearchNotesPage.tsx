@@ -61,6 +61,7 @@ import {
   workspaceDraftMatchesRecord,
   writeResearchNoteWorkspaceDraft,
 } from './researchNoteWorkspaceDraft'
+
 import {
   RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS,
   RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS,
@@ -87,6 +88,10 @@ import {
   type ResearchNoteOutlineSource,
 } from './researchNoteOutline'
 
+// Browsers coerce larger timeout delays to a signed 32-bit integer. A retry
+// timestamp far in the future would otherwise overflow to an immediate timer
+// and continuously reload the note directory.
+const MAX_BROWSER_TIMEOUT_MS = 2_147_000_000
 const UNASSIGNED_PROJECT = '__unassigned__'
 const ALL_FILTER = '__all__'
 type SaveIssue = 'failed' | 'conflict' | null
@@ -706,7 +711,10 @@ export default function ResearchNotesPage() {
     if (!hasImmediate && retryTimes.length <= 0) return
     const failureDelay = Math.max(0, evidenceMaintenanceFailureAtRef.current + 30_000 - now)
     const dueDelay = hasImmediate ? 250 : Math.max(250, Math.min(...retryTimes) - now + 50)
-    const timer = window.setTimeout(() => { void loadNotes() }, Math.max(dueDelay, failureDelay))
+    const timer = window.setTimeout(
+      () => { void loadNotes() },
+      Math.min(MAX_BROWSER_TIMEOUT_MS, Math.max(dueDelay, failureDelay)),
+    )
     return () => window.clearTimeout(timer)
   }, [evidenceMaintaining, loading, loadNotes, notes])
 

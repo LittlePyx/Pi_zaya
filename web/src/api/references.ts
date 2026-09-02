@@ -37,6 +37,36 @@ export interface ReaderDocBlock {
   text?: string
   raw_text?: string
   number?: number
+  page_start?: number
+  page_end?: number
+}
+
+export interface ReaderDocLocatorRequest {
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  heading_path?: string
+  evidence_quote?: string
+  page_start?: number
+  page_end?: number
+  strict_locate?: boolean
+}
+
+export interface ReaderDocLocatorResolution {
+  key: string
+  ok: boolean
+  changed: boolean
+  status: 'ready' | 'recovered' | 'unresolved' | 'skipped' | 'invalid' | string
+  reason?: string
+  score?: number
+  locator?: {
+    block_id?: string
+    anchor_id?: string
+    anchor_kind?: string
+    heading_path?: string
+    page_start?: number
+    page_end?: number
+  }
 }
 
 export interface ReaderDocOutlineQuality {
@@ -62,6 +92,7 @@ export interface ReaderDocResponse {
   markdown: string
   anchors?: ReaderDocAnchor[]
   blocks?: ReaderDocBlock[]
+  locator_resolution?: ReaderDocLocatorResolution | null
   cite_details?: Array<Record<string, unknown>>
   reference_cite_details?: Array<Record<string, unknown>>
 }
@@ -584,9 +615,10 @@ export const referencesApi = {
     citationCardPolishCache.set(key, pending)
     return pending
   },
-  readerDoc: (sourcePath: string, init?: RequestInit) =>
+  readerDoc: (sourcePath: string, init?: RequestInit, locator?: ReaderDocLocatorRequest) =>
     api.post<ReaderDocResponse>('/api/references/reader/doc', {
       source_path: sourcePath,
+      locator,
     }, init),
   maintainShelfReaderLocators: (items: ShelfReaderLocatorMaintenanceItem[], init?: RequestInit) =>
     api.post<ShelfReaderLocatorMaintenanceResponse>('/api/references/shelf/reader-locators/maintain', {

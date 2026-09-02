@@ -101,6 +101,7 @@ def _identity_is_supported(
     query_norm: str,
     heading_path: str,
     anchor_kind: str,
+    strict_evidence: bool = False,
 ) -> bool:
     if _contains_evidence(block, query_norm):
         return True
@@ -117,7 +118,11 @@ def _identity_is_supported(
     )
     score = float(rows[0].get("score") or 0.0) if rows else 0.0
     if query:
-        return score >= 0.52
+        # Live reader opens must not treat a surviving sequence id as exact
+        # evidence after reconversion merely because a few query terms still
+        # overlap. Persisted shelf maintenance keeps the older, more tolerant
+        # threshold; strict opens require a substantially stronger match.
+        return score >= (0.72 if strict_evidence else 0.52)
     return score >= 0.28
 
 
@@ -128,6 +133,7 @@ def _choose_recovered_block(
     query_norm: str,
     heading_path: str,
     anchor_kind: str,
+    strict_evidence: bool = False,
 ) -> tuple[SourceBlock | None, str, float]:
     candidates = [
         block
@@ -163,7 +169,9 @@ def _choose_recovered_block(
             return best_block, "context_disambiguated_quote", best_score
         return None, "ambiguous_quote", best_score
 
-    if best_score >= 0.64 and (len(ranked) == 1 or margin >= 0.12):
+    score_floor = 0.72 if strict_evidence else 0.64
+    margin_floor = 0.14 if strict_evidence else 0.12
+    if best_score >= score_floor and (len(ranked) == 1 or margin >= margin_floor):
         return best_block, "high_confidence_evidence_match", best_score
     return None, "ambiguous_or_weak_match", best_score
 
@@ -184,6 +192,7 @@ def maintain_shelf_reader_locator(
     anchor_id = _text(item.get("anchor_id"), limit=240)
     anchor_kind = _text(item.get("anchor_kind"), limit=80).lower()
     heading_path = _text(item.get("heading_path"), limit=1_200)
+    strict_evidence = bool(item.get("strict_evidence"))
     query = _evidence_query(item)
     query_norm = normalize_match_text(query)
     if not key:
@@ -203,6 +212,7 @@ def maintain_shelf_reader_locator(
         query_norm=query_norm,
         heading_path=heading_path,
         anchor_kind=anchor_kind,
+        strict_evidence=strict_evidence,
     ):
         target = direct
         reason = "identity_valid"
@@ -214,6 +224,7 @@ def maintain_shelf_reader_locator(
             query_norm=query_norm,
             heading_path=heading_path,
             anchor_kind=anchor_kind,
+            strict_evidence=strict_evidence,
         )
 
     if target is None:

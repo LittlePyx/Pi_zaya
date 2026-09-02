@@ -406,7 +406,7 @@ export function useReaderLocateEngine({
       // If strict locate already resolves the explicit identity (block/anchor),
       // keep primary focus pinned to that block instead of drifting to neighbors.
       const lockPrimaryToDirectIdentity = Boolean(strictLocate && target && hasDirectIdentityHint)
-      if (!target && hasDirectIdentityHint && alternatives.length > 1) {
+      if (!target && alternatives.length > 1) {
         let resolvedAltIndex = -1
         for (let idx = 0; idx < alternatives.length; idx += 1) {
           if (idx === activeAltIndex) continue

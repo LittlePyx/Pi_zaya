@@ -251,10 +251,19 @@ test('structured fallback switches to the resolved alternative instead of re-ran
   await expect(page.getByTestId('reader-evidence-nav')).toHaveCount(0)
 })
 
-test('strict exact locate does not degrade to heading fallback when direct identity is missing', async ({ page }) => {
+test('strict exact locate automatically recovers a unique quote when the saved identity is missing', async ({ page }) => {
   await openHarness(page, 'strict-missing-exact')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_TARGET_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"blockId": "quote-1"')
+  await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
+})
+
+test('strict exact locate rejects a surviving stale identity when its evidence is absent', async ({ page }) => {
+  await openHarness(page, 'strict-stale-unverified')
   await expect(page.getByTestId('reader-locate-resolution')).toHaveText(UNRESOLVED_LABEL_RE)
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Strict locate stopped/i)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Strict locate (?:stopped|could not resolve)/i)
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "failed"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"repairable": true')
   await expect(page.locator('.kb-reader-focus')).toHaveCount(0)

@@ -15,6 +15,10 @@ import {
   inferReaderSourceNameFromPath,
 } from '../../src/components/chat/reader/readerOpenPayloadUtils'
 import {
+  applyReaderDocLocatorResolution,
+  buildReaderOpenPayloadViewModel,
+} from '../../src/components/chat/readerOpenPayloadViewModel'
+import {
   buildHighlightQueries,
   equationNumberMatchScore,
   extractEquationNumbers,
@@ -164,6 +168,62 @@ test('reader locate recovery removes stale identities and keeps evidence signals
   expect(recovered.alternatives?.[0].snippet).toBe('A second evidence sentence.')
   expect(shouldRecoverReaderLocateHeuristically(result, recovered)).toBe(false)
   expect(shouldRecoverReaderLocateHeuristically({ ...result, ok: true, status: 'exact' }, strictPayload)).toBe(false)
+})
+
+test('reader doc locator validation replaces stale identities and suppresses unresolved ones', () => {
+  const stalePayload: ReaderOpenPayload = {
+    ...payload,
+    strictLocate: true,
+    blockId: 'stale-block',
+    anchorId: 'stale-anchor',
+    headingPath: 'Paper / Methods',
+    highlightSnippet: 'The exact source evidence sentence.',
+  }
+  const view = buildReaderOpenPayloadViewModel(stalePayload)
+  const recovered = applyReaderDocLocatorResolution({
+    alternatives: view.alternatives,
+    primaryCandidate: view.primaryCandidate,
+    strictLocate: true,
+    resolution: {
+      key: 'reader-open',
+      ok: true,
+      changed: true,
+      status: 'recovered',
+      reason: 'unique_evidence_quote',
+      locator: {
+        block_id: 'fresh-block',
+        anchor_id: 'fresh-anchor',
+        anchor_kind: 'paragraph',
+        heading_path: 'Paper / Results',
+        page_start: 3,
+        page_end: 3,
+      },
+    },
+  })
+  expect(recovered.recovered).toBe(true)
+  expect(recovered.primaryCandidate).toMatchObject({
+    blockId: 'fresh-block',
+    anchorId: 'fresh-anchor',
+    headingPath: 'Paper / Results',
+  })
+  expect(recovered.alternatives[0].blockId).toBe('fresh-block')
+
+  const unresolved = applyReaderDocLocatorResolution({
+    alternatives: view.alternatives,
+    primaryCandidate: view.primaryCandidate,
+    strictLocate: true,
+    resolution: {
+      key: 'reader-open',
+      ok: false,
+      changed: false,
+      status: 'unresolved',
+      reason: 'ambiguous_or_weak_match',
+    },
+  })
+  expect(unresolved.validated).toBe(true)
+  expect(unresolved.primaryCandidate.blockId).toBe('')
+  expect(unresolved.primaryCandidate.anchorId).toBe('')
+  expect(unresolved.primaryCandidate.highlightSnippet).toBe('The exact source evidence sentence.')
 })
 
 test('shelf locator maintenance sends only source-bound evidence and merges recovered identity', () => {

@@ -1027,9 +1027,10 @@ body.kb-reader-resizing .kb-reader-content {
 .kb-markdown.kb-markdown-reader .katex-display.kb-md-reader-equation-action-host > .kb-md-reader-block-shelf-tail {
   top: 0;
   right: 0;
+  z-index: 4;
   transform: translateY(-35%);
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   transition: opacity 0.16s ease;
 }
 

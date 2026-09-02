@@ -5564,10 +5564,24 @@ class CitationCardPolishBody(BaseModel):
         return _bounded_dict(value, name="citation card polish meta", max_json_chars=_REFS_META_MAX_JSON_CHARS)
 
 
+class ReaderDocLocatorBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    block_id: str = Field("", max_length=240)
+    anchor_id: str = Field("", max_length=240)
+    anchor_kind: str = Field("", max_length=80)
+    heading_path: str = Field("", max_length=1_200)
+    evidence_quote: str = Field("", max_length=4_000)
+    page_start: int | None = Field(None, ge=1, le=100_000)
+    page_end: int | None = Field(None, ge=1, le=100_000)
+    strict_locate: bool = False
+
+
 class ReaderDocBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source_path: str = Field(..., max_length=_REFS_SOURCE_PATH_MAX_CHARS)
+    locator: ReaderDocLocatorBody | None = None
 
 
 class ShelfReaderLocatorMaintenanceBody(BaseModel):
@@ -7708,6 +7722,12 @@ def get_reader_doc(body: ReaderDocBody):
         asset_roots=asset_roots,
     )
     anchors, blocks = _build_reader_anchors(md_text, md_path=md_path)
+    locator_resolution: dict[str, Any] | None = None
+    if body.locator is not None:
+        locator_item = body.locator.model_dump(exclude_none=True)
+        locator_item["key"] = "reader-open"
+        locator_item["strict_evidence"] = bool(body.locator.strict_locate)
+        locator_resolution = maintain_shelf_reader_locator(blocks, locator_item)
     source_name = md_path.name
     low = source_name.lower()
     if low.endswith(".en.md"):
@@ -7736,6 +7756,7 @@ def get_reader_doc(body: ReaderDocBody):
         "markdown": md_render,
         "anchors": anchors,
         "blocks": blocks,
+        "locator_resolution": locator_resolution,
         "cite_details": cite_details,
         "reference_cite_details": cite_details,
     }
