@@ -78,6 +78,7 @@ jobs:
         shell: pwsh
         run: |
           python tools/retrieval_eval/run_retrieval_eval.py --dry-run --fail-on-quality
+          python tools/retrieval_eval/run_research_qa_baseline.py --validate-only
           python tools/research_qa/run_research_qa_eval.py --dry-run
           python tools/version_ab/run_version_ab_eval.py --dry-run
           python tools/evidence_matrix/run_comparison_eval.py --dry-run

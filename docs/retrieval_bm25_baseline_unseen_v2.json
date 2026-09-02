@@ -1,0 +1,4637 @@
+{
+  "schema_version": 1,
+  "fixture_id": "research_qa_unseen_corpus_v2_chunk_qrels",
+  "case_count": 22,
+  "corpus": {
+    "document_count": 10,
+    "chunk_count": 1673,
+    "fingerprint": "d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516"
+  },
+  "fixture": {
+    "path": "docs/retrieval_eval_unseen_v2.json",
+    "sha256": "4062ce7f0a1ce4afc86f44fbe74fdc375bbeeeb6b2bdc934344e4e0d53d749d7",
+    "sha256_newlines": "normalized_lf"
+  },
+  "measured_at": "2026-09-02T13:30:42.702821+00:00",
+  "report_kind": "committed_baseline_summary",
+  "channels": {
+    "bm25_raw": {
+      "channel": "bm25_raw",
+      "modes": {
+        "scoped": {
+          "case_count": 22,
+          "label_count": 27,
+          "zero_hit_cases": 0,
+          "translated_cases": 0,
+          "metrics": {
+            "contract_recall@1": 0.386364,
+            "contract_recall@10": 0.863636,
+            "contract_recall@20": 0.909091,
+            "contract_recall@3": 0.545455,
+            "contract_recall@5": 0.613636,
+            "mrr": 0.522908,
+            "ndcg@1": 0.409091,
+            "ndcg@10": 0.586139,
+            "ndcg@20": 0.608092,
+            "ndcg@3": 0.479575,
+            "ndcg@5": 0.511154,
+            "recall@1": 0.386364,
+            "recall@10": 0.840909,
+            "recall@20": 0.909091,
+            "recall@3": 0.545455,
+            "recall@5": 0.613636,
+            "wrong_source_rate@1": 0.0,
+            "wrong_source_rate@10": 0.0,
+            "wrong_source_rate@20": 0.0,
+            "wrong_source_rate@3": 0.0,
+            "wrong_source_rate@5": 0.0
+          },
+          "latency_ms": {
+            "p50": 1.678,
+            "p95": 5.937,
+            "max": 24.985
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.458333,
+                  "contract_recall@10": 0.916667,
+                  "contract_recall@20": 0.916667,
+                  "contract_recall@3": 0.75,
+                  "contract_recall@5": 0.875,
+                  "mrr": 0.645833,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.703235,
+                  "ndcg@20": 0.703235,
+                  "ndcg@3": 0.629221,
+                  "ndcg@5": 0.687116,
+                  "recall@1": 0.458333,
+                  "recall@10": 0.916667,
+                  "recall@20": 0.916667,
+                  "recall@3": 0.75,
+                  "recall@5": 0.875,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.3,
+                  "contract_recall@10": 0.8,
+                  "contract_recall@20": 0.9,
+                  "contract_recall@3": 0.3,
+                  "contract_recall@5": 0.3,
+                  "mrr": 0.375397,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.445624,
+                  "ndcg@20": 0.49392,
+                  "ndcg@3": 0.3,
+                  "ndcg@5": 0.3,
+                  "recall@1": 0.3,
+                  "recall@10": 0.75,
+                  "recall@20": 0.9,
+                  "recall@3": 0.3,
+                  "recall@5": 0.3,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "evaluation_focus": {
+              "method_comparison": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "method_detail": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.4,
+                  "contract_recall@10": 0.8,
+                  "contract_recall@20": 0.9,
+                  "contract_recall@3": 0.6,
+                  "contract_recall@5": 0.6,
+                  "mrr": 0.516667,
+                  "ndcg@1": 0.4,
+                  "ndcg@10": 0.576186,
+                  "ndcg@20": 0.60321,
+                  "ndcg@3": 0.513093,
+                  "ndcg@5": 0.513093,
+                  "recall@1": 0.4,
+                  "recall@10": 0.8,
+                  "recall@20": 0.9,
+                  "recall@3": 0.6,
+                  "recall@5": 0.6,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "multi_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.333333,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.570642,
+                  "ndcg@20": 0.570642,
+                  "ndcg@3": 0.306574,
+                  "ndcg@5": 0.570642,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "paper_summary": {
+                "case_count": 5,
+                "metrics": {
+                  "contract_recall@1": 0.6,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.6,
+                  "contract_recall@5": 0.8,
+                  "mrr": 0.672222,
+                  "ndcg@1": 0.6,
+                  "ndcg@10": 0.746341,
+                  "ndcg@20": 0.746341,
+                  "ndcg@3": 0.6,
+                  "ndcg@5": 0.686135,
+                  "recall@1": 0.6,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.6,
+                  "recall@5": 0.8,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.410714,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.506071,
+                  "ndcg@20": 0.559251,
+                  "ndcg@3": 0.375,
+                  "ndcg@5": 0.375,
+                  "recall@1": 0.25,
+                  "recall@10": 0.875,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.806574,
+                  "ndcg@20": 0.806574,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 20,
+                "metrics": {
+                  "contract_recall@1": 0.425,
+                  "contract_recall@10": 0.9,
+                  "contract_recall@20": 0.95,
+                  "contract_recall@3": 0.575,
+                  "contract_recall@5": 0.625,
+                  "mrr": 0.558532,
+                  "ndcg@1": 0.45,
+                  "ndcg@10": 0.616221,
+                  "ndcg@20": 0.640369,
+                  "ndcg@3": 0.512204,
+                  "ndcg@5": 0.533738,
+                  "recall@1": 0.425,
+                  "recall@10": 0.875,
+                  "recall@20": 0.95,
+                  "recall@3": 0.575,
+                  "recall@5": 0.625,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "selected_context": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.166666,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.285321,
+                  "ndcg@20": 0.285321,
+                  "ndcg@3": 0.153287,
+                  "ndcg@5": 0.285321,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.25,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.166666,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.285321,
+                  "ndcg@20": 0.285321,
+                  "ndcg@3": 0.153287,
+                  "ndcg@5": 0.285321,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.25,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "en_locale": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.458333,
+                  "contract_recall@10": 0.916667,
+                  "contract_recall@20": 0.916667,
+                  "contract_recall@3": 0.75,
+                  "contract_recall@5": 0.875,
+                  "mrr": 0.645833,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.703235,
+                  "ndcg@20": 0.703235,
+                  "ndcg@3": 0.629221,
+                  "ndcg@5": 0.687116,
+                  "recall@1": 0.458333,
+                  "recall@10": 0.916667,
+                  "recall@20": 0.916667,
+                  "recall@3": 0.75,
+                  "recall@5": 0.875,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.166667,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.472222,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.435525,
+                  "ndcg@20": 0.525604,
+                  "ndcg@3": 0.371049,
+                  "ndcg@5": 0.371049,
+                  "recall@1": 0.166667,
+                  "recall@10": 0.666667,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "figure_architecture": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.666667,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.75,
+                  "ndcg@20": 0.75,
+                  "ndcg@3": 0.75,
+                  "ndcg@5": 0.75,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 1.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@3": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@1": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "quantitative_fact": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.148148,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.243902,
+                  "ndcg@20": 0.333982,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.143559,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.436508,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.508095,
+                  "ndcg@20": 0.579001,
+                  "ndcg@3": 0.333333,
+                  "ndcg@5": 0.333333,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.833333,
+                  "recall@20": 1.0,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.541667,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.648798,
+                  "ndcg@20": 0.648798,
+                  "ndcg@3": 0.543643,
+                  "ndcg@5": 0.543643,
+                  "recall@1": 0.333333,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.666667,
+                  "recall@5": 0.666667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.229166,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.407732,
+                  "ndcg@20": 0.407732,
+                  "ndcg@3": 0.25,
+                  "ndcg@5": 0.25,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_b": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.806574,
+                  "ndcg@20": 0.806574,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.806574,
+                  "ndcg@20": 0.806574,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh_locale": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.3,
+                  "contract_recall@10": 0.8,
+                  "contract_recall@20": 0.9,
+                  "contract_recall@3": 0.3,
+                  "contract_recall@5": 0.3,
+                  "mrr": 0.375397,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.445624,
+                  "ndcg@20": 0.49392,
+                  "ndcg@3": 0.3,
+                  "ndcg@5": 0.3,
+                  "recall@1": 0.3,
+                  "recall@10": 0.75,
+                  "recall@20": 0.9,
+                  "recall@3": 0.3,
+                  "recall@5": 0.3,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "mamba-selective-state",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "single_paper_mechanism",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "mamba-hardware-scan",
+              "locale": "en",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "en_locale",
+                "system_a"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-edge-functions",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-pruning-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.411834,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-ternary-efficiency",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-absmean-formula",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "formula_reasoning",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sam2-streaming-memory",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "sam2-data-engine-scale",
+              "locale": "zh",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 9,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-dataset-scale",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "quantitative_fact"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-box-architecture",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "figure_architecture",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-alternating-attention",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-flash-upstream",
+              "locale": "en",
+              "evaluation_focus": "upstream_reference",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "system_b",
+                "upstream_reference"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.806574,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "deepseek-r1-zero-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 7,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.112451,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "deepseek-r1-multistage",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "figure_architecture"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-local-global-context",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-vision-tokens",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "exact_location",
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 12,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.083333,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "timesfm-decoder-patches",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "timesfm-probabilistic-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-three-roles",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-external-rl",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "system_a",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "long-context-attention-synthesis",
+              "locale": "en",
+              "evaluation_focus": "multi_paper_synthesis",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.570642,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "segmentation-transfer-synthesis",
+              "locale": "zh",
+              "evaluation_focus": "method_comparison",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "zh_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 22,
+          "label_count": 27,
+          "zero_hit_cases": 0,
+          "translated_cases": 0,
+          "metrics": {
+            "contract_recall@1": 0.363636,
+            "contract_recall@10": 0.704545,
+            "contract_recall@20": 0.840909,
+            "contract_recall@3": 0.5,
+            "contract_recall@5": 0.522727,
+            "mrr": 0.50922,
+            "ndcg@1": 0.409091,
+            "ndcg@10": 0.530982,
+            "ndcg@20": 0.568916,
+            "ndcg@3": 0.454007,
+            "ndcg@5": 0.46601,
+            "recall@1": 0.363636,
+            "recall@10": 0.704545,
+            "recall@20": 0.840909,
+            "recall@3": 0.5,
+            "recall@5": 0.522727,
+            "wrong_source_rate@1": 0.409091,
+            "wrong_source_rate@10": 0.277273,
+            "wrong_source_rate@20": 0.229545,
+            "wrong_source_rate@3": 0.424242,
+            "wrong_source_rate@5": 0.427273
+          },
+          "latency_ms": {
+            "p50": 12.058,
+            "p95": 53.858,
+            "max": 56.432
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.666667,
+                  "contract_recall@10": 0.875,
+                  "contract_recall@20": 0.875,
+                  "contract_recall@3": 0.833333,
+                  "contract_recall@5": 0.875,
+                  "mrr": 0.833333,
+                  "ndcg@1": 0.75,
+                  "ndcg@10": 0.812685,
+                  "ndcg@20": 0.812685,
+                  "ndcg@3": 0.790679,
+                  "ndcg@5": 0.812685,
+                  "recall@1": 0.666667,
+                  "recall@10": 0.875,
+                  "recall@20": 0.875,
+                  "recall@3": 0.833333,
+                  "recall@5": 0.875,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.125,
+                  "wrong_source_rate@20": 0.195833,
+                  "wrong_source_rate@3": 0.055556,
+                  "wrong_source_rate@5": 0.083333
+                }
+              },
+              "zh": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.8,
+                  "contract_recall@3": 0.1,
+                  "contract_recall@5": 0.1,
+                  "mrr": 0.120285,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.192939,
+                  "ndcg@20": 0.276393,
+                  "ndcg@3": 0.05,
+                  "ndcg@5": 0.05,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.8,
+                  "recall@3": 0.1,
+                  "recall@5": 0.1,
+                  "wrong_source_rate@1": 0.9,
+                  "wrong_source_rate@10": 0.46,
+                  "wrong_source_rate@20": 0.27,
+                  "wrong_source_rate@3": 0.866667,
+                  "wrong_source_rate@5": 0.84
+                }
+              }
+            },
+            "evaluation_focus": {
+              "method_comparison": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 0.5,
+                  "wrong_source_rate@20": 0.25,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              },
+              "method_detail": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.3,
+                  "contract_recall@10": 0.6,
+                  "contract_recall@20": 0.8,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.413575,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.448714,
+                  "ndcg@20": 0.49896,
+                  "ndcg@3": 0.413093,
+                  "ndcg@5": 0.413093,
+                  "recall@1": 0.3,
+                  "recall@10": 0.6,
+                  "recall@20": 0.8,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.34,
+                  "wrong_source_rate@20": 0.29,
+                  "wrong_source_rate@3": 0.5,
+                  "wrong_source_rate@5": 0.5
+                }
+              },
+              "multi_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.877215,
+                  "ndcg@20": 0.877215,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.877215,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.05,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "paper_summary": {
+                "case_count": 5,
+                "metrics": {
+                  "contract_recall@1": 0.6,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.8,
+                  "contract_recall@5": 0.8,
+                  "mrr": 0.733333,
+                  "ndcg@1": 0.6,
+                  "ndcg@10": 0.797427,
+                  "ndcg@20": 0.797427,
+                  "ndcg@3": 0.726186,
+                  "ndcg@5": 0.726186,
+                  "recall@1": 0.6,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.8,
+                  "recall@5": 0.8,
+                  "wrong_source_rate@1": 0.2,
+                  "wrong_source_rate@10": 0.12,
+                  "wrong_source_rate@20": 0.15,
+                  "wrong_source_rate@3": 0.2,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "scope_boundary": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.75,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.25,
+                  "mrr": 0.350108,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.429244,
+                  "ndcg@20": 0.512263,
+                  "ndcg@3": 0.25,
+                  "ndcg@5": 0.25,
+                  "recall@1": 0.25,
+                  "recall@10": 0.75,
+                  "recall@20": 1.0,
+                  "recall@3": 0.25,
+                  "recall@5": 0.25,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.25,
+                  "wrong_source_rate@20": 0.125,
+                  "wrong_source_rate@3": 0.5,
+                  "wrong_source_rate@5": 0.5
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.613147,
+                  "ndcg@20": 0.613147,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.6,
+                  "wrong_source_rate@20": 0.6,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.4
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 20,
+                "metrics": {
+                  "contract_recall@1": 0.375,
+                  "contract_recall@10": 0.725,
+                  "contract_recall@20": 0.875,
+                  "contract_recall@3": 0.525,
+                  "contract_recall@5": 0.525,
+                  "mrr": 0.510142,
+                  "ndcg@1": 0.4,
+                  "ndcg@10": 0.54022,
+                  "ndcg@20": 0.581947,
+                  "ndcg@3": 0.46875,
+                  "ndcg@5": 0.46875,
+                  "recall@1": 0.375,
+                  "recall@10": 0.725,
+                  "recall@20": 0.875,
+                  "recall@3": 0.525,
+                  "recall@5": 0.525,
+                  "wrong_source_rate@1": 0.4,
+                  "wrong_source_rate@10": 0.28,
+                  "wrong_source_rate@20": 0.2375,
+                  "wrong_source_rate@3": 0.416667,
+                  "wrong_source_rate@5": 0.42
+                }
+              },
+              "selected_context": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.438607,
+                  "ndcg@20": 0.438607,
+                  "ndcg@3": 0.306573,
+                  "ndcg@5": 0.438607,
+                  "recall@1": 0.25,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.25,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.25,
+                  "wrong_source_rate@20": 0.15,
+                  "wrong_source_rate@3": 0.5,
+                  "wrong_source_rate@5": 0.5
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.438607,
+                  "ndcg@20": 0.438607,
+                  "ndcg@3": 0.306573,
+                  "ndcg@5": 0.438607,
+                  "recall@1": 0.25,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.25,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.25,
+                  "wrong_source_rate@20": 0.15,
+                  "wrong_source_rate@3": 0.5,
+                  "wrong_source_rate@5": 0.5
+                }
+              },
+              "en_locale": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.666667,
+                  "contract_recall@10": 0.875,
+                  "contract_recall@20": 0.875,
+                  "contract_recall@3": 0.833333,
+                  "contract_recall@5": 0.875,
+                  "mrr": 0.833333,
+                  "ndcg@1": 0.75,
+                  "ndcg@10": 0.812685,
+                  "ndcg@20": 0.812685,
+                  "ndcg@3": 0.790679,
+                  "ndcg@5": 0.812685,
+                  "recall@1": 0.666667,
+                  "recall@10": 0.875,
+                  "recall@20": 0.875,
+                  "recall@3": 0.833333,
+                  "recall@5": 0.875,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.125,
+                  "wrong_source_rate@20": 0.195833,
+                  "wrong_source_rate@3": 0.055556,
+                  "wrong_source_rate@5": 0.083333
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.833333,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.686275,
+                  "ndcg@1": 0.666667,
+                  "ndcg@10": 0.537716,
+                  "ndcg@20": 0.617653,
+                  "ndcg@3": 0.537716,
+                  "ndcg@5": 0.537716,
+                  "recall@1": 0.5,
+                  "recall@10": 0.5,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.333333,
+                  "wrong_source_rate@10": 0.366667,
+                  "wrong_source_rate@20": 0.3,
+                  "wrong_source_rate@3": 0.444444,
+                  "wrong_source_rate@5": 0.466667
+                }
+              },
+              "figure_architecture": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.666667,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.75,
+                  "ndcg@20": 0.75,
+                  "ndcg@3": 0.75,
+                  "ndcg@5": 0.75,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.3,
+                  "wrong_source_rate@20": 0.375,
+                  "wrong_source_rate@3": 0.333334,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.166667,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.356207,
+                  "ndcg@20": 0.356207,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 0.5,
+                  "wrong_source_rate@20": 0.25,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              },
+              "quantitative_fact": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.24183,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.329046,
+                  "ndcg@20": 0.408983,
+                  "ndcg@3": 0.21031,
+                  "ndcg@5": 0.21031,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 1.0,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.666667,
+                  "wrong_source_rate@10": 0.366667,
+                  "wrong_source_rate@20": 0.266667,
+                  "wrong_source_rate@3": 0.666667,
+                  "wrong_source_rate@5": 0.666667
+                }
+              },
+              "scope_boundary": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.133478,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.238992,
+                  "ndcg@20": 0.349684,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.666667,
+                  "wrong_source_rate@10": 0.333333,
+                  "wrong_source_rate@20": 0.166667,
+                  "wrong_source_rate@3": 0.666667,
+                  "wrong_source_rate@5": 0.666667
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.543643,
+                  "ndcg@20": 0.543643,
+                  "ndcg@3": 0.543643,
+                  "ndcg@5": 0.543643,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.666667,
+                  "recall@5": 0.666667,
+                  "wrong_source_rate@1": 0.333333,
+                  "wrong_source_rate@10": 0.166667,
+                  "wrong_source_rate@20": 0.133333,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.333333
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.538462,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.5,
+                  "ndcg@20": 0.631325,
+                  "ndcg@3": 0.5,
+                  "ndcg@5": 0.5,
+                  "recall@1": 0.5,
+                  "recall@10": 0.5,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.25,
+                  "wrong_source_rate@20": 0.125,
+                  "wrong_source_rate@3": 0.5,
+                  "wrong_source_rate@5": 0.5
+                }
+              },
+              "system_b": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.613147,
+                  "ndcg@20": 0.613147,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.6,
+                  "wrong_source_rate@20": 0.6,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.4
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.613147,
+                  "ndcg@20": 0.613147,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.6,
+                  "wrong_source_rate@20": 0.6,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.4
+                }
+              },
+              "zh_locale": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.8,
+                  "contract_recall@3": 0.1,
+                  "contract_recall@5": 0.1,
+                  "mrr": 0.120285,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.192939,
+                  "ndcg@20": 0.276393,
+                  "ndcg@3": 0.05,
+                  "ndcg@5": 0.05,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.8,
+                  "recall@3": 0.1,
+                  "recall@5": 0.1,
+                  "wrong_source_rate@1": 0.9,
+                  "wrong_source_rate@10": 0.46,
+                  "wrong_source_rate@20": 0.27,
+                  "wrong_source_rate@3": 0.866667,
+                  "wrong_source_rate@5": 0.84
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "mamba-selective-state",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "single_paper_mechanism",
+                "zh_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "mamba-hardware-scan",
+              "locale": "en",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "en_locale",
+                "system_a"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-edge-functions",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-pruning-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 11,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.090909,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-ternary-efficiency",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-absmean-formula",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "formula_reasoning",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sam2-streaming-memory",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "sam2-data-engine-scale",
+              "locale": "zh",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-dataset-scale",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "quantitative_fact"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-box-architecture",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "figure_architecture",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-alternating-attention",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.6,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-flash-upstream",
+              "locale": "en",
+              "evaluation_focus": "upstream_reference",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "system_b",
+                "upstream_reference"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "deepseek-r1-zero-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 7,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.36077,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "deepseek-r1-multistage",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "figure_architecture"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-local-global-context",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-vision-tokens",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "exact_location",
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 17,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.058824,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "timesfm-decoder-patches",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "timesfm-probabilistic-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-three-roles",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-external-rl",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "system_a",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 13,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.076923,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "long-context-attention-synthesis",
+              "locale": "en",
+              "evaluation_focus": "multi_paper_synthesis",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.877215,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "segmentation-transfer-synthesis",
+              "locale": "zh",
+              "evaluation_focus": "method_comparison",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "zh_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "bm25_product_queries": {
+      "channel": "bm25_product_queries",
+      "modes": {
+        "scoped": {
+          "case_count": 22,
+          "label_count": 27,
+          "zero_hit_cases": 0,
+          "translated_cases": 9,
+          "metrics": {
+            "contract_recall@1": 0.272727,
+            "contract_recall@10": 0.818182,
+            "contract_recall@20": 0.886364,
+            "contract_recall@3": 0.5,
+            "contract_recall@5": 0.613636,
+            "mrr": 0.468648,
+            "ndcg@1": 0.318182,
+            "ndcg@10": 0.533032,
+            "ndcg@20": 0.543405,
+            "ndcg@3": 0.414504,
+            "ndcg@5": 0.464438,
+            "recall@1": 0.272727,
+            "recall@10": 0.818182,
+            "recall@20": 0.863636,
+            "recall@3": 0.5,
+            "recall@5": 0.613636,
+            "wrong_source_rate@1": 0.0,
+            "wrong_source_rate@10": 0.0,
+            "wrong_source_rate@20": 0.0,
+            "wrong_source_rate@3": 0.0,
+            "wrong_source_rate@5": 0.0
+          },
+          "latency_ms": {
+            "p50": 12.715,
+            "p95": 22.116,
+            "max": 39.76
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.916667,
+                  "contract_recall@20": 0.916667,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 0.791667,
+                  "mrr": 0.543056,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.604439,
+                  "ndcg@20": 0.604439,
+                  "ndcg@3": 0.509924,
+                  "ndcg@5": 0.56558,
+                  "recall@1": 0.25,
+                  "recall@10": 0.916667,
+                  "recall@20": 0.916667,
+                  "recall@3": 0.666667,
+                  "recall@5": 0.791667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.3,
+                  "contract_recall@10": 0.7,
+                  "contract_recall@20": 0.85,
+                  "contract_recall@3": 0.3,
+                  "contract_recall@5": 0.4,
+                  "mrr": 0.379359,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.447344,
+                  "ndcg@20": 0.470164,
+                  "ndcg@3": 0.3,
+                  "ndcg@5": 0.343068,
+                  "recall@1": 0.3,
+                  "recall@10": 0.7,
+                  "recall@20": 0.8,
+                  "recall@3": 0.3,
+                  "recall@5": 0.4,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "evaluation_focus": {
+              "method_comparison": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.05,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.139595,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.5,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "method_detail": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.3,
+                  "contract_recall@10": 0.8,
+                  "contract_recall@20": 0.8,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.418333,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.505092,
+                  "ndcg@20": 0.505092,
+                  "ndcg@3": 0.413093,
+                  "ndcg@5": 0.413093,
+                  "recall@1": 0.3,
+                  "recall@10": 0.8,
+                  "recall@20": 0.8,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "multi_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.850345,
+                  "ndcg@20": 0.850345,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.850345,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "paper_summary": {
+                "case_count": 5,
+                "metrics": {
+                  "contract_recall@1": 0.2,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.6,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.2,
+                  "ndcg@10": 0.624643,
+                  "ndcg@20": 0.624643,
+                  "ndcg@3": 0.452372,
+                  "ndcg@5": 0.624643,
+                  "recall@1": 0.2,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.6,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.75,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.394231,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.477959,
+                  "ndcg@20": 0.50011,
+                  "ndcg@3": 0.375,
+                  "ndcg@5": 0.375,
+                  "recall@1": 0.25,
+                  "recall@10": 0.75,
+                  "recall@20": 0.875,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.790386,
+                  "ndcg@20": 0.790386,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 20,
+                "metrics": {
+                  "contract_recall@1": 0.275,
+                  "contract_recall@10": 0.85,
+                  "contract_recall@20": 0.9,
+                  "contract_recall@3": 0.525,
+                  "contract_recall@5": 0.625,
+                  "mrr": 0.463013,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.543818,
+                  "ndcg@20": 0.548248,
+                  "ndcg@3": 0.425297,
+                  "ndcg@5": 0.468365,
+                  "recall@1": 0.275,
+                  "recall@10": 0.85,
+                  "recall@20": 0.875,
+                  "recall@3": 0.525,
+                  "recall@5": 0.625,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "selected_context": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.75,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.525,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.425173,
+                  "ndcg@20": 0.49497,
+                  "ndcg@3": 0.306573,
+                  "ndcg@5": 0.425173,
+                  "recall@1": 0.25,
+                  "recall@10": 0.5,
+                  "recall@20": 0.75,
+                  "recall@3": 0.25,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.75,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.525,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.425173,
+                  "ndcg@20": 0.49497,
+                  "ndcg@3": 0.306573,
+                  "ndcg@5": 0.425173,
+                  "recall@1": 0.25,
+                  "recall@10": 0.5,
+                  "recall@20": 0.75,
+                  "recall@3": 0.25,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "en_locale": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.916667,
+                  "contract_recall@20": 0.916667,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 0.791667,
+                  "mrr": 0.543056,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.604439,
+                  "ndcg@20": 0.604439,
+                  "ndcg@3": 0.509924,
+                  "ndcg@5": 0.56558,
+                  "recall@1": 0.25,
+                  "recall@10": 0.916667,
+                  "recall@20": 0.916667,
+                  "recall@3": 0.666667,
+                  "recall@5": 0.791667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.166667,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.444444,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.430129,
+                  "ndcg@20": 0.430129,
+                  "ndcg@3": 0.371049,
+                  "ndcg@5": 0.371049,
+                  "recall@1": 0.166667,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "figure_architecture": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.666667,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.75,
+                  "ndcg@20": 0.75,
+                  "ndcg@3": 0.75,
+                  "ndcg@5": 0.75,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 1.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@3": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@1": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "quantitative_fact": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.166667,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.287118,
+                  "ndcg@20": 0.287118,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.287118,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.0,
+                  "recall@5": 0.666667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.41453,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.470611,
+                  "ndcg@20": 0.500146,
+                  "ndcg@3": 0.333333,
+                  "ndcg@5": 0.333333,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.241667,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.41182,
+                  "ndcg@20": 0.41182,
+                  "ndcg@3": 0.21031,
+                  "ndcg@5": 0.21031,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.229166,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.407732,
+                  "ndcg@20": 0.407732,
+                  "ndcg@3": 0.25,
+                  "ndcg@5": 0.25,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_b": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.790386,
+                  "ndcg@20": 0.790386,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.790386,
+                  "ndcg@20": 0.790386,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh_locale": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.3,
+                  "contract_recall@10": 0.7,
+                  "contract_recall@20": 0.85,
+                  "contract_recall@3": 0.3,
+                  "contract_recall@5": 0.4,
+                  "mrr": 0.379359,
+                  "ndcg@1": 0.3,
+                  "ndcg@10": 0.447344,
+                  "ndcg@20": 0.470164,
+                  "ndcg@3": 0.3,
+                  "ndcg@5": 0.343068,
+                  "recall@1": 0.3,
+                  "recall@10": 0.7,
+                  "recall@20": 0.8,
+                  "recall@3": 0.3,
+                  "recall@5": 0.4,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "mamba-selective-state",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "single_paper_mechanism",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "mamba-hardware-scan",
+              "locale": "en",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "en_locale",
+                "system_a"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-edge-functions",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-pruning-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.411834,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-ternary-efficiency",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-absmean-formula",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "formula_reasoning",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sam2-streaming-memory",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "sam2-data-engine-scale",
+              "locale": "zh",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-dataset-scale",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "quantitative_fact"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-box-architecture",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "figure_architecture",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-alternating-attention",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-flash-upstream",
+              "locale": "en",
+              "evaluation_focus": "upstream_reference",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "system_b",
+                "upstream_reference"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.790386,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "deepseek-r1-zero-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 13,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.076923,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "deepseek-r1-multistage",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "figure_architecture"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-local-global-context",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-vision-tokens",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "exact_location",
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "timesfm-decoder-patches",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 10,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "timesfm-probabilistic-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-three-roles",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-external-rl",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "system_a",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "long-context-attention-synthesis",
+              "locale": "en",
+              "evaluation_focus": "multi_paper_synthesis",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.850345,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "segmentation-transfer-synthesis",
+              "locale": "zh",
+              "evaluation_focus": "method_comparison",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 20,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.05,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 22,
+          "label_count": 27,
+          "zero_hit_cases": 0,
+          "translated_cases": 9,
+          "metrics": {
+            "contract_recall@1": 0.25,
+            "contract_recall@10": 0.727273,
+            "contract_recall@20": 0.840909,
+            "contract_recall@3": 0.522727,
+            "contract_recall@5": 0.568182,
+            "mrr": 0.428472,
+            "ndcg@1": 0.272727,
+            "ndcg@10": 0.487485,
+            "ndcg@20": 0.508146,
+            "ndcg@3": 0.415312,
+            "ndcg@5": 0.432896,
+            "recall@1": 0.25,
+            "recall@10": 0.727273,
+            "recall@20": 0.818182,
+            "recall@3": 0.522727,
+            "recall@5": 0.568182,
+            "wrong_source_rate@1": 0.090909,
+            "wrong_source_rate@10": 0.131818,
+            "wrong_source_rate@20": 0.206818,
+            "wrong_source_rate@3": 0.090909,
+            "wrong_source_rate@5": 0.081818
+          },
+          "latency_ms": {
+            "p50": 47.448,
+            "p95": 101.956,
+            "max": 120.628
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.291667,
+                  "contract_recall@10": 0.833333,
+                  "contract_recall@20": 0.833333,
+                  "contract_recall@3": 0.708333,
+                  "contract_recall@5": 0.708333,
+                  "mrr": 0.536111,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.592542,
+                  "ndcg@20": 0.592542,
+                  "ndcg@3": 0.553072,
+                  "ndcg@5": 0.553072,
+                  "recall@1": 0.291667,
+                  "recall@10": 0.833333,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.708333,
+                  "recall@5": 0.708333,
+                  "wrong_source_rate@1": 0.083333,
+                  "wrong_source_rate@10": 0.15,
+                  "wrong_source_rate@20": 0.204167,
+                  "wrong_source_rate@3": 0.083333,
+                  "wrong_source_rate@5": 0.1
+                }
+              },
+              "zh": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.2,
+                  "contract_recall@10": 0.6,
+                  "contract_recall@20": 0.85,
+                  "contract_recall@3": 0.3,
+                  "contract_recall@5": 0.4,
+                  "mrr": 0.299306,
+                  "ndcg@1": 0.2,
+                  "ndcg@10": 0.361415,
+                  "ndcg@20": 0.406869,
+                  "ndcg@3": 0.25,
+                  "ndcg@5": 0.288685,
+                  "recall@1": 0.2,
+                  "recall@10": 0.6,
+                  "recall@20": 0.8,
+                  "recall@3": 0.3,
+                  "recall@5": 0.4,
+                  "wrong_source_rate@1": 0.1,
+                  "wrong_source_rate@10": 0.11,
+                  "wrong_source_rate@20": 0.21,
+                  "wrong_source_rate@3": 0.1,
+                  "wrong_source_rate@5": 0.06
+                }
+              }
+            },
+            "evaluation_focus": {
+              "method_comparison": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.055556,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.14434,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.5,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.2,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "method_detail": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.2,
+                  "contract_recall@10": 0.7,
+                  "contract_recall@20": 0.8,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.344167,
+                  "ndcg@1": 0.2,
+                  "ndcg@10": 0.423546,
+                  "ndcg@20": 0.446313,
+                  "ndcg@3": 0.363093,
+                  "ndcg@5": 0.363093,
+                  "recall@1": 0.2,
+                  "recall@10": 0.7,
+                  "recall@20": 0.8,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.1,
+                  "wrong_source_rate@10": 0.11,
+                  "wrong_source_rate@20": 0.205,
+                  "wrong_source_rate@3": 0.066667,
+                  "wrong_source_rate@5": 0.06
+                }
+              },
+              "multi_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.797723,
+                  "ndcg@20": 0.797723,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "paper_summary": {
+                "case_count": 5,
+                "metrics": {
+                  "contract_recall@1": 0.2,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.8,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.54,
+                  "ndcg@1": 0.2,
+                  "ndcg@10": 0.655929,
+                  "ndcg@20": 0.655929,
+                  "ndcg@3": 0.578558,
+                  "ndcg@5": 0.655929,
+                  "recall@1": 0.2,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.8,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.12,
+                  "wrong_source_rate@20": 0.2,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.75,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.557292,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.602958,
+                  "ndcg@20": 0.623592,
+                  "ndcg@3": 0.5,
+                  "ndcg@5": 0.5,
+                  "recall@1": 0.5,
+                  "recall@10": 0.75,
+                  "recall@20": 0.875,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.05,
+                  "wrong_source_rate@20": 0.0875,
+                  "wrong_source_rate@3": 0.083333,
+                  "wrong_source_rate@5": 0.05
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 1.0,
+                  "wrong_source_rate@20": 0.95,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 20,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.75,
+                  "contract_recall@20": 0.85,
+                  "contract_recall@3": 0.55,
+                  "contract_recall@5": 0.6,
+                  "mrr": 0.418542,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.496347,
+                  "ndcg@20": 0.511857,
+                  "ndcg@3": 0.426186,
+                  "ndcg@5": 0.445529,
+                  "recall@1": 0.25,
+                  "recall@10": 0.75,
+                  "recall@20": 0.825,
+                  "recall@3": 0.55,
+                  "recall@5": 0.6,
+                  "wrong_source_rate@1": 0.1,
+                  "wrong_source_rate@10": 0.145,
+                  "wrong_source_rate@20": 0.2175,
+                  "wrong_source_rate@3": 0.1,
+                  "wrong_source_rate@5": 0.09
+                }
+              },
+              "selected_context": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.75,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.25,
+                  "mrr": 0.527778,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.398861,
+                  "ndcg@20": 0.471031,
+                  "ndcg@3": 0.306573,
+                  "ndcg@5": 0.306573,
+                  "recall@1": 0.25,
+                  "recall@10": 0.5,
+                  "recall@20": 0.75,
+                  "recall@3": 0.25,
+                  "recall@5": 0.25,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.1,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.75,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.25,
+                  "mrr": 0.527778,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.398861,
+                  "ndcg@20": 0.471031,
+                  "ndcg@3": 0.306573,
+                  "ndcg@5": 0.306573,
+                  "recall@1": 0.25,
+                  "recall@10": 0.5,
+                  "recall@20": 0.75,
+                  "recall@3": 0.25,
+                  "recall@5": 0.25,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.1,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "en_locale": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@1": 0.291667,
+                  "contract_recall@10": 0.833333,
+                  "contract_recall@20": 0.833333,
+                  "contract_recall@3": 0.708333,
+                  "contract_recall@5": 0.708333,
+                  "mrr": 0.536111,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.592542,
+                  "ndcg@20": 0.592542,
+                  "ndcg@3": 0.553072,
+                  "ndcg@5": 0.553072,
+                  "recall@1": 0.291667,
+                  "recall@10": 0.833333,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.708333,
+                  "recall@5": 0.708333,
+                  "wrong_source_rate@1": 0.083333,
+                  "wrong_source_rate@10": 0.15,
+                  "wrong_source_rate@20": 0.204167,
+                  "wrong_source_rate@3": 0.083333,
+                  "wrong_source_rate@5": 0.1
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.333333,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.111111,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.166667,
+                  "ndcg@20": 0.166667,
+                  "ndcg@3": 0.166667,
+                  "ndcg@5": 0.166667,
+                  "recall@1": 0.0,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.333333,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.333333,
+                  "wrong_source_rate@10": 0.333333,
+                  "wrong_source_rate@20": 0.45,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.333333
+                }
+              },
+              "figure_architecture": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.333333,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.5,
+                  "ndcg@20": 0.5,
+                  "ndcg@3": 0.5,
+                  "ndcg@5": 0.5,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.3,
+                  "wrong_source_rate@20": 0.35,
+                  "wrong_source_rate@3": 0.333334,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 1.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@3": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@1": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "quantitative_fact": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.233333,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.339261,
+                  "ndcg@20": 0.339261,
+                  "ndcg@3": 0.21031,
+                  "ndcg@5": 0.339261,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.666667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.133333,
+                  "wrong_source_rate@20": 0.35,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.409722,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.470611,
+                  "ndcg@20": 0.498122,
+                  "ndcg@3": 0.333333,
+                  "ndcg@5": 0.333333,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.066667,
+                  "wrong_source_rate@20": 0.116667,
+                  "wrong_source_rate@3": 0.111111,
+                  "wrong_source_rate@5": 0.066667
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.216667,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.306665,
+                  "ndcg@20": 0.382555,
+                  "ndcg@3": 0.21031,
+                  "ndcg@5": 0.21031,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 1.0,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5625,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.657733,
+                  "ndcg@20": 0.657733,
+                  "ndcg@3": 0.5,
+                  "ndcg@5": 0.5,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.05,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_b": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 1.0,
+                  "wrong_source_rate@20": 0.95,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              },
+              "upstream_reference": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 1.0,
+                  "wrong_source_rate@20": 0.95,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              },
+              "zh_locale": {
+                "case_count": 10,
+                "metrics": {
+                  "contract_recall@1": 0.2,
+                  "contract_recall@10": 0.6,
+                  "contract_recall@20": 0.85,
+                  "contract_recall@3": 0.3,
+                  "contract_recall@5": 0.4,
+                  "mrr": 0.299306,
+                  "ndcg@1": 0.2,
+                  "ndcg@10": 0.361415,
+                  "ndcg@20": 0.406869,
+                  "ndcg@3": 0.25,
+                  "ndcg@5": 0.288685,
+                  "recall@1": 0.2,
+                  "recall@10": 0.6,
+                  "recall@20": 0.8,
+                  "recall@3": 0.3,
+                  "recall@5": 0.4,
+                  "wrong_source_rate@1": 0.1,
+                  "wrong_source_rate@10": 0.11,
+                  "wrong_source_rate@20": 0.21,
+                  "wrong_source_rate@3": 0.1,
+                  "wrong_source_rate@5": 0.06
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "mamba-selective-state",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "single_paper_mechanism",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 20,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.05,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "mamba-hardware-scan",
+              "locale": "en",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "en_locale",
+                "system_a"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-edge-functions",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "kan-pruning-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.411834,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-ternary-efficiency",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bitnet-absmean-formula",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "formula_reasoning",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sam2-streaming-memory",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "sam2-data-engine-scale",
+              "locale": "zh",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-dataset-scale",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale",
+                "quantitative_fact"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "medsam-box-architecture",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "figure_architecture",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-alternating-attention",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "modernbert-flash-upstream",
+              "locale": "en",
+              "evaluation_focus": "upstream_reference",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "system_b",
+                "upstream_reference"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "deepseek-r1-zero-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 16,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0625,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "deepseek-r1-multistage",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "exact_location",
+                "figure_architecture"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-local-global-context",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "gemma3-vision-tokens",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "exact_location",
+                "quantitative_fact",
+                "zh_locale"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "timesfm-decoder-patches",
+              "locale": "en",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "en_locale",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 10,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "timesfm-probabilistic-boundary",
+              "locale": "zh",
+              "evaluation_focus": "scope_boundary",
+              "coverage_tags": [
+                "scope_boundary",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-three-roles",
+              "locale": "en",
+              "evaluation_focus": "paper_summary",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "bindgpt-external-rl",
+              "locale": "zh",
+              "evaluation_focus": "method_detail",
+              "coverage_tags": [
+                "system_a",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "long-context-attention-synthesis",
+              "locale": "en",
+              "evaluation_focus": "multi_paper_synthesis",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.797723,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "segmentation-transfer-synthesis",
+              "locale": "zh",
+              "evaluation_focus": "method_comparison",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "zh_locale"
+              ],
+              "first_relevant_rank": 18,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.055556,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

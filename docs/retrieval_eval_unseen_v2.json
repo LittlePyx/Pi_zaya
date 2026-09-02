@@ -1,0 +1,1236 @@
+{
+  "schema_version": 2,
+  "id": "research_qa_unseen_corpus_v2_chunk_qrels",
+  "curation_status": "frozen_pre_registered_contract_projection",
+  "description": "Chunk-level retrieval qrels mechanically projected from the pre-registered Research QA v2 source/page/evidence contracts before embedding model selection.",
+  "source_fixture": {
+    "path": "docs/research_qa_unseen_corpus_v2.json",
+    "sha256": "1d8ca4283355aa0cfafcb845e75107fab9c70ab75264ea7c6b2e61d5b5d89ae6",
+    "sha256_newlines": "normalized_lf",
+    "benchmark_id": "unseen_corpus_v2"
+  },
+  "label_policy": {
+    "version": 1,
+    "unit": "indexed_chunk",
+    "candidate_boundary": "registered document and source page",
+    "selection": "greedy evidence-term coverage independent of retriever ranking; at most three chunks per claim-evidence contract",
+    "grades": {
+      "3": "direct high-coverage evidence",
+      "2": "direct partial evidence"
+    }
+  },
+  "ks": [
+    1,
+    3,
+    5,
+    10,
+    20
+  ],
+  "corpus": {
+    "document_count": 10,
+    "chunk_count": 1673,
+    "fingerprint_algorithm": "sha256(logical_doc_id,chunk_id,text_sha256,page_span)",
+    "fingerprint": "d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516",
+    "documents": [
+      {
+        "doc_id": "bindgpt",
+        "index_doc_id": "385eac8794116d02",
+        "paper_sha256": "B2F966BE4489DC8FAA3AC0ECB0374768DD1CE7424EBB5F6A0BC4E31B021DC805",
+        "chunk_count": 87
+      },
+      {
+        "doc_id": "bitnet",
+        "index_doc_id": "a0923c9f6b527c9f",
+        "paper_sha256": "BCD625E89F95C39DC9143AF4174978FCF2467EB9659D86F8DA448D7D9366C332",
+        "chunk_count": 65
+      },
+      {
+        "doc_id": "deepseek_r1",
+        "index_doc_id": "606d3883253df045",
+        "paper_sha256": "B191B0A365A64B4AB2791D117069ED17A2933D03554A662CED58B37DF52018F4",
+        "chunk_count": 287
+      },
+      {
+        "doc_id": "gemma3",
+        "index_doc_id": "7c0059b4861a99a7",
+        "paper_sha256": "B2793D288D6672F8D6A03F65370BB4A48D607F54937A22FC7D9F727435795305",
+        "chunk_count": 166
+      },
+      {
+        "doc_id": "kan",
+        "index_doc_id": "4582761a1616bdd6",
+        "paper_sha256": "C04339E34AC3F4A8695A74C59E2A0A4F332CFDCB3831A12696D5192CEC2ED713",
+        "chunk_count": 207
+      },
+      {
+        "doc_id": "mamba",
+        "index_doc_id": "53802a4f79933bae",
+        "paper_sha256": "ADF70ED1803C85B1899DEC3E21F3AF0B124411439E8654B840EA65F7B9F52B2E",
+        "chunk_count": 180
+      },
+      {
+        "doc_id": "medsam",
+        "index_doc_id": "ac11f427a96c4cc4",
+        "paper_sha256": "E6682B7314C1ADEBD029CB8CF7B173464AFF99AAA45941E743E5439E537D4010",
+        "chunk_count": 45
+      },
+      {
+        "doc_id": "modernbert",
+        "index_doc_id": "eabb38f4bf4fc81d",
+        "paper_sha256": "013E5326FE840B8FE593A5A5BF838CA173672274F597DC6C83BFC2E06E816CE3",
+        "chunk_count": 83
+      },
+      {
+        "doc_id": "sam2",
+        "index_doc_id": "36b6b8be924bad5a",
+        "paper_sha256": "664F5C4254DB441569ECFE36A2A2FA91A1ECEC5F4D31B3BCC5D451193EFC2C0D",
+        "chunk_count": 437
+      },
+      {
+        "doc_id": "timesfm",
+        "index_doc_id": "0bb62cdf7be2eb9d",
+        "paper_sha256": "3969AAE97301F8300DA392A7C5309776D8A12EBFE71F64F22FBC28125BE2E72C",
+        "chunk_count": 116
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "mamba-selective-state",
+      "query": "Mamba 的 selection mechanism 如何让状态空间模型按当前输入决定记住或忘掉信息？这与以往时不变 SSM 的关键差别是什么？",
+      "locale": "zh",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "single_paper_mechanism",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "mamba"
+      ],
+      "contracts": [
+        {
+          "id": "mamba-selection",
+          "doc_id": "mamba",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "53802a4f79933bae:4"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "53802a4f79933bae:4",
+          "grade": 3,
+          "doc_id": "mamba",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "mamba-selection"
+          ],
+          "matched_evidence_terms": [
+            "selection mechanism",
+            "input-dependent",
+            "filter out irrelevant information",
+            "remember relevant information"
+          ],
+          "text_sha256": "532d17ddfb9d54433d72e58087a1c4f5740ce53312bf4cfb7f7cd17e7c129491"
+        }
+      ],
+      "relevance": {
+        "53802a4f79933bae:4": 3
+      }
+    },
+    {
+      "id": "mamba-hardware-scan",
+      "query": "Why does Mamba use a recurrent scan instead of convolution after making the SSM selective, and what GPU-memory optimization keeps that scan efficient?",
+      "locale": "en",
+      "evaluation_focus": "scope_boundary",
+      "coverage_tags": [
+        "en_locale",
+        "system_a"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "mamba"
+      ],
+      "contracts": [
+        {
+          "id": "mamba-hardware",
+          "doc_id": "mamba",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "53802a4f79933bae:5"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "53802a4f79933bae:5",
+          "grade": 3,
+          "doc_id": "mamba",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "mamba-hardware"
+          ],
+          "matched_evidence_terms": [
+            "hardware-aware algorithm",
+            "scan instead of convolution",
+            "expanded state",
+            "GPU memory hierarchy"
+          ],
+          "text_sha256": "c1a735c41ff40f6c262e9d91062c409326f0e34bf438cd64bc1faa7c02060387"
+        }
+      ],
+      "relevance": {
+        "53802a4f79933bae:5": 3
+      }
+    },
+    {
+      "id": "kan-edge-functions",
+      "query": "Where do KANs place learnable activation functions compared with MLPs, what remains at the nodes, and what replaces each linear weight parameter?",
+      "locale": "en",
+      "evaluation_focus": "paper_summary",
+      "coverage_tags": [
+        "en_locale",
+        "single_paper_mechanism"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "kan"
+      ],
+      "contracts": [
+        {
+          "id": "kan-edges",
+          "doc_id": "kan",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "4582761a1616bdd6:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "4582761a1616bdd6:3",
+          "grade": 3,
+          "doc_id": "kan",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "kan-edges"
+          ],
+          "matched_evidence_terms": [
+            "learnable activation functions on edges",
+            "no linear weight matrices",
+            "1D function",
+            "spline"
+          ],
+          "text_sha256": "3ed6947d1f5493e5017bf9506cb128fded60037acf5de2a1750e1d5368b1accf"
+        }
+      ],
+      "relevance": {
+        "4582761a1616bdd6:3": 3
+      }
+    },
+    {
+      "id": "kan-pruning-boundary",
+      "query": "KAN 的可解释化流程是直接按边剪枝吗？请说明论文先用什么训练约束，再在哪个粒度执行 pruning。",
+      "locale": "zh",
+      "evaluation_focus": "scope_boundary",
+      "coverage_tags": [
+        "scope_boundary",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "kan"
+      ],
+      "contracts": [
+        {
+          "id": "kan-sparsity",
+          "doc_id": "kan",
+          "source_page": 11,
+          "relevant_chunk_ids": [
+            "4582761a1616bdd6:35"
+          ]
+        },
+        {
+          "id": "kan-node-pruning",
+          "doc_id": "kan",
+          "source_page": 12,
+          "relevant_chunk_ids": [
+            "4582761a1616bdd6:39"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "4582761a1616bdd6:35",
+          "grade": 3,
+          "doc_id": "kan",
+          "page_start": 11,
+          "page_end": 11,
+          "contract_ids": [
+            "kan-sparsity"
+          ],
+          "matched_evidence_terms": [
+            "sparsity regularization",
+            "followed by pruning"
+          ],
+          "text_sha256": "ebbd64a7bf4fe70cc6b9a65c4de7988c6265f2b66e2591c5ab2b12c17a575480"
+        },
+        {
+          "chunk_id": "4582761a1616bdd6:39",
+          "grade": 3,
+          "doc_id": "kan",
+          "page_start": 12,
+          "page_end": 12,
+          "contract_ids": [
+            "kan-node-pruning"
+          ],
+          "matched_evidence_terms": [
+            "node level",
+            "rather than on the edge level"
+          ],
+          "text_sha256": "66de8bcd96d5bc52bd826ab7d4fcc15cce0e6143cc62fe8d38a7012d630c81c6"
+        }
+      ],
+      "relevance": {
+        "4582761a1616bdd6:35": 3,
+        "4582761a1616bdd6:39": 3
+      }
+    },
+    {
+      "id": "bitnet-ternary-efficiency",
+      "query": "Why is BitNet b1.58 called 1.58-bit, and how do its ternary weights change matrix-multiplication cost while preserving the paper's same-scale quality claim?",
+      "locale": "en",
+      "evaluation_focus": "paper_summary",
+      "coverage_tags": [
+        "en_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "bitnet"
+      ],
+      "contracts": [
+        {
+          "id": "bitnet-ternary",
+          "doc_id": "bitnet",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "a0923c9f6b527c9f:5"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a0923c9f6b527c9f:5",
+          "grade": 3,
+          "doc_id": "bitnet",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "bitnet-ternary"
+          ],
+          "matched_evidence_terms": [
+            "{-1, 0, 1}",
+            "1.58 bits",
+            "multiplication operations",
+            "FP16",
+            "3B"
+          ],
+          "text_sha256": "25093ee42c486b8a4ce8578e8656b6dbed05aa7514fc7ce0b5f4a70db6cc8ffa"
+        }
+      ],
+      "relevance": {
+        "a0923c9f6b527c9f:5": 3
+      }
+    },
+    {
+      "id": "bitnet-absmean-formula",
+      "query": "请解释 BitNet b1.58 的 absmean 权重量化公式：缩放因子 γ 如何计算，缩放后的权重如何被限制到 {-1,0,+1}？",
+      "locale": "zh",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "formula_reasoning",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "bitnet"
+      ],
+      "contracts": [
+        {
+          "id": "bitnet-absmean",
+          "doc_id": "bitnet",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "a0923c9f6b527c9f:6"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a0923c9f6b527c9f:6",
+          "grade": 3,
+          "doc_id": "bitnet",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "bitnet-absmean"
+          ],
+          "matched_evidence_terms": [
+            "absmean quantization",
+            "average absolute value",
+            "RoundClip"
+          ],
+          "text_sha256": "bb7cefaa8e6abbca521a290293cd270810eaad85df5464ff7045be6ac87c76e7"
+        }
+      ],
+      "relevance": {
+        "a0923c9f6b527c9f:6": 3
+      }
+    },
+    {
+      "id": "sam2-streaming-memory",
+      "query": "How does SAM 2 carry information across video frames for interactive segmentation, and which forms of user prompt can update that process?",
+      "locale": "en",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "en_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "sam2"
+      ],
+      "contracts": [
+        {
+          "id": "sam2-memory",
+          "doc_id": "sam2",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "36b6b8be924bad5a:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "36b6b8be924bad5a:3",
+          "grade": 3,
+          "doc_id": "sam2",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "sam2-memory"
+          ],
+          "matched_evidence_terms": [
+            "streaming memory",
+            "previous prompts",
+            "predictions",
+            "clicks, boxes, or masks"
+          ],
+          "text_sha256": "960a31ecd00c7ff3528605256d019767e9834d13603b97159ddf1c645d23e480"
+        }
+      ],
+      "relevance": {
+        "36b6b8be924bad5a:3": 3
+      }
+    },
+    {
+      "id": "sam2-data-engine-scale",
+      "query": "SAM 2 的数据引擎怎样让模型参与标注闭环？最终 SA-V 有多少视频和 masks，并且相对已有视频分割数据集扩大了多少倍？",
+      "locale": "zh",
+      "evaluation_focus": "paper_summary",
+      "coverage_tags": [
+        "quantitative_fact",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "sam2"
+      ],
+      "contracts": [
+        {
+          "id": "sam2-data-scale",
+          "doc_id": "sam2",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "36b6b8be924bad5a:4"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "36b6b8be924bad5a:4",
+          "grade": 3,
+          "doc_id": "sam2",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "sam2-data-scale"
+          ],
+          "matched_evidence_terms": [
+            "model in the loop",
+            "50.9K videos",
+            "35.5M masks",
+            "53× more masks"
+          ],
+          "text_sha256": "a63a17d96df0a97da1ca63a084817953d0d0391c8f31142297ad9b56dd32b668"
+        }
+      ],
+      "relevance": {
+        "36b6b8be924bad5a:4": 3
+      }
+    },
+    {
+      "id": "medsam-dataset-scale",
+      "query": "What is the scale and diversity of the dataset used to develop MedSAM, and how broad are its internal and external validation tasks?",
+      "locale": "en",
+      "evaluation_focus": "paper_summary",
+      "coverage_tags": [
+        "en_locale",
+        "quantitative_fact"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "medsam"
+      ],
+      "contracts": [
+        {
+          "id": "medsam-scale",
+          "doc_id": "medsam",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "ac11f427a96c4cc4:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "ac11f427a96c4cc4:1",
+          "grade": 3,
+          "doc_id": "medsam",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "medsam-scale"
+          ],
+          "matched_evidence_terms": [
+            "1,570,263 image-mask pairs",
+            "10 imaging modalities",
+            "30 cancer types",
+            "86 internal",
+            "60 external"
+          ],
+          "text_sha256": "e4d361d3b7d1edb1afce6aa407eddc663dc7d8acc989e66bfd6c96a233ddd590"
+        }
+      ],
+      "relevance": {
+        "ac11f427a96c4cc4:1": 3
+      }
+    },
+    {
+      "id": "medsam-box-architecture",
+      "query": "MedSAM 为什么选择 bounding box 而不是 point prompt？图 2b 中 image encoder、prompt encoder 和 mask decoder 分别承担什么作用？",
+      "locale": "zh",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "figure_architecture",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "medsam"
+      ],
+      "contracts": [
+        {
+          "id": "medsam-architecture",
+          "doc_id": "medsam",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "ac11f427a96c4cc4:8"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "ac11f427a96c4cc4:8",
+          "grade": 3,
+          "doc_id": "medsam",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "medsam-architecture"
+          ],
+          "matched_evidence_terms": [
+            "bounding boxes",
+            "image encoder",
+            "prompt encoder",
+            "mask decoder",
+            "cross-attention"
+          ],
+          "text_sha256": "100ad80e87966308b4beb890ab2dc7dbf103f5e2b2f1db557b490c4163dac889"
+        }
+      ],
+      "relevance": {
+        "ac11f427a96c4cc4:8": 3
+      }
+    },
+    {
+      "id": "modernbert-alternating-attention",
+      "query": "How does ModernBERT alternate global and local attention, including the frequency, local window, and RoPE theta values?",
+      "locale": "en",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "en_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "modernbert"
+      ],
+      "contracts": [
+        {
+          "id": "modernbert-attention",
+          "doc_id": "modernbert",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "eabb38f4bf4fc81d:8"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "eabb38f4bf4fc81d:8",
+          "grade": 3,
+          "doc_id": "modernbert",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "modernbert-attention"
+          ],
+          "matched_evidence_terms": [
+            "every third layer",
+            "global attention",
+            "128 token",
+            "160,000",
+            "10,000"
+          ],
+          "text_sha256": "18a48b03c3e6034ff62f1e608eec6ffcca22c1ce27e058e7d49f5098b25e0974"
+        }
+      ],
+      "relevance": {
+        "eabb38f4bf4fc81d:8": 3
+      }
+    },
+    {
+      "id": "modernbert-flash-upstream",
+      "query": "Did ModernBERT invent FlashAttention-2? Identify the upstream work and explain why ModernBERT uses FlashAttention 3 for global layers but FlashAttention 2 for local layers.",
+      "locale": "en",
+      "evaluation_focus": "upstream_reference",
+      "coverage_tags": [
+        "en_locale",
+        "exact_location",
+        "system_b",
+        "upstream_reference"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "modernbert"
+      ],
+      "contracts": [
+        {
+          "id": "modernbert-flash-use",
+          "doc_id": "modernbert",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "eabb38f4bf4fc81d:9"
+          ]
+        },
+        {
+          "id": "flash2-upstream",
+          "doc_id": "modernbert",
+          "source_page": 10,
+          "relevant_chunk_ids": [
+            "eabb38f4bf4fc81d:48"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "eabb38f4bf4fc81d:48",
+          "grade": 3,
+          "doc_id": "modernbert",
+          "page_start": 10,
+          "page_end": 10,
+          "contract_ids": [
+            "flash2-upstream"
+          ],
+          "matched_evidence_terms": [
+            "Tri Dao",
+            "Flashattention-2",
+            "better parallelism",
+            "work partitioning"
+          ],
+          "text_sha256": "8ee340fecbf9a2b6468716edb0e399e1b750b7b63ba6f8d10820d115ced86d2b"
+        },
+        {
+          "chunk_id": "eabb38f4bf4fc81d:9",
+          "grade": 3,
+          "doc_id": "modernbert",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "modernbert-flash-use"
+          ],
+          "matched_evidence_terms": [
+            "Flash Attention 3",
+            "sliding window attention",
+            "global attention layers",
+            "Flash Attention 2",
+            "local attention layers"
+          ],
+          "text_sha256": "ec68eb310969c1d8f973877da15cd6e975d07c25bbd57fef5399035847ab7057"
+        }
+      ],
+      "relevance": {
+        "eabb38f4bf4fc81d:48": 3,
+        "eabb38f4bf4fc81d:9": 3
+      }
+    },
+    {
+      "id": "deepseek-r1-zero-boundary",
+      "query": "DeepSeek-R1-Zero 是否使用了监督微调作为起点？它的纯 RL 路线取得了什么能力，又暴露了哪些可读性和适用范围问题？",
+      "locale": "zh",
+      "evaluation_focus": "scope_boundary",
+      "coverage_tags": [
+        "scope_boundary",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "deepseek_r1"
+      ],
+      "contracts": [
+        {
+          "id": "r1-zero-boundary",
+          "doc_id": "deepseek_r1",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "606d3883253df045:4",
+            "606d3883253df045:6"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "606d3883253df045:4",
+          "grade": 3,
+          "doc_id": "deepseek_r1",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "r1-zero-boundary"
+          ],
+          "matched_evidence_terms": [
+            "poor readability",
+            "language mixing",
+            "writing",
+            "open-domain question answering"
+          ],
+          "text_sha256": "71bd01ae213d23c8aa062f4a08103f8c10010dacdad165cca4404557e4b366a9"
+        },
+        {
+          "chunk_id": "606d3883253df045:6",
+          "grade": 2,
+          "doc_id": "deepseek_r1",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "r1-zero-boundary"
+          ],
+          "matched_evidence_terms": [
+            "without supervised fine-tuning"
+          ],
+          "text_sha256": "a5b5d25ee427a608e7a68e8b1be54890f56434ae047dc4d12c06f13907ff0ae9"
+        }
+      ],
+      "relevance": {
+        "606d3883253df045:4": 3,
+        "606d3883253df045:6": 2
+      }
+    },
+    {
+      "id": "deepseek-r1-multistage",
+      "query": "Walk through the multi-stage DeepSeek-R1 pipeline shown in Figure 2, from cold-start data through the final alignment stage. What distinct purpose does each stage serve?",
+      "locale": "en",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "en_locale",
+        "exact_location",
+        "figure_architecture"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "deepseek_r1"
+      ],
+      "contracts": [
+        {
+          "id": "r1-multistage",
+          "doc_id": "deepseek_r1",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "606d3883253df045:19"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "606d3883253df045:19",
+          "grade": 3,
+          "doc_id": "deepseek_r1",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "r1-multistage"
+          ],
+          "matched_evidence_terms": [
+            "cold-start data",
+            "RL training",
+            "rejection sampling",
+            "SFT",
+            "secondary RL stage",
+            "helpfulness",
+            "harmlessness"
+          ],
+          "text_sha256": "974db807903b8a02a0adecca5c068fdf4533a0dfa7a03408d82887ed21f5bcc2"
+        }
+      ],
+      "relevance": {
+        "606d3883253df045:19": 3
+      }
+    },
+    {
+      "id": "gemma3-local-global-context",
+      "query": "How does Gemma 3 arrange local and global attention, and what context-length exception applies to the 1B model?",
+      "locale": "en",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "en_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "gemma3"
+      ],
+      "contracts": [
+        {
+          "id": "gemma3-attention",
+          "doc_id": "gemma3",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "7c0059b4861a99a7:7"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7c0059b4861a99a7:7",
+          "grade": 3,
+          "doc_id": "gemma3",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "gemma3-attention"
+          ],
+          "matched_evidence_terms": [
+            "5 local layers",
+            "global layer",
+            "128K",
+            "1B model",
+            "32K"
+          ],
+          "text_sha256": "6bdb3d53402f2c93aa59d22f9448636e05be41846b860bb0ce2a41b9885b7ac2"
+        }
+      ],
+      "relevance": {
+        "7c0059b4861a99a7:7": 3
+      }
+    },
+    {
+      "id": "gemma3-vision-tokens",
+      "query": "Gemma 3 的视觉编码器是否随语言模型一起训练？每张图像如何被压缩为固定 token 数，896 分辨率时具体怎样池化？",
+      "locale": "zh",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "exact_location",
+        "quantitative_fact",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "gemma3"
+      ],
+      "contracts": [
+        {
+          "id": "gemma3-vision",
+          "doc_id": "gemma3",
+          "source_page": 8,
+          "relevant_chunk_ids": [
+            "7c0059b4861a99a7:34"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7c0059b4861a99a7:34",
+          "grade": 3,
+          "doc_id": "gemma3",
+          "page_start": 8,
+          "page_end": 8,
+          "contract_ids": [
+            "gemma3-vision"
+          ],
+          "matched_evidence_terms": [
+            "SigLIP",
+            "vision encoder is frozen",
+            "256 image tokens",
+            "4x4 average pooling"
+          ],
+          "text_sha256": "c68b24ad350fc614538750afec4635ccd825c8666c81bd00edf5240de9e2c7d9"
+        }
+      ],
+      "relevance": {
+        "7c0059b4861a99a7:34": 3
+      }
+    },
+    {
+      "id": "timesfm-decoder-patches",
+      "query": "How does TimesFM's decoder-only training predict future time-series patches, and why can its output patch be longer than its input patch? Use the paper's 32-to-128 example.",
+      "locale": "en",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "en_locale",
+        "single_paper_mechanism"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "timesfm"
+      ],
+      "contracts": [
+        {
+          "id": "timesfm-patches",
+          "doc_id": "timesfm",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "0bb62cdf7be2eb9d:14"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "0bb62cdf7be2eb9d:14",
+          "grade": 3,
+          "doc_id": "timesfm",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "timesfm-patches"
+          ],
+          "matched_evidence_terms": [
+            "decoder-only mode",
+            "all past patches",
+            "output patches",
+            "input patch length is 32",
+            "output patch length is 128"
+          ],
+          "text_sha256": "78fff85068214d2a291280db63ea94f05b5c9ae34b2de2964f2c582563ac484d"
+        }
+      ],
+      "relevance": {
+        "0bb62cdf7be2eb9d:14": 3
+      }
+    },
+    {
+      "id": "timesfm-probabilistic-boundary",
+      "query": "TimesFM 本文训练目标是概率预测吗？请区分论文实际采用的 point forecasting loss 与它提出的概率化扩展方式。",
+      "locale": "zh",
+      "evaluation_focus": "scope_boundary",
+      "coverage_tags": [
+        "scope_boundary",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "timesfm"
+      ],
+      "contracts": [
+        {
+          "id": "timesfm-loss-boundary",
+          "doc_id": "timesfm",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "0bb62cdf7be2eb9d:21"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "0bb62cdf7be2eb9d:21",
+          "grade": 3,
+          "doc_id": "timesfm",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "timesfm-loss-boundary"
+          ],
+          "matched_evidence_terms": [
+            "point forecasting",
+            "mean squared error",
+            "probabilistic forecasting",
+            "output heads",
+            "quantile loss"
+          ],
+          "text_sha256": "875b955502290d8f1455082ec6259ebd8abfe2447c85d6c69835069dd86e42d2"
+        }
+      ],
+      "relevance": {
+        "0bb62cdf7be2eb9d:21": 3
+      }
+    },
+    {
+      "id": "bindgpt-three-roles",
+      "query": "What three generation roles can the same pretrained BindGPT model serve, and which separate molecular-graph step does its joint graph-and-conformation generation remove?",
+      "locale": "en",
+      "evaluation_focus": "paper_summary",
+      "coverage_tags": [
+        "en_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "bindgpt"
+      ],
+      "contracts": [
+        {
+          "id": "bindgpt-roles",
+          "doc_id": "bindgpt",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "385eac8794116d02:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "385eac8794116d02:1",
+          "grade": 3,
+          "doc_id": "bindgpt",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "bindgpt-roles"
+          ],
+          "matched_evidence_terms": [
+            "molecular graphs and conformations jointly",
+            "graph reconstruction",
+            "3D molecular generative model",
+            "conformer generator",
+            "pocket-conditioned"
+          ],
+          "text_sha256": "3d8975e842c1e26027ea6073e86fe3aed10beec5f0b94ba9f846ef63dab70293"
+        }
+      ],
+      "relevance": {
+        "385eac8794116d02:1": 3
+      }
+    },
+    {
+      "id": "bindgpt-external-rl",
+      "query": "BindGPT 的强化学习微调如何接入外部物理反馈？该反馈来自什么软件，它优化的目标是什么？",
+      "locale": "zh",
+      "evaluation_focus": "method_detail",
+      "coverage_tags": [
+        "system_a",
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "bindgpt"
+      ],
+      "contracts": [
+        {
+          "id": "bindgpt-rl",
+          "doc_id": "bindgpt",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "385eac8794116d02:8"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "385eac8794116d02:8",
+          "grade": 3,
+          "doc_id": "bindgpt",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "bindgpt-rl"
+          ],
+          "matched_evidence_terms": [
+            "Reinforcement Learning",
+            "external feedback",
+            "docking software",
+            "high binding scores",
+            "protein"
+          ],
+          "text_sha256": "14e8747467f902f3dd64f7e862df2327c6b7b3a034a173a6becc164fb33db011"
+        }
+      ],
+      "relevance": {
+        "385eac8794116d02:8": 3
+      }
+    },
+    {
+      "id": "long-context-attention-synthesis",
+      "query": "Compare how ModernBERT and Gemma 3 mix local and global attention for long context. Give each paper's exact layer pattern and the local-window detail that is explicitly specified.",
+      "locale": "en",
+      "evaluation_focus": "multi_paper_synthesis",
+      "coverage_tags": [
+        "cross_paper_synthesis",
+        "en_locale"
+      ],
+      "query_scope": "selected_context",
+      "scope_doc_ids": [
+        "modernbert",
+        "gemma3"
+      ],
+      "contracts": [
+        {
+          "id": "modernbert-pattern",
+          "doc_id": "modernbert",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "eabb38f4bf4fc81d:8"
+          ]
+        },
+        {
+          "id": "gemma3-pattern",
+          "doc_id": "gemma3",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "7c0059b4861a99a7:6"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7c0059b4861a99a7:6",
+          "grade": 3,
+          "doc_id": "gemma3",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "gemma3-pattern"
+          ],
+          "matched_evidence_terms": [
+            "5:1 interleaving",
+            "5 local layers",
+            "global layer"
+          ],
+          "text_sha256": "c996891f93d11f0cd901215bedcd9063e1ba7eac734f80748286d00ddf386317"
+        },
+        {
+          "chunk_id": "eabb38f4bf4fc81d:8",
+          "grade": 3,
+          "doc_id": "modernbert",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "modernbert-pattern"
+          ],
+          "matched_evidence_terms": [
+            "every third layer",
+            "128 token",
+            "local sliding window"
+          ],
+          "text_sha256": "18a48b03c3e6034ff62f1e608eec6ffcca22c1ce27e058e7d49f5098b25e0974"
+        }
+      ],
+      "relevance": {
+        "7c0059b4861a99a7:6": 3,
+        "eabb38f4bf4fc81d:8": 3
+      }
+    },
+    {
+      "id": "segmentation-transfer-synthesis",
+      "query": "对比 SAM 2 与 MedSAM 的交互式分割适配路径：前者怎样处理视频时间信息和数据闭环，后者怎样把医学目标提示编码进 SAM 架构？不要把二者的训练数据或提示机制混为一谈。",
+      "locale": "zh",
+      "evaluation_focus": "method_comparison",
+      "coverage_tags": [
+        "cross_paper_synthesis",
+        "zh_locale"
+      ],
+      "query_scope": "selected_context",
+      "scope_doc_ids": [
+        "sam2",
+        "medsam"
+      ],
+      "contracts": [
+        {
+          "id": "sam2-transfer",
+          "doc_id": "sam2",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "36b6b8be924bad5a:4"
+          ]
+        },
+        {
+          "id": "medsam-transfer",
+          "doc_id": "medsam",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "ac11f427a96c4cc4:8"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "36b6b8be924bad5a:4",
+          "grade": 3,
+          "doc_id": "sam2",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "sam2-transfer"
+          ],
+          "matched_evidence_terms": [
+            "streaming memory",
+            "data engine",
+            "model in the loop"
+          ],
+          "text_sha256": "a63a17d96df0a97da1ca63a084817953d0d0391c8f31142297ad9b56dd32b668"
+        },
+        {
+          "chunk_id": "ac11f427a96c4cc4:8",
+          "grade": 3,
+          "doc_id": "medsam",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "medsam-transfer"
+          ],
+          "matched_evidence_terms": [
+            "bounding boxes",
+            "positional encoding",
+            "cross-attention"
+          ],
+          "text_sha256": "100ad80e87966308b4beb890ab2dc7dbf103f5e2b2f1db557b490c4163dac889"
+        }
+      ],
+      "relevance": {
+        "36b6b8be924bad5a:4": 3,
+        "ac11f427a96c4cc4:8": 3
+      }
+    }
+  ]
+}

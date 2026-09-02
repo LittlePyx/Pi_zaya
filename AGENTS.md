@@ -68,6 +68,7 @@ Primary local URLs:
 | `kb/dense_retriever.py` + `kb/hybrid_retriever.py` | Internal exact-cosine and BM25+dense RRF kernels; not product-enabled until embedding persistence and consent land |
 | `kb/cross_encoder_reranker.py` | Model-agnostic, fail-open cross-encoder reranking boundary |
 | `kb/retrieval_metrics.py` | Recall@K, MRR, and nDCG evaluation primitives |
+| `kb/retrieval_eval_fixture.py` + `kb/retrieval_benchmark.py` | Frozen real-paper chunk qrels, corpus integrity, and raw/product-query BM25 baselines |
 | `kb/reference_index.py` | Reference extraction and Crossref enrichment |
 | `kb/reference_sync.py` | Non-blocking reference metadata sync |
 | `kb/chat_store.py` | SQLite conversations, messages, and retrieval refs |

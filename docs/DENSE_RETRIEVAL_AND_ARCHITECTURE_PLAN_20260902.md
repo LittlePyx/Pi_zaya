@@ -1,6 +1,6 @@
 # Dense Retrieval and Architecture Control Plan
 
-Status: `phase 0 implemented and validated; product activation pending`
+Status: `phase 1 implemented and validated; embedding product activation pending`
 
 Started: `2026-09-02`
 
@@ -160,9 +160,12 @@ There are two tiers:
    retaining an explicit semantic-gap case. It is not a claim of general model
    quality.
 2. The frozen unseen-paper benchmark in
-   `docs/research_qa_unseen_corpus_v1.json` remains the real-paper acceptance
-   source. Its questions and source/page evidence contracts must be projected
-   into a versioned retrieval ranking set before a dense model is selected.
+   `docs/research_qa_unseen_corpus_v2.json` remains the real-paper acceptance
+   source. Phase 1 projected its 22 questions and 26 source/page/evidence
+   contracts into 27 fixed chunk qrels in `docs/retrieval_eval_unseen_v2.json`.
+   The derived fixture pins the source-fixture SHA-256, path-independent corpus
+   fingerprint, indexed chunk IDs, page spans, and labelled-text hashes. It was
+   frozen before any embedding model was selected or measured.
 
 The real set must include exact identifiers, tables/numbers, paraphrases,
 bilingual queries, negation/boundaries, multi-paper comparison, and hard
@@ -264,8 +267,8 @@ Longer-term refactoring priorities:
 
 | Phase | Scope | Status |
 |---|---|---|
-| 0 | truthful README, candidate protocol, exact dense kernel, BM25+dense RRF, cross-encoder adapter, metric functions, regression seed, size ratchet | Implemented and validated in current working tree |
-| 1 | frozen real-paper retrieval labels and BM25 baseline report | Planned |
+| 0 | truthful README, candidate protocol, exact dense kernel, BM25+dense RRF, cross-encoder adapter, metric functions, regression seed, size ratchet | Implemented and validated in commit `ba3c3d00` |
+| 1 | frozen real-paper retrieval labels and BM25 baseline report | Implemented and validated in current working tree |
 | 2 | atomic embedding index, local/cloud provider adapters, indexing status and recovery | Planned |
 | 3 | explicit Off/Local/Cloud user settings and opt-in hybrid product wiring | Planned |
 | 4 | benchmark local/cloud embedding and cross-encoder candidates; promote only accepted models | Planned |
@@ -325,3 +328,126 @@ Longer-term refactoring priorities:
 No release version or immutable tag was changed. Dense retrieval and
 cross-encoder model execution remain outside the product default path until the
 remaining phases satisfy their own acceptance gates.
+
+### 2026-09-02 — Phase 1 real-paper retrieval benchmark
+
+- Added `kb/retrieval_eval_fixture.py` to project the already pre-registered
+  Research QA evidence contracts into retrieval labels without consulting any
+  retriever ranking. Labels are bounded by registered paper and source page,
+  then selected by registered evidence-term coverage.
+- Added `docs/retrieval_eval_unseen_v2.json`: 10 papers, 1,673 indexed chunks,
+  22 questions, 26 claim-evidence contracts, and 27 fixed relevant-chunk labels.
+- The fixture pins source fixture SHA-256
+  `1d8ca4283355aa0cfafcb845e75107fab9c70ab75264ea7c6b2e61d5b5d89ae6`
+  and path-independent corpus fingerprint
+  `d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516`.
+  It stores no paper text or machine-specific path.
+- Added `kb/retrieval_benchmark.py` and
+  `tools/retrieval_eval/run_research_qa_baseline.py`. The runner validates the
+  exact corpus and every labelled-text hash, then reports Recall@K, contract
+  Recall@K, MRR, nDCG@K, wrong-source rate, latency, locale, evaluation-focus,
+  query-scope, and coverage slices.
+- Added `tools/retrieval_eval/project_research_qa_labels.py --check` so the
+  projection can be reproduced against the isolated corpus without silently
+  rewriting the committed labels.
+- Added `docs/retrieval_bm25_baseline_unseen_v2.json` with both raw BM25 and the
+  current product-query path (deterministic translation/query variants), each
+  measured in scope-qualified and full-library modes.
+- CI and the Windows release workflow validate that the frozen qrels, source
+  fixture hash, baseline fixture hash, corpus fingerprint, channels, modes, and
+  case counts remain internally consistent. The copyrighted isolated corpus is
+  not copied into CI.
+- Added five unit tests covering page-bound projection, path-independent corpus
+  identity, missing-evidence rejection, scoped/full-library metrics, and text
+  drift detection.
+
+Reproduction against the retained isolated corpus:
+
+```powershell
+python tools/retrieval_eval/project_research_qa_labels.py `
+  --db-root F:\research-papers\2026\Jan\else\kb_chat_eval\unseen_v2\db `
+  --check
+python tools/retrieval_eval/run_research_qa_baseline.py `
+  --db-root F:\research-papers\2026\Jan\else\kb_chat_eval\unseen_v2\db `
+  --output docs/retrieval_bm25_baseline_unseen_v2.json `
+  --compact
+python tools/retrieval_eval/run_research_qa_baseline.py --validate-only
+```
+
+#### Frozen BM25 baseline
+
+| Channel / scope | Recall@5 | Recall@10 | Recall@20 | MRR | nDCG@10 | Wrong source@5 |
+|---|---:|---:|---:|---:|---:|---:|
+| Raw BM25 / scope-qualified | 0.6136 | 0.8409 | 0.9091 | 0.5229 | 0.5861 | 0.0000 |
+| Product-query BM25 / scope-qualified | 0.6136 | 0.8182 | 0.8636 | 0.4686 | 0.5330 | 0.0000 |
+| Raw BM25 / full library | 0.5227 | 0.7045 | 0.8409 | 0.5092 | 0.5310 | 0.4273 |
+| Product-query BM25 / full library | 0.5682 | 0.7273 | 0.8182 | 0.4285 | 0.4875 | 0.0818 |
+
+Interpretation:
+
+- Current translation/query variants cut full-library wrong-source@5 from
+  42.73% to 8.18% and improve full-library Recall@5 by 4.55 percentage points.
+  They nevertheless reduce MRR and nDCG, and reduce scope-qualified Recall@10
+  by 2.27 points. Query fusion therefore needs measurement and calibration; it
+  must not be assumed beneficial at every ranking depth.
+- Product-query scope-qualified Recall@5 is 79.17% for English questions but
+  only 40.00% for Chinese questions. Multilingual semantic matching is the
+  clearest Dense-retrieval opportunity.
+- Cross-paper synthesis has only 50.00% Recall@10. Exact-location and
+  quantitative slices each have 66.67% Recall@10. Dense candidates must improve
+  these without weakening exact figure, table, formula, source, or page routes.
+- `sam2-streaming-memory` and `gemma3-vision-tokens` have no labelled evidence
+  in the product-query top 20. `deepseek-r1-zero-boundary` first appears at rank
+  13, and only one of two `segmentation-transfer-synthesis` contracts is covered
+  by rank 20. These cases are retained as the first hard-negative/error-analysis
+  set; none is removed or relabelled after observing the baseline.
+
+### Priority assessment after Phase 1
+
+| Priority | Work | User value | Dependency/risk | Decision |
+|---|---|---:|---|---|
+| P0.1 | Atomic, incremental, path-independent embedding index plus local provider boundary | Very high | Required before any repeatable Dense benchmark or safe recovery | Do next |
+| P0.2 | Run multilingual Dense and BM25+Dense RRF over the frozen 22-case qrels; tune only on a separate development slice | Very high | Requires P0.1; avoid tuning on the acceptance report | Immediately after P0.1 |
+| P0.3 | Cross-encoder candidate benchmark and bounded top-M calibration | High | Useful only after Dense raises candidate recall | After accepted Dense candidate set |
+| P1.1 | Answer correctness, faithfulness, citation precision/completeness, and contradiction repair metrics derived from existing Research QA contracts | Very high | Must preserve deterministic checks and must resolve failures rather than expose status labels | Before product-wide hybrid activation |
+| P1.2 | Explicit Off/Local/Cloud settings, consent, index status, rebuild, and fallback UI | High | Requires an accepted index/provider and measured privacy/latency/package cost | Gate product activation |
+| P1.3 | OpenTelemetry-aligned local spans for retrieval, reranking, tools, tokens, latency, and fallback; optional Langfuse export | Medium-high | Must redact questions, paper text, keys, and paths by default | Land before opt-in rollout |
+| P2 | Decompose generation/render/evidence runtimes under the size ratchet | High long-term | Broad regression surface; should proceed in small contract-preserving slices | Incremental, not on the critical retrieval path |
+
+The immediate implementation priority is P0.1, not UI activation. A reliable
+index manifest and provider boundary make model comparisons reproducible and
+give BM25 a safe fallback during stale, incomplete, failed, or model-mismatched
+embedding builds. Phase 2 will remain non-product-enabled until P0.2 establishes
+an accepted quality delta on this frozen baseline.
+
+### 2026-09-02 — Phase 1 validation
+
+- Qrels projection `--check`: 22 cases, 26 contracts, 27 labels; pass.
+- Frozen qrels/baseline CI metadata validation: 22 cases and 1,673 chunks; pass.
+- `git diff --check`, full Ruff, and the 21-file architecture budget: pass.
+- Focused retrieval-fixture tests: 5/5; pass.
+- Backend unit suite: 4,588 passed, 41 skipped.
+- Backend sanity suite: 305 passed, 2 skipped.
+- Deterministic retrieval seed: 11/11; exact subset Recall@5, MRR, and nDCG@5
+  remain 1.0; pass.
+- Research QA fixture: 56 cases and 41 source-grounded cases; pass.
+- Version A/B fixture: 34 expected QA cases plus three project journeys; pass.
+- Evidence comparison 5, comparison candidates 5, project status 5, and
+  project journey: pass.
+- Grounded replay 6/6 and reviewed Agent replay 5/5: pass.
+- Converter quality: 13/13; pass.
+- Frontend lint and production build: pass.
+- Browser smoke: 160 passed, 3 expected private/build-mode skips.
+- Core citation/library browser regressions: 127/127.
+- Ordinary-user surface isolation: 4/4.
+- Evidence-workspace release isolation: 1/1.
+- Dedicated library-quality suite: 24/24.
+
+An exploratory attempt to run five browser servers concurrently caused four
+unrelated 8-second page-readiness timeouts. The release-equivalent serial reruns
+of the complete affected suites passed with no code, assertion, worker, or
+timeout change; only the serial results above are treated as the gate outcome.
+
+No release version or immutable tag was changed. Product retrieval remains on
+the existing BM25/structured path; this phase adds measurement and integrity
+infrastructure, not an unmeasured Dense default.

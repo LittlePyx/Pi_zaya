@@ -142,7 +142,9 @@ jobs:
         run: python tools/research_qa/run_research_qa_eval.py --dry-run
 
       - name: Check candidate retrieval regression fixture
-        run: python tools/retrieval_eval/run_retrieval_eval.py --dry-run --fail-on-quality
+        run: |
+          python tools/retrieval_eval/run_retrieval_eval.py --dry-run --fail-on-quality
+          python tools/retrieval_eval/run_research_qa_baseline.py --validate-only
 
       - name: Check historical version A/B contract
         run: python tools/version_ab/run_version_ab_eval.py --dry-run
