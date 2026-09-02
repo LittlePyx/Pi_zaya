@@ -33,6 +33,7 @@ function failedQualityPolicy(message: Message): MessageEvidenceActionPolicy | nu
   const contract = record(getMessageAnswerContract(message))
   const contractQuality = record(contract.quality)
   const answerQuality = record(meta.answer_quality ?? meta.answerQuality)
+  const claimEvidence = record(meta.claim_evidence ?? meta.claimEvidence)
   const minimumOk = explicitBool(answerQuality.minimum_ok ?? answerQuality.minimumOk
     ?? contractQuality.minimum_ok ?? contractQuality.minimumOk)
   if (minimumOk === false) {
@@ -42,6 +43,29 @@ function failedQualityPolicy(message: Message): MessageEvidenceActionPolicy | nu
       allowLooseLocalLocate: false,
       allowResearchNote: false,
       reason: 'quality_failed',
+    }
+  }
+  const claimEvidenceMinimumOk = explicitBool(claimEvidence.minimum_ok ?? claimEvidence.minimumOk)
+  if (claimEvidenceMinimumOk === false) {
+    return {
+      allowLocalCitations: false,
+      allowStructuredLocalLocate: false,
+      allowLooseLocalLocate: false,
+      allowResearchNote: false,
+      reason: 'quality_failed',
+    }
+  }
+  const hasHits = explicitBool(
+    answerQuality.has_hits ?? answerQuality.hasHits
+      ?? contractQuality.has_hits ?? contractQuality.hasHits,
+  )
+  if (hasHits === false) {
+    return {
+      allowLocalCitations: false,
+      allowStructuredLocalLocate: false,
+      allowLooseLocalLocate: false,
+      allowResearchNote: false,
+      reason: 'insufficient_evidence',
     }
   }
   const resolution = text(

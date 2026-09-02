@@ -153,18 +153,6 @@ export function LibraryFileQualityLine({
             >
               {qualityRepairButtonLabel}
             </Button>
-            {sourceReadiness.kind === 'blocked' ? (
-              <Button
-                size="small"
-                className="kb-lib-quality-repair-btn"
-                data-testid="library-quality-confirm-index"
-                loading={qualityOverrideConfirming}
-                disabled={item.task_state !== 'idle'}
-                onClick={onConfirmQualityOverride}
-              >
-                {S.lib_btn_confirm_markdown_index}
-              </Button>
-            ) : null}
           </div>
         ) : null}
         {finalRepairResult ? (

@@ -2069,6 +2069,10 @@ def _sanitize_empty_markdown_label_fragments(answer: str) -> str:
     text = re.sub(r"(?m)^\s*\*{4,}\s*[:：]\s*", "", text)
     text = re.sub(r"(?m)(^|\n)(\s*[-*+]\s*)?\*{4,}\s*[:：]\s*", r"\1", text)
     text = re.sub(r"(?<!\*)\*{4,}\s*[:：]\s*", "", text)
+    # The final evidence gate can remove an unsupported bold label while
+    # preserving its source-backed bullet. Do not expose the empty Markdown
+    # wrapper as a visible ``**`` paragraph.
+    text = re.sub(r"(?m)^[ \t]*(?:\*\*|__)[ \t]*$\r?\n?", "", text)
     text = _strip_empty_citation_bracket_fragments(text)
     # Empty display-math blocks are invisible in the browser renderer.  If
     # they remain in persisted ``answer_markdown``, the rendered surface no
@@ -2128,6 +2132,9 @@ def _sanitize_empty_markdown_label_fragments(answer: str) -> str:
     # Citation normalization may move a marker that originally occupied the
     # blank in "如 [n] 所述".  Do not expose the resulting empty attribution.
     text = re.sub(r"(?<!\S)如\s+所述\s*[：:]?\s*", "", text)
+    # Citation relocation and claim pruning can join two English sentences at
+    # a punctuation boundary. Restore only a missing inter-sentence space.
+    text = re.sub(r"(?<=[.!?])(?=[A-Z])", " ", text)
     text = re.sub(
         r"(?:作者|论文)\s*(?:遵循|沿用)\s*的观察\s*[，,]?\s*即\s*",
         "作者基于已有工作的观察，即",

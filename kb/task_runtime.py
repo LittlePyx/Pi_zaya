@@ -82,6 +82,7 @@ from kb.conversation_followup import (
 from kb.generation_answer_finalize_runtime import (
     _build_evidence_complete_answer_override as _finalize_runtime_build_evidence_complete_answer_override,
     _build_multi_paper_doc_list_contract as _finalize_runtime_build_multi_paper_doc_list_contract,
+    _citation_plan_slot_hit_numbers as _finalize_runtime_citation_plan_slot_hit_numbers,
     _claim_evidence_hits_with_citation_plan as _finalize_runtime_claim_evidence_hits_with_citation_plan,
     _exclude_bound_source_from_multi_paper_doc_list_contract as _finalize_runtime_exclude_bound_source_from_multi_paper_doc_list_contract,
     _filter_multi_paper_doc_list_contract as _finalize_runtime_filter_multi_paper_doc_list_contract,
@@ -4890,6 +4891,9 @@ def _answer_allows_local_evidence_actions(
     source_blend: str = "",
 ) -> bool:
     quality = dict(answer_quality or {})
+    has_hits = quality.get("has_hits", quality.get("hasHits"))
+    if has_hits is False or has_hits == 0:
+        return False
     resolution_status = str(
         quality.get("resolution_status") or quality.get("resolutionStatus") or ""
     ).strip().lower()
@@ -4962,6 +4966,91 @@ def _build_scoped_not_found_answer(
         f"- Candidate evidence: {max(0, int(indexed_hit_count or 0))} retrieved hits checked, with no directly supporting passage\n"
         "- Boundary: this means direct evidence is insufficient in the current library; it does not prove the paper never addresses the issue"
     ).strip()
+
+
+def _build_direct_evidence_recovery_answer(
+    *,
+    prompt: str,
+    answer_hits: list[dict] | None,
+    citation_plan: dict | None = None,
+    limit: int = 3,
+) -> str:
+    """Build a citation-safe fallback containing only retrieved source text.
+
+    This resolves a failed generated paraphrase without treating an unverified
+    cross-language summary as paper evidence. The same citation number remains
+    available for locating and opening the original passage.
+    """
+
+    hits = [hit for hit in list(answer_hits or []) if isinstance(hit, dict)]
+    if not hits:
+        return ""
+
+    ordered_numbers: list[int] = []
+    for raw_slot in list((citation_plan or {}).get("slots") or []):
+        if not isinstance(raw_slot, dict):
+            continue
+        for number in _finalize_runtime_citation_plan_slot_hit_numbers(raw_slot, hits):
+            if 0 < number <= len(hits) and number not in ordered_numbers:
+                ordered_numbers.append(number)
+    for number in range(1, len(hits) + 1):
+        if number not in ordered_numbers:
+            ordered_numbers.append(number)
+
+    rows: list[str] = []
+    seen_quotes: set[str] = set()
+    for number in ordered_numbers:
+        hit = hits[number - 1]
+        raw_quote = re.sub(r"\s+", " ", str(hit.get("text") or "").strip())
+        raw_quote = re.sub(r"^#{1,6}\s*", "", raw_quote).strip()
+        raw_quote = re.sub(
+            r"\s*\[(?:\d+(?:\s*(?:,|-)\s*\d+)*)\]\s*",
+            " ",
+            raw_quote,
+        )
+        quote = re.sub(r"\s+", " ", raw_quote).strip()
+        if len(quote) < 24:
+            continue
+        if len(quote) > 700:
+            clipped = quote[:700].rsplit(" ", 1)[0].rstrip(" ,;:")
+            quote = f"{clipped}…" if clipped else f"{quote[:700]}…"
+        sentences = [
+            part.strip()
+            for part in re.split(
+                r"(?<!\d)(?<=[.!?\u3002\uff01\uff1f])\s+",
+                quote,
+            )
+            if len(part.strip()) >= 24
+        ]
+        for sentence in sentences or [quote]:
+            quote_key = re.sub(r"\W+", "", sentence).lower()
+            if not quote_key or quote_key in seen_quotes:
+                continue
+            seen_quotes.add(quote_key)
+            rows.append(f'- “{sentence}” [{number}]')
+            if len(rows) >= max(1, int(limit or 1)):
+                break
+        if len(rows) >= max(1, int(limit or 1)):
+            break
+    if not rows:
+        return ""
+    heading = "### 证据" if _prefer_zh_locale(prompt) else "### Evidence"
+    return f"{heading}\n\n" + "\n".join(rows)
+
+
+def _agent_trace_requires_direct_evidence_recovery(agent_trace: dict | None) -> bool:
+    trace = agent_trace if isinstance(agent_trace, dict) else {}
+    verification = (
+        dict(trace.get("verification") or {})
+        if isinstance(trace.get("verification"), dict)
+        else {}
+    )
+    return bool(
+        str(verification.get("evidence_status") or "").strip().lower()
+        == "insufficient"
+        and int(verification.get("evidence_hit_count") or 0) > 0
+        and int(verification.get("supported_claims") or 0) <= 0
+    )
 
 
 def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None:
@@ -7610,6 +7699,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         )
         citation_validation = dict(finalize_state.get("citation_validation") or {})
         answer_quality = dict(finalize_state.get("answer_quality") or {})
+        if (
+            answer_quality.get("has_hits", answer_quality.get("hasHits")) is False
+            and str(agent_answer_mode or "").strip().lower()
+            not in {"external_academic_llm", "general_llm"}
+            and str(agent_scope_context.get("answer_source_blend") or "").strip().lower()
+            not in {"external_academic", "general_llm"}
+        ):
+            answer_quality.setdefault("resolution_status", "insufficient_evidence")
+            answer_quality.setdefault("evidence_action_policy", "hidden")
         ref_opps_quality = (
             answer_quality.get("reference_opportunities")
             if isinstance(answer_quality.get("reference_opportunities"), dict)
@@ -7701,6 +7799,58 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer_mode=agent_answer_mode,
                 generation_output=agent_generation_result_for_trace,
             )
+            if (
+                local_evidence_actions_allowed
+                and _agent_trace_requires_direct_evidence_recovery(
+                    pre_repair_agent_trace
+                )
+            ):
+                recovery_hits = _finalize_runtime_claim_evidence_hits_with_citation_plan(
+                    list(answer_hits or []),
+                    finalized_citation_plan,
+                )
+                direct_evidence_answer = _build_direct_evidence_recovery_answer(
+                    prompt=prompt_for_user or prompt,
+                    answer_hits=recovery_hits,
+                    citation_plan=finalized_citation_plan,
+                )
+                if direct_evidence_answer:
+                    recovered_trace = build_agent_trace_for_completed_answer(
+                        prompt,
+                        direct_evidence_answer,
+                        evidence_hits=recovery_hits,
+                        status="done",
+                        scope_context=agent_scope_context,
+                        agent_notes=agent_notes_for_trace,
+                        answer_mode=agent_answer_mode,
+                        generation_output=agent_generation_result_for_trace,
+                    )
+                    if not _agent_trace_requires_direct_evidence_recovery(
+                        recovered_trace
+                    ):
+                        answer = direct_evidence_answer
+                        answer_hits = recovery_hits
+                        pre_repair_agent_trace = recovered_trace
+                        answer_quality.update(
+                            {
+                                "minimum_ok": True,
+                                "self_heal_attempted": True,
+                                "self_heal_succeeded": True,
+                                "resolution_status": "evidence_recovered",
+                                "final_resolution": "direct_source_evidence",
+                                "evidence_action_policy": "local_evidence",
+                            }
+                        )
+                        paper_guide_contracts = _sync_runtime_repaired_answer_contracts(
+                            paper_guide_contracts,
+                            answer=answer,
+                        )
+                        _trace_event(
+                            "answer_evidence_recovery",
+                            elapsed_s=0.0,
+                            succeeded=True,
+                            resolution="direct_source_evidence",
+                        )
             pre_repair_source_summary = _gen_agent_source_summary(pre_repair_agent_trace)
             runtime_repair = _gen_repair_answer_runtime(
                 task,

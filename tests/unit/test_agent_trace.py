@@ -30,8 +30,8 @@ def test_agent_trace_serializes_completed_rag_answer():
     assert trace["verification"]["supported_claims"] == 1
     assert trace["summary"]["supported_claims"] == 1
     assert trace["summary"]["total_claims"] == 1
-    assert trace["verification"]["evidence_status"] == "needs_review"
-    assert trace["summary"]["evidence_status"] == "needs_review"
+    assert trace["verification"]["evidence_status"] == "grounded"
+    assert trace["summary"]["evidence_status"] == "grounded"
     assert trace["summary"]["evidence_hit_count"] == 1
     assert trace["summary"]["tool_call_count"] == 3
     assert trace["summary"]["query_scope"] == "library"

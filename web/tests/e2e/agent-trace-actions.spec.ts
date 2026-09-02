@@ -1605,7 +1605,16 @@ test('message evidence policy blocks false local actions for external and failed
         agent_source_summary: { kind: 'local_kb' },
       },
     } as never)
-    return { external, mixed, failed }
+    const noHits = messageEvidenceActionPolicy({
+      id: 13,
+      role: 'assistant',
+      content: 'No matching passage was retrieved.',
+      meta: {
+        answer_quality: { minimum_ok: true, has_hits: false },
+        agent_source_summary: { kind: 'local_kb' },
+      },
+    } as never)
+    return { external, mixed, failed, noHits }
   })
 
   expect(result.external).toMatchObject({
@@ -1628,6 +1637,13 @@ test('message evidence policy blocks false local actions for external and failed
     allowLooseLocalLocate: false,
     allowResearchNote: false,
     reason: 'quality_failed',
+  })
+  expect(result.noHits).toMatchObject({
+    allowLocalCitations: false,
+    allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'insufficient_evidence',
   })
 })
 
@@ -3620,6 +3636,12 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
   await expect(page.getByTestId('evidence-drawer-item')).toContainText('Fixture Paper / Method')
   await expect(page.getByTestId('evidence-drawer')).not.toContainText('runtime_check')
   await expect(page.getByTestId('evidence-drawer')).not.toContainText('needs_review_count')
+  await page.getByTestId('research-note-open-9471').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeHidden()
+  await expect(page.locator('.kb-research-note-modal')).toBeVisible()
+  await page.locator('.kb-research-note-modal .ant-modal-close').click()
+  await page.getByTestId('assistant-source-notice').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeVisible()
   await page.getByTestId('evidence-open-source').click()
   await expect(page.getByTestId('message-list-open-payload')).toContainText(READER_REGRESSION_SOURCE_PATH)
   await page.locator('.kb-evidence-drawer .ant-drawer-close').click()
@@ -3661,7 +3683,7 @@ test('web sources stay separate from library evidence actions', async ({ page })
   await expect(page.getByTestId('evidence-web-claim-0')).toContainText('broader retrieval result')
   await expect(page.getByTestId('evidence-web-source-0')).toHaveAttribute('href', 'https://arxiv.org/abs/2601.12345')
   await expect(page.getByTestId('evidence-add-shelf')).toHaveCount(0)
-  await expect(page.getByTestId('research-note-open-9551')).toBeDisabled()
+  await expect(page.getByTestId('research-note-open-9551')).toHaveCount(0)
   await page.getByTestId('evidence-web-import-0').click()
   await expect(page.getByTestId('evidence-web-import-0')).toContainText(/Queued for processing|已进入处理队列/)
   expect(importPayload).toMatchObject({

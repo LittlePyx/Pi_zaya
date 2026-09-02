@@ -15,7 +15,7 @@ import { api, authFetch, responseError } from '../api/client'
 import { S as zh } from '../i18n/zh'
 import { S as en } from '../i18n/en'
 import { useSettingsStore } from './settingsStore'
-import { basenameFromSourcePath } from '../utils/sourcePath'
+import { basenameFromSourcePath, normalizeSourcePathForMatch } from '../utils/sourcePath'
 import {
   ensureChatStorePerfApi,
   pushConversationOpenPhase,
@@ -1483,6 +1483,7 @@ interface ChatState {
     sourceName?: string
     title?: string
     projectId?: string | null
+    forceNew?: boolean
   }) => Promise<string>
   renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
@@ -1700,6 +1701,37 @@ function findConversationInLists(
     }
   }
   return null
+}
+
+function allSidebarConversations(state: Pick<ChatState, 'rootConversations' | 'projectConversations'>): Conversation[] {
+  return [
+    ...(state.rootConversations || []),
+    ...Object.values(state.projectConversations || {}).flat(),
+  ]
+}
+
+export function findReusablePaperGuideConversation(
+  conversations: Conversation[],
+  sourcePath: string,
+  preferredProjectId?: string | null,
+): Conversation | null {
+  const sourceKey = normalizeSourcePathForMatch(sourcePath)
+  if (!sourceKey) return null
+  const projectKey = String(preferredProjectId || '').trim()
+  const candidates = conversations.filter((conversation) => (
+    conversation.mode === 'paper_guide'
+    && !conversation.archived
+    && normalizeSourcePathForMatch(conversation.bound_source_path) === sourceKey
+  ))
+  candidates.sort((left, right) => {
+    const leftSameProject = String(left.project_id || '').trim() === projectKey ? 1 : 0
+    const rightSameProject = String(right.project_id || '').trim() === projectKey ? 1 : 0
+    if (leftSameProject !== rightSameProject) return rightSameProject - leftSameProject
+    const updatedDelta = finiteNumber(right.updated_at) - finiteNumber(left.updated_at)
+    if (updatedDelta) return updatedDelta
+    return finiteNumber(right.created_at) - finiteNumber(left.created_at)
+  })
+  return candidates[0] || null
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -2104,6 +2136,17 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const locale = useSettingsStore.getState().uiLocale
     const sourceName = String(opts.sourceName || '').trim() || basenameFromSourcePath(sourcePath) || (locale === 'zh' ? zh.default_source_fallback : en.default_source_fallback)
     const projectId = opts.projectId ?? get().activeProjectId
+    if (!opts.forceNew) {
+      const reusable = findReusablePaperGuideConversation(
+        allSidebarConversations(get()),
+        sourcePath,
+        projectId,
+      )
+      if (reusable) {
+        await get().selectConversation(reusable.id)
+        return reusable.id
+      }
+    }
     const titleBase = String(opts.title || '').trim() || (locale === 'zh' ? zh.default_guide_title.replace('{name}', sourceName) : en.default_guide_title.replace('{name}', sourceName))
     const { id } = await chatApi.createConversation(titleBase, projectId, {
       mode: 'paper_guide',

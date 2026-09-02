@@ -1790,6 +1790,14 @@ export function MessageList({
     setEvidenceDrawerCiteDetails(details)
   }
 
+  const openResearchNoteEditor = (messageId: number | null, noteId = '') => {
+    closeCitationPopover()
+    closeEvidenceDrawer()
+    setResearchNoteInitialMessageId(messageId)
+    setResearchNoteInitialNoteId(noteId)
+    setResearchNoteOpen(true)
+  }
+
   const openCitationShelfFromPopover = () => {
     setShelfOpen(true)
     closeCitationPopover()
@@ -2484,14 +2492,10 @@ export function MessageList({
       loading={researchNotesLoading}
       notes={researchNotes}
       onNew={() => {
-        setResearchNoteInitialMessageId(null)
-        setResearchNoteInitialNoteId('')
-        setResearchNoteOpen(true)
+        openResearchNoteEditor(null)
       }}
       onEdit={(noteId) => {
-        setResearchNoteInitialMessageId(null)
-        setResearchNoteInitialNoteId(noteId)
-        setResearchNoteOpen(true)
+        openResearchNoteEditor(null, noteId)
       }}
       onDelete={deleteResearchNote}
       onOpenMessage={openResearchNoteMessage}
@@ -2821,21 +2825,17 @@ export function MessageList({
                           text={getMessageCopyTextValue(message)}
                           markdown={getMessageCopyMarkdownValue(message)}
                         />
-                        <Button
-                          size="small"
-                          type="text"
-                          icon={<FileTextOutlined />}
-                          data-testid={`research-note-open-${message.id}`}
-                          disabled={!canSaveAsEvidenceNote}
-                          title={!canSaveAsEvidenceNote ? S.research_note_external_blocked : undefined}
-                          onClick={() => {
-                            setResearchNoteInitialMessageId(message.id)
-                            setResearchNoteInitialNoteId('')
-                            setResearchNoteOpen(true)
-                          }}
-                        >
-                          {S.research_note_action}
-                        </Button>
+                        {canSaveAsEvidenceNote ? (
+                          <Button
+                            size="small"
+                            type="text"
+                            icon={<FileTextOutlined />}
+                            data-testid={`research-note-open-${message.id}`}
+                            onClick={() => openResearchNoteEditor(message.id)}
+                          >
+                            {S.research_note_action}
+                          </Button>
+                        ) : null}
                       </div>
                       {retryPrompt ? (
                         <Button

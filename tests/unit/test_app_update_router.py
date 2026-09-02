@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 import urllib.error
 
 from fastapi.testclient import TestClient
@@ -95,6 +96,22 @@ def test_prerelease_version_ordering():
     assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0-beta.1") is False
     assert app_router._tag_is_newer("v0.1.0-beta.alpha", "0.1.0-beta.1") is True
     assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0-beta.alpha") is False
+
+
+def test_fetch_latest_release_includes_published_prereleases(monkeypatch):
+    response = MagicMock()
+    response.read.return_value = (
+        b'[{"tag_name":"v0.1.0-beta.12","draft":false,"prerelease":true},'
+        b'{"tag_name":"v0.1.0-beta.13","draft":false,"prerelease":true},'
+        b'{"tag_name":"v0.1.0-beta.14","draft":true,"prerelease":true}]'
+    )
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+    monkeypatch.setattr(app_router.urllib.request, "urlopen", lambda request, timeout: response)
+
+    payload = app_router._fetch_latest_release("LittlePyx/Pi_zaya", 1.0)
+
+    assert payload["tag_name"] == "v0.1.0-beta.13"
 
 
 def test_update_check_reports_newer_latest_release(monkeypatch):

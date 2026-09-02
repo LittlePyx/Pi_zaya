@@ -133,6 +133,55 @@ def test_verifier_marks_fully_supported_answer_as_grounded():
     assert result.evidence_status_reasons == []
 
 
+def test_verifier_accepts_one_direct_passage_when_every_claim_is_supported() -> None:
+    result = verify_answer_citations(
+        "The workflow converts PDF into structured Markdown [1].",
+        [
+            {
+                "text": "The workflow converts PDF into structured Markdown.",
+                "meta": {"source_name": "demo"},
+            }
+        ],
+    )
+
+    assert result.evidence_status == "grounded"
+    assert result.evidence_status_reasons == []
+
+
+def test_verifier_treats_conditional_search_advice_as_procedural() -> None:
+    result = verify_answer_citations(
+        "The workflow converts PDF into structured Markdown [1].\n\n"
+        "若需对比其他文献，建议扩大检索范围或提供具体论文标题。",
+        [
+            {
+                "text": "The workflow converts PDF into structured Markdown.",
+                "meta": {"source_name": "demo"},
+            }
+        ],
+    )
+
+    assert result.evidence_status == "grounded"
+    assert result.total_claims == 1
+    assert result.source_notice_count == 1
+
+
+def test_verifier_treats_document_location_advice_as_procedural() -> None:
+    result = verify_answer_citations(
+        "The workflow converts PDF into structured Markdown [1].\n\n"
+        "建议在文档中定位“6. Conclusion”章节以获取实际结论内容。",
+        [
+            {
+                "text": "The workflow converts PDF into structured Markdown.",
+                "meta": {"source_name": "demo"},
+            }
+        ],
+    )
+
+    assert result.evidence_status == "grounded"
+    assert result.total_claims == 1
+    assert result.source_notice_count == 1
+
+
 def test_verifier_excludes_strict_retrieval_boundary_and_procedural_followup() -> None:
     answer = (
         "Paper A uses retrieval before generation [1].\n\n"

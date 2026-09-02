@@ -157,11 +157,12 @@ export type UploadDraft = {
   name: string
   selected: boolean
   stem: string
-  status: 'queued' | 'inspecting' | 'ready' | 'saving' | 'saved' | 'error'
+  status: 'queued' | 'inspecting' | 'ready' | 'saving' | 'saved' | 'duplicate' | 'error'
   failureStage?: 'inspect' | 'save' | 'duplicate' | ''
   displayName: string
   note: string
   savedName?: string
+  existingName?: string
   savedSha1?: string
   taskId?: string
   convertRequested?: boolean

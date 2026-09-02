@@ -243,6 +243,12 @@ export function useReaderWorkspaceActions({
     })
   }, [nextEventToken])
 
+  const consumeAppendSignal = useCallback((token: number) => {
+    setAppendSignal((current) => (
+      current && current.token === token ? null : current
+    ))
+  }, [])
+
   const addReaderSelectionToShelf = useCallback((payload: ReaderSelectionShelfPayload) => {
     const text = String(payload?.text || '').trim()
     const sourcePath = String(payload?.sourcePath || '').trim()
@@ -279,6 +285,7 @@ export function useReaderWorkspaceActions({
     citationShelfCount,
     openShelfSignal,
     appendSignal,
+    consumeAppendSignal,
     resetReaderWorkspaceTransientState,
     openReader,
     openReaderStandalone,

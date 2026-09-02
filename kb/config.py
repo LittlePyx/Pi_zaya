@@ -8,6 +8,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 from kb.app_paths import configure_release_environment
+from kb.test_isolation import enforce_isolated_test_paths
 
 
 # Offset added to snippet numbers in classic RAG context so that hit citations
@@ -140,6 +141,7 @@ class Settings:
 def load_settings() -> Settings:
     load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
     configure_release_environment()
+    enforce_isolated_test_paths()
 
     _env = os.environ.get
     prefs = _load_runtime_prefs()

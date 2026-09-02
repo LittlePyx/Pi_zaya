@@ -30,6 +30,7 @@ interface Props {
   uploading: boolean
   generating: boolean
   appendSignal?: { token: number; text: string } | null
+  onAppendSignalConsumed?: (token: number) => void
   queryScope: QueryScope
   queryScopeOptions: Array<{ value: QueryScope; disabled?: boolean }>
   onQueryScopeChange: (scope: QueryScope) => void
@@ -162,6 +163,7 @@ export function ChatInput({
   uploading,
   generating,
   appendSignal,
+  onAppendSignalConsumed,
   queryScope,
   queryScopeOptions,
   onQueryScopeChange,
@@ -189,13 +191,22 @@ export function ChatInput({
     setText((current) => {
       const cur = String(current || '')
       if (!cur.trim()) return incoming
+      const currentTrimmed = cur.trim()
+      const incomingTrimmed = incoming.trim()
+      if (
+        currentTrimmed === incomingTrimmed
+        || currentTrimmed.endsWith(`\n\n${incomingTrimmed}`)
+      ) {
+        return cur
+      }
       const needsBreak = !cur.endsWith('\n')
       return `${cur}${needsBreak ? '\n\n' : ''}${incoming}`
     })
+    onAppendSignalConsumed?.(appendSignal.token)
     window.setTimeout(() => {
       ref.current?.focus()
     }, 0)
-  }, [appendSignal])
+  }, [appendSignal, onAppendSignalConsumed])
 
   const uploadSelectedFiles = async (files: File[]) => {
     const { accepted, rejected } = collectAcceptedFiles(files)

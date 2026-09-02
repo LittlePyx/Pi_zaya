@@ -1,5 +1,6 @@
-import { Button, Upload, Typography } from 'antd'
+import { App, Button, Upload, Typography } from 'antd'
 import { BookOutlined, UploadOutlined } from '@ant-design/icons'
+import { isValidLibraryPdf } from './uploadPdfValidation'
 import './LibraryUploadIntake.css'
 
 const { Dragger } = Upload
@@ -28,6 +29,8 @@ export function LibraryUploadIntake({
   onAddSample,
   onToggleWorkbench,
 }: LibraryUploadIntakeProps) {
+  const { message } = App.useApp()
+
   return (
     <section className="kb-lib-workbench-section kb-lib-workbench-section-upload">
       <div className="kb-lib-section-head">
@@ -42,9 +45,13 @@ export function LibraryUploadIntake({
         disabled={uploadLocked}
         showUploadList={false}
         className={`kb-lib-upload-dropzone${uploadLocked ? ' is-locked' : ''}`}
-        beforeUpload={(file) => {
+        beforeUpload={async (file) => {
+          if (!(await isValidLibraryPdf(file as File))) {
+            message.warning(S.lib_upload_invalid_pdf.replace('{name}', String(file.name || '')))
+            return Upload.LIST_IGNORE
+          }
           onAddDrafts([file as File])
-          return false
+          return Upload.LIST_IGNORE
         }}
       >
         <div className="kb-lib-upload-dropzone-copy">

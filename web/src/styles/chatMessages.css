@@ -188,8 +188,13 @@ button.kb-assistant-source-notice {
   opacity: 0.82;
 }
 
+.kb-evidence-drawer-root {
+  pointer-events: none;
+}
+
 .kb-evidence-drawer-root .ant-drawer-content-wrapper {
   width: min(420px, calc(100vw - 20px)) !important;
+  pointer-events: auto;
 }
 
 .kb-evidence-drawer .ant-drawer-header {

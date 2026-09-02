@@ -16671,6 +16671,11 @@ def _message_local_evidence_actions_allowed(message: dict | None) -> bool | None
         )
     if minimum_ok is False or minimum_ok == 0:
         return False
+    has_hits = quality.get("has_hits", quality.get("hasHits"))
+    if has_hits is None:
+        has_hits = contract_quality.get("has_hits", contract_quality.get("hasHits"))
+    if has_hits is False or has_hits == 0:
+        return False
     resolution_status = str(
         quality.get("resolution_status")
         or quality.get("resolutionStatus")

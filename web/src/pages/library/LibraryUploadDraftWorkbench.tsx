@@ -77,6 +77,7 @@ type LibraryUploadDraftWorkbenchProps = {
   onClearErrorReason: () => void
   onSelectAllDrafts: () => void
   onInvertDraftSelection: () => void
+  onOpenDuplicateDraft: (key: string) => void | Promise<unknown>
   onInspectSelectedDrafts: () => void | Promise<unknown>
   onSaveSelectedDrafts: (convertNow: boolean) => void | Promise<unknown>
   onSelectFailedDrafts: () => void
@@ -98,6 +99,7 @@ function draftStatusText(S: Record<string, string>): Record<UploadDraft['status'
     ready: S.lib_draft_ready,
     saving: S.lib_draft_saving,
     saved: S.lib_draft_saved,
+    duplicate: S.lib_draft_duplicate,
     error: S.lib_draft_error,
   }
 }
@@ -143,6 +145,7 @@ export function LibraryUploadDraftWorkbench({
   onClearErrorReason,
   onSelectAllDrafts,
   onInvertDraftSelection,
+  onOpenDuplicateDraft,
   onInspectSelectedDrafts,
   onSaveSelectedDrafts,
   onSelectFailedDrafts,
@@ -241,13 +244,14 @@ export function LibraryUploadDraftWorkbench({
             <div className="kb-lib-upload-draft-list-body" role="list">
               {pagedUploadDrafts.map((draft) => {
                 const reasonKey = draft.status === 'error' ? classifyFailedReason(draft.note) : null
+                const duplicate = draft.status === 'duplicate'
                 return (
                   <div key={draft.key} className="kb-lib-upload-draft-item" role="listitem">
                     <div className="w-full space-y-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Checkbox checked={draft.selected} onChange={(event) => onDraftSelectedChange(draft.key, event.target.checked)} />
+                        <Checkbox disabled={duplicate} checked={draft.selected} onChange={(event) => onDraftSelectedChange(draft.key, event.target.checked)} />
                         <Text className="min-w-0 flex-1 truncate text-sm">{draft.name}</Text>
-                        <Tag color={draft.status === 'saved' ? 'success' : draft.status === 'error' ? 'error' : (draft.status === 'saving' || draft.status === 'inspecting') ? 'processing' : 'default'}>
+                        <Tag color={draft.status === 'saved' || duplicate ? 'success' : draft.status === 'error' ? 'error' : (draft.status === 'saving' || draft.status === 'inspecting') ? 'processing' : 'default'}>
                           {statusText[draft.status]}
                         </Tag>
                         {reasonKey ? (
@@ -259,10 +263,20 @@ export function LibraryUploadDraftWorkbench({
                       </div>
                       <div className="flex flex-wrap items-center gap-2 pl-6">
                         <Text type="secondary" className="text-xs">{S.lib_upload_suggest_name}</Text>
-                        <Input value={draft.stem} onChange={(event) => onDraftStemChange(draft.key, event.target.value)} className="w-[24rem] max-w-full" />
-                        <Button size="small" disabled={uploadLocked || draft.status === 'saving' || draft.status === 'inspecting'} onClick={() => onInspectDraft(draft.key)}>{S.lib_btn_scan}</Button>
-                        <Button size="small" disabled={uploadLocked || draft.status === 'saving' || draft.status === 'saved' || draft.status === 'inspecting'} onClick={() => { void onSaveDraft(draft.key, false) }}>{S.lib_btn_save}</Button>
-                        <Button size="small" type="primary" disabled={uploadLocked || draft.status === 'saving' || draft.status === 'saved' || draft.status === 'inspecting'} onClick={() => { void onSaveDraft(draft.key, true) }}>{S.lib_btn_save_and_convert}</Button>
+                        <Input disabled={duplicate} value={draft.stem} onChange={(event) => onDraftStemChange(draft.key, event.target.value)} className="w-[24rem] max-w-full" />
+                        {!duplicate ? (
+                          <Button size="small" disabled={uploadLocked || draft.status === 'saving' || draft.status === 'inspecting'} onClick={() => onInspectDraft(draft.key)}>{S.lib_btn_scan}</Button>
+                        ) : null}
+                        {duplicate ? (
+                          <Button size="small" onClick={() => { void onOpenDuplicateDraft(draft.key) }}>
+                            {S.lib_btn_open_existing}
+                          </Button>
+                        ) : (
+                          <>
+                            <Button size="small" disabled={uploadLocked || draft.status === 'saving' || draft.status === 'saved' || draft.status === 'inspecting'} onClick={() => { void onSaveDraft(draft.key, false) }}>{S.lib_btn_save}</Button>
+                            <Button size="small" type="primary" disabled={uploadLocked || draft.status === 'saving' || draft.status === 'saved' || draft.status === 'inspecting'} onClick={() => { void onSaveDraft(draft.key, true) }}>{S.lib_btn_save_and_convert}</Button>
+                          </>
+                        )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2 pl-6">
                         <Text type="secondary" className="text-xs">{draft.displayName}</Text>

@@ -18,6 +18,38 @@ def test_scoped_not_found_answer_resolves_without_deflecting_to_user() -> None:
     assert "请检查" not in answer
 
 
+def test_direct_evidence_recovery_uses_only_located_source_text() -> None:
+    hits = [
+        {
+            "text": (
+                "## Workflow Step 1 converts the PDF into structured Markdown. "
+                "Step 2 retrieves passages that match the question [9]."
+            ),
+            "meta": {"source_path": "paper.md"},
+        }
+    ]
+    answer = task_runtime._build_direct_evidence_recovery_answer(
+        prompt="文中有哪些关键结论？",
+        answer_hits=hits,
+        citation_plan={"slots": [{"candidate_hits": [1]}]},
+    )
+
+    assert answer.startswith("### 证据")
+    assert "Step 1 converts the PDF" in answer
+    assert "[9]" not in answer
+    assert answer.endswith("[1]")
+
+    trace = task_runtime.build_agent_trace_for_completed_answer(
+        "文中有哪些关键结论？",
+        answer,
+        evidence_hits=hits,
+        answer_mode="evidence_grounded",
+    )
+
+    assert task_runtime._agent_trace_requires_direct_evidence_recovery(trace) is False
+    assert trace["verification"]["evidence_status"] == "grounded"
+
+
 def test_insufficient_evidence_resolution_removes_all_local_evidence_actions() -> None:
     contracts = task_runtime._strip_paper_guide_evidence_actions(
         {
@@ -43,6 +75,11 @@ def test_insufficient_evidence_resolution_removes_all_local_evidence_actions() -
     assert packet["locate_target"] == {}
     assert task_runtime._answer_allows_local_evidence_actions(
         answer_quality={"minimum_ok": True, "resolution_status": "insufficient_evidence"},
+        answer_mode="evidence_grounded",
+        source_blend="local_grounded",
+    ) is False
+    assert task_runtime._answer_allows_local_evidence_actions(
+        answer_quality={"minimum_ok": True, "has_hits": False},
         answer_mode="evidence_grounded",
         source_blend="local_grounded",
     ) is False

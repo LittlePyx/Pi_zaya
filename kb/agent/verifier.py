@@ -11,7 +11,7 @@ _CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
 _NUMERIC_CITATION_RE = re.compile(r"(?<!\[)\[(\d+(?:\s*(?:,|-)\s*\d+)*)\](?!\])")
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<!Fig\.)(?<!Figs\.)(?<!Eq\.)(?<!Eqs\.)(?<!Sec\.)(?<!Secs\.)(?<!Tab\.)(?<!Tabs\.)"
-    r"(?<!e\.g\.)(?<!i\.e\.)(?<!et al\.)(?<=[.!?\u3002\uff01\uff1f])\s+|\n+"
+    r"(?<!e\.g\.)(?<!i\.e\.)(?<!et al\.)(?<!\d\.)(?<=[.!?\u3002\uff01\uff1f])\s+|\n+"
 )
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
@@ -52,7 +52,14 @@ _PROCEDURAL_NEXT_STEP_RE = re.compile(
     r"^(?:next\s+steps?|follow[- ]?up)\s*[:\uff1a]\s*"
     r"(?:inspect|read|check|open|review|verify|compare|look\s+at)\b"
     r"|^(?:\u4e0b\u4e00\u6b65|\u540e\u7eed)\s*[:\uff1a]\s*"
-    r"(?:\u67e5\u770b|\u68c0\u67e5|\u9605\u8bfb|\u6838\u5bf9|\u6253\u5f00|\u6bd4\u8f83|\u9a8c\u8bc1)",
+    r"(?:\u67e5\u770b|\u68c0\u67e5|\u9605\u8bfb|\u6838\u5bf9|\u6253\u5f00|\u6bd4\u8f83|\u9a8c\u8bc1)"
+    r"|^(?:if\s+you\s+(?:need|want)|to\s+(?:compare|inspect|verify)).{0,120}"
+    r"(?:consider|provide|expand|search|open|inspect|compare|verify)"
+    r"|^(?:\u82e5\u9700|\u5982\u9700|\u5982\u679c\u9700\u8981).{0,120}"
+    r"(?:\u5efa\u8bae|\u53ef\u4ee5|\u53ef).{0,80}"
+    r"(?:\u6269\u5927|\u63d0\u4f9b|\u68c0\u7d22|\u67e5\u770b|\u6253\u5f00|\u6bd4\u8f83|\u6838\u5bf9|\u9a8c\u8bc1)"
+    r"|^\u5efa\u8bae.{0,80}(?:\u6587\u6863|\u539f\u6587|\u8bba\u6587|\u6587\u732e\u5e93).{0,60}"
+    r"(?:\u5b9a\u4f4d|\u67e5\u770b|\u6253\u5f00|\u68c0\u7d22|\u6838\u5bf9)",
     flags=re.IGNORECASE,
 )
 _NONCLAIM_HEADING_RE = re.compile(
@@ -272,8 +279,6 @@ def assess_evidence_status(
 
     if unsupported > 0:
         reasons.append("unsupported_claims")
-    if hit_count < 2:
-        reasons.append("low_evidence_count")
     if total <= 0:
         return "needs_review", reasons
     if reasons:

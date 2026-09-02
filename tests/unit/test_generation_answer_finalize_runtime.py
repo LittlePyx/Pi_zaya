@@ -140,6 +140,23 @@ def test_sanitize_answer_removes_orphan_citation_only_line() -> None:
     assert cleaned == "在该配置下，测得的横向分辨率约为 120 nm [1]。"
 
 
+def test_sanitize_answer_removes_orphan_bold_shell_after_claim_pruning() -> None:
+    answer = "可提取的关键结论如下：\n\n**\n- 支持原文：Step 1. [1]"
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert "\n**\n" not in cleaned
+    assert "支持原文：Step 1. [1]" in cleaned
+
+
+def test_sanitize_answer_restores_missing_space_between_english_sentences() -> None:
+    answer = "The reader checks the source [1].Structured conversion improves retrieval [1]."
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert "]. Structured" in cleaned
+
+
 def test_sanitize_answer_removes_only_empty_display_math_blocks() -> None:
     answer = "第一段 [1]。\n\n$$\n$$\n\n$$\nx = Ay\n$$\n\n第二段 [2]。"
 

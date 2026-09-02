@@ -308,6 +308,7 @@ export default function ChatPage() {
     citationShelfCount,
     openShelfSignal,
     appendSignal,
+    consumeAppendSignal,
     resetReaderWorkspaceTransientState,
     openReader,
     openReaderStandalone,
@@ -673,6 +674,7 @@ export default function ChatPage() {
         uploading={uploading}
         generating={!!generation}
         appendSignal={appendSignal}
+        onAppendSignalConsumed={consumeAppendSignal}
         queryScope={resolveQueryScope(queryScope, {
           hasCurrentPaper: Boolean(researchContext.activeSource.ready),
           hasBasket: Boolean(currentSelectedResearchContext?.items?.length),
