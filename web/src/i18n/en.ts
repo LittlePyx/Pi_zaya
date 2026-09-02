@@ -2345,6 +2345,7 @@ export const S = {
   research_notes_loading_workspace: 'Loading research notes…',
   research_notes_source_quote: 'Source evidence',
   research_notes_source_location: 'Location',
+  research_notes_evidence_auto_relocated: 'Automatically relocated: {from} → {to}',
   reader_note_modal_title: 'Add to research note',
   reader_note_save: 'Add to note',
   reader_note_saved: 'Added to research note',

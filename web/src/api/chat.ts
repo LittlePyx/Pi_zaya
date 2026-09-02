@@ -259,6 +259,12 @@ export interface ResearchNoteEvidenceRepairIntent {
   repair: ResearchNoteEvidenceRepairBody
 }
 
+export interface ResearchNoteReaderReturnIntent {
+  version: 1
+  note_id: string
+  source_index: number
+}
+
 export interface ResearchNoteEvidenceReviewBody {
   decision: 'confirmed' | 'invalid'
   source_index: number

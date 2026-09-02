@@ -620,6 +620,11 @@
   font-size: 11px;
 }
 
+.kb-notes-source-card > small.kb-notes-source-relocated {
+  color: color-mix(in srgb, #16856b 82%, var(--text));
+  font-weight: 600;
+}
+
 .kb-notes-source-card blockquote {
   margin: 10px 0 2px;
   padding: 8px 9px;

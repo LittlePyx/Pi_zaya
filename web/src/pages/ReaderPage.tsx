@@ -9,6 +9,7 @@ import {
   type ResearchNoteEvidenceContextSnapshotBlock,
   type ResearchNoteEvidenceRepairIntent,
   type ResearchNoteEvidenceReviewIntent,
+  type ResearchNoteReaderReturnIntent,
 } from '../api/chat'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type {
@@ -209,6 +210,34 @@ function normalizeEvidenceRepairIntent(value: unknown): ResearchNoteEvidenceRepa
       source_fingerprint: fingerprint,
     },
   }
+}
+
+function normalizeResearchNoteReturnIntent(value: unknown): ResearchNoteReaderReturnIntent | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const noteId = String(record?.note_id || '').trim()
+  const sourceIndex = Number(record?.source_index)
+  if (
+    Number(record?.version) !== 1
+    || !noteId
+    || !Number.isSafeInteger(sourceIndex)
+    || sourceIndex < 0
+  ) return null
+  return { version: 1, note_id: noteId, source_index: sourceIndex }
+}
+
+function researchNoteReturnUrl(
+  noteId: string,
+  sourceIndex: number,
+  extra?: Record<string, string>,
+): string {
+  const params = new URLSearchParams({ note: noteId })
+  if (Number.isSafeInteger(sourceIndex) && sourceIndex >= 0) {
+    params.set('evidence_source', String(sourceIndex))
+  }
+  Object.entries(extra || {}).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  return `/notes?${params.toString()}`
 }
 
 function normalizeEvidenceContextSnapshotBlock(value: unknown): ResearchNoteEvidenceContextSnapshotBlock | null {
@@ -532,6 +561,14 @@ export default function ReaderPage() {
     ),
     [session?.state],
   )
+  const researchNoteReturnIntent = useMemo(
+    () => normalizeResearchNoteReturnIntent(
+      session?.state && typeof session.state === 'object'
+        ? (session.state as Record<string, unknown>).researchNoteReturn
+        : null,
+    ),
+    [session?.state],
+  )
   const payload = standaloneRecoveryPayload || sessionPayload
   const payloadSourcePath = String(payload?.sourcePath || '').trim()
   const sessionConversationId = String(session?.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
@@ -709,10 +746,17 @@ export default function ReaderPage() {
   }, [S.reader_returned_to_session, flushPendingState, payloadSourcePath, sessionConversationId, sessionId])
 
   const goBack = useCallback(() => {
-    const noteIntent = repairIntent || evidenceReviewIntent
-    if (noteIntent) {
+    const noteId = repairIntent?.note_id
+      || evidenceReviewIntent?.note_id
+      || researchNoteReturnIntent?.note_id
+      || ''
+    const sourceIndex = repairIntent?.repair.source_index
+      ?? evidenceReviewIntent?.review.source_index
+      ?? researchNoteReturnIntent?.source_index
+      ?? -1
+    if (noteId) {
       flushPendingState()
-      navigate(`/notes?note=${encodeURIComponent(noteIntent.note_id)}`)
+      navigate(researchNoteReturnUrl(noteId, sourceIndex))
       return
     }
     if (sessionConversationId) {
@@ -728,7 +772,7 @@ export default function ReaderPage() {
       return
     }
     navigate('/')
-  }, [S.reader_returned_to_session, evidenceReviewIntent, flushPendingState, navigate, repairIntent, returnToConversationWindow, sessionConversationId])
+  }, [S.reader_returned_to_session, evidenceReviewIntent, flushPendingState, navigate, repairIntent, researchNoteReturnIntent, returnToConversationWindow, sessionConversationId])
 
   const persistReaderShelfItem = useCallback((item: Record<string, unknown>) => {
     if (!item || Object.keys(item).length <= 0) return
@@ -924,14 +968,14 @@ export default function ReaderPage() {
       await chatApi.repairResearchNoteEvidence(repairIntent.note_id, repairIntent.repair)
       flushPendingState()
       navigate(
-        `/notes?note=${encodeURIComponent(repairIntent.note_id)}&evidence_repaired=1`,
+        researchNoteReturnUrl(repairIntent.note_id, repairIntent.repair.source_index, { evidence_repaired: '1' }),
       )
     } catch {
       setRepairError('')
       message.info(S.reader_evidence_repair_failed)
       flushPendingState()
       navigate(
-        `/notes?note=${encodeURIComponent(repairIntent.note_id)}&evidence_recheck=1`,
+        researchNoteReturnUrl(repairIntent.note_id, repairIntent.repair.source_index, { evidence_recheck: '1' }),
       )
     } finally {
       setRepairingEvidence(false)
@@ -959,7 +1003,11 @@ export default function ReaderPage() {
       })
       flushPendingState()
       navigate(
-        `/notes?note=${encodeURIComponent(evidenceReviewIntent.note_id)}&evidence_reviewed=${decision}`,
+        researchNoteReturnUrl(
+          evidenceReviewIntent.note_id,
+          evidenceReviewIntent.review.source_index,
+          { evidence_reviewed: decision },
+        ),
       )
     } catch (err) {
       const detail = err instanceof Error ? err.message : S.reader_evidence_review_failed

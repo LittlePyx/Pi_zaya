@@ -24,6 +24,7 @@ async function fulfillJson(route: Route, body: unknown) {
 async function installReaderBackend(page: Page, options: {
   payload?: Record<string, unknown>
   document?: Record<string, unknown>
+  state?: Record<string, unknown>
   statePatches?: Array<Record<string, unknown>>
 } = {}) {
   await installAppShellMocks(page)
@@ -58,7 +59,7 @@ async function installReaderBackend(page: Page, options: {
         headingPath: 'Introduction',
         snippet: 'Reader return fixture text.',
       },
-      state: {
+      state: options.state || {
         sourcePath: SOURCE_PATH,
         conversationId: CONV_ID,
         highlights: [],
@@ -111,6 +112,25 @@ test('reader session page does not keep the chat main window name', async ({ pag
 
   await expect.poll(async () => page.evaluate(() => window.name)).toBe(READER_STANDALONE_WINDOW_NAME)
   await expect(page.getByRole('heading', { name: 'Reader Return Fixture', exact: true })).toBeVisible()
+})
+
+test('reader opened from a research note returns to that note and evidence card', async ({ page }) => {
+  await installReaderBackend(page, {
+    state: {
+      sourcePath: SOURCE_PATH,
+      highlights: [],
+      researchNoteReturn: {
+        version: 1,
+        note_id: 'note-reader-return',
+        source_index: 2,
+      },
+    },
+  })
+
+  await page.goto(`/reader/session/${SESSION_ID}`)
+  await page.getByRole('button', { name: /Back|返回/ }).click()
+
+  await expect(page).toHaveURL(/\/notes\?note=note-reader-return&evidence_source=2$/)
 })
 
 test('standalone reader automatically recovers a stale exact locator without a dead-end result', async ({ page }) => {

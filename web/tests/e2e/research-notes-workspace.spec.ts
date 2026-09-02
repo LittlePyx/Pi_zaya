@@ -133,6 +133,7 @@ test('outline helpers inherit a shared project and deduplicate traceable sources
 test('research notes workspace edits, combines, filters, and follows traceable sources', async ({ page }) => {
   test.setTimeout(60_000)
   let readerPayload: Record<string, unknown> | null = null
+  let readerState: Record<string, unknown> | null = null
   let wordExportBody: Record<string, unknown> | null = null
   const evidenceContextBodies: Array<Record<string, unknown>> = []
   let failOutlineSaves = false
@@ -161,6 +162,22 @@ test('research notes workspace edits, combines, filters, and follows traceable s
             evidence_quote: 'Photon arrival is a stochastic process.',
             block_id: 'block-noise',
             page_start: 3,
+            evidence_auto_resolution_history: [{
+              version: 1,
+              resolved_at: 1_780_000_050,
+              action: 'exact_quote_auto_relocated',
+              match_reason: 'quote_relocated',
+              from: {
+                heading_path: 'Methods / Noise modeling',
+                page_start: 2,
+                page_end: 2,
+              },
+              to: {
+                heading_path: 'Methods / Noise modeling',
+                page_start: 3,
+                page_end: 3,
+              },
+            }],
           },
         ],
       },
@@ -279,8 +296,12 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   })
 
   await page.route('**/api/reader/sessions', async (route) => {
-    const body = route.request().postDataJSON() as { payload?: Record<string, unknown> }
+    const body = route.request().postDataJSON() as {
+      payload?: Record<string, unknown>
+      state?: Record<string, unknown>
+    }
     readerPayload = body.payload || null
+    readerState = body.state || null
     await fulfillJson(route, {
       id: 'reader-note-source',
       conversation_id: CONVERSATION_ID,
@@ -421,6 +442,8 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await expect(page.getByRole('menuitem', { name: /研究笔记/ })).toHaveClass(/ant-menu-item-selected/)
   await expect(workspace.getByText('SPAD noise conclusion', { exact: true })).toBeVisible()
   await expect(workspace.locator('.kb-notes-source-card blockquote')).toContainText('Photon arrival is a stochastic process.')
+  await expect(page.getByTestId('research-note-source-1')).toContainText('Methods / Noise modeling · 第 3 页')
+  await expect(page.getByTestId('research-note-evidence-relocated-1')).toContainText('第 2 页 → Methods / Noise modeling · 第 3 页')
 
   await page.getByTestId('research-note-evidence-review-1').click()
   const exactReview = page.getByTestId('research-note-evidence-result-1')
@@ -614,9 +637,18 @@ test('research notes workspace edits, combines, filters, and follows traceable s
     anchorId: 'p_00011',
     strictLocate: true,
   }))
+  expect(readerState).toEqual(expect.objectContaining({
+    researchNoteReturn: {
+      version: 1,
+      note_id: 'note-a',
+      source_index: 1,
+    },
+  }))
   await expect(page).toHaveURL(/\/reader\/session\/reader-note-source/)
 
-  await page.goto('/notes')
+  await page.goto('/notes?note=note-a&evidence_source=1')
+  await expect(page).toHaveURL('/notes?note=note-a')
+  await expect(page.getByTestId('research-note-source-1')).toBeFocused()
   await workspace.getByRole('button', { name: '回到回答' }).click()
   await expect(page).toHaveURL(new RegExp(`conversation=${CONVERSATION_ID}.*note_message=22`))
 })

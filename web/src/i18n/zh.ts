@@ -2346,6 +2346,7 @@ export const S = {
   research_notes_loading_workspace: '正在读取研究笔记…',
   research_notes_source_quote: '原文依据',
   research_notes_source_location: '定位',
+  research_notes_evidence_auto_relocated: '系统已自动重定位：{from} → {to}',
   reader_note_modal_title: '加入研究笔记',
   reader_note_save: '加入笔记',
   reader_note_saved: '已加入研究笔记',

@@ -43,6 +43,7 @@ import {
   type ResearchNoteEvidenceContext,
   type ResearchNoteEvidenceRepairIntent,
   type ResearchNoteEvidenceReviewIntent,
+  type ResearchNoteReaderReturnIntent,
   type ResearchNoteRecord,
   type ResearchNoteSourceLink,
   type ResearchNoteSourceState,
@@ -283,6 +284,44 @@ function evidenceLocationLabel(
   return parts.join(' · ')
 }
 
+function evidenceLocatorLocationLabel(
+  S: ReturnType<typeof useT>,
+  value: Record<string, unknown> | null | undefined,
+): string {
+  if (!value) return ''
+  const positivePage = (key: string) => {
+    const number = Number(value[key])
+    return Number.isFinite(number) && number > 0 ? number : undefined
+  }
+  return evidenceLocationLabel(
+    S,
+    String(value.heading_path || '').trim(),
+    positivePage('page_start'),
+    positivePage('page_end'),
+  )
+}
+
+function evidenceAutomaticRelocation(
+  S: ReturnType<typeof useT>,
+  link: ResearchNoteSourceLink,
+): { from: string; to: string } | null {
+  const history = Array.isArray(link.evidence_auto_resolution_history)
+    ? [...link.evidence_auto_resolution_history].reverse()
+    : []
+  for (const item of history) {
+    if (![
+      'source_change_auto_verified',
+      'exact_quote_auto_relocated',
+      'stable_locator_auto_aligned',
+      'saved_context_auto_disambiguated',
+    ].includes(String(item?.action || ''))) continue
+    const from = evidenceLocatorLocationLabel(S, item?.from)
+    const to = evidenceLocatorLocationLabel(S, item?.to)
+    if (from && to && from !== to) return { from, to }
+  }
+  return null
+}
+
 function evidenceReasonLabel(S: ReturnType<typeof useT>, reason: string): string {
   const labels: Record<string, string> = {
     exact_block: S.research_notes_evidence_reason_exact_block,
@@ -419,6 +458,12 @@ export default function ResearchNotesPage() {
     () => String(new URLSearchParams(location.search).get('note') || '').trim(),
     [location.search],
   )
+  const requestedEvidenceSourceIndex = useMemo(() => {
+    const raw = new URLSearchParams(location.search).get('evidence_source')
+    if (raw == null || !/^\d+$/.test(raw)) return null
+    const index = Number(raw)
+    return Number.isSafeInteger(index) ? index : null
+  }, [location.search])
   const projects = useChatStore(state => state.projects)
   const [notes, setNotes] = useState<ResearchNoteRecord[]>([])
   const [activeNote, setActiveNote] = useState<ResearchNoteRecord | null>(null)
@@ -803,6 +848,33 @@ export default function ResearchNotesPage() {
   useEffect(() => {
     if (!requestedNoteId) requestedNoteHandledRef.current = ''
   }, [requestedNoteId])
+
+  useEffect(() => {
+    if (
+      requestedEvidenceSourceIndex == null
+      || !activeNote
+      || activeNote.id !== requestedNoteId
+      || loadingNote
+      || requestedEvidenceSourceIndex >= links.length
+    ) return
+    setEvidenceHealthFilter('all')
+    setFocusedEvidenceIndex(requestedEvidenceSourceIndex)
+    const params = new URLSearchParams(location.search)
+    params.delete('evidence_source')
+    navigate(
+      { pathname: location.pathname, search: params.toString() ? `?${params.toString()}` : '' },
+      { replace: true },
+    )
+  }, [
+    activeNote,
+    links.length,
+    loadingNote,
+    location.pathname,
+    location.search,
+    navigate,
+    requestedEvidenceSourceIndex,
+    requestedNoteId,
+  ])
 
   useEffect(() => {
     const params = new URLSearchParams(location.search)
@@ -1193,16 +1265,23 @@ export default function ResearchNotesPage() {
   const openPaper = async (
     link: ResearchNoteSourceLink,
     verifiedPayload: MessageProvenanceReaderOpen,
+    sourceIndex: number,
     state?: Record<string, unknown>,
   ) => {
     const sourcePath = String(verifiedPayload.sourcePath || '').trim()
     if (!sourcePath) return
     try {
+      const returnIntent: ResearchNoteReaderReturnIntent | null = activeNote && sourceIndex >= 0
+        ? { version: 1, note_id: activeNote.id, source_index: sourceIndex }
+        : null
       const session = await chatApi.createReaderSession(verifiedPayload, {
         title: link.source_name || link.label,
         conversationId: link.conversation_id,
         messageId: link.message_id,
-        state,
+        state: {
+          ...(returnIntent ? { researchNoteReturn: returnIntent } : {}),
+          ...(state || {}),
+        },
       })
       navigate(`/reader/session/${encodeURIComponent(session.id)}`)
     } catch (error) {
@@ -1246,7 +1325,7 @@ export default function ResearchNotesPage() {
         source_fingerprint: context.source_fingerprint,
       },
     }
-    await openPaper(link, verifiedPayload, { researchNoteEvidenceRepair: intent })
+    await openPaper(link, verifiedPayload, sourceIndex, { researchNoteEvidenceRepair: intent })
   }
 
   const decideCandidateEvidence = async (
@@ -1375,17 +1454,18 @@ export default function ResearchNotesPage() {
         source_fingerprint: context.source_fingerprint,
       },
     }
-    await openPaper(link, verifiedPayload, { researchNoteEvidenceReview: intent })
+    await openPaper(link, verifiedPayload, sourceIndex, { researchNoteEvidenceReview: intent })
   }
 
   const reviewEvidence = async (
     link: ResearchNoteSourceLink,
     reviewKey: string,
     openIfExact = false,
+    sourceIndex = -1,
   ) => {
     const cached = evidenceReviews[reviewKey]?.data
     if (openIfExact && cached?.status === 'exact' && cached.reader_open) {
-      await openPaper(link, cached.reader_open)
+      await openPaper(link, cached.reader_open, sourceIndex)
       return
     }
     setEvidenceReviews(current => ({
@@ -1396,7 +1476,7 @@ export default function ResearchNotesPage() {
       const data = await chatApi.reviewResearchNoteEvidence(link)
       setEvidenceReviews(current => ({ ...current, [reviewKey]: { loading: false, data } }))
       if (openIfExact && data.status === 'exact' && data.reader_open) {
-        await openPaper(link, data.reader_open)
+        await openPaper(link, data.reader_open, sourceIndex)
       }
     } catch (error) {
       const detail = error instanceof Error ? error.message : S.research_notes_evidence_load_failed
@@ -1720,7 +1800,7 @@ export default function ResearchNotesPage() {
       sourceCard?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
       sourceCard?.focus({ preventScroll: true })
     })
-    if (entry.link.source_path) void reviewEvidence(entry.link, entry.reviewKey)
+    if (entry.link.source_path) void reviewEvidence(entry.link, entry.reviewKey, false, entry.index)
   }
   const evidenceHealthCounts = paperLinkEntries.reduce((counts, entry) => {
     const status = evidenceHealthStatus(
@@ -2437,6 +2517,16 @@ export default function ResearchNotesPage() {
                     && (result.source_changed || link.evidence_verification?.status === 'invalid')
                     && link.evidence_verification?.source_fingerprint,
                   )
+                  const generatedLocation = evidenceLocationLabel(
+                    S,
+                    link.heading_path,
+                    link.page_start,
+                    link.page_end,
+                  )
+                  const currentLocation = link.page_start
+                    ? generatedLocation
+                    : String(link.location_label || '').trim() || generatedLocation
+                  const automaticRelocation = evidenceAutomaticRelocation(S, link)
                   return (
                     <article
                       key={`${link.kind}-${link.message_id || 0}-${link.source_path || ''}-${index}`}
@@ -2457,8 +2547,18 @@ export default function ResearchNotesPage() {
                         ) : null}
                       </div>
                       <strong>{link.label || link.source_name || S.research_note_untitled_source}</strong>
-                      {link.location_label || link.heading_path ? (
-                        <small>{S.research_notes_source_location} · {link.location_label || link.heading_path}</small>
+                      {currentLocation ? (
+                        <small>{S.research_notes_source_location} · {currentLocation}</small>
+                      ) : null}
+                      {automaticRelocation ? (
+                        <small
+                          className="kb-notes-source-relocated"
+                          data-testid={`research-note-evidence-relocated-${index}`}
+                        >
+                          {S.research_notes_evidence_auto_relocated
+                            .replace('{from}', automaticRelocation.from)
+                            .replace('{to}', automaticRelocation.to)}
+                        </small>
                       ) : null}
                       {link.evidence_quote ? (
                         <blockquote>
@@ -2485,7 +2585,7 @@ export default function ResearchNotesPage() {
                                 loading={Boolean(review?.loading)}
                                 disabled={!link.source_path || evidenceHealthRun.running}
                                 data-testid={`research-note-evidence-review-${index}`}
-                                onClick={() => { void reviewEvidence(link, reviewKey) }}
+                                onClick={() => { void reviewEvidence(link, reviewKey, false, index) }}
                               >
                                 {result ? S.research_notes_evidence_recheck : S.research_notes_evidence_review}
                               </Button>
@@ -2495,7 +2595,7 @@ export default function ResearchNotesPage() {
                                 type="link"
                                 icon={<ArrowRightOutlined />}
                                 data-testid={`research-note-evidence-open-${index}`}
-                                onClick={() => { void reviewEvidence(link, reviewKey, true) }}
+                                onClick={() => { void reviewEvidence(link, reviewKey, true, index) }}
                               >
                                 {S.research_notes_evidence_open_exact}
                               </Button>
