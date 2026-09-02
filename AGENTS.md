@@ -64,6 +64,10 @@ Primary local URLs:
 | `kb/converter/quality_repair.py` | Markdown quality analysis, repair planning, and safe repair |
 | `kb/task_runtime.py` + `kb/bg_queue_state.py` | Thread-safe background queue for PDF conversion and chat tasks |
 | `kb/retrieval_engine.py` | Query translation, heuristic filtering, result caching |
+| `kb/candidate_retriever.py` | Minimal candidate-retrieval protocol; keeps ranking channels outside orchestration |
+| `kb/dense_retriever.py` + `kb/hybrid_retriever.py` | Internal exact-cosine and BM25+dense RRF kernels; not product-enabled until embedding persistence and consent land |
+| `kb/cross_encoder_reranker.py` | Model-agnostic, fail-open cross-encoder reranking boundary |
+| `kb/retrieval_metrics.py` | Recall@K, MRR, and nDCG evaluation primitives |
 | `kb/reference_index.py` | Reference extraction and Crossref enrichment |
 | `kb/reference_sync.py` | Non-blocking reference metadata sync |
 | `kb/chat_store.py` | SQLite conversations, messages, and retrieval refs |
@@ -100,6 +104,8 @@ All via environment variables. At minimum set one API key:
 - Markdown page markers use `<!-- kb_page: N -->` and must be preserved through conversion repairs.
 - React API contracts should be typed in `web/src/api`.
 - Quality fixes should flow from source diagnostics to converter/repair code, not only hide bad UI states.
+- Run `python tools/check_architecture_budgets.py`; protected oversized files may shrink but must not grow.
+- Do not describe retrieval as sparse+dense hybrid until the product path actually has an enabled embedding index.
 
 ## Database Files
 

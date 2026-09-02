@@ -70,12 +70,14 @@ jobs:
         shell: pwsh
         run: |
           python -m ruff check . --output-format=github
+          python tools/check_architecture_budgets.py
           python -m pytest tests/unit -q
           python -m pytest tests/sanity -q
 
       - name: Research and conversion quality gates
         shell: pwsh
         run: |
+          python tools/retrieval_eval/run_retrieval_eval.py --dry-run --fail-on-quality
           python tools/research_qa/run_research_qa_eval.py --dry-run
           python tools/version_ab/run_version_ab_eval.py --dry-run
           python tools/evidence_matrix/run_comparison_eval.py --dry-run

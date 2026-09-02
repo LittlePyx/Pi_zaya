@@ -36,6 +36,7 @@ from .retrieval_heuristics import (
     _score_tokens,
 )
 from .retriever import BM25Retriever
+from .candidate_retriever import CandidateRetriever
 from .reference_query_family import prompt_explicitly_requests_multi_paper_list as _prompt_explicitly_requests_multi_paper_list
 from .source_blocks import load_anchor_index_cached as _load_anchor_index_cached
 from .source_filters import is_excluded_source_path
@@ -2419,7 +2420,7 @@ def _merge_expanded_results(
 
 def _search_hits_with_fallback(
     prompt_text: str,
-    retriever: BM25Retriever,
+    retriever: CandidateRetriever,
     top_k: int,
     settings,
     *,

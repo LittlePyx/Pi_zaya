@@ -89,7 +89,7 @@ web context.
 flowchart LR
   A["PDF Library"] --> B["PDF-to-Markdown Converter"]
   B --> C["Chunking + Structured Index"]
-  C --> D["Hybrid Retrieval"]
+  C --> D["BM25 + Structured Retrieval"]
   D --> E["Research Agent Runtime"]
   E --> P["Planner + Intent Router"]
   E --> R["Evidence Retriever"]
@@ -126,6 +126,13 @@ At a high level:
    same paper and carries a reader locator; missing evidence stays visibly empty.
 6. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
+
+The current release retrieves candidates with BM25, query
+translation/expansion, and structured indexes. It does not yet enable
+embedding-based dense candidate retrieval or a vector database. BM25+dense
+fusion is being developed behind an isolated retrieval boundary and will not
+enter the product path until persistence, user consent, privacy disclosure, and
+retrieval evaluation are complete.
 
 Key backend entry points:
 
