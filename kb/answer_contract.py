@@ -2221,6 +2221,9 @@ def build_answer_contract_payload(
     quality_payload = {
         "minimum_ok": quality.get("minimum_ok") if "minimum_ok" in quality else None,
         "prompt_family": _contract_payload_text(quality.get("prompt_family")),
+        "resolution_status": _contract_payload_text(
+            quality.get("resolution_status"), quality.get("resolutionStatus")
+        ),
         "quality_gate_status": _contract_payload_text(
             source_summary.get("quality_gate_status"),
             policy_support.get("quality_gate_status"),

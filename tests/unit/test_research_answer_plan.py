@@ -1,4 +1,33 @@
-from kb.research_answer_plan import infer_research_answer_plan
+from kb.research_answer_plan import (
+    build_research_facet_queries,
+    infer_research_answer_plan,
+    infer_research_question_facets,
+)
+
+
+def test_comprehensive_reading_plan_requires_results_evidence_separately() -> None:
+    prompt = "只依据本文，说明研究问题、核心方法、关键结果和主要局限。"
+    plan = infer_research_answer_plan(
+        prompt=prompt,
+        paper_guide_prompt_family="overview",
+        answer_intent="reading",
+        paper_guide_mode=True,
+    )
+
+    assert infer_research_question_facets(prompt) == [
+        "problem",
+        "method",
+        "results",
+        "limitations",
+    ]
+    assert plan.kind == "comprehensive_reading"
+    assert "tables/figures/metrics" in plan.evidence_need
+    assert [facet for facet, _ in build_research_facet_queries(prompt)] == [
+        "problem",
+        "method",
+        "results",
+        "limitations",
+    ]
 
 
 def test_infer_research_answer_plan_prefers_family_for_exact_method():

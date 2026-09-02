@@ -196,6 +196,7 @@ import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
 import { ResearchGapWorkspace } from './ResearchGapWorkspace'
 import { ResearchNoteModal } from './ResearchNoteModal'
 import { researchNoteAnswerEvidenceEligible } from './researchNote'
+import { messageEvidenceActionPolicy } from './messageEvidencePolicy'
 import { ResearchNotesPanel } from './ResearchNotesPanel'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../../utils/featureFlags'
@@ -2547,7 +2548,10 @@ export function MessageList({
               ? selectedResearchContextByAssistantId.get(Number(message.id)) || null
               : null
             const renderPacket = !isUser ? getMessageRenderPacket(message) : null
-            const citeDetails = getMessageCiteDetailRecords(message)
+            const evidenceActionPolicy = messageEvidenceActionPolicy(message)
+            const citeDetails = (evidenceActionPolicy.allowLocalCitations
+              ? getMessageCiteDetailRecords(message)
+              : [])
               .map(normalizeCiteDetail)
               .filter((detail): detail is CiteDetail => Boolean(detail))
               .map((detail) => ({
@@ -2645,6 +2649,7 @@ export function MessageList({
               hasRawCiteDetails: effectiveCiteDetails.length > 0,
               hasStructuredProvenance,
               hasDirectProvenance,
+              allowLooseLocalLocate: evidenceActionPolicy.allowLooseLocalLocate,
             })
             const guideInlineTextTailLocate = Boolean(
               !suppressLooseInlineLocate
@@ -2676,7 +2681,9 @@ export function MessageList({
               isStrictStructuredTargetCompatible,
             } = structuredInlineLocateResolver
             const locateCandidates = prep?.locateCandidates || (guideSourcePath ? guideDocCandidates : [])
-            const enableLocateUi = Boolean(onOpenReader) && (
+            const enableLocateUi = Boolean(onOpenReader)
+              && evidenceActionPolicy.allowStructuredLocalLocate
+              && (
               strictStructuredLocateOnly
               || strictStructuredInlineLocate
               || hasDirectProvenance

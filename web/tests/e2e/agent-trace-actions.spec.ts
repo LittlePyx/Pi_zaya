@@ -1573,6 +1573,64 @@ test('research notes reject answers that contain external supplementation', asyn
   expect(result).toEqual({ externalEligible: false, localEligible: true, answerIds: [4] })
 })
 
+test('message evidence policy blocks false local actions for external and failed answers', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { messageEvidenceActionPolicy } = await import('/src/components/chat/messageEvidencePolicy.ts')
+    const external = messageEvidenceActionPolicy({
+      id: 10,
+      role: 'assistant',
+      content: 'Model background',
+      meta: {
+        answer_contract: {
+          source_policy_payload: {
+            kind: 'external_not_kb',
+            uses_local_knowledge_base: false,
+          },
+        },
+      },
+    } as never)
+    const mixed = messageEvidenceActionPolicy({
+      id: 11,
+      role: 'assistant',
+      content: 'Local evidence plus model context',
+      meta: { agent_source_summary: { kind: 'local_plus_external' } },
+    } as never)
+    const failed = messageEvidenceActionPolicy({
+      id: 12,
+      role: 'assistant',
+      content: 'Empty template',
+      meta: {
+        answer_quality: { minimum_ok: false },
+        agent_source_summary: { kind: 'local_kb' },
+      },
+    } as never)
+    return { external, mixed, failed }
+  })
+
+  expect(result.external).toMatchObject({
+    allowLocalCitations: false,
+    allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'external',
+  })
+  expect(result.mixed).toMatchObject({
+    allowLocalCitations: true,
+    allowStructuredLocalLocate: true,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'mixed',
+  })
+  expect(result.failed).toMatchObject({
+    allowLocalCitations: false,
+    allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'quality_failed',
+  })
+})
+
 test('evidence drawer view model dedupes cards and derives compact source detail', async ({ page }) => {
   const drawer = await evidenceDrawerViewModel(page, {
     sourceNotice: {

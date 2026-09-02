@@ -246,7 +246,8 @@ export function buildMessageMarkdownLocateProps(
 
   return {
     inlineLocateTokenPolicy: opts.guideSourcePath ? { quote: true, figure_ref: true } : undefined,
-    inlineTextLocateEnabled: (!opts.guideSourcePath || opts.strictStructuredInlineLocate) && !opts.suppressLooseInlineLocate,
+    inlineTextLocateEnabled: opts.strictStructuredInlineLocate
+      || ((!opts.guideSourcePath) && !opts.suppressLooseInlineLocate),
     inlineTextTailLocateEnabled: opts.guideInlineTextTailLocate,
     locateSurfacePolicy: opts.guideSourcePath
       ? {

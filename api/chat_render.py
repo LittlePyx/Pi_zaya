@@ -11438,10 +11438,21 @@ def _reading_guide_attach_claim_level_system_a_citations(
             or re.match(r"^#{1,6}\s+", stripped)
         ):
             continue
-        units = re.split(
-            r"(?<=[。！？!?；;])|(?<=[A-Za-z\u4e00-\u9fff]\.)(?=\s|$)",
+        protected_body = re.sub(
+            r"(?i)\b(?:fig|figure|eq|ref|sec|dr|mr|mrs|ms|prof|vs)\.",
+            lambda match: str(match.group(0)).replace(".", "\uE000"),
             body,
         )
+        protected_body = re.sub(
+            r"(?i)\b(?:e\uE000g|i\uE000e)\.",
+            lambda match: str(match.group(0)).replace(".", "\uE000"),
+            protected_body,
+        )
+        units = re.split(
+            r"(?<=[。！？!?；;])|(?<=[A-Za-z\u4e00-\u9fff]\.)(?=\s|$)",
+            protected_body,
+        )
+        units = [unit.replace("\uE000", ".") for unit in units]
         if not units:
             continue
         units_by_line[line_idx] = units
@@ -16633,6 +16644,141 @@ def _message_refs_user_msg_id(rec: dict | None, *, fallback: int = 0) -> int:
     return 0
 
 
+def _message_local_evidence_actions_allowed(message: dict | None) -> bool | None:
+    rec = dict(message or {})
+    meta = rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
+    contract = (
+        meta.get("answer_contract")
+        if isinstance(meta.get("answer_contract"), dict)
+        else meta.get("answerContract")
+        if isinstance(meta.get("answerContract"), dict)
+        else {}
+    )
+    quality = (
+        meta.get("answer_quality")
+        if isinstance(meta.get("answer_quality"), dict)
+        else meta.get("answerQuality")
+        if isinstance(meta.get("answerQuality"), dict)
+        else {}
+    )
+    contract_quality = (
+        contract.get("quality") if isinstance(contract.get("quality"), dict) else {}
+    )
+    minimum_ok = quality.get("minimum_ok", quality.get("minimumOk"))
+    if minimum_ok is None:
+        minimum_ok = contract_quality.get(
+            "minimum_ok", contract_quality.get("minimumOk")
+        )
+    if minimum_ok is False or minimum_ok == 0:
+        return False
+    resolution_status = str(
+        quality.get("resolution_status")
+        or quality.get("resolutionStatus")
+        or contract_quality.get("resolution_status")
+        or contract_quality.get("resolutionStatus")
+        or ""
+    ).strip().lower()
+    if resolution_status in {"insufficient_evidence", "not_found", "scoped_not_found"}:
+        return False
+
+    contract_summary = (
+        contract.get("source_summary")
+        if isinstance(contract.get("source_summary"), dict)
+        else contract.get("sourceSummary")
+        if isinstance(contract.get("sourceSummary"), dict)
+        else {}
+    )
+    summary = contract_summary or (
+        meta.get("agent_source_summary")
+        if isinstance(meta.get("agent_source_summary"), dict)
+        else meta.get("agentSourceSummary")
+        if isinstance(meta.get("agentSourceSummary"), dict)
+        else {}
+    )
+    contract_policy = (
+        contract.get("source_policy_payload")
+        if isinstance(contract.get("source_policy_payload"), dict)
+        else contract.get("sourcePolicyPayload")
+        if isinstance(contract.get("sourcePolicyPayload"), dict)
+        else {}
+    )
+    summary_policy = (
+        summary.get("source_policy_payload")
+        if isinstance(summary.get("source_policy_payload"), dict)
+        else summary.get("sourcePolicyPayload")
+        if isinstance(summary.get("sourcePolicyPayload"), dict)
+        else {}
+    )
+    policy = contract_policy or summary_policy
+    kind = str(policy.get("kind") or summary.get("kind") or "").strip().lower()
+    source_blend = str(
+        policy.get("source_blend")
+        or policy.get("sourceBlend")
+        or summary.get("source_blend")
+        or summary.get("sourceBlend")
+        or contract.get("source_blend")
+        or contract.get("sourceBlend")
+        or ""
+    ).strip().lower()
+    uses_local = policy.get(
+        "uses_local_knowledge_base", policy.get("usesLocalKnowledgeBase")
+    )
+    if uses_local is False or uses_local == 0:
+        return False
+    if kind in {"external_not_kb", "general_api"}:
+        return False
+    if source_blend in {"external_academic", "general_llm"}:
+        return False
+    if uses_local is True or uses_local == 1:
+        return True
+    if kind in {"local_kb", "local_plus_external"}:
+        return True
+    if source_blend in {"local_grounded", "hybrid_local_external"}:
+        return True
+    return None
+
+
+def _strip_message_local_evidence_actions(message: dict) -> dict:
+    rec = dict(message or {})
+    rec.pop("provenance", None)
+    rec["cite_details"] = []
+    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
+    meta.pop("provenance", None)
+    meta.pop("render_cache", None)
+    contracts = (
+        dict(meta.get("paper_guide_contracts") or {})
+        if isinstance(meta.get("paper_guide_contracts"), dict)
+        else {}
+    )
+    for key in (
+        "primary_evidence",
+        "citation_plan",
+        "support_pack",
+        "grounding_trace",
+        "evidence_cards",
+        "retrieval_bundle",
+        "research_basket_evidence",
+    ):
+        contracts.pop(key, None)
+    packet = (
+        dict(contracts.get("render_packet") or {})
+        if isinstance(contracts.get("render_packet"), dict)
+        else {}
+    )
+    if packet:
+        packet["cite_details"] = []
+        packet["citation_validation"] = {}
+        packet["locate_target"] = {}
+        packet["reader_open"] = {}
+        packet["primary_evidence"] = {}
+        packet["evidence_alternatives"] = []
+        contracts["render_packet"] = packet
+    if contracts:
+        meta["paper_guide_contracts"] = contracts
+    rec["meta"] = meta
+    return rec
+
+
 def enrich_messages_with_reference_render(
     messages: list[dict],
     refs_by_user: dict[int, dict],
@@ -16655,6 +16801,9 @@ def enrich_messages_with_reference_render(
         rec = dict(msg or {})
         role = str(rec.get("role") or "")
         content = str(rec.get("content") or "")
+        local_evidence_actions_allowed = _message_local_evidence_actions_allowed(rec)
+        if role == "assistant" and local_evidence_actions_allowed is False:
+            rec = _strip_message_local_evidence_actions(rec)
         render_source = _message_render_source_markdown(rec, content)
         try:
             msg_id = int(rec.get("id") or 0)
@@ -16679,8 +16828,12 @@ def enrich_messages_with_reference_render(
             if raw_ref_pack is None:
                 raw_ref_pack = refs_by_user.get(str(message_refs_user_msg_id))
         raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
+        if local_evidence_actions_allowed is False:
+            raw_ref_pack_dict = None
         input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
         message_citation_plan = _message_citation_plan(rec)
+        if local_evidence_actions_allowed is False:
+            message_citation_plan = {}
         rec_meta_for_plan = (
             rec.get("meta") if isinstance(rec.get("meta"), dict) else {}
         )
@@ -17150,13 +17303,13 @@ def enrich_messages_with_reference_render(
             provenance_raw if isinstance(provenance_raw, dict) else None,
             hits,
             anchor_ns=f"{conv_id}:{idx}:{msg_id}:api",
-        )
+        ) if local_evidence_actions_allowed is not False else None
         if isinstance(enriched_provenance, dict):
             rec["provenance"] = enriched_provenance
             if isinstance(rec.get("meta"), dict):
                 rec["meta"] = dict(rec.get("meta") or {})
                 rec["meta"]["provenance"] = enriched_provenance
-        if (not cached) or _cached_render_packet_needs_contract_refresh(
+        if local_evidence_actions_allowed is not False and ((not cached) or _cached_render_packet_needs_contract_refresh(
             cached,
             enriched_provenance=(
                 enriched_provenance
@@ -17164,7 +17317,7 @@ def enrich_messages_with_reference_render(
                 else None
             ),
             ref_pack=ref_pack if isinstance(ref_pack, dict) else None,
-        ):
+        )):
             _merge_render_packet_contract_meta(
                 rec=rec,
                 msg_id=msg_id,
@@ -17215,6 +17368,8 @@ def enrich_messages_with_reference_render(
             except Exception:
                 pass
         rec["render_cache_key"] = str(render_cache_key or "")[:12]
+        if local_evidence_actions_allowed is False:
+            rec = _strip_message_local_evidence_actions(rec)
         out.append(rec)
 
     return out

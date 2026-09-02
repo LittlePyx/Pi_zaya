@@ -113,6 +113,12 @@ def test_paper_guide_prompt_family_prefers_overview_for_beginner_problem_and_app
     )
 
 
+def test_paper_guide_prompt_family_keeps_multifacet_reading_out_of_method_only():
+    prompt = "只依据本文，分别说明研究问题、核心方法和关键量化结果。"
+
+    assert _paper_guide_prompt_family(prompt) == "overview"
+
+
 def test_paper_guide_prompt_family_prefers_method_for_training_summary_questions():
     assert (
         _paper_guide_prompt_family(

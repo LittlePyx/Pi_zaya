@@ -13068,6 +13068,38 @@ def test_claim_level_citation_reuse_skips_a_different_named_paper():
     assert "基础综述说明单像素成像的重建质量与重建速度 [1]。" in repaired
 
 
+def test_claim_level_citation_keeps_figure_abbreviation_and_panel_together():
+    from api import chat_render
+
+    source_path = "single-photon-imaging.en.md"
+    evidence = (
+        "Fig. 1c compares single-photon reconstruction quality and reports higher PSNR "
+        "and SSIM for the proposed method."
+    )
+    answer = (
+        "Fig. 1c compares single-photon reconstruction quality and reports higher PSNR "
+        "and SSIM for the proposed method."
+    )
+    repaired = chat_render._reading_guide_attach_claim_level_system_a_citations(
+        answer,
+        [{"text": evidence, "meta": {"source_path": source_path}}],
+        {
+            "slots": [
+                {
+                    "preferred_system": "system_a",
+                    "source_path": source_path,
+                    "evidence_quote": evidence,
+                    "candidate_hits": [1],
+                }
+            ]
+        },
+    )
+
+    assert "Fig [1]. 1c" not in repaired
+    assert "Fig. 1c" in repaired
+    assert repaired.endswith("[1].")
+
+
 def test_claim_level_citation_reuse_skips_markdown_wrapped_different_paper_title():
     from api import chat_render
 

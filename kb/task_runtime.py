@@ -373,6 +373,10 @@ from kb.paper_guide_prompting import (
     _paper_guide_text_matches_requested_targets,
 )
 from kb.reference_index import load_reference_index, resolve_reference_entry
+from kb.research_answer_plan import (
+    build_research_facet_queries,
+    infer_research_question_facets,
+)
 from kb.retrieval_engine import (
     _collect_doc_overview_snippets,
     _deep_read_md_for_context,
@@ -757,6 +761,139 @@ def _paper_guide_supplemental_scan_prompts(
         if len(candidates) >= max(1, int(limit or 1)):
             break
     return candidates
+
+
+_RESEARCH_FACET_HIT_PATTERNS: dict[str, re.Pattern[str]] = {
+    "problem": re.compile(
+        r"(?i)\b(?:introduction|background|motivation|problem|challenge|objective)\b|研究问题|研究动机|背景|挑战|目标"
+    ),
+    "method": re.compile(
+        r"(?i)\b(?:methods?|approach|architecture|algorithm|workflow|implementation|network|model)\b|方法|原理|算法|架构|实现|模型"
+    ),
+    "results": re.compile(
+        r"(?i)\b(?:results?|experiments?|evaluation|performance|table|fig(?:ure)?|psnr|ssim|accuracy|auc|f1|metric|outperform)\b|\b\d+(?:\.\d+)?\s*(?:db|%)\b|结果|实验|评估|性能|表\s*\d+|图\s*\d+|指标"
+    ),
+    "limitations": re.compile(
+        r"(?i)\b(?:limitations?|discussion|assumptions?|failure|future\s+work|scope)\b|局限|不足|讨论|假设|失败|未来工作|适用边界"
+    ),
+}
+
+
+def _research_hit_facets(hit: dict | None) -> set[str]:
+    item = dict(hit or {})
+    meta = item.get("meta") if isinstance(item.get("meta"), dict) else {}
+    haystack = "\n".join(
+        (
+            str(meta.get("heading_path") or ""),
+            str(meta.get("block_kind") or meta.get("kind") or ""),
+            str(item.get("text") or ""),
+        )
+    )
+    return {
+        facet
+        for facet, pattern in _RESEARCH_FACET_HIT_PATTERNS.items()
+        if pattern.search(haystack)
+    }
+
+
+def _balance_research_facet_hits(
+    *,
+    selected_hits: list[dict] | None,
+    candidate_hits: list[dict] | None,
+    requested_facets: list[str] | None,
+    limit: int,
+) -> list[dict]:
+    facets = [
+        facet
+        for facet in list(requested_facets or [])
+        if facet in _RESEARCH_FACET_HIT_PATTERNS
+    ]
+    if len(facets) < 2:
+        return [dict(hit) for hit in list(selected_hits or []) if isinstance(hit, dict)]
+    candidates = [
+        dict(hit)
+        for hit in [*list(selected_hits or []), *list(candidate_hits or [])]
+        if isinstance(hit, dict)
+    ]
+    out: list[dict] = []
+    seen: set[str] = set()
+
+    def identity(hit: dict) -> str:
+        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+        return hashlib.sha1(
+            (
+                str(meta.get("source_path") or "")
+                + "\n"
+                + str(meta.get("block_id") or meta.get("heading_path") or "")
+                + "\n"
+                + str(hit.get("text") or "")
+            ).encode("utf-8", "ignore")
+        ).hexdigest()[:20]
+
+    for facet in facets:
+        matches = [hit for hit in candidates if facet in _research_hit_facets(hit)]
+        matches.sort(
+            key=lambda hit: (
+                1
+                if facet
+                in _research_hit_facets(
+                    {
+                        "text": "",
+                        "meta": {
+                            "heading_path": str(
+                                (hit.get("meta") or {}).get("heading_path") or ""
+                            )
+                        },
+                    }
+                )
+                else 0,
+                float(hit.get("score") or 0.0),
+            ),
+            reverse=True,
+        )
+        for hit in matches:
+            key = identity(hit)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(hit)
+            break
+    for hit in candidates:
+        key = identity(hit)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(hit)
+    return out[: max(len(facets), max(1, int(limit or 1)))]
+
+
+def _apply_research_facet_quality(
+    finalize_state: dict,
+    *,
+    prompt: str,
+) -> dict:
+    state = dict(finalize_state or {})
+    requested = infer_research_question_facets(prompt)
+    if len(requested) < 2:
+        return state
+    answer = str(state.get("answer") or "")
+    covered = infer_research_question_facets(answer)
+    missing = [facet for facet in requested if facet not in covered]
+    quality = (
+        dict(state.get("answer_quality") or {})
+        if isinstance(state.get("answer_quality"), dict)
+        else {}
+    )
+    quality["requested_facets"] = requested
+    quality["covered_facets"] = [facet for facet in requested if facet in covered]
+    quality["missing_facets"] = missing
+    quality["facet_coverage"] = round(
+        (len(requested) - len(missing)) / max(1, len(requested)), 3
+    )
+    if missing:
+        quality["minimum_ok"] = False
+    state["answer_quality"] = quality
+    return state
 
 
 def _is_synthetic_research_basket_hit(hit: dict) -> bool:
@@ -4746,6 +4883,87 @@ def _sync_runtime_repaired_answer_contracts(paper_guide_contracts: dict | None, 
     return _agent_finalize_sync_runtime_repaired_answer_contracts(paper_guide_contracts, answer=answer)
 
 
+def _answer_allows_local_evidence_actions(
+    *,
+    answer_quality: dict | None,
+    answer_mode: str = "",
+    source_blend: str = "",
+) -> bool:
+    quality = dict(answer_quality or {})
+    resolution_status = str(
+        quality.get("resolution_status") or quality.get("resolutionStatus") or ""
+    ).strip().lower()
+    if resolution_status in {"insufficient_evidence", "not_found", "scoped_not_found"}:
+        return False
+    mode = str(answer_mode or "").strip().lower()
+    blend = str(source_blend or "").strip().lower()
+    if mode in {"external_academic_llm", "general_llm"}:
+        return False
+    if blend in {"external_academic", "general_llm"}:
+        return False
+    return True
+
+
+def _strip_paper_guide_evidence_actions(paper_guide_contracts: dict | None) -> dict:
+    contracts = dict(paper_guide_contracts or {})
+    for key in (
+        "primary_evidence",
+        "citation_plan",
+        "support_pack",
+        "grounding_trace",
+        "evidence_cards",
+        "retrieval_bundle",
+        "research_basket_evidence",
+    ):
+        contracts.pop(key, None)
+    packet = (
+        dict(contracts.get("render_packet") or {})
+        if isinstance(contracts.get("render_packet"), dict)
+        else {}
+    )
+    if packet:
+        packet["cite_details"] = []
+        packet["citation_validation"] = {}
+        packet["locate_target"] = {}
+        packet["reader_open"] = {}
+        packet["primary_evidence"] = {}
+        packet["evidence_alternatives"] = []
+        contracts["render_packet"] = packet
+    return contracts
+
+
+def _build_scoped_not_found_answer(
+    *,
+    prompt: str,
+    source_name: str = "",
+    source_path: str = "",
+    indexed_hit_count: int = 0,
+) -> str:
+    query = " ".join(str(prompt or "").split()).strip()
+    if len(query) > 160:
+        query = f"{query[:157].rstrip()}..."
+    source = str(source_name or source_path or "").strip()
+    source_label = source or "the current indexed paper"
+    use_zh = _prefer_zh_locale(prompt)
+    if use_zh:
+        return (
+            "### 结论\n\n"
+            f"在当前检索范围内，未找到能明确回答“{query}”的原文证据，因此不作推断。\n\n"
+            "### 已自动核查\n\n"
+            f"- 检索范围：{source_label} 的已索引内容\n"
+            f"- 候选证据：检查了 {max(0, int(indexed_hit_count or 0))} 个检索命中，但没有可直接支持结论的段落\n"
+            "- 结论边界：这表示当前文献库中的直接证据不足，不等同于该论文绝对没有涉及此事项"
+        ).strip()
+    return (
+        "### Conclusion\n\n"
+        f"No passage in the current search scope explicitly answers “{query}”, so I will not infer an answer.\n\n"
+        "### Automatic check completed\n\n"
+        f"- Scope: indexed content of {source_label}\n"
+        f"- Candidate evidence: {max(0, int(indexed_hit_count or 0))} retrieved hits checked, with no directly supporting passage\n"
+        "- Boundary: this means direct evidence is insufficient in the current library; it does not prove the paper never addresses the issue"
+    ).strip()
+
+
 def _gen_store_agent_trace_meta(task: dict, *, agent_trace: dict | None) -> None:
     return _agent_finalize_store_agent_trace_meta(task, agent_trace=agent_trace, chat_store_cls=ChatStore)
 
@@ -5550,6 +5768,22 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         used_query=used_query or "",
                         query_variants=query_variants,
                     )
+                    facet_queries = [
+                        query
+                        for _, query in build_research_facet_queries(
+                            prompt or retrieval_prompt or ""
+                        )
+                    ]
+                    if facet_queries:
+                        combined_scan_candidates: list[str] = []
+                        combined_seen: set[str] = set()
+                        for candidate in [*facet_queries, *scan_candidates]:
+                            key = normalize_match_text(candidate)
+                            if not key or key in combined_seen:
+                                continue
+                            combined_seen.add(key)
+                            combined_scan_candidates.append(candidate)
+                        scan_candidates = combined_scan_candidates[:8]
 
                     supplemental_hits: list[dict] = []
                     supplemental_seen: set[str] = set()
@@ -6404,6 +6638,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     answer_hit_limit,
                     min(semantic_passage_cap, max(1, int(top_k or 1))),
                 )
+                requested_research_facets = infer_research_question_facets(
+                    prompt or retrieval_prompt or ""
+                )
+                if len(requested_research_facets) >= 2:
+                    answer_passage_limit = max(
+                        answer_passage_limit,
+                        min(6, len(requested_research_facets) + 1),
+                    )
             raw_target_hits = []
             if not paper_guide_cross_paper_refs:
                 raw_target_hits = _select_paper_guide_raw_target_hits(
@@ -6422,6 +6664,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 top_n=answer_passage_limit,
             )
             if not paper_guide_cross_paper_refs:
+                requested_research_facets = infer_research_question_facets(
+                    prompt or retrieval_prompt or ""
+                )
+                if len(requested_research_facets) >= 2:
+                    answer_hits = _balance_research_facet_hits(
+                        selected_hits=answer_hits,
+                        candidate_hits=list(hits_raw or []),
+                        requested_facets=requested_research_facets,
+                        limit=answer_passage_limit,
+                    )
                 answer_hits = _selection_merge_same_source_answer_hits(answer_hits)
                 answer_hit_limit = min(answer_hit_limit, max(1, len(answer_hits)))
         else:
@@ -7089,33 +7341,117 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             return
 
         t_finalize0 = time.perf_counter()
-        finalize_state = _finalize_generation_answer(
-            partial,
-            prompt=prompt,
-            prompt_for_user=prompt_for_user,
-            answer_hits=answer_hits,
-            db_dir=db_dir,
-            locked_citation_source=locked_citation_source,
-            answer_intent=answer_intent,
-            answer_depth=answer_depth,
-            answer_output_mode=answer_output_mode,
-            paper_guide_mode=bool(paper_guide_source_scoped),
-            paper_guide_contract_enabled=paper_guide_contract_enabled,
-            paper_guide_prompt_family=paper_guide_prompt_family,
-            paper_guide_special_focus_block=paper_guide_special_focus_block,
-            paper_guide_focus_source_path=paper_guide_focus_source_path,
-            paper_guide_direct_source_path=paper_guide_direct_source_path,
-            paper_guide_bound_source_path=paper_guide_bound_source_path,
-            paper_guide_candidate_refs_by_source=paper_guide_candidate_refs_by_source,
-            paper_guide_support_slots=paper_guide_support_slots,
-            paper_guide_evidence_cards=paper_guide_evidence_cards,
-            research_answer_plan=research_answer_plan,
-            paper_guide_contracts_seed=paper_guide_contracts_seed,
-            paper_guide_retrieval_confidence_hint=paper_guide_retrieval_confidence_hint,
-            paper_guide_precomputed_support_resolution=paper_guide_support_resolution,
-            paper_guide_fast_exact=bool(paper_guide_exact_preflight),
-            settings_obj=settings_obj,
+        def _finalize_candidate(candidate_text: str) -> dict:
+            finalized = _finalize_generation_answer(
+                candidate_text,
+                prompt=prompt,
+                prompt_for_user=prompt_for_user,
+                answer_hits=answer_hits,
+                db_dir=db_dir,
+                locked_citation_source=locked_citation_source,
+                answer_intent=answer_intent,
+                answer_depth=answer_depth,
+                answer_output_mode=answer_output_mode,
+                paper_guide_mode=bool(paper_guide_source_scoped),
+                paper_guide_contract_enabled=paper_guide_contract_enabled,
+                paper_guide_prompt_family=paper_guide_prompt_family,
+                paper_guide_special_focus_block=paper_guide_special_focus_block,
+                paper_guide_focus_source_path=paper_guide_focus_source_path,
+                paper_guide_direct_source_path=paper_guide_direct_source_path,
+                paper_guide_bound_source_path=paper_guide_bound_source_path,
+                paper_guide_candidate_refs_by_source=paper_guide_candidate_refs_by_source,
+                paper_guide_support_slots=paper_guide_support_slots,
+                paper_guide_evidence_cards=paper_guide_evidence_cards,
+                research_answer_plan=research_answer_plan,
+                paper_guide_contracts_seed=paper_guide_contracts_seed,
+                paper_guide_retrieval_confidence_hint=paper_guide_retrieval_confidence_hint,
+                paper_guide_precomputed_support_resolution=paper_guide_support_resolution,
+                paper_guide_fast_exact=bool(paper_guide_exact_preflight),
+                settings_obj=settings_obj,
+            )
+            return _apply_research_facet_quality(
+                finalized,
+                prompt=prompt_for_user or prompt,
+            )
+
+        finalize_state = _finalize_candidate(partial)
+        initial_answer_quality = (
+            dict(finalize_state.get("answer_quality") or {})
+            if isinstance(finalize_state.get("answer_quality"), dict)
+            else {}
         )
+        local_evidence_answer = _answer_allows_local_evidence_actions(
+            answer_quality=initial_answer_quality,
+            answer_mode=agent_answer_mode,
+            source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
+        )
+        if (
+            paper_guide_source_scoped
+            and local_evidence_answer
+            and answer_hits
+            and not bool(initial_answer_quality.get("minimum_ok"))
+            and not image_attachments
+        ):
+            try:
+                if ds is None:
+                    ds = DeepSeekChat(settings_obj)
+                recovery_system = (
+                    f"{system}\n\n"
+                    "Answer recovery pass (mandatory): the previous draft failed the answer-quality contract. "
+                    "Answer the user's exact question first. Use only the supplied DOC evidence. "
+                    "Do not leave a heading or list item empty. Do not ask the user to inspect the paper. "
+                    "If the supplied evidence does not explicitly resolve the question, state that the automatic "
+                    "search found no explicit supporting passage and stop without guessing."
+                )
+                recovery_messages = _build_generation_messages(
+                    system=recovery_system,
+                    hist=hist,
+                    user_content=user_content,
+                )
+                recovered_text = str(
+                    ds.chat(
+                        messages=recovery_messages,
+                        temperature=min(float(temperature), 0.1),
+                        max_tokens=max_tokens,
+                        timeout_s=_generation_llm_retry_timeout_s(),
+                        max_retries=0,
+                    )
+                    or ""
+                ).strip()
+                if recovered_text:
+                    recovered_state = _finalize_candidate(recovered_text)
+                    recovered_quality = (
+                        dict(recovered_state.get("answer_quality") or {})
+                        if isinstance(recovered_state.get("answer_quality"), dict)
+                        else {}
+                    )
+                    if bool(recovered_quality.get("minimum_ok")):
+                        recovered_quality["self_heal_attempted"] = True
+                        recovered_quality["self_heal_succeeded"] = True
+                        recovered_state["answer_quality"] = recovered_quality
+                        finalize_state = recovered_state
+                        _trace_event(
+                            "answer_self_heal",
+                            elapsed_s=0.0,
+                            attempted=True,
+                            succeeded=True,
+                        )
+                    else:
+                        _trace_event(
+                            "answer_self_heal",
+                            elapsed_s=0.0,
+                            attempted=True,
+                            succeeded=False,
+                            reason="recovered_answer_failed_quality",
+                        )
+            except Exception as exc:
+                _trace_event(
+                    "answer_self_heal",
+                    elapsed_s=0.0,
+                    attempted=True,
+                    succeeded=False,
+                    reason=f"{type(exc).__name__}: {str(exc)}"[:180],
+                )
         _trace_event("finalize_answer", elapsed_s=time.perf_counter() - t_finalize0)
         answer = str(finalize_state.get("answer") or "")
         paper_guide_support_resolution = list(finalize_state.get("paper_guide_support_resolution") or [])
@@ -7303,6 +7639,55 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     "research_answer_plan": research_answer_plan,
                     "final_answer_prefix": str(answer or "")[:160],
                 }
+            )
+        local_evidence_actions_allowed = _answer_allows_local_evidence_actions(
+            answer_quality=answer_quality,
+            answer_mode=agent_answer_mode,
+            source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
+        )
+        if (
+            paper_guide_source_scoped
+            and local_evidence_actions_allowed
+            and not bool(answer_quality.get("minimum_ok"))
+        ):
+            failed_quality = dict(answer_quality)
+            answer = _build_scoped_not_found_answer(
+                prompt=prompt_for_user or prompt,
+                source_name=paper_guide_bound_source_name,
+                source_path=paper_guide_bound_source_path,
+                indexed_hit_count=len(list(answer_hits or [])),
+            )
+            answer_quality = {
+                **failed_quality,
+                "minimum_ok": True,
+                "original_minimum_ok": False,
+                "resolution_status": "insufficient_evidence",
+                "self_heal_attempted": bool(answer_hits),
+                "self_heal_succeeded": False,
+                "final_resolution": "scoped_not_found",
+                "evidence_action_policy": "hidden",
+            }
+            paper_guide_contracts = _sync_runtime_repaired_answer_contracts(
+                paper_guide_contracts,
+                answer=answer,
+            )
+            paper_guide_contracts = _strip_paper_guide_evidence_actions(
+                paper_guide_contracts
+            )
+            answer_hits = []
+            paper_guide_support_resolution = []
+            shared_primary_evidence = {}
+            finalized_citation_plan = {}
+            citation_validation = {}
+            paper_guide_debug["answer_self_heal_final_resolution"] = (
+                "scoped_not_found"
+            )
+            local_evidence_actions_allowed = False
+            _trace_event(
+                "answer_self_heal_final",
+                elapsed_s=0.0,
+                resolution="scoped_not_found",
+                original_minimum_ok=False,
             )
         runtime_repair = {"answer": answer, "changed": False, "reasons": []}
         if bool(task.get("agent_mode")):
@@ -7664,11 +8049,15 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             conv_id=conv_id,
             answer_quality=answer_quality,
         )
-        if paper_guide_exact_preflight:
+        if paper_guide_exact_preflight or not local_evidence_actions_allowed:
             _trace_event(
                 "provenance_fast_skipped",
                 elapsed_s=0.0,
-                reason="exact_support_contract",
+                reason=(
+                    "exact_support_contract"
+                    if paper_guide_exact_preflight
+                    else "evidence_actions_not_allowed"
+                ),
             )
         else:
             t_prov0 = time.perf_counter()
@@ -7698,7 +8087,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             except Exception as exc:
                 _perf_log("gen.provenance_inline_fast", elapsed=time.perf_counter() - t_prov0, ok=0, err=str(exc)[:120])
                 _trace_event("provenance_fast", elapsed_s=time.perf_counter() - t_prov0, ok=False)
-        if (not paper_guide_exact_preflight) and _should_run_provenance_async_refine(task):
+        if (
+            (not paper_guide_exact_preflight)
+            and local_evidence_actions_allowed
+            and _should_run_provenance_async_refine(task)
+        ):
             try:
                 _gen_store_answer_provenance_async(
                     task,
@@ -7711,6 +8104,10 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 _trace_section("answer", {"provenance_async_scheduled": True})
             except Exception as exc:
                 _perf_log("gen.provenance_async_schedule", ok=0, err=str(exc)[:120])
+        if not local_evidence_actions_allowed:
+            paper_guide_contracts = _strip_paper_guide_evidence_actions(
+                paper_guide_contracts
+            )
         _gen_store_paper_guide_contract_meta(task, paper_guide_contracts=paper_guide_contracts)
         _trace_section(
             "answer",

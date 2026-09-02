@@ -5,6 +5,7 @@ import {
   getMessageCopyMarkdownValue,
 } from './messageRenderPacket'
 import { getMessageAgentSourceSummary, getMessageAnswerContract } from './messageTraceUtils'
+import { messageEvidenceActionPolicy } from './messageEvidencePolicy'
 
 export interface ResearchNoteLabels {
   question: string
@@ -60,6 +61,7 @@ function record(value: unknown): Record<string, unknown> {
 
 export function researchNoteAnswerEvidenceEligible(message: Message): boolean {
   if (message.role !== 'assistant') return false
+  if (!messageEvidenceActionPolicy(message).allowResearchNote) return false
   const contract = record(getMessageAnswerContract(message))
   const contractSummary = record(contract.source_summary || contract.sourceSummary)
   const summary = Object.keys(contractSummary).length > 0

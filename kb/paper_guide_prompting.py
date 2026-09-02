@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from kb.research_answer_plan import infer_research_question_facets
+
 from kb.paper_guide_shared import (
     _extract_paper_guide_abstract_excerpt,
     _trim_paper_guide_prompt_field,
@@ -575,6 +577,11 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
         return "strength_limits"
     if comparison_request:
         return "compare"
+    requested_facets = infer_research_question_facets(q)
+    if len(requested_facets) >= 3 or (
+        len(requested_facets) >= 2 and "results" in requested_facets
+    ):
+        return "overview"
     if _PAPER_GUIDE_METHOD_DETAIL_FAMILY_RE.search(q):
         return "method"
     if _PAPER_GUIDE_BROAD_OVERVIEW_HINT_RE.search(q):
