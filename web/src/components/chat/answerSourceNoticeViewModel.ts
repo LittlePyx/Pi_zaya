@@ -70,15 +70,34 @@ function safeWebSources(value: unknown): ExternalWebSource[] {
     const url = textValue(item.url)
     try {
       const parsed = new URL(url)
-      if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) continue
+      if (parsed.protocol !== 'https:' || parsed.username || parsed.password) continue
+      if (textValue(item.verification_status, item.verificationStatus) !== 'verified') continue
       parsed.hash = ''
       const cleanUrl = parsed.toString()
       if (seen.has(cleanUrl)) continue
       seen.add(cleanUrl)
+      let pdfUrl = ''
+      try {
+        const parsedPdf = new URL(textValue(item.pdf_url, item.pdfUrl))
+        if (parsedPdf.protocol === 'https:' && !parsedPdf.username && !parsedPdf.password) {
+          parsedPdf.hash = ''
+          pdfUrl = parsedPdf.toString()
+        }
+      } catch {
+        pdfUrl = ''
+      }
       out.push({
         title: textValue(item.title).slice(0, 500),
         url: cleanUrl,
         domain: textValue(item.domain) || parsed.hostname,
+        verification_status: 'verified',
+        verification_level: textValue(item.verification_level, item.verificationLevel).slice(0, 40),
+        claim_text: textValue(item.claim_text, item.claimText).slice(0, 320),
+        scholarly_kind: textValue(item.scholarly_kind, item.scholarlyKind).slice(0, 40),
+        doi: textValue(item.doi).slice(0, 300),
+        arxiv_id: textValue(item.arxiv_id, item.arxivId).slice(0, 80),
+        pdf_url: pdfUrl || undefined,
+        import_eligible: Boolean(pdfUrl && boolValue(item.import_eligible ?? item.importEligible)),
       })
       if (out.length >= 8) break
     } catch {

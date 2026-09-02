@@ -295,11 +295,48 @@ button.kb-assistant-source-notice {
 }
 
 .kb-evidence-web-title {
+  display: inline-flex;
   color: var(--text-main);
   font-size: 12.5px;
   font-weight: 680;
   line-height: 1.4;
   overflow-wrap: anywhere;
+  text-decoration: none;
+}
+
+.kb-evidence-web-title:hover {
+  color: var(--accent);
+}
+
+.kb-evidence-web-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.kb-evidence-web-badges .ant-tag {
+  margin-inline-end: 0;
+  font-size: 10px;
+  line-height: 19px;
+}
+
+.kb-evidence-web-claim {
+  display: grid;
+  gap: 3px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  color: var(--muted-text);
+  padding-left: 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.kb-evidence-web-claim span {
+  color: color-mix(in srgb, var(--text-main) 76%, transparent);
+  font-weight: 650;
+}
+
+.kb-evidence-web-claim q {
+  quotes: none;
 }
 
 .kb-evidence-web-meta {

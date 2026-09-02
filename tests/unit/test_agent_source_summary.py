@@ -23,7 +23,7 @@ def test_agent_source_summary_marks_local_kb_without_trace_details():
     assert summary["label_key"] == "agent_trace_source_local_only"
     assert summary["should_show"] is True
     policy = summary["source_policy_payload"]
-    assert policy["schema_version"] == 2
+    assert policy["schema_version"] == 3
     assert policy["kind"] == "local_kb"
     assert policy["uses_local_knowledge_base"] is True
     assert policy["uses_external_model"] is False
@@ -154,8 +154,27 @@ def test_agent_source_summary_exposes_safe_web_sources_separately():
         generation_output={
             "web_search_used": True,
             "web_citations": [
-                {"title": "Primary source", "url": "https://example.org/paper#results"},
-                {"title": "Duplicate", "url": "https://example.org/paper#results"},
+                {
+                    "title": "Primary source",
+                    "url": "https://example.org/paper#results",
+                    "verification_status": "verified",
+                    "verification_level": "content_match",
+                    "claim_text": "Web sources report a broader result.",
+                    "scholarly_kind": "doi",
+                    "doi": "10.1000/example",
+                    "pdf_url": "https://example.org/paper.pdf",
+                    "import_eligible": True,
+                },
+                {
+                    "title": "Duplicate",
+                    "url": "https://example.org/paper#results",
+                    "verification_status": "verified",
+                },
+                {
+                    "title": "Insecure historical source",
+                    "url": "http://example.org/paper",
+                    "verification_status": "verified",
+                },
                 {"title": "Unsafe", "url": "javascript:alert(1)"},
             ],
         },
@@ -168,7 +187,19 @@ def test_agent_source_summary_exposes_safe_web_sources_separately():
     assert summary["external_source_kind"] == "web"
     assert summary["web_search_used"] is True
     assert summary["web_sources"] == [
-        {"title": "Primary source", "url": "https://example.org/paper", "domain": "example.org"}
+        {
+            "title": "Primary source",
+            "url": "https://example.org/paper",
+            "domain": "example.org",
+            "verification_status": "verified",
+            "verification_level": "content_match",
+            "claim_text": "Web sources report a broader result.",
+            "scholarly_kind": "doi",
+            "doi": "10.1000/example",
+            "arxiv_id": "",
+            "pdf_url": "https://example.org/paper.pdf",
+            "import_eligible": True,
+        }
     ]
     assert policy["uses_external_web"] is True
     assert policy["uses_external_model"] is False

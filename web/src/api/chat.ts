@@ -521,6 +521,14 @@ export interface ExternalWebSource {
   title?: string
   url: string
   domain?: string
+  verification_status?: 'verified' | string
+  verification_level?: 'content_match' | 'reachable' | string
+  claim_text?: string
+  scholarly_kind?: 'doi' | 'arxiv' | 'web' | string
+  doi?: string
+  arxiv_id?: string
+  pdf_url?: string
+  import_eligible?: boolean
 }
 
 export interface AnswerRuntimeCheck {

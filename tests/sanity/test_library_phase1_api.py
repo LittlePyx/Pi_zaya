@@ -5194,6 +5194,89 @@ def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
     assert len(enqueued) == 1
 
 
+def test_external_pdf_import_route_downloads_then_queues_conversion(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_path = tmp_path / "imported.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7 imported")
+    enqueued: list[dict] = []
+    saved_calls: list[dict] = []
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: tmp_path / "md_output")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(
+            db_dir=str(tmp_path / "db"),
+            library_db_path=str(tmp_path / "library.db"),
+            max_pdf_upload_bytes=1024,
+        ),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "fetch_external_pdf",
+        lambda url, max_bytes: {
+            "data": b"%PDF-1.7 imported",
+            "url": "https://arxiv.org/pdf/2601.12345",
+            "content_type": "application/pdf",
+            "file_name": "2601.12345.pdf",
+        },
+    )
+
+    def fake_save(**kwargs):
+        saved_calls.append(dict(kwargs))
+        return {
+            "duplicate": False,
+            "path": str(pdf_path),
+            "name": pdf_path.name,
+            "sha1": "abc",
+        }
+
+    monkeypatch.setattr(library_router, "save_pdf_to_library", fake_save)
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/external-pdf/import",
+        json={
+            "url": "https://arxiv.org/pdf/2601.12345",
+            "title": "A verified external paper",
+            "convert_now": True,
+            "speed_mode": "balanced",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_status"] == "conversion_queued"
+    assert payload["formal_evidence_ready"] is False
+    assert payload["enqueued"] is True
+    assert saved_calls[0]["base_name"] == "A verified external paper"
+    assert len(enqueued) == 1
+
+
+def test_external_pdf_import_route_reports_safe_download_rejection(monkeypatch):
+    from api.routers import library as library_router
+    from kb.web_sources import ExternalSourceError
+
+    monkeypatch.setattr(
+        library_router,
+        "fetch_external_pdf",
+        lambda url, max_bytes: (_ for _ in ()).throw(
+            ExternalSourceError("unsafe_host", "Private hosts are not allowed.")
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/external-pdf/import",
+        json={"url": "https://127.0.0.1/paper.pdf", "title": "Blocked"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "unsafe_host"
+
+
 def test_save_pdf_to_library_respects_explicit_base_name_even_with_llm_title(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

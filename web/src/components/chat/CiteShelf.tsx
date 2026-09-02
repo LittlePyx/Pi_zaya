@@ -2068,13 +2068,12 @@ export function CiteShelf({
                               type="checkbox"
                               className="kb-shelf-check"
                               checked={isItemSelected}
-                              readOnly
                               onChange={(event) => {
                                 event.stopPropagation()
+                                toggleSelect(item.key, event.currentTarget.checked)
                               }}
                               onClick={(event) => {
                                 event.stopPropagation()
-                                toggleSelect(item.key, !isItemSelected)
                               }}
                             />
                             <div className="kb-shelf-item-main">

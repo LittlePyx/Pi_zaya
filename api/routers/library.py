@@ -48,6 +48,7 @@ from kb.task_runtime import (
     _bg_resume_task,
     _bg_update_recoverable_pdf_path,
 )
+from kb.web_sources import ExternalSourceError, fetch_external_pdf
 from kb.file_ops import (
     _list_pdf_paths_fast,
     _next_pdf_dest_path,
@@ -6701,6 +6702,28 @@ async def inspect_upload_pdf(file: UploadFile = File(...), use_llm: bool = Form(
     )
 
 
+def _enqueue_saved_pdf_conversion(saved: dict, *, speed_mode: str) -> tuple[bool, str]:
+    if bool(saved.get("duplicate")):
+        return False, ""
+    s = get_settings()
+    md_d = _md_dir()
+    md_d.mkdir(parents=True, exist_ok=True)
+    pdf_path = Path(str(saved.get("path") or "")).expanduser()
+    if not _path_is_file(pdf_path):
+        return False, ""
+    no_llm = str(speed_mode or "").strip().lower() == "no_llm"
+    task = _build_bg_task(
+        pdf_path=pdf_path,
+        out_root=md_d,
+        db_dir=s.db_dir,
+        no_llm=no_llm,
+        replace=True,
+        speed_mode=str(speed_mode or "balanced"),
+    )
+    enqueued = bool(_bg_enqueue(task))
+    return enqueued, str(task.get("_tid") or "") if enqueued else ""
+
+
 @router.post("/upload/commit", dependencies=[Depends(require_management_api)])
 async def commit_upload_pdf(
     file: UploadFile = File(...),
@@ -6728,26 +6751,64 @@ async def commit_upload_pdf(
     enqueued = False
     task_id = ""
     if bool(convert_now) and (not bool(saved.get("duplicate"))):
-        s = get_settings()
-        md_d = _md_dir()
-        md_d.mkdir(parents=True, exist_ok=True)
-        pdf_path = Path(str(saved.get("path") or "")).expanduser()
-        if _path_is_file(pdf_path):
-            no_llm = str(speed_mode or "").strip().lower() == "no_llm"
-            task = _build_bg_task(
-                pdf_path=pdf_path,
-                out_root=md_d,
-                db_dir=s.db_dir,
-                no_llm=no_llm,
-                replace=True,
-                speed_mode=str(speed_mode or "balanced"),
-            )
-            enqueued = bool(_bg_enqueue(task))
-            task_id = str(task.get("_tid") or "") if enqueued else ""
+        enqueued, task_id = _enqueue_saved_pdf_conversion(saved, speed_mode=speed_mode)
     return {
         **saved,
         "enqueued": bool(enqueued),
         "task_id": task_id,
+    }
+
+
+class ImportExternalPdfBody(BaseModel):
+    url: str
+    title: str = ""
+    convert_now: bool = True
+    speed_mode: str = "balanced"
+
+
+@router.post("/external-pdf/import", dependencies=[Depends(require_management_api)])
+def import_external_pdf(body: ImportExternalPdfBody):
+    try:
+        fetched = fetch_external_pdf(
+            body.url,
+            max_bytes=max_pdf_upload_bytes(get_settings()),
+        )
+    except ExternalSourceError as exc:
+        status_code = 413 if exc.code == "too_large" else 400
+        raise HTTPException(
+            status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail or "The external PDF could not be imported safely.",
+            },
+        ) from exc
+
+    data = bytes(fetched.get("data") or b"")
+    file_name = str(fetched.get("file_name") or "external-source.pdf")
+    content_type = str(fetched.get("content_type") or "application/pdf")
+    ensure_pdf_upload(data, file_name=file_name, content_type=content_type)
+    saved = save_pdf_to_library(
+        file_name=file_name,
+        data=data,
+        base_name=str(body.title or "").strip(),
+    )
+    enqueued = False
+    task_id = ""
+    if bool(body.convert_now) and not bool(saved.get("duplicate")):
+        enqueued, task_id = _enqueue_saved_pdf_conversion(saved, speed_mode=body.speed_mode)
+    if bool(saved.get("duplicate")):
+        candidate_status = "already_imported"
+    elif enqueued:
+        candidate_status = "conversion_queued"
+    else:
+        candidate_status = "imported"
+    return {
+        **saved,
+        "enqueued": bool(enqueued),
+        "task_id": task_id,
+        "source_url": str(fetched.get("url") or body.url),
+        "candidate_status": candidate_status,
+        "formal_evidence_ready": False,
     }
 
 

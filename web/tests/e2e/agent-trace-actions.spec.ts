@@ -1496,7 +1496,13 @@ test('web source notice keeps safe external links distinct from model knowledge'
         external_source_kind: 'web',
         external_supplement_mode: 'web',
         web_sources: [
-          { title: 'Primary web source', url: 'https://example.org/paper#results', domain: 'example.org' },
+          {
+            title: 'Primary web source',
+            url: 'https://example.org/paper#results',
+            domain: 'example.org',
+            verification_status: 'verified',
+            verification_level: 'content_match',
+          },
           { title: 'Unsafe', url: 'javascript:alert(1)' },
         ],
         badge: {
@@ -3566,16 +3572,46 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
 })
 
 test('web sources stay separate from library evidence actions', async ({ page }) => {
+  let importPayload: Record<string, unknown> | null = null
+  await page.route('**/api/library/external-pdf/import', async (route) => {
+    importPayload = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        duplicate: false,
+        name: 'external-paper.pdf',
+        path: 'C:/fixture/external-paper.pdf',
+        sha1: 'fixture',
+        enqueued: true,
+        task_id: 'conversion-fixture',
+        source_url: 'https://arxiv.org/pdf/2601.12345',
+        candidate_status: 'conversion_queued',
+        formal_evidence_ready: false,
+      }),
+    })
+  })
   await page.goto('/__message_list_test__?scenario=agent-web-source')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-web-source')
   await expect(page.getByTestId('assistant-source-notice')).toContainText(/Web sources|网页来源/)
   await page.getByTestId('assistant-source-notice').click()
   await expect(page.getByTestId('evidence-drawer')).toBeVisible()
-  await expect(page.getByTestId('evidence-web-sources')).toContainText('Primary web source')
-  await expect(page.getByTestId('evidence-web-source-0')).toHaveAttribute('href', 'https://example.org/paper')
+  await expect(page.getByTestId('evidence-web-sources')).toContainText('Primary web source on RAG evidence')
+  await expect(page.getByTestId('evidence-web-sources')).toContainText(/Link and source title checked|链接与来源标题已核验/)
+  await expect(page.getByTestId('evidence-web-sources')).toContainText('arXiv 2601.12345')
+  await expect(page.getByTestId('evidence-web-claim-0')).toContainText('broader retrieval result')
+  await expect(page.getByTestId('evidence-web-source-0')).toHaveAttribute('href', 'https://arxiv.org/abs/2601.12345')
   await expect(page.getByTestId('evidence-add-shelf')).toHaveCount(0)
   await expect(page.getByTestId('research-note-open-9551')).toBeDisabled()
+  await page.getByTestId('evidence-web-import-0').click()
+  await expect(page.getByTestId('evidence-web-import-0')).toContainText(/Queued for processing|已进入处理队列/)
+  expect(importPayload).toMatchObject({
+    url: 'https://arxiv.org/pdf/2601.12345',
+    title: 'Primary web source on RAG evidence',
+    convert_now: true,
+  })
+  await expect(page.getByTestId('evidence-add-shelf')).toHaveCount(0)
 })
 
 test('external source notice is compacted outside the answer body', async ({ page }) => {

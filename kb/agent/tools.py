@@ -13,6 +13,7 @@ from kb.reference_index import load_reference_index, resolve_reference_entry
 from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
+from kb.web_sources import verify_web_citations
 
 from .verifier import verify_answer_citations as _verify_answer_citations
 
@@ -824,6 +825,55 @@ def _web_search_configured(settings: Any) -> bool:
     )
 
 
+def _web_retry_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    retry = [dict(item) for item in list(messages or [])]
+    instruction = (
+        "\n\nWeb-source retry requirement: cite accessible public HTTPS sources that directly support "
+        "the answer. Prefer DOI or arXiv records and direct scholarly sources. Do not cite search "
+        "result pages, inaccessible placeholders, or a URL whose page title does not match the source."
+    )
+    for index in range(len(retry) - 1, -1, -1):
+        if str(retry[index].get("role") or "").strip().lower() == "user":
+            retry[index]["content"] = f"{str(retry[index].get('content') or '').rstrip()}{instruction}"
+            return retry
+    retry.append({"role": "user", "content": instruction.strip()})
+    return retry
+
+
+def _verified_web_generation(
+    chat: DeepSeekChat,
+    *,
+    messages: list[dict[str, Any]],
+    temperature: float,
+    max_tokens: int,
+) -> dict[str, Any] | None:
+    rejected_total = 0
+    for attempt in range(2):
+        active_messages = messages if attempt == 0 else _web_retry_messages(messages)
+        web_result = chat.chat_with_web_search(
+            messages=active_messages,
+            temperature=float(temperature),
+            max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+        )
+        raw_answer = str(web_result.get("content") or "")
+        answer = clean_assistant_answer_presentation_text(raw_answer).strip()
+        verification = verify_web_citations(
+            raw_answer,
+            list(web_result.get("annotations") or [])[:12],
+        )
+        rejected_total += int(verification.get("rejected_count") or 0)
+        sources = list(verification.get("sources") or [])[:8]
+        if answer and sources:
+            return {
+                "answer": answer,
+                "web_citations": sources,
+                "web_search_model": str(web_result.get("model") or ""),
+                "web_search_attempts": attempt + 1,
+                "web_source_rejected_count": rejected_total,
+            }
+    return None
+
+
 def _external_answer_notice(query: str, *, web_used: bool = False) -> str:
     if _has_cjk(query):
         if web_used:
@@ -1205,13 +1255,14 @@ def generate_grounded_answer(
             if supplement_mode == "web" and _web_search_configured(settings):
                 try:
                     chat = DeepSeekChat(settings)
-                    web_result = chat.chat_with_web_search(
+                    web_generation = _verified_web_generation(
+                        chat,
                         messages=_general_llm_messages(query, history, academic=True, prefer_web=True),
                         temperature=float(temperature),
-                        max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+                        max_tokens=max_tokens,
                     )
-                    answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
-                    if answer:
+                    if web_generation:
+                        answer = str(web_generation.get("answer") or "").strip()
                         answer = _prepend_external_notice(answer, query, web_used=True)
                         return {
                             "answer": answer,
@@ -1219,8 +1270,10 @@ def generate_grounded_answer(
                             "answer_mode": mode,
                             "source_blend": source_blend or "external_academic",
                             "web_search_used": True,
-                            "web_citations": list(web_result.get("annotations") or [])[:12],
-                            "web_search_model": str(web_result.get("model") or ""),
+                            "web_citations": list(web_generation.get("web_citations") or [])[:8],
+                            "web_search_model": str(web_generation.get("web_search_model") or ""),
+                            "web_search_attempts": int(web_generation.get("web_search_attempts") or 1),
+                            "web_source_rejected_count": int(web_generation.get("web_source_rejected_count") or 0),
                             "observation": "Generated an external academic answer with API web search because no local evidence was retrieved.",
                         }
                 except Exception:
@@ -1307,13 +1360,14 @@ def generate_grounded_answer(
                 list(hits or []),
                 answer_contract=_answer_contract(agent_notes),
             )
-            web_result = DeepSeekChat(settings).chat_with_web_search(
+            web_generation = _verified_web_generation(
+                DeepSeekChat(settings),
                 messages=messages,
                 temperature=float(temperature),
-                max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+                max_tokens=max_tokens,
             )
-            answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
-            if answer:
+            if web_generation:
+                answer = str(web_generation.get("answer") or "").strip()
                 finalized = _finalize_grounded_answer(
                     query,
                     answer,
@@ -1333,8 +1387,10 @@ def generate_grounded_answer(
                     "answer_mode": "hybrid_local_external",
                     "source_blend": source_blend or "hybrid_local_external",
                     "web_search_used": True,
-                    "web_citations": list(web_result.get("annotations") or [])[:12],
-                    "web_search_model": str(web_result.get("model") or ""),
+                    "web_citations": list(web_generation.get("web_citations") or [])[:8],
+                    "web_search_model": str(web_generation.get("web_search_model") or ""),
+                    "web_search_attempts": int(web_generation.get("web_search_attempts") or 1),
+                    "web_source_rejected_count": int(web_generation.get("web_source_rejected_count") or 0),
                     "quality_gate": finalized["quality_gate"],
                     "observation": "Generated a hybrid answer from local evidence plus external API web context.",
                 }

@@ -293,6 +293,21 @@ def test_generate_grounded_answer_uses_web_search_for_external_academic_no_hit(m
             }
 
     monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+    monkeypatch.setattr(
+        tools,
+        "verify_web_citations",
+        lambda answer, citations: {
+            "sources": [{
+                **citations[0],
+                "domain": "example.org",
+                "verification_status": "verified",
+                "verification_level": "content_match",
+                "scholarly_kind": "web",
+                "import_eligible": False,
+            }],
+            "rejected_count": 0,
+        },
+    )
 
     result = tools.generate_grounded_answer(
         "Why do diffusion models work?",
@@ -333,6 +348,21 @@ def test_generate_grounded_answer_uses_web_search_for_hybrid_answer(monkeypatch)
             }
 
     monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+    monkeypatch.setattr(
+        tools,
+        "verify_web_citations",
+        lambda answer, citations: {
+            "sources": [{
+                **citations[0],
+                "domain": "example.org",
+                "verification_status": "verified",
+                "verification_level": "content_match",
+                "scholarly_kind": "web",
+                "import_eligible": False,
+            }],
+            "rejected_count": 0,
+        },
+    )
 
     result = tools.generate_grounded_answer(
         "How does the paper use RAG?",
@@ -352,6 +382,65 @@ def test_generate_grounded_answer_uses_web_search_for_hybrid_answer(monkeypatch)
     assert result["web_search_used"] is True
     assert "external model and web context" in result["answer"]
     assert result["web_citations"][0]["url"] == "https://example.org/rag"
+
+
+def test_generate_grounded_answer_retries_once_when_web_sources_are_rejected(monkeypatch):
+    calls = {"search": 0, "verify": 0}
+
+    class _Settings:
+        text_api_key = "test-key"
+        agent_web_search_enabled = True
+        agent_web_search_api_key = "web-key"
+        agent_web_search_model = "gpt-5-search-api"
+
+    class _FakeDeepSeekChat:
+        def __init__(self, settings):
+            self.settings = settings
+
+        def chat_with_web_search(self, messages, *, temperature=0.2, max_tokens=1200):
+            calls["search"] += 1
+            suffix = "bad" if calls["search"] == 1 else "good"
+            return {
+                "content": f"Answer from the {suffix} source.",
+                "annotations": [{"url": f"https://example.org/{suffix}", "title": suffix}],
+                "model": "gpt-5-search-api",
+            }
+
+    def fake_verify(answer, citations):
+        calls["verify"] += 1
+        if citations[0]["url"].endswith("/bad"):
+            return {"sources": [], "rejected_count": 1}
+        return {
+            "sources": [{
+                **citations[0],
+                "verification_status": "verified",
+                "verification_level": "content_match",
+                "domain": "example.org",
+            }],
+            "rejected_count": 0,
+        }
+
+    monkeypatch.setattr(tools, "DeepSeekChat", _FakeDeepSeekChat)
+    monkeypatch.setattr(tools, "verify_web_citations", fake_verify)
+
+    result = tools.generate_grounded_answer(
+        "What does the literature report?",
+        [],
+        settings=_Settings(),
+        agent_notes={
+            "evidence_gate": {
+                "answer_mode": "external_academic_llm",
+                "external_supplement_mode": "web",
+            }
+        },
+    )
+
+    assert calls == {"search": 2, "verify": 2}
+    assert result["web_search_attempts"] == 2
+    assert result["web_source_rejected_count"] == 1
+    assert result["web_citations"][0]["url"].endswith("/good")
+    assert "Answer from the good source." in result["answer"]
+    assert "Answer from the bad source." not in result["answer"]
 
 
 def test_generate_grounded_answer_model_supplement_never_uses_configured_web_search(monkeypatch):

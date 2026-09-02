@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
+
+from kb.web_sources import safe_external_url
 
 
 SOURCE_SUMMARY_KINDS = {
@@ -12,7 +14,7 @@ SOURCE_SUMMARY_KINDS = {
     "unknown",
 }
 
-SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION = 2
+SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION = 3
 
 
 def _record(value: Any) -> dict[str, Any]:
@@ -100,27 +102,17 @@ def _generation_output(trace: dict[str, Any]) -> dict[str, Any]:
 
 
 def _safe_web_url(value: object) -> str:
-    raw = str(value or "").replace("\x00", "").strip()
-    if not raw or len(raw) > 2400:
-        return ""
-    try:
-        parsed = urlsplit(raw)
-    except Exception:
-        return ""
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc:
-        return ""
-    if parsed.username or parsed.password:
-        return ""
-    return urlunsplit((parsed.scheme.lower(), parsed.netloc, parsed.path, parsed.query, ""))
+    return safe_external_url(value)
 
 
-def _web_sources(value: object) -> list[dict[str, str]]:
-    out: list[dict[str, str]] = []
+def _web_sources(value: object) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for raw in list(value or []) if isinstance(value, list) else []:
         item = _record(raw)
         url = _safe_web_url(item.get("url"))
-        if not url or url in seen:
+        verification_status = str(item.get("verification_status") or "").strip().lower()
+        if not url or url in seen or verification_status != "verified":
             continue
         seen.add(url)
         title = str(item.get("title") or "").replace("\x00", " ").strip()[:500]
@@ -128,7 +120,22 @@ def _web_sources(value: object) -> list[dict[str, str]]:
             domain = str(urlsplit(url).hostname or "").lower()
         except Exception:
             domain = ""
-        out.append({"title": title, "url": url, "domain": domain})
+        source: dict[str, Any] = {
+            "title": title,
+            "url": url,
+            "domain": domain,
+            "verification_status": "verified",
+            "verification_level": str(item.get("verification_level") or "reachable").strip()[:40],
+            "claim_text": str(item.get("claim_text") or "").replace("\x00", " ").strip()[:320],
+            "scholarly_kind": str(item.get("scholarly_kind") or "web").strip()[:40],
+            "doi": str(item.get("doi") or "").replace("\x00", "").strip()[:300],
+            "arxiv_id": str(item.get("arxiv_id") or "").replace("\x00", "").strip()[:80],
+        }
+        pdf_url = _safe_web_url(item.get("pdf_url"))
+        if pdf_url:
+            source["pdf_url"] = pdf_url
+            source["import_eligible"] = bool(item.get("import_eligible"))
+        out.append(source)
         if len(out) >= 8:
             break
     return out
@@ -169,7 +176,7 @@ def _build_source_policy_payload(
     external_supplement_mode: str = "disabled",
     external_source_kind: str = "",
     web_search_used: bool = False,
-    web_sources: list[dict[str, str]] | None = None,
+    web_sources: list[dict[str, Any]] | None = None,
     external_supplement_unavailable: str = "",
 ) -> dict[str, Any]:
     flags = _policy_flags(kind, external_source_kind=external_source_kind)

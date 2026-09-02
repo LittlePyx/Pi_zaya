@@ -551,6 +551,12 @@ export interface UploadCommitResponse {
   task_id: string
 }
 
+export interface ExternalPdfImportResponse extends UploadCommitResponse {
+  source_url: string
+  candidate_status: 'already_imported' | 'conversion_queued' | 'imported' | string
+  formal_evidence_ready: false
+}
+
 export interface LibraryUploadResponse {
   name: string
   duplicate?: boolean
@@ -1331,6 +1337,22 @@ export const libraryApi = {
     fd.append('allow_duplicate', String(Boolean(opts?.allowDuplicate)))
     const res = await authFetch('/api/library/upload/commit', { method: 'POST', body: fd })
     return responseJson<UploadCommitResponse>(res)
+  },
+  importExternalPdf: async (
+    url: string,
+    opts?: { title?: string; convertNow?: boolean; speedMode?: string },
+  ) => {
+    const res = await authFetch('/api/library/external-pdf/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        title: String(opts?.title || ''),
+        convert_now: opts?.convertNow ?? true,
+        speed_mode: String(opts?.speedMode || 'balanced'),
+      }),
+    })
+    return responseJson<ExternalPdfImportResponse>(res)
   },
   convert: (pdfName: string, speedMode = 'balanced', opts?: { replace?: boolean }) =>
     api.post('/api/library/convert', {
