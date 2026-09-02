@@ -40,7 +40,9 @@ export function useLibraryUploadDraftActions({
   const openFile = useLibraryStore((s) => s.openFile)
 
   const [uploadDrafts, setUploadDrafts] = useState<UploadDraft[]>([])
-  const [uploadUseLlm, setUploadUseLlm] = useState(true)
+  // Metadata enrichment is optional and opt-in. Local PDF inspection must stay
+  // usable without opening model settings when no text provider is configured.
+  const [uploadUseLlm, setUploadUseLlm] = useState(false)
   const [uploadDraftFilter, setUploadDraftFilter] = useState<UploadDraftFilter>('all')
   const [uploadErrorReason, setUploadErrorReason] = useState<UploadErrorReason>('all')
   const [uploadInspecting, setUploadInspecting] = useState(false)
@@ -409,6 +411,10 @@ export function useLibraryUploadDraftActions({
   const invertUploadDraftSelection = useCallback(() => {
     setUploadDrafts((cur) => cur.map((item) => ({ ...item, selected: !item.selected })))
   }, [])
+
+  useEffect(() => {
+    if (!textModelReady) setUploadUseLlm(false)
+  }, [textModelReady])
 
   useEffect(() => {
     if (uploadDrafts.length === 0) {

@@ -260,6 +260,119 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
 CONVERSION_QUALITY_RULES_VERSION = 15
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
+
+
+def conversion_retry_profile_signature(
+    source_pdf_path: Path | str | None,
+    *,
+    speed_mode: str,
+    no_llm: bool,
+    settings: Any | None = None,
+) -> str:
+    """Identify when a repeated source conversion has materially new inputs.
+
+    API-key values are never included.  Presence, provider/model routing, source
+    stat, and the quality-rules version are sufficient to reopen a previously
+    exhausted retry after the user fixes model configuration or replaces a PDF.
+    """
+
+    source = Path(source_pdf_path).expanduser() if source_pdf_path else None
+    try:
+        stat = source.stat() if source is not None else None
+    except Exception:
+        stat = None
+    payload = {
+        "source_path": str(source.resolve()) if source is not None else "",
+        "source_size": int(stat.st_size) if stat is not None else 0,
+        "source_mtime_ns": int(stat.st_mtime_ns) if stat is not None else 0,
+        "speed_mode": str(speed_mode or "").strip().lower(),
+        "no_llm": bool(no_llm),
+        "text_configured": bool(getattr(settings, "text_api_key", None)),
+        "text_base_url": str(getattr(settings, "text_base_url", "") or "").strip(),
+        "text_model": str(getattr(settings, "text_model", "") or "").strip(),
+        "vision_configured": bool(getattr(settings, "vision_api_key", None)),
+        "vision_base_url": str(getattr(settings, "vision_base_url", "") or "").strip(),
+        "vision_model": str(getattr(settings, "vision_model", "") or "").strip(),
+        "quality_rules_version": CONVERSION_QUALITY_RULES_VERSION,
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8", errors="replace")).hexdigest()[:24]
+
+
+def conversion_retry_exhaustion(
+    report: Mapping[str, Any] | None,
+    *,
+    current_profile_signature: str = "",
+) -> dict[str, Any]:
+    """Return terminal retry state after one source recovery cycle stayed blocked."""
+
+    payload = report if isinstance(report, Mapping) else {}
+    attempts = [item for item in list(payload.get("repair_attempts") or []) if isinstance(item, Mapping)]
+    if not attempts:
+        return {"exhausted": False}
+    for gate_index in range(len(attempts) - 1, -1, -1):
+        gate = attempts[gate_index]
+        if str(gate.get("event") or "").strip().lower() != "post_convert_quality_gate":
+            continue
+        if str(gate.get("status") or "").strip().lower() not in {"blocked", "failed", "error"}:
+            return {"exhausted": False}
+        if str(gate.get("action") or "").strip().lower() != "reconvert":
+            return {"exhausted": False}
+        gate_extra = gate.get("extra") if isinstance(gate.get("extra"), Mapping) else {}
+        gate_signature = str(gate_extra.get("profile_signature") or "").strip()
+        current_signature = str(current_profile_signature or "").strip()
+        if current_signature and gate_signature and current_signature != gate_signature:
+            return {"exhausted": False, "profile_changed": True}
+
+        gate_task_id = str(gate.get("task_id") or "").strip()
+        completed_retry: Mapping[str, Any] | None = None
+        for previous in reversed(attempts[:gate_index]):
+            previous_task_id = str(previous.get("task_id") or "").strip()
+            if gate_task_id and previous_task_id and previous_task_id != gate_task_id:
+                continue
+            event = str(previous.get("event") or "").strip().lower()
+            status = str(previous.get("status") or "").strip().lower()
+            if status not in {"success", "accepted", "ready", "partial"}:
+                continue
+            if event == "source_quality_retry_finished":
+                completed_retry = previous
+                break
+            if event == "conversion_finished" and str(previous.get("repair_run_id") or "").strip():
+                completed_retry = previous
+                break
+        if completed_retry is None:
+            return {"exhausted": False}
+
+        issue_codes = sorted(
+            {
+                str(code or "").strip().lower()
+                for code in list(gate.get("issue_codes") or [])
+                if str(code or "").strip()
+            }
+        )
+        previous_issue_codes = sorted(
+            {
+                str(code or "").strip().lower()
+                for code in list(completed_retry.get("issue_codes") or [])
+                if str(code or "").strip()
+            }
+        )
+        if not issue_codes or not previous_issue_codes or issue_codes != previous_issue_codes:
+            return {
+                "exhausted": False,
+                "issue_signature_changed": bool(issue_codes and previous_issue_codes),
+            }
+        return {
+            "exhausted": True,
+            "profile_signature": gate_signature,
+            "task_id": gate_task_id,
+            "issue_codes": issue_codes,
+            "reason": (
+                "The system completed a source reconversion with the same inputs, "
+                "but the blocking quality signature remained. Identical retries are suppressed."
+            ),
+        }
+    return {"exhausted": False}
 PAGE_ALIGNMENT_NGRAMS = (8, 6)
 PAGE_ALIGNMENT_DEFAULT_NGRAM = PAGE_ALIGNMENT_NGRAMS[0]
 SOURCE_PAGE_COVERAGE_THRESHOLD = 0.66

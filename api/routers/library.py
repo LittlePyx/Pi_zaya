@@ -69,6 +69,8 @@ from kb.converter.quality_repair import (
     append_conversion_repair_attempt,
     conversion_quality_result_path,
     conversion_quality_report_is_stale,
+    conversion_retry_exhaustion,
+    conversion_retry_profile_signature,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
     plan_conversion_quality_repair,
@@ -374,6 +376,24 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
     stale = conversion_quality_report_is_stale(md_path, report)
     center_summary = {} if stale else quality_center_summary(report)
     repair_plan = {} if stale else (report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {})
+    retry_state: dict = {"exhausted": False}
+    if not stale and str(repair_plan.get("action") or "").strip().lower() == "reconvert":
+        source_pdf_path = str(source_quality.get("source_pdf_path") or "").strip()
+        current_profile_signature = ""
+        if source_pdf_path:
+            try:
+                current_profile_signature = conversion_retry_profile_signature(
+                    source_pdf_path,
+                    speed_mode=str(repair_plan.get("speed_mode") or "normal"),
+                    no_llm=bool(repair_plan.get("no_llm")),
+                    settings=get_settings(),
+                )
+            except Exception:
+                current_profile_signature = ""
+        retry_state = conversion_retry_exhaustion(
+            report,
+            current_profile_signature=current_profile_signature,
+        )
     return {
         "available": True,
         "stale": bool(stale),
@@ -390,6 +410,10 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
         "repair_attempt_count": len(repair_attempts),
         "latest_repair_attempt": latest_attempt,
         "repair_attempts": repair_attempts[-5:],
+        "retry_exhausted": bool(retry_state.get("exhausted")),
+        "retry_exhausted_reason": str(retry_state.get("reason") or ""),
+        "retry_profile_signature": str(retry_state.get("profile_signature") or ""),
+        "retry_issue_codes": list(retry_state.get("issue_codes") or [])[:30],
         "recommended_action": "" if stale else str(report.get("recommended_action") or ""),
         "needs_reconvert": False if stale else bool(report.get("needs_reconvert")),
         "source_quality": source_quality,
@@ -8064,6 +8088,7 @@ def repair_library_quality(body: QualityRepairBody):
 
     enqueued = 0
     repaired = 0
+    retry_exhausted = 0
     skipped_busy = 0
     failed = sum(1 for item in items if not bool(item.get("ok")))
     auto_backup = None
@@ -8158,9 +8183,46 @@ def repair_library_quality(body: QualityRepairBody):
         )
         repair_payload: dict = {}
         active_plan: dict = {}
+        preflight_quality: dict | None = None
+        if md_exists and _path_is_within(md_path, [md_d]):
+            try:
+                preflight_quality = _conversion_quality_summary(md_path) or {}
+            except Exception:
+                preflight_quality = None
+        preflight_report = (
+            preflight_quality.get("conversion_report")
+            if isinstance(preflight_quality, dict)
+            and isinstance(preflight_quality.get("conversion_report"), dict)
+            else {}
+        )
+        if bool(preflight_report.get("retry_exhausted")):
+            active_plan = _quality_repair_plan_from_summary(preflight_quality or {})
+            remaining_issue_codes = [
+                str(issue.get("code") or "")
+                for issue in list((preflight_quality or {}).get("issues") or [])
+                if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+            ]
+            repair_payload = {
+                "md_path": str(md_path),
+                "quality_before": preflight_quality,
+                "quality_after": preflight_quality,
+                "remaining_issue_codes": remaining_issue_codes[:12],
+                "repair_plan": active_plan,
+                "planned_action": "none",
+                "planned_scope": str(active_plan.get("scope") or ""),
+                "retry_exhausted": True,
+                "retry_exhausted_reason": str(preflight_report.get("retry_exhausted_reason") or ""),
+            }
+            items.append({**base_item, **repair_payload, "ok": True, "enqueued": False})
+            retry_exhausted += 1
+            continue
         if bool(body.md_autofix) and md_exists and _path_is_within(md_path, [md_d]):
             try:
-                before_quality = _conversion_quality_summary(md_path) or {}
+                before_quality = (
+                    preflight_quality
+                    if preflight_quality is not None
+                    else (_conversion_quality_summary(md_path) or {})
+                )
                 before_issues = [
                     str(issue.get("code") or "")
                     for issue in list(before_quality.get("issues") or [])
@@ -8254,7 +8316,11 @@ def repair_library_quality(body: QualityRepairBody):
                     "repair_error": str(exc)[:240] or "markdown autofix failed",
                 }
         elif md_exists:
-            before_quality = _conversion_quality_summary(md_path) or {}
+            before_quality = (
+                preflight_quality
+                if preflight_quality is not None
+                else (_conversion_quality_summary(md_path) or {})
+            )
             before_issue_codes = [
                 str(issue.get("code") or "")
                 for issue in list(before_quality.get("issues") or [])
@@ -8438,6 +8504,7 @@ def repair_library_quality(body: QualityRepairBody):
         "enqueued": int(enqueued),
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
+        "retry_exhausted": int(retry_exhausted),
         "needs_reindex": bool(needs_reindex),
         "reader_locate_reindex": int(len(reader_locate_reindex_items)),
         "before_avg_score": int(round(sum(before_scores) / len(before_scores))) if before_scores else 0,
@@ -8483,7 +8550,11 @@ def repair_library_quality(body: QualityRepairBody):
             else (
                 "Reader locate source anchors need index refresh."
                 if reader_locate_reindex_items and not repaired_items
-                else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+                else (
+                    "The system already completed the same source recovery without improvement; identical retries were suppressed."
+                    if retry_exhausted > 0
+                    else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+                )
             )
         ),
     })
@@ -8499,6 +8570,7 @@ def repair_library_quality(body: QualityRepairBody):
         "impact": impact,
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
+        "retry_exhausted": int(retry_exhausted),
         "auto_backup": auto_backup,
         "items": items,
     }
@@ -8895,6 +8967,7 @@ def resolve_library_guide_source(body: GuideSourceBody):
         raise HTTPException(400, "markdown not ready")
 
     source_name = _strip_known_source_ext(pdf_name) or pdf_name
+    index_view = _library_markdown_index_state(md_main, _load_docs_index_state())
     return {
         "ok": True,
         "pdf_name": pdf_name,
@@ -8904,6 +8977,10 @@ def resolve_library_guide_source(body: GuideSourceBody):
         # Bind to PDF path; runtime maps to latest markdown on disk.
         "source_path": str(pdf_path),
         "source_name": source_name,
+        "index_state": str(index_view.get("index_state") or "not_indexed"),
+        "index_status": str(index_view.get("index_status") or "missing"),
+        "index_ready": bool(index_view.get("index_ready")),
+        "index_num_chunks": int(index_view.get("index_num_chunks") or 0),
     }
 
 

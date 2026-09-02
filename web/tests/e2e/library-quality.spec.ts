@@ -166,6 +166,9 @@ test('library source readiness respects repair action precedence over quality-bl
     const S = {
       lib_source_status_blocked: 'Needs reconvert',
       lib_source_status_blocked_detail: 'Reconvert detail',
+      lib_source_status_exhausted: 'Readable, not searchable',
+      lib_source_status_exhausted_detail: 'Automatic recovery stopped',
+      lib_source_status_exhausted_scanned_detail: 'Vision model required',
       lib_source_status_review: 'Can repair',
       lib_source_status_review_detail: 'Repair detail',
       lib_source_status_confirmed: 'User confirmed',
@@ -178,11 +181,13 @@ test('library source readiness respects repair action precedence over quality-bl
       centerAction = '',
       gateAction = '',
       reportStale = false,
+      retryExhausted = false,
     }: {
       repairPlanAction?: string
       centerAction?: string
       gateAction?: string
       reportStale?: boolean
+      retryExhausted?: boolean
     }) => ({
       md_exists: true,
       task_state: 'idle',
@@ -193,6 +198,7 @@ test('library source readiness respects repair action precedence over quality-bl
         has_review_issue: true,
         conversion_report: {
           stale: reportStale,
+          retry_exhausted: retryExhausted,
           needs_reconvert: false,
           remaining_issue_codes: ['page_marker_gaps'],
           repair_plan: repairPlanAction ? { action: repairPlanAction } : null,
@@ -213,6 +219,10 @@ test('library source readiness respects repair action precedence over quality-bl
       }), S),
       gateAutofix: conversionSourceReadiness(makeItem({ gateAction: 'autofix' }), S),
       gateReconvert: conversionSourceReadiness(makeItem({ gateAction: 'reconvert' }), S),
+      exhausted: conversionSourceReadiness(makeItem({
+        gateAction: 'reconvert',
+        retryExhausted: true,
+      }), S),
       planNone: conversionSourceReadiness(makeItem({
         repairPlanAction: 'none',
         centerAction: 'reconvert',
@@ -245,6 +255,12 @@ test('library source readiness respects repair action precedence over quality-bl
   expect(result.centerReview).toMatchObject({ kind: 'review', action: 'repair', blocked: false })
   expect(result.gateAutofix).toMatchObject({ kind: 'review', action: 'repair', blocked: false })
   expect(result.gateReconvert).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
+  expect(result.exhausted).toMatchObject({
+    kind: 'blocked',
+    action: '',
+    blocked: true,
+    label: 'Readable, not searchable',
+  })
   expect(result.planNone).toMatchObject({ kind: 'index_stale', action: 'reindex', blocked: false })
   expect(result.stalePlan).toMatchObject({ kind: 'blocked', action: 'reconvert', blocked: true })
   expect(result.manuallyConfirmed).toMatchObject({
@@ -254,6 +270,32 @@ test('library source readiness respects repair action precedence over quality-bl
     blocked: false,
     label: 'User confirmed',
   })
+})
+
+test('research context preserves an explicit unsearchable guide binding', async ({ page }) => {
+  await page.goto('/library')
+  const result = await page.evaluate(async () => {
+    const { buildResearchContext } = await import('/src/components/chat/researchContext.ts')
+    return buildResearchContext({
+      activeConvId: 'guide-unindexed',
+      activeConversation: {
+        id: 'guide-unindexed',
+        title: 'Paper guide',
+        mode: 'paper_guide',
+        bound_source_path: 'C:/papers/paper.pdf',
+        bound_source_name: 'Paper',
+        bound_source_ready: false,
+      },
+    })
+  })
+
+  expect(result.mode).toBe('paper_guide')
+  expect(result.guideSource).toMatchObject({
+    kind: 'guide',
+    sourcePath: 'C:/papers/paper.pdf',
+    ready: false,
+  })
+  expect(result.activeSource).toMatchObject({ kind: 'none', ready: false })
 })
 
 test('library targeted repair helper exposes only page-scoped reconversion locations', async ({ page }) => {
@@ -3144,6 +3186,108 @@ test('library shows a document terminal result and retries only its failed index
   await expect.poll(() => retryRequestName).toBe(paperName)
   await expect(row.getByTestId('library-conversion-result')).toContainText(/索引重试完成|Index retry completed/)
   await expect(row.getByTestId('library-retry-conversion')).toHaveCount(0)
+})
+
+test('library suppresses stale retry actions after source reconversion is exhausted', async ({ page }) => {
+  const paperName = 'Scanned retry exhausted.pdf'
+  await page.unroute('**/api/library/files**')
+  await page.route('**/api/library/files**', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [{
+          ...baseItem,
+          name: paperName,
+          path: `F:\\kb\\pdfs\\${paperName}`,
+          md_exists: true,
+          md_path: 'F:\\kb\\md\\scanned\\paper.en.md',
+          md_folder: 'F:\\kb\\md\\scanned',
+          category: 'converted',
+          status: 'converted',
+          index_state: 'not_indexed',
+          index_status: 'quality_blocked',
+          index_ready: false,
+          quality_gate: { action: 'reconvert', indexable: false },
+          conversion_quality: {
+            status: 'warning',
+            label: 'Needs review',
+            score: 88,
+            summary: 'Needs review | Q88 | 1 pages | 0 refs',
+            has_review_issue: true,
+            issues: [
+              { code: 'weak_structure', label: 'Weak structure', severity: 'warning', count: 1 },
+              { code: 'missing_references', label: 'Missing references', severity: 'warning', count: 1 },
+            ],
+            metrics: { page_markers: 1, references: 0 },
+            conversion_report: {
+              available: true,
+              stale: false,
+              retry_exhausted: true,
+              retry_exhausted_reason: 'Same conversion profile and blocking issues remained.',
+              recommended_action: 'reconvert',
+              needs_reconvert: true,
+              remaining_issue_codes: ['weak_structure', 'missing_references'],
+              repair_plan: { action: 'reconvert', issue_codes: ['weak_structure', 'missing_references'] },
+              source_quality: { pdf_text_chars: 0 },
+              quality_center: { status: 'reconvert', action: 'reconvert' },
+            },
+          },
+          last_conversion: {
+            task_id: 'quality-blocked',
+            name: paperName,
+            pdf: `F:\\kb\\pdfs\\${paperName}`,
+            outcome: 'quality_blocked',
+            operation: 'conversion',
+            message: 'Quality checks blocked indexing.',
+            detail: '',
+            retry_action: 'reconvert',
+            replace: true,
+            speed_mode: 'normal',
+            started_at: 100,
+            finished_at: 101,
+            duration_s: 1,
+            page_done: 1,
+            page_total: 1,
+          },
+        }],
+        counts: {
+          total_view: 1,
+          total_all: 1,
+          pending: 0,
+          converted: 1,
+          queued: 0,
+          running: 0,
+          reconverting: 0,
+          quality_review: 1,
+          quality_ready: 0,
+          index_ready: 0,
+          index_stale: 1,
+        },
+        truncated: false,
+        scope: '200',
+        queue: {
+          running: false,
+          queued_count: 0,
+          active_count: 0,
+          active_tasks: [],
+          current: '',
+          done: 1,
+          total: 1,
+          recent_tasks: [],
+        },
+      }),
+    })
+  })
+
+  await page.goto('/library')
+  const row = page.getByTestId('library-file-row').filter({ hasText: paperName })
+  await expect(row.getByTestId('library-file-source-readiness')).toHaveAttribute('data-source-readiness', 'blocked')
+  await expect(row.getByTestId('library-retry-conversion')).toHaveCount(0)
+  await expect(row.getByTestId('library-quality-repair')).toHaveCount(0)
+
+  await row.locator('.kb-lib-file-more-btn').click()
+  await expect(page.getByRole('menuitem', { name: /重新转换|Reconvert/ })).toHaveCount(0)
 })
 
 test('library rechecks current Markdown once and clears a stale quality block without reconversion', async ({ page }) => {

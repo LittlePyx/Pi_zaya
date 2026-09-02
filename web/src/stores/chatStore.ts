@@ -1481,6 +1481,7 @@ interface ChatState {
   createPaperGuideConversation: (opts: {
     sourcePath: string
     sourceName?: string
+    sourceReady?: boolean
     title?: string
     projectId?: string | null
     forceNew?: boolean
@@ -2135,6 +2136,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sourcePath) throw new Error('sourcePath required')
     const locale = useSettingsStore.getState().uiLocale
     const sourceName = String(opts.sourceName || '').trim() || basenameFromSourcePath(sourcePath) || (locale === 'zh' ? zh.default_source_fallback : en.default_source_fallback)
+    const sourceReady = opts.sourceReady ?? true
     const projectId = opts.projectId ?? get().activeProjectId
     if (!opts.forceNew) {
       const reusable = findReusablePaperGuideConversation(
@@ -2143,6 +2145,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
         projectId,
       )
       if (reusable) {
+        if (Boolean(reusable.bound_source_ready) !== sourceReady) {
+          try {
+            await chatApi.updateConversationGuide(reusable.id, {
+              mode: 'paper_guide',
+              bound_source_path: sourcePath,
+              bound_source_name: sourceName,
+              bound_source_ready: sourceReady,
+            })
+            await get().loadSidebarData()
+          } catch {
+            // Backward compatible: old backend may not expose /guide.
+          }
+        }
         await get().selectConversation(reusable.id)
         return reusable.id
       }
@@ -2152,14 +2167,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       mode: 'paper_guide',
       bound_source_path: sourcePath,
       bound_source_name: sourceName,
-      bound_source_ready: true,
+      bound_source_ready: sourceReady,
     })
     try {
       await chatApi.updateConversationGuide(id, {
         mode: 'paper_guide',
         bound_source_path: sourcePath,
         bound_source_name: sourceName,
-        bound_source_ready: true,
+        bound_source_ready: sourceReady,
       })
     } catch {
       // Backward compatible: old backend may not expose /guide.
@@ -2179,7 +2194,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             mode: 'paper_guide',
             bound_source_path: sourcePath,
             bound_source_name: sourceName,
-            bound_source_ready: true,
+            bound_source_ready: sourceReady,
           }
         : state.activeConversation,
     }))

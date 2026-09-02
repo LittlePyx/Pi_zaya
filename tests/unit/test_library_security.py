@@ -275,6 +275,40 @@ def test_guide_source_rejects_markdown_symlink_escape(monkeypatch, tmp_path: Pat
     assert "markdown" in str(exc_info.value.detail).lower()
 
 
+def test_guide_source_returns_authoritative_index_readiness(monkeypatch, tmp_path: Path):
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir()
+    paper_dir = md_dir / "paper"
+    paper_dir.mkdir(parents=True)
+    (pdf_dir / "paper.pdf").write_bytes(b"%PDF-1.4")
+    (paper_dir / "paper.en.md").write_text("<!-- kb_page: 1 -->\n# Paper\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_load_docs_index_state", lambda: {"docs": {}})
+    monkeypatch.setattr(
+        library_router,
+        "_library_markdown_index_state",
+        lambda *_args, **_kwargs: {
+            "index_state": "not_indexed",
+            "index_status": "missing",
+            "index_ready": False,
+            "index_num_chunks": 0,
+        },
+    )
+
+    result = library_router.resolve_library_guide_source(
+        library_router.GuideSourceBody(pdf_name="paper.pdf")
+    )
+
+    assert result["md_exists"] is True
+    assert result["source_path"] == str(pdf_dir / "paper.pdf")
+    assert result["index_ready"] is False
+    assert result["index_state"] == "not_indexed"
+    assert result["index_num_chunks"] == 0
+
+
 def test_sync_md_after_pdf_rename_rejects_markdown_symlink_escape(tmp_path: Path):
     md_dir = tmp_path / "md_output"
     outside_dir = tmp_path / "outside_md"

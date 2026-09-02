@@ -190,6 +190,10 @@ export interface ConversionQualityReport {
   repair_attempt_count?: number
   latest_repair_attempt?: ConversionRepairAttempt | null
   repair_attempts?: ConversionRepairAttempt[]
+  retry_exhausted?: boolean
+  retry_exhausted_reason?: string
+  retry_profile_signature?: string
+  retry_issue_codes?: string[]
   recommended_action: string
   needs_reconvert: boolean
   source_quality?: ConversionSourceQuality | null
@@ -571,6 +575,10 @@ export interface GuideSourceResponse {
   md_exists: boolean
   source_path: string
   source_name: string
+  index_state: string
+  index_status: string
+  index_ready: boolean
+  index_num_chunks: number
 }
 
 export interface LibraryReindexResponse {

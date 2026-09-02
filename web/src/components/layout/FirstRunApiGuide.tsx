@@ -29,14 +29,14 @@ export function FirstRunApiGuide({
   const refresh = useOnboardingStore((state) => state.refresh)
 
   useEffect(() => {
-    if (visible) void refresh()
-  }, [refresh, visible])
+    if (visible) void refresh(true)
+  }, [hasTextApiKey, refresh, visible])
 
   useEffect(() => {
-    if (!visible || status?.completed) return
-    const timer = window.setInterval(() => { void refresh() }, 2500)
+    if (!visible || status?.completed || status?.current_step !== 'prepare_document') return
+    const timer = window.setInterval(() => { void refresh() }, 5000)
     return () => window.clearInterval(timer)
-  }, [refresh, status?.completed, visible])
+  }, [refresh, status?.completed, status?.current_step, visible])
 
   const fallbackStep: GuideStep | null = hasTextApiKey ? null : 'connect_model'
   const currentStep = status?.current_step === 'completed'

@@ -100,7 +100,12 @@ export function buildResearchContext(input: BuildResearchContextInput): Research
   const shelfScope = shelfProjectScopeId(shelfProjectId)
   const guideSourcePath = cleanText(input.activeConversation?.bound_source_path || input.guideBinding?.sourcePath)
   const guideSourceName = cleanText(input.activeConversation?.bound_source_name || input.guideBinding?.sourceName)
-  const guideReady = Boolean(input.activeConversation?.bound_source_ready || guideSourcePath)
+  const boundSourceReady = input.activeConversation?.bound_source_ready
+  const guideReady = typeof boundSourceReady === 'boolean'
+    ? boundSourceReady
+    : typeof boundSourceReady === 'number'
+      ? boundSourceReady !== 0
+      : Boolean(guideSourcePath)
   const mode: 'normal' | 'paper_guide' = input.activeConversation?.mode === 'paper_guide' || guideSourcePath ? 'paper_guide' : 'normal'
   const guideSource: ResearchSourceContext = {
     kind: guideSourcePath ? 'guide' : 'none',

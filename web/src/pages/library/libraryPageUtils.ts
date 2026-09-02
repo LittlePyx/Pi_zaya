@@ -722,6 +722,7 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
   const isBlocked = repairAction === 'reconvert'
     || (!repairAction && (Boolean(report?.needs_reconvert) || Boolean(sourceQuality?.source_text_loss)))
   const wasAutofixed = Boolean(report?.auto_repair_changed) || ['autofixed', 'fixed'].includes(latestStatus)
+  const retryExhausted = Boolean(report?.retry_exhausted)
 
   if (item.task_state === 'running' || item.task_state === 'queued') {
     return {
@@ -754,6 +755,20 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
       action: '',
       qaReady: true,
       blocked: false,
+    }
+  }
+  if (retryExhausted) {
+    const pdfTextChars = Number(sourceQuality?.pdf_text_chars || 0)
+    return {
+      kind: 'blocked',
+      tone: 'blocked',
+      label: S.lib_source_status_exhausted,
+      detail: pdfTextChars > 100
+        ? S.lib_source_status_exhausted_detail
+        : S.lib_source_status_exhausted_scanned_detail,
+      action: '',
+      qaReady: false,
+      blocked: true,
     }
   }
   const needsIndexRefresh = ['not_indexed', 'index_stale', 'not_ready'].includes(indexState)

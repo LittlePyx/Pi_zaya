@@ -132,6 +132,7 @@ export function useChatUploadFlow(labels: Record<string, string>) {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
+        sourceReady: Boolean(item.ready),
         title: labels.default_guide_title.replace('{name}', sourceName),
       })
       hide()

@@ -61,6 +61,7 @@ type LibraryUploadDraftWorkbenchProps = {
   uploadErrorReason: UploadErrorReason
   uploadDraftFilterOptions: UploadFilterOption[]
   uploadUseLlm: boolean
+  uploadLlmAvailable: boolean
   uploadInspecting: boolean
   uploadSaving: boolean
   uploadLocked: boolean
@@ -129,6 +130,7 @@ export function LibraryUploadDraftWorkbench({
   uploadErrorReason,
   uploadDraftFilterOptions,
   uploadUseLlm,
+  uploadLlmAvailable,
   uploadInspecting,
   uploadSaving,
   uploadLocked,
@@ -179,7 +181,13 @@ export function LibraryUploadDraftWorkbench({
     >
       <div className="space-y-3">
         <div className="kb-lib-upload-toolbar flex flex-wrap items-center gap-2">
-          <Switch checked={uploadUseLlm} onChange={onUploadUseLlmChange} />
+          <Tooltip title={uploadLlmAvailable ? undefined : S.lib_upload_llm_unavailable}>
+            <Switch
+              checked={uploadUseLlm}
+              disabled={!uploadLlmAvailable}
+              onChange={onUploadUseLlmChange}
+            />
+          </Tooltip>
           <Text className="text-sm text-[var(--muted)]">{S.lib_upload_use_llm}</Text>
           <Select
             value={uploadDraftFilter}

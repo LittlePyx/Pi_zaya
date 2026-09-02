@@ -2971,6 +2971,79 @@ def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path
     assert enqueued == []
 
 
+def test_library_quality_repair_suppresses_exhausted_identical_retry(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True)
+    md_path = md_dir / "paper" / "paper.en.md"
+    md_path.parent.mkdir(parents=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path.write_text("<!-- kb_page: 1 -->\n# Paper\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"queue": [], "active_tasks": []})
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        library_router,
+        "_conversion_quality_summary",
+        lambda _path: {
+            "score": 64,
+            "issues": [{"code": "weak_structure"}],
+            "conversion_report": {
+                "retry_exhausted": True,
+                "retry_exhausted_reason": "same profile stayed blocked",
+                "repair_plan": {
+                    "action": "reconvert",
+                    "scope": "document",
+                    "speed_mode": "normal",
+                    "no_llm": False,
+                },
+            },
+        },
+    )
+    repair_calls: list[str] = []
+    enqueue_calls: list[dict] = []
+    monkeypatch.setattr(
+        library_router,
+        "repair_markdown_quality",
+        lambda *_args, **_kwargs: repair_calls.append("repair") or {},
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_bg_enqueue",
+        lambda task: enqueue_calls.append(dict(task or {})) or True,
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_append_quality_repair_run",
+        lambda row: {**row, "created_at": 1, "updated_at": 1},
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/repair",
+        json={"pdf_names": ["paper.pdf"], "md_autofix": False},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enqueued"] == 0
+    assert payload["retry_exhausted"] == 1
+    assert payload["items"][0]["retry_exhausted"] is True
+    assert repair_calls == []
+    assert enqueue_calls == []
+
+
 def test_convert_pending_enqueues_only_idle_pending(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 

@@ -10,12 +10,58 @@ from kb.converter.quality_repair import (
     append_conversion_repair_attempt,
     conversion_quality_result_path,
     conversion_repair_strategy_for_issue,
+    conversion_retry_exhaustion,
+    conversion_retry_profile_signature,
     load_conversion_quality_result,
     plan_conversion_quality_repair,
     repair_markdown_quality,
     repair_markdown_text,
     write_conversion_quality_result,
 )
+
+
+def test_source_retry_exhaustion_suppresses_only_identical_profiles(tmp_path: Path):
+    pdf_path = tmp_path / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4\n")
+    profile = conversion_retry_profile_signature(
+        pdf_path,
+        speed_mode="normal",
+        no_llm=False,
+    )
+    report = {
+        "repair_attempts": [
+            {
+                "event": "conversion_finished",
+                "status": "success",
+                "action": "reconvert",
+                "task_id": "task-1",
+                "repair_run_id": "repair-1",
+                "issue_codes": ["missing_references", "weak_structure"],
+                "extra": {"profile_signature": profile},
+            },
+            {
+                "event": "post_convert_quality_gate",
+                "status": "blocked",
+                "action": "reconvert",
+                "task_id": "task-1",
+                "issue_codes": ["weak_structure", "missing_references"],
+                "extra": {"profile_signature": profile},
+            },
+        ]
+    }
+
+    exhausted = conversion_retry_exhaustion(report, current_profile_signature=profile)
+    assert exhausted["exhausted"] is True
+    assert exhausted["issue_codes"] == ["missing_references", "weak_structure"]
+
+    reopened = conversion_retry_exhaustion(report, current_profile_signature="new-provider-profile")
+    assert reopened["exhausted"] is False
+    assert reopened["profile_changed"] is True
+
+    report["repair_attempts"][1]["issue_codes"] = ["missing_references"]
+    improved = conversion_retry_exhaustion(report, current_profile_signature=profile)
+    assert improved["exhausted"] is False
+    assert improved["issue_signature_changed"] is True
 
 
 def test_unchanged_repair_reuses_source_quality_for_sidecar(monkeypatch, tmp_path: Path):

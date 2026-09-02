@@ -141,7 +141,10 @@ from kb.config import load_settings
 from kb.conversion_job_store import ConversionJobStore
 from kb.file_ops import _resolve_md_output_paths
 from kb.converter.quality_gate import prepare_markdown_for_index
-from kb.converter.quality_repair import append_conversion_repair_attempt
+from kb.converter.quality_repair import (
+    append_conversion_repair_attempt,
+    conversion_retry_profile_signature,
+)
 from kb.converter.structured_indices import rebuild_structured_indices_for_markdown
 from kb.research_note_maintenance import enqueue_research_note_source_recovery
 from kb.llm import DeepSeekChat
@@ -9095,6 +9098,7 @@ def _bg_post_convert_quality_gate(
     repair_run_id: str = "",
     speed_mode: str = "",
     source_pdf_path: Path | str | None = None,
+    profile_signature: str = "",
 ) -> dict:
     if not _post_convert_quality_gate_enabled():
         return {
@@ -9180,6 +9184,7 @@ def _bg_post_convert_quality_gate(
                 "applied": [str(item) for item in list(auto_repair.get("applied") or []) if str(item or "").strip()][:20],
             },
             "structured_indices_rebuilt": bool(assessment.get("structured_indices_rebuilt")),
+            "profile_signature": str(profile_signature or "").strip(),
         },
     )
     return assessment
@@ -9358,6 +9363,19 @@ def _bg_worker_loop() -> None:
                 )
 
             effective_speed_mode = speed_mode
+            try:
+                effective_profile_signature = conversion_retry_profile_signature(
+                    pdf,
+                    speed_mode=effective_speed_mode,
+                    no_llm=no_llm,
+                    settings=load_settings(),
+                )
+            except Exception:
+                effective_profile_signature = conversion_retry_profile_signature(
+                    pdf,
+                    speed_mode=effective_speed_mode,
+                    no_llm=no_llm,
+                )
             source_retry_done = bool(initial_retry_pages)
             _bg_set_conversion_stage("retrying" if initial_retry_pages else "converting", task_id=task_id)
             ok, out_folder = run_pdf_to_md(
@@ -9400,6 +9418,7 @@ def _bg_worker_loop() -> None:
                         "replace": replace,
                         "no_llm": no_llm,
                         "retry_pages": initial_retry_pages,
+                        "profile_signature": effective_profile_signature,
                     },
                 )
 
@@ -9419,6 +9438,7 @@ def _bg_worker_loop() -> None:
                         repair_run_id=repair_run_id,
                         speed_mode=speed_mode,
                         source_pdf_path=pdf,
+                        profile_signature=effective_profile_signature,
                     )
                     post_convert_quality_validated = True
                     if not bool(post_convert_quality.get("indexable")):
@@ -9560,6 +9580,19 @@ def _bg_worker_loop() -> None:
                     prefix="+SOURCE_RETRY",
                 )
                 effective_speed_mode = retry_speed_mode
+                try:
+                    effective_profile_signature = conversion_retry_profile_signature(
+                        pdf,
+                        speed_mode=effective_speed_mode,
+                        no_llm=False,
+                        settings=load_settings(),
+                    )
+                except Exception:
+                    effective_profile_signature = conversion_retry_profile_signature(
+                        pdf,
+                        speed_mode=effective_speed_mode,
+                        no_llm=False,
+                    )
                 _, md_main, md_exists = _resolve_md_output_paths(out_root, pdf)
                 if md_exists:
                     _bg_record_repair_attempt(
@@ -9579,6 +9612,7 @@ def _bg_worker_loop() -> None:
                             "requested_speed_mode": speed_mode,
                             "retry_speed_mode": retry_speed_mode,
                             "retry_pages": retry_pages,
+                            "profile_signature": effective_profile_signature,
                         },
                     )
                 post_convert_quality = {}
@@ -9596,6 +9630,7 @@ def _bg_worker_loop() -> None:
                             repair_run_id=repair_run_id,
                             speed_mode=effective_speed_mode,
                             source_pdf_path=pdf,
+                            profile_signature=effective_profile_signature,
                         )
                         post_convert_quality_validated = True
                         if not bool(post_convert_quality.get("indexable")):

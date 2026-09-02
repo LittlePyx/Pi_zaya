@@ -11,7 +11,6 @@ import {
   conversionTargetedRepairPageDetail,
   conversionTargetedRepairPages,
   formatQualityRepairRecordSummary,
-  hasConversionQualityIssue,
   libraryDocumentTypeView,
   normalizeTextList,
   normalizeTextValue,
@@ -107,14 +106,13 @@ export function LibraryFileQualityLine({
   const finalRepairResult = String(
     repairResult || (repairRecord ? formatQualityRepairRecordSummary(repairRecord, S) : ''),
   ).trim()
-  const qualityNeedsRepair = hasConversionQualityIssue(item)
   const sourceReadiness = conversionSourceReadiness(item, S)
   const targetedRepairPages = conversionTargetedRepairPages(item)
   const targetedPageSummary = targetedRepairPages.length > 6
     ? `${targetedRepairPages.slice(0, 6).join(', ')} +${targetedRepairPages.length - 6}`
     : targetedRepairPages.join(', ')
   const targetedPageDetail = conversionTargetedRepairPageDetail(item, S)
-  const sourceReadinessActionAvailable = qualityNeedsRepair || sourceReadiness.action === 'reindex'
+  const sourceReadinessActionAvailable = Boolean(sourceReadiness.action)
   const qualityRepairButtonLabel = sourceReadiness.action === 'reconvert'
     ? targetedRepairPages.length > 0
       ? S.lib_btn_repair_target_pages.replace('{pages}', targetedPageSummary)
@@ -308,7 +306,6 @@ export function LibraryFileQualityLine({
             </span>
           ) : null}
           {sourceReadinessActionAvailable ? (
-            <>
               <Button
                 size="small"
                 icon={<ReloadOutlined />}
@@ -320,19 +317,18 @@ export function LibraryFileQualityLine({
               >
                 {qualityRepairButtonLabel}
               </Button>
-              {sourceReadiness.kind === 'blocked' ? (
-                <Button
-                  size="small"
-                  className="kb-lib-quality-repair-btn"
-                  data-testid="library-quality-confirm-index"
-                  loading={qualityOverrideConfirming}
-                  disabled={item.task_state !== 'idle'}
-                  onClick={onConfirmQualityOverride}
-                >
-                  {S.lib_btn_confirm_markdown_index}
-                </Button>
-              ) : null}
-            </>
+          ) : null}
+          {sourceReadiness.kind === 'blocked' ? (
+            <Button
+              size="small"
+              className="kb-lib-quality-repair-btn"
+              data-testid="library-quality-confirm-index"
+              loading={qualityOverrideConfirming}
+              disabled={item.task_state !== 'idle'}
+              onClick={onConfirmQualityOverride}
+            >
+              {S.lib_btn_confirm_markdown_index}
+            </Button>
           ) : null}
         </div>
       ) : null}

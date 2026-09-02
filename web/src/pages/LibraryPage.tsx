@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Button,
   message,
@@ -89,7 +89,6 @@ import {
   type ReadingStatusValue,
 } from './library/useLibraryFileFilters'
 import { useLibraryQualityFocusActions } from './library/useLibraryQualityFocusActions'
-import { libraryAutoRecoveryKind, libraryAutoRecoverySignature } from './library/libraryAutoRecovery'
 import {
   useLibraryQualityRepairActions,
 } from './library/useLibraryQualityRepairActions'
@@ -187,9 +186,6 @@ export default function LibraryPage() {
   const [conversionRetryingName, setConversionRetryingName] = useState('')
   const [conversionResumeAllRunning, setConversionResumeAllRunning] = useState(false)
   const [firstRunAdvancedOpen, setFirstRunAdvancedOpen] = useState(false)
-  const [autoRecoveryPass, setAutoRecoveryPass] = useState(0)
-  const autoRecoveryBusyRef = useRef(false)
-  const autoRecoveryAttemptsRef = useRef(new Map<string, { signature: string; attempts: number }>())
   const {
     directoriesConfigured,
     dirDirty,
@@ -746,53 +742,6 @@ export default function LibraryPage() {
     setQualityRepairRun,
   })
 
-  useEffect(() => {
-    if (
-      autoRecoveryBusyRef.current
-      || store.converting
-      || Boolean(store.refSync?.running)
-      || Object.keys(qualityRepairingNames).length > 0
-    ) return
-    const candidate = store.files.find((item) => {
-      const kind = libraryAutoRecoveryKind(item)
-      if (!kind) return false
-      const current = autoRecoveryAttemptsRef.current.get(item.name)
-      const signature = libraryAutoRecoverySignature(item, kind)
-      return !current || (current.attempts < 2 && current.signature !== signature)
-    })
-    if (!candidate) return
-    const kind = libraryAutoRecoveryKind(candidate)
-    if (!kind) return
-    const signature = libraryAutoRecoverySignature(candidate, kind)
-    const current = autoRecoveryAttemptsRef.current.get(candidate.name)
-    autoRecoveryAttemptsRef.current.set(candidate.name, {
-      signature,
-      attempts: Number(current?.attempts || 0) + 1,
-    })
-    autoRecoveryBusyRef.current = true
-    void (async () => {
-      try {
-        if (kind === 'repair') {
-          await handleRepairQualityOne(candidate)
-        } else {
-          await libraryApi.reindexFile(candidate.name)
-          await store.loadFiles(scope)
-        }
-      } catch {
-        // The visible readiness state remains the durable record. Automatic
-        // recovery is bounded and never weakens the quality gate.
-      } finally {
-        autoRecoveryBusyRef.current = false
-        setAutoRecoveryPass((value) => value + 1)
-      }
-    })()
-  }, [
-    autoRecoveryPass,
-    handleRepairQualityOne,
-    qualityRepairingNames,
-    scope,
-    store,
-  ])
   const qualityCenterView = useLibraryQualityCenterViewModel({
     S,
     reportStats: qualityReportStats,
@@ -1407,11 +1356,13 @@ export default function LibraryPage() {
       let sourcePath = ''
       let sourceName = stripKnownSourceExt(item.name) || item.name
       let resolvedMdPath = ''
+      let sourceReady = Boolean(item.index_ready)
       try {
         const resolved = await libraryApi.resolveGuideSource(item.name)
         sourcePath = String(resolved.source_path || '').trim()
         sourceName = String(resolved.source_name || '').trim() || sourceName
         resolvedMdPath = String(resolved.md_path || '').trim()
+        sourceReady = Boolean(resolved.index_ready)
       } catch {
         // Backward-compatible fallback when backend route is not available yet.
         sourcePath = String(item.md_path || '').trim()
@@ -1422,6 +1373,7 @@ export default function LibraryPage() {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
+        sourceReady,
         title: convTitle,
       })
       if (resolvedMdPath && resolvedMdPath !== String(item.md_path || '').trim()) {
@@ -1617,6 +1569,7 @@ export default function LibraryPage() {
       uploadErrorReason={uploadErrorReason}
       uploadDraftFilterOptions={uploadDraftFilterOptions}
       uploadUseLlm={uploadUseLlm}
+      uploadLlmAvailable={textModelReady}
       uploadInspecting={uploadInspecting}
       uploadSaving={uploadSaving}
       uploadLocked={uploadLocked}
