@@ -7,6 +7,11 @@ import re
 # generated summaries and retrieval scores must never trigger factual copy.
 _RELATIONS = (
     (
+        r"invariant\s+function.{0,100}minimizing.{0,40}satisfies",
+        "这里讨论使目标最小化的不变函数，并引出其应满足的等式。",
+        "优化对象限定为不变函数；这一段引出最优解的等式，具体公式及逐子集适用条件需连同后续源块核对。",
+    ),
+    (
         r"variance of the estimate is the average variance of the corruptions in the targets, divided by the number of training samples",
         "有限数据下，估计方差等于目标污染的平均方差除以训练样本数。",
         "该段明确给出分子、分母及除法关系，可核对估计方差如何随目标污染与样本量变化。",
@@ -89,6 +94,12 @@ _COMPOUND_RELATIONS = (
         ),
         "DnCNN \u9884\u6d4b\u7684\u662f\u542b\u566a\u89c2\u6d4b\u4e0e\u6f5c\u5728\u5e72\u51c0\u56fe\u50cf\u4e4b\u95f4\u7684\u6b8b\u5dee\uff0c\u800c\u975e\u76f4\u63a5\u8f93\u51fa\u5e72\u51c0\u56fe\u50cf\u3002",
         "\u8be5\u6bb5\u660e\u786e\u5b9a\u4e49\u4e86\u7f51\u7edc\u8f93\u51fa\u7684\u7269\u7406\u542b\u4e49\uff0c\u53ef\u7528\u4e8e\u6838\u5bf9\u201c\u8f93\u51fa\u6b8b\u5dee\u3001\u518d\u4ece\u542b\u566a\u8f93\u5165\u4e2d\u6263\u9664\u201d\u7684\u53bb\u566a\u5173\u7cfb\u3002",
+    ),
+    (
+        (r"independent,?\s+mean[- ]zero\s+noise\s+in\s+each\s+pixel",
+         r"choose.{0,160}singletons"),
+        "独立且均值为零的像素噪声允许选择每个坐标的单元素集作为分组。",
+        "单元素分组的选择明确依赖逐像素独立和零均值两个条件，不能把这一例子推广到任意相关或有偏噪声。",
     ),
 )
 

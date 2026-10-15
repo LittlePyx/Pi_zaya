@@ -11,6 +11,7 @@ except ImportError:
     fitz = None
 
 from .models import TextBlock
+from .pdf_math_geometry import extract_math_raw
 from .text_utils import _normalize_text
 
 _UNICODE_MATH_SYMBOLS_RE = r"[∑∏∫√∞≈≠≤≥±×·⋅∈∂∇]"
@@ -94,144 +95,6 @@ def render_blocks_to_markdown(
             return "\n".join(acc) if direction > 0 else "\n".join(reversed(acc))
         except Exception:
             return ""
-
-    def _extract_math_raw_from_page(page, bbox: tuple[float, float, float, float]) -> str:
-        """
-        Extract math-like text from `page` inside `bbox` using span-level geometry (rawdict),
-        attempting to preserve superscript/subscript structure.
-
-        This is critical for full_llm quality: `get_text('dict')` often loses layout cues,
-        producing garbled math that even an LLM can't reliably reconstruct.
-        """
-        try:
-            clip = fitz.Rect(bbox)
-            if clip.width <= 2 or clip.height <= 2:
-                return ""
-        except Exception:
-            return ""
-
-        try:
-            d = page.get_text("rawdict")
-        except Exception:
-            try:
-                d = page.get_text("dict")
-            except Exception:
-                return ""
-
-        spans: list[tuple[float, float, float, float, float, str]] = []
-        try:
-            for b0 in (d.get("blocks") or []):
-                for ln in (b0.get("lines") or []):
-                    for sp in (ln.get("spans") or []):
-                        txt = str(sp.get("text") or "")
-                        if not txt.strip():
-                            # Some PDFs store glyphs only in `chars` with empty `text`.
-                            chars = sp.get("chars") or []
-                            if chars:
-                                try:
-                                    txt = "".join(str(ch.get("c") or "") for ch in chars)
-                                except Exception:
-                                    txt = ""
-                        if not txt.strip():
-                            continue
-                        sb = sp.get("bbox")
-                        if not sb:
-                            continue
-                        try:
-                            r = fitz.Rect(tuple(float(x) for x in sb))
-                        except Exception:
-                            continue
-                        if not r.intersects(clip):
-                            continue
-                        size = float(sp.get("size") or 0.0)
-                        spans.append((float(r.x0), float(r.y0), float(r.x1), float(r.y1), size, txt))
-        except Exception:
-            spans = []
-
-        if not spans:
-            return ""
-
-        # Sort top-to-bottom, left-to-right
-        spans.sort(key=lambda x: (x[1], x[0]))
-
-        # Group spans into lines by y proximity
-        lines: list[list[tuple[float, float, float, float, float, str]]] = []
-        cur: list[tuple[float, float, float, float, float, str]] = []
-        cur_y = None
-        for sp in spans:
-            y0, y1, size = sp[1], sp[3], sp[4]
-            cy = (y0 + y1) / 2.0
-            if cur_y is None:
-                cur_y = cy
-                cur = [sp]
-                continue
-            tol = max(2.0, (size or 10.0) * 0.65)
-            if abs(cy - cur_y) <= tol:
-                cur.append(sp)
-                # update running center y
-                cur_y = (cur_y * 0.7) + (cy * 0.3)
-            else:
-                lines.append(cur)
-                cur = [sp]
-                cur_y = cy
-        if cur:
-            lines.append(cur)
-
-        def _median(xs: list[float]) -> float:
-            if not xs:
-                return 0.0
-            xs2 = sorted(xs)
-            mid = len(xs2) // 2
-            return xs2[mid] if (len(xs2) % 2 == 1) else (xs2[mid - 1] + xs2[mid]) / 2.0
-
-        out_lines: list[str] = []
-        for ln in lines:
-            ln.sort(key=lambda x: x[0])
-            centers = [((x[1] + x[3]) / 2.0) for x in ln]
-            sizes = [float(x[4] or 0.0) for x in ln]
-            base_c = _median(centers)
-            base_s = _median([s for s in sizes if s > 0.0]) or 0.0
-            # Estimate line height
-            heights = [max(1.0, float(x[3] - x[1])) for x in ln]
-            lh = _median(heights) or 10.0
-
-            parts: list[str] = []
-            prev_x1 = None
-            for x0, y0, x1, y1, size, txt in ln:
-                t = str(txt)
-                # Normalize some common math glyphs early
-                t = (
-                    t.replace("\u2299", r"\odot")
-                    .replace("\u2208", r"\in")
-                    .replace("\u00d7", r"\times")
-                    .replace("\u00b7", r"\cdot")
-                )
-                t = re.sub(r"\s+", " ", t).strip()
-                if not t:
-                    continue
-                c = (y0 + y1) / 2.0
-                is_small = (base_s > 0.0) and (size > 0.0) and (size <= base_s * 0.88)
-                # Sup/sub classification by relative center y
-                super_th = base_c - (lh * 0.22)
-                sub_th = base_c + (lh * 0.22)
-                if is_small and c < super_th:
-                    t = "^{" + t + "}"
-                elif is_small and c > sub_th:
-                    t = "_{" + t + "}"
-
-                # Insert a space if there is a large horizontal gap between spans
-                if prev_x1 is not None:
-                    gap = float(x0) - float(prev_x1)
-                    if gap > max(2.0, (base_s or 10.0) * 0.4):
-                        parts.append(" ")
-                parts.append(t)
-                prev_x1 = x1
-
-            line_s = "".join(parts).strip()
-            if line_s:
-                out_lines.append(line_s)
-
-        return "\n".join(out_lines).strip()
 
     def _save_eq_image(
         bbox: tuple[float, float, float, float],
@@ -695,7 +558,7 @@ def render_blocks_to_markdown(
                 if page is not None:
                     bb = getattr(b, "bbox", None)
                     if bb and isinstance(bb, tuple) and len(bb) == 4:
-                        raw2 = _extract_math_raw_from_page(page, bb)
+                        raw2 = extract_math_raw(page, bb)
                         # Only replace if it looks non-trivial.
                         if raw2 and len(raw2) >= max(12, int(len(math_src) * 0.85)):
                             math_src = raw2

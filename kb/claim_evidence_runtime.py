@@ -6,7 +6,9 @@ from typing import Any
 from kb.claim_polarity_guard import claim_polarity_conflicts, has_checkable_action_fact
 from kb.imaging_equation_binding import has_masked_frame_sum
 from kb.citation_marker_context import strip_citation_decoration
-from kb.theory_evidence import normalize_supported_variance_relation, protect_source_equations
+from kb.theory_evidence import (
+    drop_conflicting_source_equations, normalize_supported_variance_relation, protect_source_equations,
+)
 
 from kb.evidence_binding import (
     _claim_fact_quantities_for_evidence,
@@ -3340,6 +3342,9 @@ def audit_and_repair_claim_evidence(
         for index, hit in enumerate(hits, start=1)
     ]
     scoped, source_equations = protect_source_equations(str(answer or ""), eligible_hits)
+    dropped_equation_conflicts = []
+    if drop_unsupported_unplanned_claims or drop_unsupported_high_risk_claims:
+        scoped, dropped_equation_conflicts = drop_conflicting_source_equations(scoped, eligible_hits)
     scoped, dropped_placeholder_sections = _drop_placeholder_sections(scoped)
     scoped, scoped_count = _scope_absolute_negative_claims(scoped)
     scoped, trimmed_inference_count = _trim_unsupported_boundary_inferences(scoped)
@@ -3600,6 +3605,8 @@ def audit_and_repair_claim_evidence(
         meta["renderer_rejected_details"] = renderer_rejected_citations[:8]
     if dropped_unplanned_claims:
         meta["dropped_unplanned_claims"] = dropped_unplanned_claims[:8]
+    if dropped_equation_conflicts:
+        meta["dropped_source_equation_conflicts"] = dropped_equation_conflicts[:8]
     for token, equation in source_equations.items():
         repaired = repaired.replace(token, equation)
     return repaired, meta

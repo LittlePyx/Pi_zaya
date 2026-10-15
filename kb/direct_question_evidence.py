@@ -165,6 +165,7 @@ _TASK_LIST_QUESTION = re.compile(
     r"(?i)(?:三类|三种|three).{0,30}(?:任务|应用|tasks?|applications?)|(?:任务|应用|tasks?|applications?).{0,30}(?:三类|三种|three)"
 )
 _CALIBRATION_QUESTION = re.compile(r"(?i)校准|calibrat")
+_SINGLETON_QUESTION = re.compile(r"(?i)单元素|\bsingletons?\b")
 _TRAINING_OBSERVATION_QUESTION = re.compile(
     r"(?i)训练(?:观测|数据)|training\s+(?:data|observations)|noisy\s+pairs|噪声图像|"
     r"(?:一|单)张.{0,12}带噪|干净(?:参照|目标|标签).{0,30}(?:配对|数据)|"
@@ -311,6 +312,7 @@ def requests_direct_question_evidence(prompt: str) -> bool:
         or _VARIANCE_QUESTION.search(prompt)
         or _TASK_LIST_QUESTION.search(prompt)
         or _CALIBRATION_QUESTION.search(prompt)
+        or _SINGLETON_QUESTION.search(prompt)
         or _TRAINING_OBSERVATION_QUESTION.search(prompt)
         or _INDEPENDENCE_QUESTION.search(prompt)
         or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt)
@@ -328,6 +330,9 @@ def direct_question_evidence_hits(
         return []
     blocks = list(load_source_blocks(md_path))
     statement = _STATEMENT.search(prompt)
+    requested_pages = {
+        int(a or b) for a, b in re.findall(r"第\s*(\d+)\s*页|\bpage\s+(\d+)\b", prompt, re.I)
+    }
     candidates: list[tuple[int, int, list[int]]] = []
     query_words = set(re.findall(r"[a-z]{4,}", prompt.lower()))
     for index, block in enumerate(blocks):
@@ -335,6 +340,7 @@ def direct_question_evidence_hits(
         if (
             block.get("kind") in {"heading", "figure"}
             or "reference" in str(block.get("heading_path") or "").lower()
+            or (len(requested_pages) == 1 and block.get("page_start") not in requested_pages)
         ):
             continue
         selected = [index]
@@ -365,6 +371,9 @@ def direct_question_evidence_hits(
                     break
                 if row.get("kind") != "figure":
                     selected.append(following)
+        elif _SINGLETON_QUESTION.search(prompt):
+            if not re.search(r"\bsingletons?\b", text, re.I) or "=" not in text:
+                continue
         elif _INTERVAL_QUESTION.search(prompt):
             if not re.search(
                 r"\[\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*\]", text

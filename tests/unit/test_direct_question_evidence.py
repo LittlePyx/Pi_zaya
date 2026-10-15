@@ -3,6 +3,18 @@ from __future__ import annotations
 from kb.direct_question_evidence import direct_question_evidence_hits
 
 
+def test_explicit_page_singleton_assignment_requires_its_actual_source_block(tmp_path):
+    source = tmp_path / "sets.md"
+    source.write_text(
+        "<!-- kb_page: 2 -->\nFor independent, mean-zero noise in each pixel we choose "
+        r"$\mathcal{J}$ = {{1}, . . . , {m}} to be the singletons."
+        "\n<!-- kb_page: 8 -->\nWe choose a different set = {a,b} of singletons.", encoding="utf8")
+    hits = direct_question_evidence_hits(source, "第2页选择单元素分组的等式是什么？")
+    assert len(hits) == 1 and "mean-zero" in hits[0]["text"]
+    assert hits[0]["meta"]["page_start"] == 2
+    assert not direct_question_evidence_hits(source, "第3页选择单元素分组的等式是什么？")
+
+
 def test_application_enumeration_does_not_require_literal_number(tmp_path):
     source = tmp_path / "applications.md"
     source.write_text("<!-- kb_page: 1 -->\nWe show applications in photographic noise removal, denoising of synthetic images, and reconstruction of undersampled measurements.\n\n## References\n\nWe show applications in unrelated imaging.", encoding="utf-8")

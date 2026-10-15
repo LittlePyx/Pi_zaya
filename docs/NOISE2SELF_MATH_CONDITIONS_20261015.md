@@ -1,5 +1,8 @@
 # Noise2Self 数学块与条件链验证（2026-10-15）
 
+后续命题2尾部、孤立等号与分组字体的实际修复、负例和失败记录见
+[公式结构链路](NOISE2SELF_FORMULA_STRUCTURE_20261015.md)。本文件保留r23时的历史边界。
+
 本轮先确认 main 的 `119f8a80151516b4ba69a34645a4ab2161ac5830`：
 [CI 38725996240](https://github.com/LittlePyx/Pi_zaya/actions/runs/38725996240)
 的 Frontend、Backend、Quality gates 和 CI summary 全部成功，再修改代码。

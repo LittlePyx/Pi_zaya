@@ -12,6 +12,10 @@ def looks_like_mixed_math_prose_line(text: str) -> bool:
 
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     words = re.findall(r"\b[A-Za-z]{2,}\b", value)
+    if re.search(r"\b(?:we (?:may )?choose|minimizing)\b", value, re.I):
+        return True
+    if re.match(r"^(?:for (?:each|every|all|any)|where|provided that)\s+", value, re.I) and len(words) >= 3:
+        return True
     # Definitions often wrap after a set or domain expression. Those lines
     # remain prose even though they contain too few words for the longer
     # conditional-sentence rule below.
