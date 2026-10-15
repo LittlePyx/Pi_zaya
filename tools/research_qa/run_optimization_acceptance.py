@@ -99,6 +99,9 @@ def _serve(root: Path, port: int, baseline: bool) -> None:
     from kb.test_isolation import enforce_isolated_test_paths
     enforce_isolated_test_paths()
     from server import app
+    if trace_path := os.environ.get("KB_ACCEPTANCE_ANSWER_TRACE"):
+        from tools.research_qa.answer_chain_trace import install
+        install(Path(trace_path))
     if baseline:
         import kb.claim_evidence_runtime as runtime
         import kb.evidence_binding as binding
