@@ -97,6 +97,74 @@ def test_source_equation_survives_atomic_audit_with_external_citation():
     assert again.count("Source equation") == 1
 
 
+@pytest.mark.parametrize("mutation", [
+    lambda eq: eq.replace(r"\mathcal{J}", "J"),
+    lambda eq: eq.replace("J^{c}", "J"),
+    lambda eq: eq.replace("=E", "=2E"),
+    lambda eq: eq + r"\in\mathcal{J}",
+])
+def test_partition_equation_requires_exact_font_complement_coefficient_and_tail(mutation):
+    from kb.theory_evidence import protect_source_equations
+
+    equation = r"f^{\ast}_{\mathcal{J}}(x)_{J}=E[y_{J}|x_{J^{c}}]"
+    source = "$$" + equation + "$$"
+    assert protect_source_equations(source, [hit(source)])[1]
+    assert not protect_source_equations("$$" + mutation(equation) + "$$", [hit(source)])[1]
+    assert not protect_source_equations(source, [hit("A different source without this formula")])[1]
+    changed = mutation(equation)
+    answer, _ = audit_and_repair_claim_evidence(
+        "$$" + changed + "$$", [hit(source)], allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True, drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True)
+    assert changed not in answer
+
+
+def test_equation_conflict_veto_preserves_exact_short_and_unrelated_expressions():
+    from kb.theory_evidence import drop_conflicting_source_equations
+
+    source = [hit("$$a=b$$")]
+    assert drop_conflicting_source_equations("$$a=b$$", source) == ("$$a=b$$", [])
+    assert drop_conflicting_source_equations("$$u=v$$", source) == ("$$u=v$$", [])
+    assert drop_conflicting_source_equations("$$a=2b$$", source)[1] == ["$$a=2b$$"]
+
+
+@pytest.mark.parametrize("presentation", [
+    lambda eq: eq.replace("|", r"\mid "),
+    lambda eq: eq.replace(r"^{\ast}", "^*"),
+    lambda eq: eq.replace("_{J}", "_J").replace("^{c}", "^c"),
+])
+def test_partition_equation_allows_equivalent_tex_script_and_bar_presentation(presentation):
+    equation = r"f^{\ast}_{\mathcal{J}}(x)_{J}=E[y_{J}|x_{J^{c}}]"
+    displayed = presentation(equation)
+    answer, _ = audit_and_repair_claim_evidence(
+        "$$" + displayed + "$$", [hit("$$" + equation + "$$")], allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True, drop_unsupported_high_risk_claims=True,
+        enforce_user_visible_binding=True)
+    assert displayed in answer and "Source equation [1]" in answer
+
+
+def test_exact_plaintext_inline_set_assignment_survives_audit():
+    source = r"For independent, mean-zero noise we choose $\mathcal{J}$ = {{1}, . . . , {m}} to be the singletons."
+    equation = r"\mathcal{J} = \{\{1\}, \ldots, \{m\}\}"
+    answer, _ = audit_and_repair_claim_evidence(
+        "$$" + equation + "$$", [hit(source)], allowed_citation_numbers={1},
+        drop_unsupported_unplanned_claims=True, enforce_user_visible_binding=True)
+    assert equation in answer and "Source equation [1]" in answer
+
+
+@pytest.mark.parametrize("source", [
+    r"We choose $\mathcal{J}$ = {{1}, . . . , {n}} to be the singletons.",
+    r"We choose $\mathcal{J}$ = {{1}, . . . , {m} to be the singletons.",
+    r"We choose $\mathcal{J}$ = {an unrelated description, m}.",
+    r"We choose $J$ = {{1}, . . . , {m}} to be the singletons.",
+    r"$$\mathcal{J} = {{1}, . . . , {m}}$$",
+])
+def test_inline_set_assignment_cannot_infer_members_font_or_visible_braces(source):
+    from kb.theory_evidence import protect_source_equations
+    answer = r"$$\mathcal{J} = \{\{1\}, \ldots, \{m\}\}$$"
+    assert not protect_source_equations(answer, [hit(source)])[1]
+
+
 def test_variance_does_not_use_negated_relation_as_support():
     assert binding(CLAIM, VARIANCE.replace("estimate is", "estimate is not"))["suppress_link"]
 

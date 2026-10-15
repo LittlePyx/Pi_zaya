@@ -24,6 +24,7 @@ from .layout_analysis import _detect_column_split_x, _is_frontmatter_noise_line,
 from .models import TextBlock
 from .page_figure_metadata import expand_visual_crop_for_intersecting_caption
 from .page_line_classification import looks_like_mixed_math_prose_line
+from .pdf_math_geometry import coalesce_baseline_lines, styled_span_text
 from .text_utils import _normalize_text
 
 
@@ -132,7 +133,7 @@ def extract_text_blocks(
                 return False
             return float(line_rect.width) <= W * 0.10
 
-        for l in b["lines"]:
+        for l in coalesce_baseline_lines(b["lines"]):
             spans = l.get("spans") or []
             parts: list[str] = []
             for s in spans:
@@ -152,7 +153,7 @@ def extract_text_blocks(
                     max_size = size
                 if ("bold" in font) or ("dubai-bold" in font):
                     is_bold = True
-                parts.append(t)
+                parts.append(styled_span_text(s, inline=True))
             line_text = " ".join(parts).strip()
             if not line_text:
                 continue
@@ -234,7 +235,10 @@ def extract_text_blocks(
         cur: list[tuple["fitz.Rect", str]] = []
         for lr, lt in line_items:
             m = _is_math_line(lt)
-            if cur and (m != cur_is_math):
+            starts_statement = bool(re.match(
+                r"^(?:Proposition|Theorem|Lemma|Corollary|Definition)\b", lt, re.I
+            ))
+            if cur and (m != cur_is_math or starts_statement):
                 groups.append((cur_is_math, cur))
                 cur = []
                 cur_is_math = m

@@ -793,6 +793,8 @@ def _localized_summary_named_terms(summary_line: str, *, max_terms: int = 3) -> 
     """Return specific named concepts from already localized Guide copy."""
 
     summary = _text(summary_line)
+    # TeX commands describe notation; they are not named scientific concepts.
+    summary = re.sub(r"\\[A-Za-z]+", " ", summary)
     if not summary or not re.search(r"[\u4e00-\u9fff]", summary):
         return []
     candidates = re.findall(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from kb.source_equation_literals import source_equation_literals
+
 
 _ESTIMATE_VARIANCE = r"(?:估计(?:量|值)?(?:的)?方差|variance\s+of\s+the\s+estimate)"
 _TARGET_VARIANCE = r"(?:目标.{0,16}方差|(?:average\s+)?variance\s+of\s+the\s+corruptions\s+in\s+the\s+targets)"
@@ -197,6 +199,10 @@ def measurement_conditions_covered(claim: str, evidence: str) -> bool:
 
 def normalized_equation(text: str) -> str:
     """Normalize presentation only; preserve operands, signs and exponents."""
+    text = re.sub(r"\\(?:ldots|dots)\b", "...", text)
+    text = re.sub(r"\\mid\b", "|", text)
+    text = re.sub(r"\\ast\b", "*", text)
+    text = re.sub(r"([_^])\s*\{\s*([A-Za-z0-9*])\s*\}", r"\1\2", text)
     text = re.sub(r"\\(?:mathbb|mathrm)\s*\{E\}", "E", text)
     text = text.replace(r"\Vert", "∥").replace(r"\|", "∥").replace("||", "∥")
     text = re.sub(r"\\(?:left|right|,|;|!)", "", text)
@@ -236,8 +242,8 @@ def protect_source_equations(answer: str, hits: list[dict]) -> tuple[str, dict[s
     for number, hit in enumerate(hits, 1):
         meta = hit.get("meta") or {}
         text = str(meta.get("citation_plan_full_evidence_quote") or hit.get("text") or "")
-        for match in re.finditer(r"\$\$(.*?)\$\$", text, re.S):
-            key = normalized_equation(match[1])
+        for literal in source_equation_literals(text):
+            key = normalized_equation(literal)
             if "=" in key and len(key) >= 12:
                 equations.setdefault(key, str(number))
     protected: dict[str, str] = {}
@@ -254,3 +260,35 @@ def protect_source_equations(answer: str, hits: list[dict]) -> tuple[str, dict[s
     # together with the equation so a recheck cannot duplicate it.
     pattern = r"\$\$(.*?)\$\$(?:\s*原文等式 / Source equation(?:\s*\[\d+\])?\s*\.)*"
     return re.sub(pattern, replace, answer, flags=re.S), protected
+
+
+def drop_conflicting_source_equations(answer: str, hits: list[dict]) -> tuple[str, list[str]]:
+    """Veto a changed equality for the same source-defined expression.
+
+    This runs after exact formulas have been protected. Ignoring alphabet style
+    on the left only detects a potential conflict; it never grants support.
+    Unrelated expressions remain subject to the ordinary claim audit.
+    """
+    def subject(equation: str) -> str:
+        lhs, separator, _ = normalized_equation(equation).partition("=")
+        if not separator:
+            return ""
+        return normalized_equation(re.sub(r"\\(?:mathcal|mathbf|mathrm)\{([^{}]+)\}", r"\1", lhs))
+
+    subjects = set()
+    equations = set()
+    for hit in hits:
+        text = str((hit.get("meta") or {}).get("citation_plan_full_evidence_quote") or hit.get("text") or "")
+        for literal in source_equation_literals(text):
+            subjects.add(subject(literal))
+            equations.add(normalized_equation(literal))
+    subjects.discard("")
+    removed = []
+
+    def replace(match):
+        if normalized_equation(match[1]) in equations or subject(match[1]) not in subjects:
+            return match[0]
+        removed.append(match[0])
+        return ""
+
+    return re.sub(r"\$\$(.*?)\$\$", replace, answer, flags=re.S), removed

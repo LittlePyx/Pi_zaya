@@ -155,6 +155,11 @@ def is_display_equation_block(text: str) -> bool:
     if "\\[" in src and "\\]" in src:
         return True
 
+    # Inline formulas do not turn their surrounding quantifier into a display.
+    prose = re.sub(r"(?<!\$)\$(?!\$)[^$]+\$(?!\$)", " ", src)
+    if prose != src and len(re.findall(r"\b[A-Za-z]{3,}\b", prose)) >= 2:
+        return False
+
     # Fallback: allow concise single-line formula-like blocks.
     if not has_equation_signal(src):
         return False

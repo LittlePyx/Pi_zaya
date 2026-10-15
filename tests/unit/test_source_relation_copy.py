@@ -4,6 +4,29 @@ from api.reference_card_quality import attach_ref_card_polish_contract
 from api.source_relation_copy import source_relation_copy
 
 
+def test_math_introduction_copy_requires_the_actual_optimization_relation():
+    evidence = r"The \mathcal{J}-invariant function f minimizing (1) satisfies..."
+    ui = attach_ref_card_polish_contract({"render_locale": "zh", "primary_evidence": {"snippet": evidence},
+        "summary_line": "适用于分组集合 mathcal 的各个子集。", "why_line": ""})
+    assert "不变函数" in ui["why_line"] and "后续源块" in ui["why_line"]
+    assert "mathcal" not in ui["why_line"]
+    assert source_relation_copy("The invariant function never minimizes the loss.") is None
+    assert source_relation_copy("The function minimizing the loss satisfies a different equation.") is None
+
+
+def test_singleton_copy_requires_both_noise_conditions_and_the_choice():
+    source = r"For independent, mean-zero noise in each pixel we may choose $\mathcal{J}$ = {{1}, . . . , {m}} to be the singletons."
+    assert "零均值" in source_relation_copy(source)[1]
+    assert source_relation_copy(source.replace("mean-zero", "biased")) is None
+    assert source_relation_copy(source.replace("independent", "correlated")) is None
+    assert source_relation_copy(source.replace("we may choose", "we cannot choose")) is None
+
+
+def test_tex_font_commands_are_not_named_card_concepts():
+    from api.reference_card_quality import _localized_summary_named_terms
+    assert "mathcal" not in _localized_summary_named_terms(r"分组 $\mathcal{J}$ 与 $x_J$ 有关。")
+
+
 def test_specific_copy_comes_from_relation_not_keywords():
     assert source_relation_copy("We measure loss, noise, variance, and supervised performance.") is None
     copy = source_relation_copy("The self-supervised loss is the sum of the ordinary supervised loss and the variance of the noise.")
