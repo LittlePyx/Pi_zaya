@@ -228,14 +228,13 @@ test('outline active section follows reader scroll position', async ({ page }) =
   })).toBeTruthy()
   await expect(page.getByTestId('reader-outline-item-0')).toHaveClass(/is-active/)
 
-  await reader.evaluate((node) => {
-    ;(node as HTMLDivElement).scrollTop = (node as HTMLDivElement).scrollHeight
-  })
+  // Exercise actual user scroll intent, which cancels initial locate retries.
+  // Assigning scrollTop alone can be overwritten by the pending locate scroll.
+  await reader.hover()
+  await page.mouse.wheel(0, await reader.evaluate((node) => node.scrollHeight))
   await expect(page.getByTestId('reader-outline-item-5')).toHaveClass(/is-active/)
 
-  await reader.evaluate((node) => {
-    ;(node as HTMLDivElement).scrollTop = 0
-  })
+  await page.mouse.wheel(0, -await reader.evaluate((node) => node.scrollHeight))
   await expect(page.getByTestId('reader-outline-item-0')).toHaveClass(/is-active/)
 })
 

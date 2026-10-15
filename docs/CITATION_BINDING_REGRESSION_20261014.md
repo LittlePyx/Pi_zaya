@@ -528,3 +528,16 @@ r22的回答、双模式阅读器及后端进程全部结束后才审计，301�
 `frozen-24-r22-summary.json`、`binding-audit-r22.json`、`pdf-audit-r22/`及
 `r22-chain.jsonl`。本轮为固定开发副本验证，未构建或发布发行包；r21缺卡失败和所有
 说明/交互检查的中间失败不被本轮成功覆盖。
+
+PR #10首个推送CI另暴露既有阅读器测试的时序竞争：核心129项中128通过，目录滚动一项
+失败。该提交未修改阅读器前端；同一提交的PR CI全部通过，但原测试4 workers重复10次
+仍有1次相同失败，因此没有仅靠重跑忽略它。CI trace显示scrollTop先到1635，再被初始
+定位的延迟滚动拉回371。原测试只赋值scrollTop，没有发出产品用来取消初始定位重试的
+用户输入。现改用真实鼠标滚轮，原目录高亮断言、8秒断言超时、4 workers及129项范围
+全部保留；产品源码与r22的301文件清单仍完全一致，原24题及标准未改动。滚轮版本10次
+重复全部通过。首个失败CI、截图、trace、原测试的9通过/1失败以及修复后日志分别保存于
+`pr10-push-ci-failed.*`、`pr10-push-failure-artifact/`、`pr10-ci-race-diagnostic.json`、
+`pr10-reader-repeat*`和`pr10-reader-wheel-repeat*`。
+修正后保持4 workers的完整核心浏览器回归129通过，前端lint通过，日志为
+`pr10-core-wheel.log`和`pr10-lint-final.log`。本次补充提交只含测试与诊断文档，生产源码
+散列仍与最终r22相同，不用重跑获得的成功覆盖首次CI失败。
