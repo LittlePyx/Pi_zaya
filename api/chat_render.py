@@ -8,6 +8,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
+from api.claim_passage_plan import message_citation_plan as _message_citation_plan, prepare_claim_passage_plan
 
 from api.message_render_contract import (
     build_render_cache_payload as _contract_build_render_cache_payload,
@@ -2618,6 +2619,9 @@ def _refine_system_a_cite_locators_from_final_primary(
         detail = dict(raw) if isinstance(raw, dict) else {}
         if not detail:
             continue
+        if detail.get("passage_bound_claims"):
+            out.append(detail)  # Verified occurrence locators outrank a document-wide primary.
+            continue
         if (
             bool(detail.get("is_inpaper"))
             or str(detail.get("citation_route") or "").strip().lower() == "system_b"
@@ -3358,21 +3362,6 @@ def _message_answer_output_mode(rec: dict | None) -> str:
     meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
     answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
     return str(answer_quality.get("output_mode") or "").strip().lower()
-
-
-def _message_citation_plan(rec: dict | None) -> dict:
-    if not isinstance(rec, dict):
-        return {}
-    meta = dict(rec.get("meta") or {}) if isinstance(rec.get("meta"), dict) else {}
-    answer_quality = dict(meta.get("answer_quality") or {}) if isinstance(meta.get("answer_quality"), dict) else {}
-    plan = answer_quality.get("citation_plan")
-    if isinstance(plan, dict) and plan:
-        return dict(plan)
-    contracts = dict(meta.get("paper_guide_contracts") or {}) if isinstance(meta.get("paper_guide_contracts"), dict) else {}
-    plan = contracts.get("citation_plan")
-    if isinstance(plan, dict) and plan:
-        return dict(plan)
-    return {}
 
 
 def _citation_plan_with_ref_primary(plan: dict | None, ref_pack: dict | None) -> dict:
@@ -5447,6 +5436,8 @@ def _augment_hits_with_system_a_plan_slots(
     for slot in plan_slots:
         if not isinstance(slot, dict):
             continue
+        if slot.get("passage_bound_claims"):
+            continue  # A claim-specific view of an existing hit, not a new answer coordinate.
         if str(slot.get("preferred_system") or "").strip().lower() == "system_b":
             continue
         source_path = str(slot.get("source_path") or slot.get("sourcePath") or "").strip()
@@ -16836,6 +16827,7 @@ def enrich_messages_with_reference_render(
         raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
         if local_evidence_actions_allowed is False:
             raw_ref_pack_dict = None
+        rec = prepare_claim_passage_plan(rec, raw_ref_pack_dict, render_source)
         input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
         message_citation_plan = _message_citation_plan(rec)
         if local_evidence_actions_allowed is False:

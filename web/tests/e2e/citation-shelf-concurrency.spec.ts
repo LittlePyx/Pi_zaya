@@ -126,6 +126,9 @@ test('a clear with a lost response cannot erase a subsequent append when the pag
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   await expect(page.getByTestId('citation-shelf-item')).toContainText('after-clear')
   expect((await (await request.get(url)).json()).items.map((item: Record<string, unknown>) => item.key)).toEqual(['after-clear'])
+  await journalSettled(page)
+  // Keep the context alive until forwarded retries and hydration requests finish.
+  await page.unrouteAll({ behavior: 'wait' })
 })
 
 test('more than 120 retained offline operations drain in bounded API batches', async ({ page, request }) => {

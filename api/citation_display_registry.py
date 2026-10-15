@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.source_passage_evidence import claim_bound_candidates
 
 
 _ANSWER_CITATION_LINK_RE = re.compile(
@@ -338,9 +339,13 @@ def _rebind_system_a_occurrence_anchors(markdown: str, rows: list[dict]) -> str:
             pieces.append(surface)
             cursor = match.end()
             continue
-        claim_tokens = evidence_alignment_tokens(
-            _citation_claim_context(text, match.start(), match.end())
-        )
+        claim = _citation_claim_context(text, match.start(), match.end())
+        candidates = claim_bound_candidates(candidates, claim)
+        claim_tokens = evidence_alignment_tokens(claim)
+        if not candidates:
+            pieces.append(surface)
+            cursor = match.end()
+            continue
         if not claim_tokens:
             pieces.append(surface)
             cursor = match.end()

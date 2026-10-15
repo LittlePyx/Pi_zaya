@@ -14,6 +14,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 import requests
+from kb.source_passage_evidence import claim_bound_candidates, claim_occurrence_matches
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.citation_card import compose_citation_card
@@ -5339,7 +5340,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                             quantity_exact_slots.append(slot)
                     if len(quantity_exact_slots) == 1:
                         slot_pool = quantity_exact_slots
-        for slot in slot_pool:
+        for slot in claim_bound_candidates(slot_pool, answer_claim):
             if id(slot) in seen_slots:
                 continue
             seen_slots.add(id(slot))
@@ -6125,6 +6126,7 @@ def _annotate_inpaper_citations_with_hover_meta(
             cached = detail_by_key.get(base_skey)
             if (
                 isinstance(cached, dict)
+                and not any(claim_occurrence_matches(answer_claim, slot.get("passage_bound_claims") or []) for slot in plan_system_a_slots)
                 and re.match(
                     r"^(?:这(?:使得|意味着|表明)?|因此|由此|从而|它|该(?:方法|模型|设计)|"
                     r"基于(?:该|此)模型|其(?:核心思想|作用|机制)(?:是|在于)?|"
@@ -7001,6 +7003,8 @@ def _annotate_inpaper_citations_with_hover_meta(
                 or meta_h.get("why_line")
                 or ""
             ).strip()[:320]
+            if plan_slot.get("passage_bound_claims"):
+                why_line = ""  # The old polished explanation describes another passage.
             support_relation = why_line
             if not support_relation:
                 support_relation = str(binding.get("reason") or "").strip()
@@ -7093,6 +7097,7 @@ def _annotate_inpaper_citations_with_hover_meta(
                 "binding_overlap_terms": list(binding.get("overlap_terms") or []),
                 "evidence_pick_score": float(evidence_pick.get("score") or 0.0) if evidence_pick else 0.0,
                 "citation_plan_slot": bool(meta_h.get("citation_plan_slot")),
+                "passage_bound_claims": list(plan_slot.get("passage_bound_claims") or []),
                 "compound_plan_evidence": bool(compound_plan_specific),
                 "selection_reason": str(
                     meta_h.get("citation_plan_evidence_selection_reason")

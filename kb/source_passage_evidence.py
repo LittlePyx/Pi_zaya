@@ -3,6 +3,20 @@ from __future__ import annotations
 import re
 
 
+def claim_occurrence_matches(claim: str, bound_claims: list[str]) -> bool:
+    def key(value: str) -> str:
+        value = re.sub(r"\[\d{1,4}\](?:\([^\n)]*\))?", "", str(value or ""))
+        return re.sub(r"[\W_]+", "", value.casefold())
+
+    actual = key(claim)
+    return any(len(bound := key(value)) >= 20 and bound in actual for value in bound_claims)
+
+
+def claim_bound_candidates(rows: list[dict], claim: str) -> list[dict]:
+    matched = [row for row in rows if claim_occurrence_matches(claim, row.get("passage_bound_claims") or [])]
+    return matched or [row for row in rows if not row.get("passage_bound_claims")]
+
+
 def bind_source_passage_primary(card: dict, primary: dict, hits: list[dict]) -> dict:
     """Bind a compound context excerpt to its first verified source passage."""
     quote = str(
