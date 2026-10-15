@@ -26,6 +26,7 @@ from tools.retrieval_eval.run_user_journey_qwen_dense_diagnostic import (
 )
 from tools.retrieval_eval.validate_product_shadow_protocol import (
     DEFAULT_PROTOCOL,
+    sha256_file_variants,
     validate_protocol,
 )
 
@@ -197,7 +198,7 @@ def validate_report(
         or report.get("report_kind") != "retrieval_product_shadow_operational_v1"
     ):
         errors.append("product shadow operational report identity changed")
-    if report.get("protocol_sha256") != sha256_file(DEFAULT_PROTOCOL) or report.get(
+    if report.get("protocol_sha256") not in sha256_file_variants(DEFAULT_PROTOCOL) or report.get(
         "fixture_sha256"
     ) != sha256_file(DEFAULT_FIXTURE):
         errors.append("product shadow operational source identity changed")

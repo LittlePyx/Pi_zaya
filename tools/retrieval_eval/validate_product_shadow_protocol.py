@@ -10,8 +10,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROTOCOL = REPO_ROOT / "docs" / "retrieval_product_shadow_protocol_v1.json"
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def sha256_file_variants(path: Path) -> set[str]:
+    data = path.read_bytes()
+    lf = data.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    return {
+        hashlib.sha256(candidate).hexdigest()
+        for candidate in (data, lf, crlf)
+    }
 
 
 def validate_protocol(payload: dict[str, Any]) -> list[str]:
@@ -28,7 +34,7 @@ def validate_protocol(payload: dict[str, Any]) -> list[str]:
         ("retriever_path", "retriever_sha256"),
     ):
         path = REPO_ROOT / str(parent.get(path_key) or "")
-        if not path.is_file() or parent.get(sha_key) != _sha256(path):
+        if not path.is_file() or parent.get(sha_key) not in sha256_file_variants(path):
             errors.append(f"product shadow parent evidence changed: {path_key}")
     if (
         parent.get("semantic_result_fingerprint")
