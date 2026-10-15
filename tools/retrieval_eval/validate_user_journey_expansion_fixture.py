@@ -17,6 +17,7 @@ from kb.store import load_all_chunks
 from kb.tokenize import tokenize
 from tools.retrieval_eval.build_user_journey_expansion_fixture import (
     DEFAULT_BASE_FIXTURE,
+    DEFAULT_CHUNK_PROJECTION,
     DEFAULT_DB_ROOT,
     DEFAULT_MANIFEST,
     DEFAULT_OUTPUT,
@@ -110,9 +111,13 @@ def validate_fixture(payload: dict[str, Any]) -> list[str]:
         for source in previous_sources
         for case in source.get("cases") or []
     }
+    chunks = load_all_chunks(DEFAULT_DB_ROOT)
+    if not chunks:
+        projection = json.loads(DEFAULT_CHUNK_PROJECTION.read_text(encoding="utf-8"))
+        chunks = [dict(chunk) for chunk in projection.get("chunks") or []]
     chunk_text = {
         str(chunk.get("id") or ""): str(chunk.get("text") or "")
-        for chunk in load_all_chunks(DEFAULT_DB_ROOT)
+        for chunk in chunks
     }
     for case in cases:
         case_id = str(case.get("id") or "")
@@ -128,6 +133,17 @@ def validate_fixture(payload: dict[str, Any]) -> list[str]:
         ):
             errors.append(f"cross-paper qrels are incomplete: {case_id}")
         if case.get("locale") == "en":
+            missing_chunk_ids = [
+                str(label.get("chunk_id") or "")
+                for label in labels
+                if str(label.get("chunk_id") or "") not in chunk_text
+            ]
+            if missing_chunk_ids:
+                errors.append(
+                    f"fixture evidence text is unavailable: {case_id}: "
+                    + ", ".join(missing_chunk_ids)
+                )
+                continue
             longest = max(
                 (
                     _longest_contiguous_overlap(

@@ -5,6 +5,7 @@ import json
 
 import pytest
 
+from tools.retrieval_eval import validate_user_journey_expansion_fixture as validator
 from tools.retrieval_eval.build_user_journey_expansion_fixture import (
     DEFAULT_CHUNK_PROJECTION,
     build_fixture,
@@ -63,6 +64,19 @@ def test_user_journey_cross_paper_qrels_cover_each_scoped_document() -> None:
 def test_user_journey_fixture_rebuilds_without_private_local_database(tmp_path) -> None:
     rebuilt = build_fixture(db_root=tmp_path / "missing-db")
     assert rebuilt == _fixture()
+
+
+def test_user_journey_validator_uses_projection_without_private_database(
+    tmp_path, monkeypatch
+) -> None:
+    missing_db = tmp_path / "missing-db"
+    monkeypatch.setattr(validator, "DEFAULT_DB_ROOT", missing_db)
+    monkeypatch.setattr(
+        validator,
+        "build_fixture",
+        lambda: build_fixture(db_root=missing_db),
+    )
+    assert validator.validate_fixture(_fixture()) == []
 
 
 def test_user_journey_fixture_rejects_incomplete_frozen_chunk_projection(tmp_path) -> None:
