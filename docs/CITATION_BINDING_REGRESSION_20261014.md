@@ -541,3 +541,18 @@ PR #10首个推送CI另暴露既有阅读器测试的时序竞争：核心129项
 修正后保持4 workers的完整核心浏览器回归129通过，前端lint通过，日志为
 `pr10-core-wheel.log`和`pr10-lint-final.log`。本次补充提交只含测试与诊断文档，生产源码
 散列仍与最终r22相同，不用重跑获得的成功覆盖首次CI失败。
+
+补充提交`71e78d05`的推送CI全部成功，PR CI却在另一个既有smoke场景失败：
+`citation-shelf-concurrency`丢失clear响应并重开页面的全部数据断言通过后，fixture关闭
+浏览器时仍有PATCH转发回调在执行，`route.fetch`因此抛出context已关闭。trace中最终
+数据断言先完成，随后才进入page fixture teardown并启动该PATCH；不是“后追加条目被
+清空”的断言失败。原版本本地2 workers重复10次全部通过，不能替代已发生的CI失败。
+现沿用同文件前一场景已有的收尾方式，在原数据断言之后等待保存操作日志清空，随后
+`unrouteAll({behavior: 'wait'})`等待转发完成再关闭上下文。不忽略回调异常，不调整丢响应
+故障时序、数据断言、超时或workers，也不修改产品源码与冻结题集。
+第二次失败CI与trace、诊断和本地原版复测分别保留于`pr10-second-pr-ci-failed.*`、
+`pr10-second-pr-failure-artifact/`、`pr10-shelf-route-lifecycle-diagnostic.json`和
+`pr10-shelf-clear-before*`。
+补充收尾后，在原2 workers下将整个真实API并发文件重复10轮，30项全部通过，相关
+lint通过，见`pr10-shelf-drain-repeat.log`及`pr10-shelf-lint.txt`。测试收尾改动仍不影响
+r22已固定并完整验证的301个生产源码文件。
