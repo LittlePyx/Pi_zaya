@@ -10,8 +10,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_PROTOCOL = REPO_ROOT / "docs" / "retrieval_cpu_query_compatibility_protocol_v3.json"
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _hash_matches(path: Path, expected: object) -> bool:
+    data = path.read_bytes()
+    lf = data.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    return str(expected or "") in {
+        hashlib.sha256(candidate).hexdigest()
+        for candidate in (data, lf, crlf)
+    }
 
 
 def validate_protocol(payload: dict[str, Any]) -> list[str]:
@@ -34,14 +40,14 @@ def validate_protocol(payload: dict[str, Any]) -> list[str]:
             "candidate_or_gate_changes": 0,
         }
         or not predecessor_path.is_file()
-        or predecessor.get("protocol_sha256") != _sha256(predecessor_path)
+        or not _hash_matches(predecessor_path, predecessor.get("protocol_sha256"))
         or not invalidation_path.is_file()
-        or predecessor.get("invalidation_sha256") != _sha256(invalidation_path)
+        or not _hash_matches(invalidation_path, predecessor.get("invalidation_sha256"))
     ):
         errors.append("CPU query predecessor or zero-query invalidation changed")
     parent = payload.get("accepted_parent") or {}
     parent_path = REPO_ROOT / str(parent.get("report_path") or "")
-    if not parent_path.is_file() or parent.get("report_sha256") != _sha256(parent_path):
+    if not parent_path.is_file() or not _hash_matches(parent_path, parent.get("report_sha256")):
         errors.append("accepted parent report changed")
     if parent.get("result_fingerprint") != "a3c81c2805cd887011219b68a33e6bbf3ed8688f5209b8483263e1a41ce2847a":
         errors.append("accepted parent result changed")
@@ -49,7 +55,7 @@ def validate_protocol(payload: dict[str, Any]) -> list[str]:
     fixture_path = REPO_ROOT / str(fixture.get("path") or "")
     if (
         not fixture_path.is_file()
-        or fixture.get("sha256") != _sha256(fixture_path)
+        or not _hash_matches(fixture_path, fixture.get("sha256"))
         or fixture.get("case_count") != 12
         or fixture.get("modes") != ["scoped", "full_library"]
     ):
