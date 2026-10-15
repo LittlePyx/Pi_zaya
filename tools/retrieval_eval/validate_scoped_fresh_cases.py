@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 from collections import Counter
@@ -26,6 +27,9 @@ from tools.retrieval_eval.validate_scoped_fresh_authoring_protocol import (
 
 DEFAULT_FIXTURE = REPO_ROOT / "docs" / "retrieval_scoped_fresh_cases_v1.json"
 BASE_FIXTURE = REPO_ROOT / "docs" / "retrieval_user_journey_expansion_v1.json"
+DEFAULT_CHUNK_PROJECTION = (
+    REPO_ROOT / "docs" / "retrieval_scoped_fresh_chunk_projection_v1.json"
+)
 EXPECTED_FIXTURE_SHA256 = "3472826090e032739903db91dd8c359adbc68bff6fcbe40ec9f136bb945b1d27"
 EXPECTED_CORPUS_FINGERPRINT = "5d65f3a033d62e15c3b90b7c32314452cb49334652d1db0f0e74a55a2b125317"
 EXPECTED_DOCUMENTS = [
@@ -68,12 +72,92 @@ def _load_selected_chunks() -> list[dict[str, Any]]:
     chunks: list[dict[str, Any]] = []
     for _logical_id, index_id, _count in EXPECTED_DOCUMENTS:
         path = REPO_ROOT / "db" / "chunks" / f"{index_id}.jsonl"
+        if not path.exists():
+            projection = _load_json(DEFAULT_CHUNK_PROJECTION)
+            if (
+                projection.get("schema_version") != 1
+                or projection.get("status") != "frozen_scoped_fresh_corpus_projection"
+                or projection.get("chunk_count") != 702
+                or not isinstance(projection.get("chunks"), list)
+            ):
+                raise ValueError("scoped fresh chunk projection identity is invalid")
+            return [dict(chunk) for chunk in projection["chunks"]]
         chunks.extend(
             json.loads(line)
             for line in path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         )
     return chunks
+
+
+def _projected_corpus_fingerprint(
+    chunks: Sequence[Mapping[str, Any]],
+    chunk_to_doc: Mapping[str, str],
+) -> str:
+    digest = hashlib.sha256()
+    for chunk in sorted(chunks, key=lambda item: str(item.get("id") or "")):
+        chunk_id = str(chunk.get("id") or "").strip()
+        logical_doc_id = str(chunk_to_doc.get(chunk_id) or "")
+        meta = chunk.get("meta") if isinstance(chunk.get("meta"), Mapping) else {}
+        record = "\x1f".join(
+            [
+                logical_doc_id,
+                chunk_id,
+                str(chunk.get("text_sha256") or ""),
+                str(int(meta.get("page_start") or 0)),
+                str(int(meta.get("page_end") or 0)),
+            ]
+        )
+        digest.update(record.encode("utf-8"))
+        digest.update(b"\x1e")
+    return digest.hexdigest()
+
+
+def _validate_projected_corpus(
+    payload: Mapping[str, Any],
+    chunks: Sequence[Mapping[str, Any]],
+) -> list[str]:
+    corpus = payload.get("corpus") if isinstance(payload.get("corpus"), Mapping) else {}
+    index_to_logical = {
+        str(item.get("index_doc_id") or ""): str(item.get("doc_id") or "")
+        for item in list(corpus.get("documents") or [])
+        if isinstance(item, Mapping)
+    }
+    chunk_to_doc: dict[str, str] = {}
+    errors: list[str] = []
+    for chunk in chunks:
+        chunk_id = str(chunk.get("id") or "")
+        logical_doc_id = index_to_logical.get(chunk_id.split(":", 1)[0], "")
+        if not logical_doc_id:
+            errors.append(f"unregistered corpus chunk: {chunk_id}")
+            continue
+        chunk_to_doc[chunk_id] = logical_doc_id
+    expected_count = int(corpus.get("chunk_count") or 0)
+    if len(chunks) != expected_count:
+        errors.append(f"chunk count is {len(chunks)}, expected {expected_count}")
+    actual_fingerprint = _projected_corpus_fingerprint(chunks, chunk_to_doc)
+    expected_fingerprint = str(corpus.get("fingerprint") or "")
+    if actual_fingerprint != expected_fingerprint:
+        errors.append(
+            f"corpus fingerprint is {actual_fingerprint}, expected {expected_fingerprint}"
+        )
+    chunks_by_id = {str(chunk.get("id") or ""): chunk for chunk in chunks}
+    for case in list(payload.get("cases") or []):
+        if not isinstance(case, Mapping):
+            continue
+        case_id = str(case.get("id") or "<missing-id>")
+        for label in list(case.get("labels") or []):
+            if not isinstance(label, Mapping):
+                continue
+            chunk_id = str(label.get("chunk_id") or "")
+            chunk = chunks_by_id.get(chunk_id)
+            if chunk is None:
+                errors.append(f"{case_id}: labelled chunk is missing: {chunk_id}")
+            elif str(chunk.get("text_sha256") or "") != str(
+                label.get("text_sha256") or ""
+            ):
+                errors.append(f"{case_id}: labelled chunk text changed: {chunk_id}")
+    return errors
 
 
 def _prior_evidence_ids() -> set[str]:
@@ -171,10 +255,13 @@ def validate_fixture(
             if chunk is None:
                 continue
             meta = chunk.get("meta") if isinstance(chunk.get("meta"), Mapping) else {}
+            chunk_text_sha256 = str(chunk.get("text_sha256") or "") or sha256_text(
+                chunk.get("text")
+            )
             if (
                 int(label.get("page_start") or 0) != int(meta.get("page_start") or 0)
                 or int(label.get("page_end") or 0) != int(meta.get("page_end") or 0)
-                or str(label.get("text_sha256") or "") != sha256_text(chunk.get("text"))
+                or str(label.get("text_sha256") or "") != chunk_text_sha256
             ):
                 errors.append(f"{case_id}: evidence page or source-text identity changed: {chunk_id}")
         label_ids = {str(label.get("chunk_id") or "") for label in labels}
@@ -200,7 +287,10 @@ def validate_fixture(
     if _contains_forbidden_result_key(payload):
         errors.append("retrieval result data leaked into the sealed authoring fixture")
 
-    _mapping, corpus_errors = validate_indexed_corpus(payload, chunk_rows)
+    if chunk_rows and all("text_sha256" in chunk for chunk in chunk_rows):
+        corpus_errors = _validate_projected_corpus(payload, chunk_rows)
+    else:
+        _mapping, corpus_errors = validate_indexed_corpus(payload, chunk_rows)
     errors.extend(corpus_errors)
     return errors
 
