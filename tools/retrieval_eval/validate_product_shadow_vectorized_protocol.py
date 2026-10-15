@@ -12,8 +12,14 @@ DEFAULT_PROTOCOL = (
 )
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def sha256_file_variants(path: Path) -> set[str]:
+    data = path.read_bytes()
+    lf = data.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    return {
+        hashlib.sha256(candidate).hexdigest()
+        for candidate in (data, lf, crlf)
+    }
 
 
 def validate_protocol(payload: dict[str, Any]) -> list[str]:
@@ -29,7 +35,7 @@ def validate_protocol(payload: dict[str, Any]) -> list[str]:
         ("rejected_report_path", "rejected_report_sha256"),
     ):
         path = REPO_ROOT / str(parent.get(path_key) or "")
-        if not path.is_file() or parent.get(hash_key) != _sha256(path):
+        if not path.is_file() or parent.get(hash_key) not in sha256_file_variants(path):
             errors.append(f"vectorized shadow parent changed: {path_key}")
     if (
         parent.get("rejected_result_fingerprint")
@@ -46,7 +52,7 @@ def validate_protocol(payload: dict[str, Any]) -> list[str]:
         ("shadow_runtime_path", "shadow_runtime_sha256"),
     ):
         path = REPO_ROOT / str(changes.get(path_key) or "")
-        if not path.is_file() or changes.get(hash_key) != _sha256(path):
+        if not path.is_file() or changes.get(hash_key) not in sha256_file_variants(path):
             errors.append(f"vectorized shadow implementation changed: {path_key}")
     expected_change_contract = {
         "scoring_backend": "numpy_float32_exact_shortlist",

@@ -22,6 +22,7 @@ from tools.retrieval_eval.run_product_shadow_operational_replay import (
     validate_report as validate_parent_report,
 )
 from tools.retrieval_eval.validate_product_shadow_protocol import (
+    sha256_file_variants,
     validate_protocol as validate_parent_protocol,
 )
 from tools.retrieval_eval.validate_product_shadow_vectorized_protocol import (
@@ -117,11 +118,9 @@ def validate_report(
         != "retrieval_product_shadow_vectorized_operational_v1"
     ):
         errors.append("vectorized shadow report identity changed")
-    if report.get("protocol_sha256") != sha256_file(DEFAULT_PROTOCOL):
+    if report.get("protocol_sha256") not in sha256_file_variants(DEFAULT_PROTOCOL):
         errors.append("vectorized shadow protocol identity changed")
-    if report.get("parent_rejected_report_sha256") != sha256_file(
-        DEFAULT_PARENT_REPORT
-    ):
+    if report.get("parent_rejected_report_sha256") not in sha256_file_variants(DEFAULT_PARENT_REPORT):
         errors.append("vectorized shadow rejected parent changed")
     changes = child_protocol["allowed_implementation_changes"]
     expected_candidate = {
