@@ -5,6 +5,9 @@ from pathlib import Path
 
 from kb.source_blocks import load_source_blocks
 from kb.source_blocks import normalize_match_text
+from kb.n2n_target_condition import (
+    attach_target_condition_slot, corruption_condition_question, target_condition_quote,
+)
 
 
 def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) -> dict:
@@ -37,7 +40,8 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                 # Promote the selected direct passage only after reading its
                 # actual source block again; keep the existing source/number.
                 selected = next(
-                    (r for r in rows if len(str(r.get("text") or "")) >= 40), None
+                    (r for r in rows if r.get("block_id") == slot.get("block_id")),
+                    next((r for r in rows if len(str(r.get("text") or "")) >= 40), None),
                 )
                 selected_block = actual.get(str((selected or {}).get("block_id") or ""))
                 if (
@@ -125,17 +129,30 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
         slots.append(slot)
     if "slots" in result:
         result["slots"] = slots
-    return result
+    return attach_target_condition_slot(result, hits or [])
 
 
 def prioritize_direct_question_hits(
-    selected: list[dict], candidates: list[dict], *, limit: int
+    selected: list[dict], candidates: list[dict], *, limit: int, prompt: str = ""
 ) -> list[dict]:
     direct = [
         hit
         for hit in candidates
         if (hit.get("meta") or {}).get("direct_question_evidence")
     ]
+    if corruption_condition_question(prompt):
+        # Supplemental/facet scans can deduplicate an earlier direct hit into
+        # a generic row. Re-read only the already scoped candidate sources.
+        fresh = []
+        paths = dict.fromkeys(str((h.get("meta") or {}).get("source_path") or "")
+                              for h in selected + candidates)
+        for path in paths:
+            if path and Path(path).is_file():
+                try:
+                    fresh.extend(direct_question_evidence_hits(Path(path), prompt, limit=limit))
+                except (OSError, ValueError, TypeError):
+                    pass
+        direct = fresh + direct
     if not direct:
         return selected
     seen = set()
@@ -317,6 +334,7 @@ def requests_direct_question_evidence(prompt: str) -> bool:
         or _INDEPENDENCE_QUESTION.search(prompt)
         or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt)
         or _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt)
+        or corruption_condition_question(prompt)
         or _OUTPUT_RELATION_QUESTION.search(prompt)
         or _architecture_relation_question(prompt)
     )
@@ -391,6 +409,12 @@ def direct_question_evidence_hits(
             )
             if not task_score and not broad_application_statement:
                 continue
+        elif corruption_condition_question(prompt):
+            if not target_condition_quote(text) and not (
+                "they need a perfect, explicit computational model of the corruption" in text
+                and "our requirement of the knowledge of the appropriate statistical summary (mean, median)" in text
+            ):
+                continue
         elif _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt):
             if not _noisy_target_expectation_score(text):
                 continue
@@ -440,6 +464,13 @@ def direct_question_evidence_hits(
         return []
     candidates.sort(key=lambda row: (-row[0], row[1]))
     chosen = candidates[0][2]
+    if corruption_condition_question(prompt):
+        # Keep both the model contrast and the target condition as actual
+        # paragraphs. Their page locators remain separate throughout auditing.
+        chosen = sorted(
+            {i for _, _, bundle in candidates for i in bundle},
+            key=lambda i: (bool(target_condition_quote(str(blocks[i].get("raw_text") or ""))), i),
+        )
     # Lead with the explanatory paragraph for loss questions, while preserving
     # the statement and its page-local equations as separately bound passages.
     if statement and re.search(r"(?i)loss|损失", prompt):

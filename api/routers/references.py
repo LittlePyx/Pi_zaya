@@ -123,7 +123,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 36
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 37
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -2390,7 +2390,7 @@ def _overlay_refs_payload_with_answer_citations(
                     detail.get("heading_path") or detail.get("location_label") or ""
                 ),
             )
-            reader_evidence_quote = _clean_answer_citation_overlay_quote(
+            reader_evidence_quote = str(reader_detail.get("reader_evidence_quote") or "").strip() or _clean_answer_citation_overlay_quote(
                 _reader_quote(reader_detail) or evidence_quote,
                 heading_path=str(
                     reader_detail.get("heading_path")

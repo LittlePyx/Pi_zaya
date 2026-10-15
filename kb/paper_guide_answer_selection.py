@@ -982,7 +982,7 @@ def _merge_same_source_answer_hits(
         if fingerprint in seen:
             continue
         seen.add(fingerprint)
-        if len(body) > text_limit:
+        if len(body) > text_limit and not (meta.get("direct_question_evidence") and len(body) <= 1800):
             body = body[:text_limit].rsplit(" ", 1)[0].rstrip() + "..."
         heading = str(meta.get("heading_path") or meta.get("top_heading") or "").strip()
         try:

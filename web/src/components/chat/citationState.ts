@@ -1285,7 +1285,6 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'answerClaim',
     'headingPath',
     'evidenceQuote',
-    'readerEvidenceQuote',
     'citationContext',
     'upstreamWorkRole',
     'userQuestionRelation',
@@ -1342,8 +1341,7 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
       // highlighting, while the evidence fields on a v2 System-A card are
       // already a validated, display-ready evidence window. The sentence picker below intentionally
       // compacts legacy text and can drop a later step from the same mechanism.
-      // Both values are already display-cleaned by the preceding loop, so keep
-      // their complete sentence sequence here.
+      // Reader literals bypass display cleanup; preserve their math symbols.
       continue
     }
     if (key === 'summaryLine' && isArticleSummaryTextSource(detail.summarySource)) {
