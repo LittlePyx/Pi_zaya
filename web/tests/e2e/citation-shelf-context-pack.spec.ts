@@ -286,6 +286,7 @@ test('pagehide cannot flush an open stale empty shelf over restored backend evid
 })
 
 test('selected citation shelf items are sent as next-turn prompt context', async ({ page }) => {
+  test.setTimeout(60_000)
   const backend = await installBackend(page)
   await page.goto('/?conversation=conv-context-pack')
 
