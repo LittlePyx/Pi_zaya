@@ -241,4 +241,3 @@ def extract_math_raw(page, bbox: tuple[float, float, float, float]) -> str:
             out_lines.append(line_s)
 
     return "\n".join(out_lines).strip()
-
