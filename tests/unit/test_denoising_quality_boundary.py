@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from kb.denoising_quality_boundary import (
     complete_denoising_quality_boundary,
     complete_n2n_corruption_model_boundary,
@@ -135,4 +137,59 @@ def test_n2n_corruption_completion_does_not_join_relation_fragments_across_sourc
             ("noise2noise", "They need a perfect, explicit computational model of the corruption.", 1),
             ("noise2self", "Our requirement is the appropriate statistical summary (mean, median).", 2),
         ),
+    ) == N2N_CORRUPTION_ANSWER
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["C:/papers/noise2self/noise2self.en.md", "D:/other/noise2noise.en.md"],
+)
+def test_completion_rejects_stale_candidate_number_and_namesake_source(path: str) -> None:
+    hits = [{"meta": {"source_path": path}}]
+    assert complete_n2n_corruption_model_boundary(
+        N2N_CORRUPTION_ANSWER,
+        prompt=N2N_CORRUPTION_PROMPT,
+        citation_plan=_plan(("noise2noise", N2N_CORRUPTION, 1)),
+        answer_hits=hits,
+    ) == N2N_CORRUPTION_ANSWER
+    assert complete_denoising_quality_boundary(
+        "Keep me.",
+        prompt="Why should it outperform clean targets? Explain the performance boundary.",
+        citation_plan=_plan(("noise2void", N2V, 1)),
+        answer_hits=hits,
+    ) == "Keep me."
+
+
+def test_completion_remaps_stale_number_to_the_exact_source_path() -> None:
+    hits = [
+        {"meta": {"source_path": "D:/other/noise2noise.en.md"}},
+        {"meta": {"source_path": r"c:\papers\noise2noise\noise2noise.en.md"}},
+    ]
+    result = complete_n2n_corruption_model_boundary(
+        N2N_CORRUPTION_ANSWER,
+        prompt=N2N_CORRUPTION_PROMPT,
+        citation_plan=_plan(("noise2noise", N2N_CORRUPTION, 1)),
+        answer_hits=hits,
+    )
+    assert result.endswith("corruption model [2].")
+
+
+def test_completion_rejects_an_explicitly_empty_answer_source_list() -> None:
+    assert complete_n2n_corruption_model_boundary(
+        N2N_CORRUPTION_ANSWER,
+        prompt=N2N_CORRUPTION_PROMPT,
+        citation_plan=_plan(("noise2noise", N2N_CORRUPTION, 1)),
+        answer_hits=[],
+    ) == N2N_CORRUPTION_ANSWER
+
+
+def test_parent_directory_name_cannot_relabel_a_different_paper() -> None:
+    plan = _plan(("noise2self", N2N_CORRUPTION, 1))
+    path = "C:/papers/noise2noise/noise2self.en.md"
+    plan["slots"][0]["source_path"] = path
+    assert complete_n2n_corruption_model_boundary(
+        N2N_CORRUPTION_ANSWER,
+        prompt=N2N_CORRUPTION_PROMPT,
+        citation_plan=plan,
+        answer_hits=[{"meta": {"source_path": path}}],
     ) == N2N_CORRUPTION_ANSWER

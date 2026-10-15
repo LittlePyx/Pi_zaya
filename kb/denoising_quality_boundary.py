@@ -11,11 +11,12 @@ def _text(value: object) -> str:
 
 def _source_identity(value: object) -> str:
     text = str(value or "").replace("\\", "/").casefold().strip()
-    return re.sub(r"[^a-z0-9]+", "", text.rsplit("/", 1)[-1])
+    return re.sub(r"/+", "/", text)
 
 
 def _slot_source(slot: Mapping[str, Any]) -> str:
-    return _source_identity(slot.get("source_path") or slot.get("source_name"))
+    source = _source_identity(slot.get("source_path") or slot.get("source_name"))
+    return re.sub(r"[^a-z0-9]+", "", source.rsplit("/", 1)[-1])
 
 
 def _hit_source(hit: Mapping[str, Any]) -> str:
@@ -31,12 +32,13 @@ def _hit_source(hit: Mapping[str, Any]) -> str:
 
 
 def _citation_number(slot: Mapping[str, Any], answer_hits: Sequence[Mapping[str, Any]]) -> int:
-    source = _slot_source(slot)
+    source = _source_identity(slot.get("source_path") or slot.get("source_name"))
     if source and answer_hits:
         matches = [index for index, hit in enumerate(answer_hits, start=1) if _hit_source(hit) == source]
         if matches:
             candidates = [int(value) for value in slot.get("candidate_hits") or [] if str(value).isdigit()]
             return next((number for number in candidates if number in matches), matches[0])
+        return 0
     for value in slot.get("candidate_hits") or []:
         try:
             number = int(value)
@@ -107,6 +109,8 @@ def complete_denoising_quality_boundary(
     if not text or not isinstance(citation_plan, Mapping):
         return text
     hits = [hit for hit in list(answer_hits or []) if isinstance(hit, Mapping)]
+    if answer_hits is not None and not hits:
+        return text
     n2n, n2v = _relation_slots(citation_plan, hits)
     question = str(prompt or "")
     pair_request = bool(
@@ -203,6 +207,8 @@ def complete_n2n_corruption_model_boundary(
     if re.search(r"\b(?:expectation|mean)\b", text, re.I):
         return text
     hits = [hit for hit in list(answer_hits or []) if isinstance(hit, Mapping)]
+    if answer_hits is not None and not hits:
+        return text
     relation = _n2n_corruption_summary_slot(citation_plan, hits)
     if relation is None:
         return text
