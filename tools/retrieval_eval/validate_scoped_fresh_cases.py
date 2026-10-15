@@ -69,19 +69,22 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 
 def _load_selected_chunks() -> list[dict[str, Any]]:
+    paths = [
+        REPO_ROOT / "db" / "chunks" / f"{index_id}.jsonl"
+        for _logical_id, index_id, _count in EXPECTED_DOCUMENTS
+    ]
+    if not any(path.exists() for path in paths):
+        projection = _load_json(DEFAULT_CHUNK_PROJECTION)
+        if (
+            projection.get("schema_version") != 1
+            or projection.get("status") != "frozen_scoped_fresh_corpus_projection"
+            or projection.get("chunk_count") != 702
+            or not isinstance(projection.get("chunks"), list)
+        ):
+            raise ValueError("scoped fresh chunk projection identity is invalid")
+        return [dict(chunk) for chunk in projection["chunks"]]
     chunks: list[dict[str, Any]] = []
-    for _logical_id, index_id, _count in EXPECTED_DOCUMENTS:
-        path = REPO_ROOT / "db" / "chunks" / f"{index_id}.jsonl"
-        if not path.exists():
-            projection = _load_json(DEFAULT_CHUNK_PROJECTION)
-            if (
-                projection.get("schema_version") != 1
-                or projection.get("status") != "frozen_scoped_fresh_corpus_projection"
-                or projection.get("chunk_count") != 702
-                or not isinstance(projection.get("chunks"), list)
-            ):
-                raise ValueError("scoped fresh chunk projection identity is invalid")
-            return [dict(chunk) for chunk in projection["chunks"]]
+    for path in paths:
         chunks.extend(
             json.loads(line)
             for line in path.read_text(encoding="utf-8").splitlines()

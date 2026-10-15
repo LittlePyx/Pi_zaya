@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import json
 
+import pytest
+
+import tools.retrieval_eval.validate_scoped_fresh_cases as validator
 from kb.retrieval_eval_fixture import sha256_file
 from tools.retrieval_eval.validate_scoped_fresh_cases import (
     DEFAULT_CHUNK_PROJECTION,
@@ -35,6 +38,17 @@ def test_scoped_fresh_fixture_rejects_projection_text_drift() -> None:
     chunks[0]["text_sha256"] = "0" * 64
     errors = validate_fixture(_fixture(), chunks=chunks)
     assert any("corpus fingerprint" in error for error in errors)
+
+
+def test_scoped_fresh_projection_does_not_hide_an_incomplete_local_corpus(
+    monkeypatch, tmp_path,
+) -> None:
+    chunks_dir = tmp_path / "db" / "chunks"
+    chunks_dir.mkdir(parents=True)
+    (chunks_dir / "a34b2661f87a68d2.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.setattr(validator, "REPO_ROOT", tmp_path)
+    with pytest.raises(FileNotFoundError):
+        validator._load_selected_chunks()
 
 
 def test_scoped_fresh_fixture_rejects_locale_drift() -> None:
