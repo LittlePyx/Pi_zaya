@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import json
 
+import pytest
+
 from tools.retrieval_eval.validate_portable_e5_architecture_startup_protocol import (
     DEFAULT_PROTOCOL,
     validate_protocol,
@@ -13,10 +15,30 @@ def _protocol() -> dict:
     return json.loads(DEFAULT_PROTOCOL.read_text(encoding="utf-8"))
 
 
+def _strict_preflight_artifacts_available() -> bool:
+    protocol = _protocol()
+    root = DEFAULT_PROTOCOL.parents[1]
+    archives = (
+        root / protocol["base_portable"]["archive_path"],
+        root / protocol["component"]["archive_path"],
+    )
+    runtime_dirs = (
+        root / protocol["execution"]["working_db_path"],
+        root / protocol["execution"]["existing_index_path"],
+    )
+    return all(path.is_file() for path in archives) and all(
+        path.is_dir() for path in runtime_dirs
+    )
+
+
 def test_architecture_startup_protocol_passes_historical_validation() -> None:
     assert validate_protocol(_protocol()) == []
 
 
+@pytest.mark.skipif(
+    not _strict_preflight_artifacts_available(),
+    reason="strict preflight requires frozen external runtime artifacts",
+)
 def test_architecture_startup_protocol_passes_strict_preflight() -> None:
     assert validate_protocol(_protocol(), inspect_runtime_files=True) == []
 

@@ -213,11 +213,19 @@ def validate_protocol(payload: dict[str, Any], *, inspect_files: bool = False) -
                 sources.get(sha_key) or ""
             ):
                 errors.append(f"scoped fresh E5 product source changed: {path_key}")
+        try:
+            snapshot_sha256 = retrieval_snapshot_sha256(
+                REPO_ROOT / str(existing.get("working_db_path") or "")
+            )
+            index_sha256 = _tree_fingerprint(
+                REPO_ROOT / str(existing.get("index_path") or "")
+            )
+        except (OSError, RuntimeError):
+            snapshot_sha256 = ""
+            index_sha256 = ""
         if (
-            existing.get("working_db_retrieval_snapshot_sha256")
-            != retrieval_snapshot_sha256(REPO_ROOT / str(existing.get("working_db_path") or ""))
-            or existing.get("index_tree_sha256")
-            != _tree_fingerprint(REPO_ROOT / str(existing.get("index_path") or ""))
+            existing.get("working_db_retrieval_snapshot_sha256") != snapshot_sha256
+            or existing.get("index_tree_sha256") != index_sha256
         ):
             errors.append("scoped fresh E5 existing corpus/index files changed")
         for path_key, sha_key in (
