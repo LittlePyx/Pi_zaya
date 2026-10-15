@@ -1684,11 +1684,21 @@ def _drop_hard_mismatched_claims(
             kept.append(segment)
         if not kept:
             continue
-        joiner = "" if _ZH_RE.search("".join(kept)) else " "
-        rebuilt = joiner.join(kept)
+        rebuilt = _join_pruned_claim_segments(segments, kept)
         leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
         output_lines.append(f"{leading}{prefix}{rebuilt}")
     return "\n".join(output_lines), dropped
+
+
+def _join_pruned_claim_segments(segments: list[str], kept: list[str]) -> str:
+    joiner = "" if _ZH_RE.search("".join(kept)) else " "
+    rebuilt = joiner.join(kept)
+    # A semicolon connects clauses. If its following clause was removed by the
+    # evidence gate, end the surviving clause instead of manufacturing a
+    # truncated draft. Never close a semicolon already trailing in the input.
+    if kept and segments and kept[-1] != segments[-1]:
+        rebuilt = re.sub(r"[;；]$", lambda match: "。" if match[0] == "；" else ".", rebuilt)
+    return rebuilt
 
 
 def _strip_unplanned_numeric_citations(
@@ -1732,16 +1742,16 @@ def _drop_unsupported_uncited_claims(answer: str) -> tuple[str, list[str]]:
         prefix = prefix_match.group(0) if prefix_match else ""
         body = stripped[len(prefix) :] if prefix else stripped
         kept: list[str] = []
-        for segment in _split_claim_segments(body):
+        segments = _split_claim_segments(body)
+        for segment in segments:
             if _is_high_risk_claim(segment) and not _CITATION_RE.search(segment):
                 dropped.append(_plain_claim(segment)[:220])
                 continue
             kept.append(segment)
         if not kept:
             continue
-        joiner = "" if _ZH_RE.search("".join(kept)) else " "
         leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
-        output_lines.append(f"{leading}{prefix}{joiner.join(kept)}")
+        output_lines.append(f"{leading}{prefix}{_join_pruned_claim_segments(segments, kept)}")
     return "\n".join(output_lines), dropped
 
 

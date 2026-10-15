@@ -6047,15 +6047,9 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
         heading = _compact_text(slot.get("heading_path"), max_len=100)
         if heading:
             parts.append(f"heading={heading}")
-        # The comparison plan can replace a weak retrieval paragraph with the
-        # paper's abstract.  Keep enough of that authoritative passage for the
-        # model to see the second sentence where detector counts, frame rates,
-        # or whole-field behavior are often stated.  A 160-character preview
-        # hid precisely those details and encouraged unsupported domain fill.
-        quote = _compact_text(
-            slot.get("evidence_quote"),
-            max_len=(720 if str(plan.get("intent") or "").strip().lower() == "comparison" else 160),
-        )
+        # All intents need the bounded source passage: a 160-character preview
+        # can cut off the condition itself when it is absent from the DOC body.
+        quote = _compact_text(slot.get("evidence_quote"), max_len=720)
         if quote:
             parts.append(f"evidence={quote}")
         lines.append("- " + " | ".join(parts))
