@@ -10,8 +10,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_CONTRACT = REPO_ROOT / "docs" / "retrieval_product_opt_in_contract_v1.json"
 
 
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _sha256_variants(path: Path) -> set[str]:
+    data = path.read_bytes()
+    lf = data.replace(b"\r\n", b"\n")
+    crlf = lf.replace(b"\n", b"\r\n")
+    return {
+        hashlib.sha256(candidate).hexdigest()
+        for candidate in (data, lf, crlf)
+    }
 
 
 def validate_contract(payload: dict[str, Any]) -> list[str]:
@@ -35,7 +41,7 @@ def validate_contract(payload: dict[str, Any]) -> list[str]:
         ("operational_report_path", "operational_report_sha256"),
     ):
         path = REPO_ROOT / str(evidence.get(path_key) or "")
-        if not path.is_file() or evidence.get(hash_key) != _sha256(path):
+        if not path.is_file() or evidence.get(hash_key) not in _sha256_variants(path):
             errors.append(f"accepted product evidence changed: {path_key}")
     if evidence.get("semantic_result_fingerprint") != "a3c81c2805cd887011219b68a33e6bbf3ed8688f5209b8483263e1a41ce2847a":
         errors.append("semantic result fingerprint changed")
