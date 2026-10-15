@@ -29,6 +29,9 @@ DEFAULT_REGISTRY = REPO_ROOT / "docs" / "retrieval_user_journey_qrel_registry_v1
 DEFAULT_BASE_FIXTURE = REPO_ROOT / "docs" / "retrieval_eval_development_v1.json"
 DEFAULT_OUTPUT = REPO_ROOT / "docs" / "retrieval_user_journey_expansion_v1.json"
 DEFAULT_DB_ROOT = REPO_ROOT / "db"
+DEFAULT_CHUNK_PROJECTION = (
+    REPO_ROOT / "docs" / "retrieval_user_journey_chunk_projection_v1.json"
+)
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -156,6 +159,7 @@ def build_fixture(
     manifest_path: Path = DEFAULT_MANIFEST,
     registry_path: Path = DEFAULT_REGISTRY,
     base_fixture_path: Path = DEFAULT_BASE_FIXTURE,
+    chunk_projection_path: Path = DEFAULT_CHUNK_PROJECTION,
 ) -> dict[str, Any]:
     protocol = _load_json(protocol_path)
     manifest = _load_json(manifest_path)
@@ -173,6 +177,15 @@ def build_fixture(
         str(row["index_doc_id"]): str(row["doc_id"]) for row in corpus["documents"]
     }
     chunks = load_all_chunks(db_root)
+    if not chunks:
+        projection = _load_json(chunk_projection_path)
+        if (
+            projection.get("schema_version") != 1
+            or projection.get("status") != "frozen_qrel_source_projection"
+            or not isinstance(projection.get("chunks"), list)
+        ):
+            raise ValueError("frozen qrel source projection identity is invalid")
+        chunks = [dict(chunk) for chunk in projection["chunks"]]
     chunks_by_id = {str(chunk.get("id") or ""): dict(chunk) for chunk in chunks}
     manifest_by_id = {str(case["id"]): dict(case) for case in manifest["cases"]}
     output_cases: list[dict[str, Any]] = []
