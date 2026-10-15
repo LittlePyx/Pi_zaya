@@ -1,12 +1,13 @@
 import { useCallback } from 'react'
 import { message } from 'antd'
-import type { QueryScope } from '../../api/chat'
+import type { ExternalSupplementMode, QueryScope } from '../../api/chat'
 import { useChatStore } from '../../stores/chatStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { reportUserIssue } from '../../userIssueReporter'
 import type { ApiSettingsTarget } from '../layout/settingsEvents'
 import type { ResearchRuntimeContext } from './researchContext'
 import type { SelectedResearchContextPack } from './researchContextPack'
+import type { LocalRetrievalMode } from './useLocalSemanticRetrieval'
 
 export function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
   if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
@@ -44,7 +45,8 @@ export function useChatSendFlow({
   researchContext,
   queryScope,
   selectedResearchContext,
-  agentMode,
+  externalSupplementMode,
+  retrievalMode,
   onOpenApiSettings,
   onSelectedResearchContextConsumed,
 }: {
@@ -52,7 +54,8 @@ export function useChatSendFlow({
   researchContext: ResearchRuntimeContext
   queryScope: QueryScope
   selectedResearchContext?: SelectedResearchContextPack | null
-  agentMode: boolean
+  externalSupplementMode: ExternalSupplementMode
+  retrievalMode: LocalRetrievalMode
   onOpenApiSettings: (target: ApiSettingsTarget | '') => void
   onSelectedResearchContextConsumed?: (packId: string) => void
 }) {
@@ -69,17 +72,23 @@ export function useChatSendFlow({
   const maxTokens = useSettingsStore((s) => s.maxTokens)
   const uiLocale = useSettingsStore((s) => s.uiLocale)
   const refreshReadiness = useSettingsStore((s) => s.refreshReadiness)
+  const webSearchAvailable = useSettingsStore((s) => s.webSearchAvailable)
 
   return useCallback((text: string) => {
     if (researchContext.api.sendBlockTarget === 'text') {
       message.warning(labels.chat_api_missing_toast)
       onOpenApiSettings('text')
-      return
+      return false
     }
     if (researchContext.api.sendBlockTarget === 'vision') {
       message.warning(labels.chat_vision_api_missing_toast)
       onOpenApiSettings('vision')
-      return
+      return false
+    }
+    if (externalSupplementMode === 'web' && !webSearchAvailable) {
+      message.warning(labels.chat_external_web_unavailable_toast)
+      onOpenApiSettings('web')
+      return false
     }
 
     const hasCurrentPaper = Boolean(researchContext.activeSource.ready)
@@ -93,7 +102,9 @@ export function useChatSendFlow({
       deepRead: true,
       promptContext: contextPackForSend,
       queryScope: resolvedScope,
-      agentMode,
+      agentMode: true,
+      externalSupplementMode,
+      retrievalMode,
     }).then(() => {
       if (!contextPackForSend) return
       onSelectedResearchContextConsumed?.(contextPackForSend.id)
@@ -124,7 +135,9 @@ export function useChatSendFlow({
           running_upload_count: uploadItems.filter((item) => item.kind === 'pdf' && !item.ready && item.status !== 'error').length,
           selected_context: Boolean(contextPackForSend),
           selected_context_item_count: Array.isArray(contextPackForSend?.items) ? contextPackForSend.items.length : 0,
-          agent_mode: agentMode,
+          agent_mode: true,
+          external_supplement_mode: externalSupplementMode,
+          retrieval_mode: retrievalMode,
           prompt_length: text.trim().length,
           prompt_empty: text.trim().length === 0,
         },
@@ -142,12 +155,13 @@ export function useChatSendFlow({
       }
       message.error(fallback || labels.upload_failed_generic)
     })
+    return true
   }, [
     activeConvId,
     activeConversation?.bound_source_path,
     activeConversation?.mode,
     activeProjectId,
-    agentMode,
+    externalSupplementMode,
     guideBindings,
     labels,
     maxTokens,
@@ -156,6 +170,7 @@ export function useChatSendFlow({
     onSelectedResearchContextConsumed,
     pendingImages.length,
     queryScope,
+    retrievalMode,
     refreshReadiness,
     researchContext.activeSource.ready,
     researchContext.api.sendBlockTarget,
@@ -165,5 +180,6 @@ export function useChatSendFlow({
     topK,
     uiLocale,
     uploadItems,
+    webSearchAvailable,
   ])
 }

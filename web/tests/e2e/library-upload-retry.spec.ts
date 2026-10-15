@@ -47,9 +47,10 @@ function settingsPayload() {
   }
 }
 
-async function installLibraryUploadBackend(page: Page) {
+async function installLibraryUploadBackend(page: Page, opts?: { duplicate?: boolean }) {
   let inspectCalls = 0
   let commitCalls = 0
+  let openCalls = 0
   let lastCommitBody = ''
   let committed = false
   await installAppShellMocks(page, {
@@ -110,6 +111,20 @@ async function installLibraryUploadBackend(page: Page) {
   })
   await page.route('**/api/library/upload/inspect', async (route) => {
     inspectCalls += 1
+    if (opts?.duplicate) {
+      await fulfillJson(route, {
+        name: 'already-here.pdf',
+        sha1: 'duplicate-sha1',
+        duplicate: true,
+        existing: 'Existing-Paper.pdf',
+        existing_path: 'F:\\kb\\pdfs\\Existing-Paper.pdf',
+        suggested_name: 'Existing-Paper.pdf',
+        suggested_stem: 'Existing-Paper',
+        display_full_name: 'Existing Paper.pdf',
+        meta: {},
+      })
+      return
+    }
     if (inspectCalls === 1) {
       await fulfillJson(route, { detail: 'temporary scan outage' }, 503)
       return
@@ -152,6 +167,10 @@ async function installLibraryUploadBackend(page: Page) {
       body: 'data: {"running":false,"done":true,"status":"idle","current":"","completed":0,"total":0,"active_count":0,"active_tasks":[]}\n\n',
     })
   })
+  await page.route('**/api/library/file/open', async (route) => {
+    openCalls += 1
+    await fulfillJson(route, { ok: true, target: 'pdf', path: 'F:\\kb\\pdfs\\Existing-Paper.pdf' })
+  })
   await page.route('**/api/library/quality/overview**', async (route) => {
     await fulfillJson(route, {
       ok: true,
@@ -171,6 +190,7 @@ async function installLibraryUploadBackend(page: Page) {
     inspectCalls: () => inspectCalls,
     commitCalls: () => commitCalls,
     lastCommitBody: () => lastCommitBody,
+    openCalls: () => openCalls,
   }
 }
 
@@ -199,4 +219,39 @@ test('retry and convert rescans an inspect-failed PDF before committing it', asy
   expect(backend.lastCommitBody()).toContain('Suggested-Paper')
   expect(backend.lastCommitBody()).toContain('name="convert_now"')
   expect(backend.lastCommitBody()).toContain('true')
+})
+
+test('invalid library upload is rejected locally without creating a failed draft', async ({ page }) => {
+  const backend = await installLibraryUploadBackend(page)
+  await page.goto('/library')
+
+  const input = page.locator('.kb-lib-upload-dropzone input[type="file"]')
+  await input.setInputFiles({
+    name: 'README.md',
+    mimeType: 'text/markdown',
+    buffer: Buffer.from('# not a PDF'),
+  })
+
+  await expect(page.locator('.ant-message')).toContainText('valid PDF files only')
+  await expect(page.locator('.kb-lib-upload-draft-list')).toHaveCount(0)
+  await expect.poll(() => backend.inspectCalls()).toBe(0)
+})
+
+test('duplicate library upload is a resolved existing item with an open action', async ({ page }) => {
+  const backend = await installLibraryUploadBackend(page, { duplicate: true })
+  await page.goto('/library')
+
+  const input = page.locator('.kb-lib-upload-dropzone input[type="file"]')
+  await input.setInputFiles({
+    name: 'already-here.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4\n% duplicate upload regression\n'),
+  })
+
+  const list = page.locator('.kb-lib-upload-draft-list')
+  await expect(list).toContainText('Already in library')
+  await expect(page.getByText(/Failed drafts:/)).toHaveCount(0)
+  await page.getByRole('button', { name: 'Open existing PDF' }).click()
+  await expect.poll(() => backend.openCalls()).toBe(1)
+  await expect.poll(() => backend.commitCalls()).toBe(0)
 })

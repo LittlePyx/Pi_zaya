@@ -5,13 +5,15 @@ from pathlib import Path
 
 import pytest
 
+from kb.product_query_policy import (
+    expand_query_via_llm,
+    merge_expanded_results,
+    search_hits_with_fallback,
+    translate_query_for_search,
+)
 from kb.retrieval_engine import (
-    _expand_query_via_llm,
     _group_hits_by_doc_for_refs,
-    _merge_expanded_results,
     _reading_roadmap_source_role_bonus,
-    _search_hits_with_fallback,
-    _translate_query_for_search,
 )
 
 
@@ -82,13 +84,13 @@ from kb.retrieval_heuristics import _doc_term_bonus, _query_term_profile
 
 
 # ---------------------------------------------------------------------------
-# _expand_query_via_llm
+# expand_query_via_llm
 # ---------------------------------------------------------------------------
 
 def test_expand_query_returns_original_on_empty(monkeypatch):
     """Empty/very short input returns just the original query (or empty)."""
-    assert _expand_query_via_llm(None, "") == []
-    assert _expand_query_via_llm(None, "ab") == ["ab"]
+    assert expand_query_via_llm(None, "") == []
+    assert expand_query_via_llm(None, "ab") == ["ab"]
 
 
 def test_expand_query_uses_cache(monkeypatch):
@@ -105,11 +107,11 @@ def test_expand_query_uses_cache(monkeypatch):
         nonlocal call_count
         call_count += 1
 
-    import kb.retrieval_engine as re
-    monkeypatch.setattr(re, "_cache_get", fake_cache_get)
-    monkeypatch.setattr(re, "_cache_set", fake_cache_set)
+    import kb.product_query_policy as re
+    monkeypatch.setattr(re, "cache_get", fake_cache_get)
+    monkeypatch.setattr(re, "cache_set", fake_cache_set)
 
-    result = _expand_query_via_llm(None, "test query")
+    result = expand_query_via_llm(None, "test query")
     assert "test query" in result
     assert "cached_variant" in result
 
@@ -134,12 +136,12 @@ def test_expand_query_llm_failure_returns_original(monkeypatch):
         def chat(self, **kw):
             raise RuntimeError("LLM timeout")
 
-    import kb.retrieval_engine as re
-    monkeypatch.setattr(re, "_cache_get", fake_cache_get)
-    monkeypatch.setattr(re, "_cache_set", fake_cache_set)
-    monkeypatch.setattr(re, "DeepSeekChat", lambda s: FakeDeepSeek())
+    import kb.product_query_policy as re
+    monkeypatch.setattr(re, "cache_get", fake_cache_get)
+    monkeypatch.setattr(re, "cache_set", fake_cache_set)
+    monkeypatch.setattr(re, "_make_chat_client", lambda s: FakeDeepSeek())
 
-    result = _expand_query_via_llm(FakeSettings(), "test query")
+    result = expand_query_via_llm(FakeSettings(), "test query")
     assert result == ["test query"]
 
 
@@ -162,12 +164,12 @@ def test_expand_query_parses_llm_output(monkeypatch):
         def chat(self, messages, temperature, max_tokens):
             return "query variant one\nquery variant two"
 
-    import kb.retrieval_engine as re
-    monkeypatch.setattr(re, "_cache_get", fake_cache_get)
-    monkeypatch.setattr(re, "_cache_set", fake_cache_set)
-    monkeypatch.setattr(re, "DeepSeekChat", lambda s: FakeDeepSeek())
+    import kb.product_query_policy as re
+    monkeypatch.setattr(re, "cache_get", fake_cache_get)
+    monkeypatch.setattr(re, "cache_set", fake_cache_set)
+    monkeypatch.setattr(re, "_make_chat_client", lambda s: FakeDeepSeek())
 
-    result = _expand_query_via_llm(FakeSettings(), "test query")
+    result = expand_query_via_llm(FakeSettings(), "test query")
     # Original query always first
     assert result[0] == "test query"
     assert "query variant one" in result
@@ -188,37 +190,37 @@ def test_expand_query_none_output(monkeypatch):
         def chat(self, messages, temperature, max_tokens):
             return "NONE"
 
-    import kb.retrieval_engine as re
-    monkeypatch.setattr(re, "_cache_get", fake_cache_get)
-    monkeypatch.setattr(re, "_cache_set", lambda *a, **kw: None)
-    monkeypatch.setattr(re, "DeepSeekChat", lambda s: FakeDeepSeek())
+    import kb.product_query_policy as re
+    monkeypatch.setattr(re, "cache_get", fake_cache_get)
+    monkeypatch.setattr(re, "cache_set", lambda *a, **kw: None)
+    monkeypatch.setattr(re, "_make_chat_client", lambda s: FakeDeepSeek())
 
-    result = _expand_query_via_llm(FakeSettings(), "test query")
+    result = expand_query_via_llm(FakeSettings(), "test query")
     assert result == ["test query"]
 
 
 # ---------------------------------------------------------------------------
-# _merge_expanded_results  (RRF)
+# merge_expanded_results  (RRF)
 # ---------------------------------------------------------------------------
 
 def _make_meta_hit(chunk_id: str, text: str, score: float = 1.0) -> dict:
     return {"chunk_id": chunk_id, "text": text, "score": score, "meta": {"chunk_id": chunk_id}}
 
 
-def test_merge_expanded_results_disjoint():
+def testmerge_expanded_results_disjoint():
     """Two completely disjoint result sets are merged."""
     r1 = ([_make_meta_hit("a", "hit a")], [1.0], "q1")
     r2 = ([_make_meta_hit("b", "hit b")], [1.0], "q2")
-    merged_hits, merged_scores = _merge_expanded_results([r1, r2], top_k=10)
+    merged_hits, merged_scores = merge_expanded_results([r1, r2], top_k=10)
     assert len(merged_hits) == 2
     assert {h["chunk_id"] for h in merged_hits} == {"a", "b"}
 
 
-def test_merge_expanded_results_overlap():
+def testmerge_expanded_results_overlap():
     """Overlapping hits get higher RRF scores."""
     r1 = ([_make_meta_hit("a", "hit a"), _make_meta_hit("b", "hit b")], [1.0, 0.5], "q1")
     r2 = ([_make_meta_hit("a", "hit a")], [1.0], "q2")
-    merged_hits, merged_scores = _merge_expanded_results([r1, r2], top_k=10)
+    merged_hits, merged_scores = merge_expanded_results([r1, r2], top_k=10)
     ids = [h["chunk_id"] for h in merged_hits]
     # "a" is in both sets so it should rank first
     assert ids[0] == "a"
@@ -227,21 +229,21 @@ def test_merge_expanded_results_overlap():
     assert merged_hits[0]["_bm25_score"] == pytest.approx(1.0)
 
 
-def test_merge_expanded_results_empty():
+def testmerge_expanded_results_empty():
     """Empty inputs produce empty output."""
-    merged_hits, merged_scores = _merge_expanded_results([], top_k=10)
+    merged_hits, merged_scores = merge_expanded_results([], top_k=10)
     assert merged_hits == []
     assert merged_scores == []
 
 
-def test_merge_expanded_results_top_k():
+def testmerge_expanded_results_top_k():
     """top_k limits output."""
     r1 = ([_make_meta_hit(f"chunk_{i}", f"hit {i}") for i in range(10)], [1.0] * 10, "q1")
-    merged_hits, merged_scores = _merge_expanded_results([r1], top_k=3)
+    merged_hits, merged_scores = merge_expanded_results([r1], top_k=3)
     assert len(merged_hits) == 3
 
 
-def test_merge_expanded_results_uses_hit_id_before_text_fallback():
+def testmerge_expanded_results_uses_hit_id_before_text_fallback():
     shared_prefix = "same text prefix " * 12
     r1 = (
         [
@@ -252,23 +254,23 @@ def test_merge_expanded_results_uses_hit_id_before_text_fallback():
         "q1",
     )
 
-    merged_hits, _merged_scores = _merge_expanded_results([r1], top_k=10)
+    merged_hits, _merged_scores = merge_expanded_results([r1], top_k=10)
 
     assert [hit["id"] for hit in merged_hits] == ["hit-a", "hit-b"]
 
 
-def test_merge_expanded_results_counts_identity_once_per_result_set():
+def testmerge_expanded_results_counts_identity_once_per_result_set():
     duplicate = {"id": "hit-a", "text": "same hit", "score": 1.0, "meta": {}}
     r1 = ([duplicate, dict(duplicate)], [1.0, 0.9], "q1")
 
-    merged_hits, merged_scores = _merge_expanded_results([r1], top_k=10)
+    merged_hits, merged_scores = merge_expanded_results([r1], top_k=10)
 
     assert [hit["id"] for hit in merged_hits] == ["hit-a"]
     assert merged_scores == pytest.approx([1.0 / 20.0])
 
 
 # ---------------------------------------------------------------------------
-# _search_hits_with_fallback — expansion integration
+# search_hits_with_fallback — expansion integration
 # ---------------------------------------------------------------------------
 
 class _FakeRetriever:
@@ -291,15 +293,15 @@ def test_translate_query_uses_mixed_metric_anchors_without_llm(monkeypatch):
     class Settings:
         api_key = "configured"
 
-    import kb.retrieval_engine as retrieval_engine
+    import kb.product_query_policy as retrieval_engine
 
     monkeypatch.setattr(
         retrieval_engine,
-        "DeepSeekChat",
+        "_make_chat_client",
         lambda _settings: (_ for _ in ()).throw(AssertionError("translation LLM should not run")),
     )
 
-    translated = _translate_query_for_search(
+    translated = translate_query_for_search(
         Settings(),
         "ECCV-2022 Simple Baselines 论文的 SIDD 基准测试里，PSNR 最高的模型是谁？如果并列请全部列出。",
     )
@@ -318,7 +320,7 @@ def test_search_hits_fallback_basic():
     retriever = _FakeRetriever({
         "test query": [{"text": "result 1", "score": 5.0, "meta": {"source_path": "doc.md"}}],
     })
-    hits, scores, used_query, used_trans, variants = _search_hits_with_fallback(
+    hits, scores, used_query, used_trans, variants = search_hits_with_fallback(
         "test query", retriever, top_k=10, settings=_FakeSettings(),
     )
     assert len(hits) == 1
@@ -340,7 +342,7 @@ def test_search_hits_fallback_does_not_index_internal_query_scope_instructions()
         "- When multiple papers are relevant, organize the answer by paper."
     )
 
-    hits, _scores, used_query, _used_trans, variants = _search_hits_with_fallback(
+    hits, _scores, used_query, _used_trans, variants = search_hits_with_fallback(
         prompt,
         retriever,
         top_k=10,
@@ -379,12 +381,12 @@ def test_search_hits_fallback_keeps_translated_hits_when_original_has_weak_match
         }
     )
 
-    import kb.retrieval_engine as re
+    import kb.product_query_policy as re
 
-    monkeypatch.setattr(re, "_translate_query_for_search", lambda _settings, _prompt: translated)
-    monkeypatch.setattr(re, "_deterministic_query_variants", lambda _prompt: [])
+    monkeypatch.setattr(re, "translate_query_for_search", lambda _settings, _prompt: translated)
+    monkeypatch.setattr(re, "deterministic_query_variants", lambda _prompt: [])
 
-    hits, scores, _used_query, used_trans, variants = _search_hits_with_fallback(
+    hits, scores, _used_query, used_trans, variants = search_hits_with_fallback(
         query,
         retriever,
         top_k=10,
@@ -414,12 +416,12 @@ def test_search_hits_fallback_uses_wider_candidate_window_for_whole_library(monk
             ]
         }
     )
-    import kb.retrieval_engine as re
+    import kb.product_query_policy as re
 
-    monkeypatch.setattr(re, "_translate_query_for_search", lambda _settings, _prompt: None)
-    monkeypatch.setattr(re, "_deterministic_query_variants", lambda _prompt: [])
+    monkeypatch.setattr(re, "translate_query_for_search", lambda _settings, _prompt: None)
+    monkeypatch.setattr(re, "deterministic_query_variants", lambda _prompt: [])
 
-    hits, _scores, _used_query, _used_trans, _variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_trans, _variants = search_hits_with_fallback(
         "library question",
         retriever,
         top_k=6,
@@ -522,11 +524,11 @@ def test_search_hits_fallback_with_expansion(monkeypatch):
     def fake_translate(settings, prompt):
         return None  # No translation
 
-    import kb.retrieval_engine as re
-    monkeypatch.setattr(re, "_expand_query_via_llm", fake_expand)
-    monkeypatch.setattr(re, "_translate_query_for_search", fake_translate)
+    import kb.product_query_policy as re
+    monkeypatch.setattr(re, "expand_query_via_llm", fake_expand)
+    monkeypatch.setattr(re, "translate_query_for_search", fake_translate)
 
-    hits, scores, used_query, used_trans, variants = _search_hits_with_fallback(
+    hits, scores, used_query, used_trans, variants = search_hits_with_fallback(
         "test query", retriever, top_k=10, settings=FakeSettings(),
         allow_expand=True,
     )
@@ -561,21 +563,21 @@ def test_deterministic_expansion_skips_redundant_llm_expansion(monkeypatch):
         }
     )
 
-    import kb.retrieval_engine as re
+    import kb.product_query_policy as re
 
-    monkeypatch.setattr(re, "_translate_query_for_search", lambda _settings, _prompt: None)
+    monkeypatch.setattr(re, "translate_query_for_search", lambda _settings, _prompt: None)
     monkeypatch.setattr(
         re,
-        "_deterministic_query_variants",
+        "deterministic_query_variants",
         lambda _prompt: ["CASSI exact architecture"],
     )
     monkeypatch.setattr(
         re,
-        "_expand_query_via_llm",
+        "expand_query_via_llm",
         lambda *_args, **_kwargs: pytest.fail("deterministic coverage should skip LLM expansion"),
     )
 
-    hits, _scores, _used_query, _used_trans, variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_trans, variants = search_hits_with_fallback(
         "CASSI 怎么进行双色散编码？",
         retriever,
         top_k=10,

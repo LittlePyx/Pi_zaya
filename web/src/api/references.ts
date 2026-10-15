@@ -37,6 +37,36 @@ export interface ReaderDocBlock {
   text?: string
   raw_text?: string
   number?: number
+  page_start?: number
+  page_end?: number
+}
+
+export interface ReaderDocLocatorRequest {
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  heading_path?: string
+  evidence_quote?: string
+  page_start?: number
+  page_end?: number
+  strict_locate?: boolean
+}
+
+export interface ReaderDocLocatorResolution {
+  key: string
+  ok: boolean
+  changed: boolean
+  status: 'ready' | 'recovered' | 'unresolved' | 'skipped' | 'invalid' | string
+  reason?: string
+  score?: number
+  locator?: {
+    block_id?: string
+    anchor_id?: string
+    anchor_kind?: string
+    heading_path?: string
+    page_start?: number
+    page_end?: number
+  }
 }
 
 export interface ReaderDocOutlineQuality {
@@ -62,8 +92,59 @@ export interface ReaderDocResponse {
   markdown: string
   anchors?: ReaderDocAnchor[]
   blocks?: ReaderDocBlock[]
+  locator_resolution?: ReaderDocLocatorResolution | null
   cite_details?: Array<Record<string, unknown>>
   reference_cite_details?: Array<Record<string, unknown>>
+}
+
+export interface ShelfReaderLocatorMaintenanceItem {
+  key: string
+  source_path: string
+  source_name?: string
+  fallback_source_path?: string
+  library_match_path?: string
+  block_id?: string
+  anchor_id?: string
+  anchor_kind?: string
+  heading_path?: string
+  reader_evidence_quote?: string
+  evidence_quote?: string
+  shelf_excerpt?: string
+  card_evidence?: string
+  raw?: string
+  page_start?: number
+  page_end?: number
+}
+
+export interface ShelfReaderLocatorMaintenanceResult {
+  key: string
+  ok: boolean
+  changed: boolean
+  status: 'ready' | 'recovered' | 'unresolved' | 'source_unavailable' | 'skipped' | 'invalid' | string
+  reason?: string
+  score?: number
+  source_path?: string
+  public_source_path?: string
+  source_relocated?: boolean
+  doc_hash?: string
+  locator?: {
+    block_id?: string
+    anchor_id?: string
+    anchor_kind?: string
+    heading_path?: string
+    page_start?: number
+    page_end?: number
+  }
+}
+
+export interface ShelfReaderLocatorMaintenanceResponse {
+  ok: boolean
+  requested: number
+  ready: number
+  changed: number
+  unresolved: number
+  items: ShelfReaderLocatorMaintenanceResult[]
+  model_calls: number
 }
 
 export interface ShelfMetadataQualityIssue {
@@ -321,12 +402,21 @@ function normalizedBibliometricsDoi(meta: Record<string, unknown>): string {
     .toLowerCase()
 }
 
-export function bibliometricsCacheKey(meta: Record<string, unknown>): string {
+export function bibliometricsCacheKey(
+  meta: Record<string, unknown>,
+  options?: { allowModelCalls?: boolean },
+): string {
+  const allowModelCalls = options?.allowModelCalls !== false
   const locale = String(
     meta.refs_card_locale || meta.target_locale || meta.ui_locale || meta.summary_locale || '',
   ).trim().toLowerCase()
   const doi = normalizedBibliometricsDoi(meta)
-  if (doi) return stableStringify({ bibliometrics_client_version: 4, identity: `doi:${doi}`, locale })
+  if (doi) return stableStringify({
+    bibliometrics_client_version: 5,
+    identity: `doi:${doi}`,
+    locale,
+    allow_model_calls: allowModelCalls,
+  })
 
   const title = String(meta.title || meta.card_title || meta.cardTitle || '')
     .trim()
@@ -335,9 +425,10 @@ export function bibliometricsCacheKey(meta: Record<string, unknown>): string {
   const year = String(meta.year || '').trim()
   const source = String(meta.source_path || meta.sourcePath || '').trim().toLowerCase()
   return stableStringify({
-    bibliometrics_client_version: 4,
+    bibliometrics_client_version: 5,
     identity: title ? `title:${title}|year:${year}` : `source:${source}`,
     locale,
+    allow_model_calls: allowModelCalls,
   })
 }
 
@@ -457,15 +548,17 @@ export const referencesApi = {
         source_path: sourcePath,
       }),
     ),
-  bibliometrics: (meta: Record<string, unknown>) =>
+  bibliometrics: (meta: Record<string, unknown>, options?: { allowModelCalls?: boolean }) =>
     api.post<Record<string, unknown>>('/api/references/bibliometrics', {
       meta,
+      allow_model_calls: options?.allowModelCalls !== false,
     }),
-  bibliometricsCached: (meta: Record<string, unknown>) =>
+  bibliometricsCached: (meta: Record<string, unknown>, options?: { allowModelCalls?: boolean }) =>
     withTimedBibliometricsCache(
-      bibliometricsCacheKey(meta),
+      bibliometricsCacheKey(meta, options),
       () => api.post<Record<string, unknown>>('/api/references/bibliometrics', {
         meta,
+        allow_model_calls: options?.allowModelCalls !== false,
       }),
     ),
   repairShelfMetadata: (items: Array<Record<string, unknown>>, limit?: number) =>
@@ -522,8 +615,13 @@ export const referencesApi = {
     citationCardPolishCache.set(key, pending)
     return pending
   },
-  readerDoc: (sourcePath: string, init?: RequestInit) =>
+  readerDoc: (sourcePath: string, init?: RequestInit, locator?: ReaderDocLocatorRequest) =>
     api.post<ReaderDocResponse>('/api/references/reader/doc', {
       source_path: sourcePath,
+      locator,
+    }, init),
+  maintainShelfReaderLocators: (items: ShelfReaderLocatorMaintenanceItem[], init?: RequestInit) =>
+    api.post<ShelfReaderLocatorMaintenanceResponse>('/api/references/shelf/reader-locators/maintain', {
+      items,
     }, init),
 }

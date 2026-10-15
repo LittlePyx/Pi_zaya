@@ -37,9 +37,12 @@ export function useLibraryUploadDraftActions({
   const files = useLibraryStore((s) => s.files)
   const loadFiles = useLibraryStore((s) => s.loadFiles)
   const startProgressStream = useLibraryStore((s) => s.startProgressStream)
+  const openFile = useLibraryStore((s) => s.openFile)
 
   const [uploadDrafts, setUploadDrafts] = useState<UploadDraft[]>([])
-  const [uploadUseLlm, setUploadUseLlm] = useState(true)
+  // Metadata enrichment is optional and opt-in. Local PDF inspection must stay
+  // usable without opening model settings when no text provider is configured.
+  const [uploadUseLlm, setUploadUseLlm] = useState(false)
   const [uploadDraftFilter, setUploadDraftFilter] = useState<UploadDraftFilter>('all')
   const [uploadErrorReason, setUploadErrorReason] = useState<UploadErrorReason>('all')
   const [uploadInspecting, setUploadInspecting] = useState(false)
@@ -51,8 +54,8 @@ export function useLibraryUploadDraftActions({
   const selectedUploadCount = useMemo(() => uploadDrafts.filter((x) => x.selected).length, [uploadDrafts])
   const failedUploadDrafts = useMemo(() => uploadDrafts.filter((x) => x.status === 'error'), [uploadDrafts])
   const duplicateFailedDrafts = useMemo(
-    () => failedUploadDrafts.filter((x) => isDuplicateFailure(x.note)),
-    [failedUploadDrafts],
+    () => uploadDrafts.filter((x) => x.status === 'duplicate'),
+    [uploadDrafts],
   )
   const retryableFailedUploadDrafts = useMemo(
     () => failedUploadDrafts.filter((x) => x.failureStage !== 'duplicate' && !isDuplicateFailure(x.note)),
@@ -80,7 +83,7 @@ export function useLibraryUploadDraftActions({
     )
     if (uploadDraftFilter === 'all') return uploadDrafts
     if (uploadDraftFilter === 'error') return withReason(uploadDrafts.filter((x) => x.status === 'error'))
-    if (uploadDraftFilter === 'dup_error') return withReason(uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)))
+    if (uploadDraftFilter === 'dup_error') return uploadDrafts.filter((x) => x.status === 'duplicate')
     if (uploadDraftFilter === 'saved') return uploadDrafts.filter((x) => x.status === 'saved')
     return uploadDrafts.filter((x) => ['queued', 'inspecting', 'ready', 'saving'].includes(x.status))
   }, [uploadDrafts, uploadDraftFilter, uploadErrorReason])
@@ -89,7 +92,7 @@ export function useLibraryUploadDraftActions({
       { value: 'all', label: S.lib_upload_filter_all.replace('{n}', String(uploadDrafts.length)) },
       { value: 'todo', label: S.lib_upload_filter_todo.replace('{n}', String(uploadDrafts.filter((x) => ['queued', 'inspecting', 'ready', 'saving'].includes(x.status)).length)) },
       { value: 'error', label: S.lib_upload_filter_error.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error').length)) },
-      { value: 'dup_error', label: S.lib_upload_filter_dup.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'error' && isDuplicateFailure(x.note)).length)) },
+      { value: 'dup_error', label: S.lib_upload_filter_dup.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'duplicate').length)) },
       { value: 'saved', label: S.lib_upload_filter_saved.replace('{n}', String(uploadDrafts.filter((x) => x.status === 'saved').length)) },
     ],
     [uploadDrafts, S],
@@ -167,16 +170,27 @@ export function useLibraryUploadDraftActions({
           suggestionBasisDetail: String(res.meta?.basis_detail || ''),
           suggestionMatchMethod: String(res.meta?.match_method || ''),
           suggestionYearSource: String(res.meta?.year_source || ''),
-          status: res.duplicate ? 'error' : 'ready',
+          status: res.duplicate ? 'duplicate' : 'ready',
           failureStage: res.duplicate ? 'duplicate' : '',
-          note: res.duplicate ? `${S.lib_upload_dup_prefix}${String(res.existing || '')}` : S.lib_upload_scan_done,
+          selected: res.duplicate ? false : x.selected,
+          existingName: res.duplicate ? String(res.existing || '') : '',
+          note: res.duplicate ? S.lib_upload_existing.replace('{name}', String(res.existing || x.name)) : S.lib_upload_scan_done,
         }
       }))
+      if (res.duplicate) {
+        message.info(S.lib_upload_existing.replace('{name}', String(res.existing || target.name)))
+      }
       return { ok: !res.duplicate, duplicate: Boolean(res.duplicate), suggestedStem }
     } catch (err) {
+      const rawError = err instanceof Error ? err.message : ''
+      if (/upload must be a pdf|invalid pdf|not a pdf|pdf file expected/i.test(rawError)) {
+        setUploadDrafts((cur) => cur.filter((x) => x.key !== key))
+        message.warning(S.lib_upload_invalid_pdf.replace('{name}', target.name))
+        return { ok: false, duplicate: false, suggestedStem: '' }
+      }
       setUploadDrafts((cur) => cur.map((x) => (
         x.key === key
-          ? { ...x, status: 'error', failureStage: 'inspect', note: err instanceof Error ? err.message : S.lib_upload_scan_fail }
+          ? { ...x, status: 'error', failureStage: 'inspect', note: rawError || S.lib_upload_scan_fail }
           : x
       )))
       return { ok: false, duplicate: false, suggestedStem: '' }
@@ -246,9 +260,11 @@ export function useLibraryUploadDraftActions({
         if (res.duplicate) {
           return {
             ...x,
-            status: 'error',
+            status: 'duplicate',
             failureStage: 'duplicate',
-            note: `${S.lib_upload_dup_prefix}${String(res.existing || '')}`,
+            selected: false,
+            existingName: String(res.existing || ''),
+            note: S.lib_upload_existing.replace('{name}', String(res.existing || x.name)),
           }
         }
         return {
@@ -361,8 +377,19 @@ export function useLibraryUploadDraftActions({
   }, [S, inspectDraft, loadFiles, saveDraft, scope, startProgressStream, textModelReady, uploadDrafts, uploadUseLlm, warnLlmFallback])
 
   const clearSavedDrafts = useCallback(() => {
-    setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved'))
+    setUploadDrafts((cur) => cur.filter((x) => x.status !== 'saved' && x.status !== 'duplicate'))
   }, [])
+
+  const openDuplicateDraft = useCallback(async (key: string) => {
+    const draft = uploadDrafts.find((item) => item.key === key)
+    const existingName = String(draft?.existingName || '').trim()
+    if (!existingName) return
+    try {
+      await openFile(existingName, 'pdf')
+    } catch {
+      message.error(S.lib_msg_exec_fail)
+    }
+  }, [S.lib_msg_exec_fail, openFile, uploadDrafts])
 
   const selectFailedReason = useCallback((reason: Exclude<UploadErrorReason, 'all'>) => {
     applyUploadFilter('error')
@@ -384,6 +411,10 @@ export function useLibraryUploadDraftActions({
   const invertUploadDraftSelection = useCallback(() => {
     setUploadDrafts((cur) => cur.map((item) => ({ ...item, selected: !item.selected })))
   }, [])
+
+  useEffect(() => {
+    if (!textModelReady) setUploadUseLlm(false)
+  }, [textModelReady])
 
   useEffect(() => {
     if (uploadDrafts.length === 0) {
@@ -443,6 +474,7 @@ export function useLibraryUploadDraftActions({
     inspectSelectedDrafts,
     inspectSingleDraft,
     invertUploadDraftSelection,
+    openDuplicateDraft,
     pagedUploadDrafts,
     retryFailedDrafts,
     retryableFailedUploadDrafts,

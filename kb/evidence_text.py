@@ -695,6 +695,21 @@ def compound_claim_evidence_excerpt(
     if len(sentences) < 2:
         return ""
 
+    # Carrier encoding, detector multiplexing and lock-in demodulation form
+    # one acquisition chain. Terminology overlap alone can prefer its LIA
+    # definition and silently discard the simultaneous encoding step.
+    if re.search(r"锁相|\block[- ]in\b|\bLIA\b", str(claim or ""), re.I) and re.search(
+        r"合并|并行|多个?频率|parallel|multiplex|frequenc", str(claim or ""), re.I
+    ):
+        steps = [next((sentence for sentence in sentences if re.search(pattern, sentence, re.I)), "") for pattern in (
+            r"frequencies\s+simultaneously",
+            r"multiplexed.{0,60}single[- ]pixel\s+detector",
+            r"demodulated.{0,80}(?:LIAs?|lock[- ]in)",
+        )]
+        chain = " ".join(dict.fromkeys(step for step in steps if step))
+        if all(steps) and len(chain) <= hard_limit:
+            return finish_evidence_text(chain, max_len=hard_limit)
+
     # A short source block can still contain a two-sentence mechanism whose
     # clauses must remain together.  In SCINeRF, the first sentence establishes
     # synthesis of the compressed measurement and the next establishes the

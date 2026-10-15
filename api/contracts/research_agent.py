@@ -10,6 +10,7 @@ _MAX_MESSAGE_CHARS = 80_000
 _MAX_SOURCE_PATH_CHARS = 1_200
 _MAX_SOURCE_NAME_CHARS = 500
 _MAX_QUERY_SCOPE_CHARS = 40
+_MAX_EXTERNAL_SUPPLEMENT_MODE_CHARS = 32
 _MAX_PROMPT_CONTEXT_JSON_CHARS = 260_000
 
 
@@ -34,6 +35,7 @@ class ResearchAgentRequest(BaseModel):
     temperature: float = Field(0.2, ge=0.0, le=2.0)
     max_tokens: int = Field(1200, ge=1, le=8192)
     query_scope: str = Field("", max_length=_MAX_QUERY_SCOPE_CHARS)
+    external_supplement_mode: str = Field("disabled", max_length=_MAX_EXTERNAL_SUPPLEMENT_MODE_CHARS)
     prompt_context: dict[str, Any] | None = None
     source_lock_path: str = Field("", max_length=_MAX_SOURCE_PATH_CHARS)
     source_lock_name: str = Field("", max_length=_MAX_SOURCE_NAME_CHARS)

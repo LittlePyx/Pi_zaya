@@ -11,6 +11,8 @@ async function fulfillJson(route: Route, body: unknown) {
 }
 
 async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
+  let onboardingCalls = 0
+  const uploadInspectBodies: string[] = []
   await page.route((url) => url.pathname.startsWith('/api/'), async (route) => {
     const requestUrl = new URL(route.request().url())
     const path = requestUrl.pathname
@@ -23,6 +25,7 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
       return
     }
     if (path === '/api/app/onboarding-status') {
+      onboardingCalls += 1
       await fulfillJson(route, {
         text_model_ready: hasKey,
         imported_document_count: phase === 'connect_model' || phase === 'prepare_document' ? 0 : 1,
@@ -75,6 +78,28 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
       await fulfillJson(route, { projects: [], root_conversations: [], project_conversations: {} })
       return
     }
+    if (path === '/api/conversations' && route.request().method() === 'POST') {
+      await fulfillJson(route, {
+        id: 'first-run-conversation',
+        title: 'New conversation',
+        mode: 'normal',
+        archived: false,
+        created_at: Date.now() / 1000,
+        updated_at: Date.now() / 1000,
+      })
+      return
+    }
+    if (path === '/api/generate') {
+      await fulfillJson(route, {
+        session_id: 'first-run-session',
+        task_id: 'first-run-task',
+        user_msg_id: 1,
+        assistant_msg_id: 2,
+        started: false,
+        start_error: 'fixture generation stopped',
+      })
+      return
+    }
     if (path === '/api/projects' || path === '/api/conversations') {
       await fulfillJson(route, [])
       return
@@ -91,6 +116,7 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
     }
     if (path === '/api/library/upload/inspect') {
       const uploadBody = route.request().postDataBuffer()?.toString('latin1') || ''
+      uploadInspectBodies.push(uploadBody)
       if (uploadBody.includes('Pi_zaya-Getting-Started-Sample.pdf')) {
         expect(uploadBody).toContain('%PDF-1.4')
         expect(uploadBody).toContain('%%EOF')
@@ -117,6 +143,10 @@ async function installCleanProfileBackend(page: Page, getPhase: () => Phase) {
     }
     await fulfillJson(route, {})
   })
+  return {
+    onboardingCalls: () => onboardingCalls,
+    uploadInspectBodies: () => [...uploadInspectBodies],
+  }
 }
 
 test('clean profile progresses from model setup to the first cited answer', async ({ page }) => {
@@ -153,11 +183,41 @@ test('clean profile progresses from model setup to the first cited answer', asyn
   await guide.getByRole('button', { name: 'Ask a question' }).click()
   await expect(page).toHaveURL(/\/$/)
   const starterQuestions = page.getByTestId('first-run-questions')
+  const starterQuestion = starterQuestions.getByRole('button', { name: /Summarize the research question/ })
   await expect(starterQuestions).toBeVisible()
-  await starterQuestions.getByRole('button', { name: /Summarize the research question/ }).click()
-  await expect(page.getByPlaceholder('Ask something… (will search your Markdown first)')).toHaveValue(/Summarize the research question/)
+  await starterQuestion.click()
+  const composer = page.getByPlaceholder('Ask something… (will search your Markdown first)')
+  await expect(composer).toHaveValue(/Summarize the research question/)
+  const firstPrompt = await composer.inputValue()
+  await starterQuestion.click()
+  await expect(composer).toHaveValue(firstPrompt)
+  await page.getByRole('button', { name: 'Send' }).click()
+  await expect(composer).toHaveValue('')
 
   phase = 'completed'
   await page.reload()
   await expect(page.getByTestId('first-run-api-guide')).toHaveCount(0)
+})
+
+test('upload remains local and onboarding polling stays bounded without an API key', async ({ page }) => {
+  const backend = await installCleanProfileBackend(page, () => 'connect_model')
+  await page.goto('/library')
+
+  const pdf = Buffer.from('%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF\n', 'utf8')
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'local-reading-paper.pdf',
+    mimeType: 'application/pdf',
+    buffer: pdf,
+  })
+
+  await expect.poll(() => backend.uploadInspectBodies().length).toBe(1)
+  expect(backend.uploadInspectBodies()[0]).toContain('name="use_llm"')
+  expect(backend.uploadInspectBodies()[0]).toContain('false')
+  const enrichmentSwitch = page.locator('.kb-lib-upload-toolbar').getByRole('switch')
+  await expect(enrichmentSwitch).not.toBeChecked()
+  await expect(enrichmentSwitch).toBeDisabled()
+  await expect(page.locator('.ant-drawer-open')).toHaveCount(0)
+
+  await page.waitForTimeout(5500)
+  expect(backend.onboardingCalls()).toBeLessThanOrEqual(2)
 })

@@ -18,7 +18,8 @@ import { ResearchBriefWorkspace } from '../components/chat/ResearchBriefWorkspac
 import { ResearchGapWorkspace } from '../components/chat/ResearchGapWorkspace'
 import { restoreShelfItems } from '../components/chat/citeShelfStorage'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
-import { useAgentMode } from '../components/chat/useAgentMode'
+import { useExternalSupplementMode } from '../components/chat/useExternalSupplementMode'
+import { useLocalSemanticRetrieval } from '../components/chat/useLocalSemanticRetrieval'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useChatUploadFlow } from '../components/chat/useChatUploadFlow'
@@ -80,7 +81,8 @@ export default function ChatPage() {
     S.first_run_question_evidence,
     S.first_run_question_limitations,
   ], [S])
-  const { agentMode, setAgentMode: handleAgentModeChange } = useAgentMode(activeConvId)
+  const { mode: externalSupplementMode, setMode: setExternalSupplementMode } = useExternalSupplementMode(activeConvId)
+  const localSemanticRetrieval = useLocalSemanticRetrieval()
   const {
     readerOpen,
     readerPayload,
@@ -308,6 +310,7 @@ export default function ChatPage() {
     citationShelfCount,
     openShelfSignal,
     appendSignal,
+    consumeAppendSignal,
     resetReaderWorkspaceTransientState,
     openReader,
     openReaderStandalone,
@@ -552,12 +555,24 @@ export default function ChatPage() {
     onStartGuideFromUpload,
   } = useChatUploadFlow(S)
 
+  const resolvedQueryScope = resolveQueryScope(queryScope, {
+    hasCurrentPaper: Boolean(researchContext.activeSource.ready),
+    hasBasket: Boolean(currentSelectedResearchContext?.items?.length),
+  })
+  const localSemanticScopeEligible = resolvedQueryScope !== 'library'
+  const effectiveRetrievalMode = (
+    localSemanticScopeEligible
+    && localSemanticRetrieval.preferredMode === 'hybrid_local'
+    && localSemanticRetrieval.status?.hybrid_local?.state === 'ready'
+  ) ? 'hybrid_local' : 'bm25'
+
   const onSend = useChatSendFlow({
     labels: S,
     researchContext,
     queryScope,
     selectedResearchContext: currentSelectedResearchContext,
-    agentMode,
+    externalSupplementMode,
+    retrievalMode: effectiveRetrievalMode,
     onOpenApiSettings: openApiSettings,
     onSelectedResearchContextConsumed: clearSelectedResearchContextIfCurrent,
   })
@@ -673,18 +688,27 @@ export default function ChatPage() {
         uploading={uploading}
         generating={!!generation}
         appendSignal={appendSignal}
-        queryScope={resolveQueryScope(queryScope, {
-          hasCurrentPaper: Boolean(researchContext.activeSource.ready),
-          hasBasket: Boolean(currentSelectedResearchContext?.items?.length),
-        })}
+        onAppendSignalConsumed={consumeAppendSignal}
+        queryScope={resolvedQueryScope}
         queryScopeOptions={[
           { value: 'current_paper', disabled: !researchContext.activeSource.ready },
           { value: 'basket', disabled: !currentSelectedResearchContext?.items?.length },
           { value: 'library' },
         ]}
         onQueryScopeChange={setQueryScope}
-        agentMode={agentMode}
-        onAgentModeChange={handleAgentModeChange}
+        localSemanticStatus={localSemanticRetrieval.status}
+        localRetrievalMode={localSemanticRetrieval.preferredMode}
+        localSemanticScopeEligible={localSemanticScopeEligible}
+        localSemanticBusy={localSemanticRetrieval.busy}
+        onLocalRetrievalModeChange={localSemanticRetrieval.setPreferredMode}
+        onLocalSemanticEnable={localSemanticRetrieval.enable}
+        onLocalSemanticResume={localSemanticRetrieval.resume}
+        onLocalSemanticCancel={localSemanticRetrieval.cancel}
+        onLocalSemanticRemove={localSemanticRetrieval.remove}
+        externalSupplementMode={externalSupplementMode}
+        onExternalSupplementModeChange={setExternalSupplementMode}
+        webSupplementAvailable={settings.webSearchAvailable}
+        onConfigureWebSupplement={() => openApiSettings('web')}
       />
     </>
   )

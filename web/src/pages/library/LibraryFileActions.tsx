@@ -36,7 +36,8 @@ export function LibraryFileActions({
   const conversionBusy = item.task_state === 'queued' || item.task_state === 'running'
   const recoveryAvailable = item.task_state === 'interrupted'
   const conversionCancelling = item.conversion_stage === 'cancelling'
-  const retryAction = conversionBusy ? '' : String(item.last_conversion?.retry_action || '')
+  const retryExhausted = Boolean(item.conversion_quality?.conversion_report?.retry_exhausted)
+  const retryAction = conversionBusy || retryExhausted ? '' : String(item.last_conversion?.retry_action || '')
 
   return (
     <div className={`kb-lib-file-actions${showPrimaryConvertAction ? ' has-convert' : ' is-compact'}`}>
@@ -111,7 +112,7 @@ export function LibraryFileActions({
           trigger={['click']}
           menu={{
             items: [
-              ...(item.md_exists
+              ...(item.md_exists && !retryExhausted
                 ? [{ key: 'reconvert', label: S.lib_btn_reconvert, disabled: item.task_state !== 'idle', icon: <ReloadOutlined /> }]
                 : []),
               ...(recoveryAvailable

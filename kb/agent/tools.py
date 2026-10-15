@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +11,12 @@ from kb.inpaper_citation_grounding import extract_candidate_ref_nums_from_hits, 
 from kb.llm import DeepSeekChat
 from kb.rag import build_messages
 from kb.reference_index import load_reference_index, resolve_reference_entry
-from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
+from kb.product_query_policy import search_hits_with_fallback
+from kb.retrieval_engine import _group_hits_by_doc_for_refs
+from kb.retrieval_observability import record_retrieval_observation
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
+from kb.web_sources import verify_web_citations
 
 from .verifier import verify_answer_citations as _verify_answer_citations
 
@@ -481,7 +485,7 @@ def _balanced_scoped_hits(
     return balanced
 
 
-def retrieve_evidence(
+def _retrieve_evidence_impl(
     query: str,
     *,
     db_dir: str | Path,
@@ -502,7 +506,7 @@ def retrieve_evidence(
             )
         ]
     retriever = BM25Retriever(chunks)
-    hits, scores, used_query, used_translation, query_variants = _search_hits_with_fallback(
+    hits, scores, used_query, used_translation, query_variants = search_hits_with_fallback(
         query,
         retriever,
         max(1, min(20, int(top_k or 6))),
@@ -531,6 +535,51 @@ def retrieve_evidence(
         "requested_source_count": len(requested_paths),
         "observation": f"Retrieved {len(hits)} evidence snippet(s).",
     }
+
+
+def retrieve_evidence(
+    query: str,
+    *,
+    db_dir: str | Path,
+    settings: Any = None,
+    top_k: int = 6,
+    source_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    scope = "selected_sources" if source_paths else "full_library"
+    try:
+        result = _retrieve_evidence_impl(
+            query,
+            db_dir=db_dir,
+            settings=settings,
+            top_k=top_k,
+            source_paths=source_paths,
+        )
+    except Exception:
+        record_retrieval_observation(
+            started_at=started_at,
+            channel="agent_bm25",
+            source_scope=scope,
+            fallback_reason="retrieval_error",
+            status="error",
+        )
+        raise
+    variants = list(result.get("query_variants") or [])
+    fallback_reason = None
+    if bool(result.get("used_translation")):
+        fallback_reason = "query_translation"
+    elif len(variants) > 1:
+        fallback_reason = "query_expansion"
+    record_retrieval_observation(
+        started_at=started_at,
+        channel="agent_bm25",
+        source_scope=scope,
+        hit_count=len(list(result.get("hits") or [])),
+        query_variant_count=len(variants),
+        translation_used=bool(result.get("used_translation")),
+        fallback_reason=fallback_reason,
+    )
+    return result
 
 
 def retrieve_references(
@@ -722,6 +771,16 @@ def _answer_mode(agent_notes: dict[str, Any] | None) -> str:
     return str(gate.get("answer_mode") or "").strip()
 
 
+def _external_supplement_mode(agent_notes: dict[str, Any] | None) -> str:
+    if not isinstance(agent_notes, dict):
+        return "disabled"
+    gate = agent_notes.get("evidence_gate")
+    if not isinstance(gate, dict):
+        return "disabled"
+    mode = str(gate.get("external_supplement_mode") or "disabled").strip().lower()
+    return mode if mode in {"model", "web"} else "disabled"
+
+
 def _answer_contract(agent_notes: dict[str, Any] | None) -> str:
     if not isinstance(agent_notes, dict):
         return ""
@@ -814,6 +873,55 @@ def _web_search_configured(settings: Any) -> bool:
     )
 
 
+def _web_retry_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    retry = [dict(item) for item in list(messages or [])]
+    instruction = (
+        "\n\nWeb-source retry requirement: cite accessible public HTTPS sources that directly support "
+        "the answer. Prefer DOI or arXiv records and direct scholarly sources. Do not cite search "
+        "result pages, inaccessible placeholders, or a URL whose page title does not match the source."
+    )
+    for index in range(len(retry) - 1, -1, -1):
+        if str(retry[index].get("role") or "").strip().lower() == "user":
+            retry[index]["content"] = f"{str(retry[index].get('content') or '').rstrip()}{instruction}"
+            return retry
+    retry.append({"role": "user", "content": instruction.strip()})
+    return retry
+
+
+def _verified_web_generation(
+    chat: DeepSeekChat,
+    *,
+    messages: list[dict[str, Any]],
+    temperature: float,
+    max_tokens: int,
+) -> dict[str, Any] | None:
+    rejected_total = 0
+    for attempt in range(2):
+        active_messages = messages if attempt == 0 else _web_retry_messages(messages)
+        web_result = chat.chat_with_web_search(
+            messages=active_messages,
+            temperature=float(temperature),
+            max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+        )
+        raw_answer = str(web_result.get("content") or "")
+        answer = clean_assistant_answer_presentation_text(raw_answer).strip()
+        verification = verify_web_citations(
+            raw_answer,
+            list(web_result.get("annotations") or [])[:12],
+        )
+        rejected_total += int(verification.get("rejected_count") or 0)
+        sources = list(verification.get("sources") or [])[:8]
+        if answer and sources:
+            return {
+                "answer": answer,
+                "web_citations": sources,
+                "web_search_model": str(web_result.get("model") or ""),
+                "web_search_attempts": attempt + 1,
+                "web_source_rejected_count": rejected_total,
+            }
+    return None
+
+
 def _external_answer_notice(query: str, *, web_used: bool = False) -> str:
     if _has_cjk(query):
         if web_used:
@@ -866,6 +974,16 @@ def _fallback_general_answer(query: str, *, reason: str = "", academic: bool = F
     if academic:
         return f"No matching local knowledge-base evidence was found, and no text model API is available to generate an external academic answer.{suffix}"
     return f"This question does not require indexed evidence, but no text model API is available to generate a general answer.{suffix}"
+
+
+def _web_supplement_unavailable_answer(query: str, *, has_local_evidence: bool) -> str:
+    if _has_cjk(query):
+        if has_local_evidence:
+            return "网页检索当前不可用；本次没有改用模型知识，以下仅保留文献库中的可定位证据。"
+        return "文献库中没有找到足够证据，网页检索当前不可用；本次没有改用模型知识。"
+    if has_local_evidence:
+        return "Web search is unavailable. Model knowledge was not substituted; this response keeps only located library evidence."
+    return "The library did not provide enough evidence, and web search is unavailable. Model knowledge was not substituted."
 
 
 def _hybrid_answer_query(query: str, notes_text: str, *, prefer_web: bool = False) -> str:
@@ -1167,20 +1285,32 @@ def generate_grounded_answer(
     defer_quality_gate_repair: bool = False,
 ) -> dict[str, Any]:
     source_blend = _source_blend(agent_notes)
+    supplement_mode = _external_supplement_mode(agent_notes)
     if not hits:
         if _is_general_llm_mode(agent_notes):
+            if supplement_mode == "disabled":
+                answer = _fallback_grounded_answer(query, hits, reason="external supplement disabled", agent_notes=agent_notes)
+                return {
+                    "answer": answer,
+                    "llm_used": False,
+                    "answer_mode": "evidence_grounded",
+                    "source_blend": "local_grounded",
+                    "web_search_used": False,
+                    "observation": "Skipped external generation because supplementation was disabled.",
+                }
             mode = _answer_mode(agent_notes)
             academic = mode == "external_academic_llm"
-            if academic and _web_search_configured(settings):
+            if supplement_mode == "web" and _web_search_configured(settings):
                 try:
                     chat = DeepSeekChat(settings)
-                    web_result = chat.chat_with_web_search(
+                    web_generation = _verified_web_generation(
+                        chat,
                         messages=_general_llm_messages(query, history, academic=True, prefer_web=True),
                         temperature=float(temperature),
-                        max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+                        max_tokens=max_tokens,
                     )
-                    answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
-                    if answer:
+                    if web_generation:
+                        answer = str(web_generation.get("answer") or "").strip()
                         answer = _prepend_external_notice(answer, query, web_used=True)
                         return {
                             "answer": answer,
@@ -1188,12 +1318,24 @@ def generate_grounded_answer(
                             "answer_mode": mode,
                             "source_blend": source_blend or "external_academic",
                             "web_search_used": True,
-                            "web_citations": list(web_result.get("annotations") or [])[:12],
-                            "web_search_model": str(web_result.get("model") or ""),
+                            "web_citations": list(web_generation.get("web_citations") or [])[:8],
+                            "web_search_model": str(web_generation.get("web_search_model") or ""),
+                            "web_search_attempts": int(web_generation.get("web_search_attempts") or 1),
+                            "web_source_rejected_count": int(web_generation.get("web_source_rejected_count") or 0),
                             "observation": "Generated an external academic answer with API web search because no local evidence was retrieved.",
                         }
                 except Exception:
                     pass
+            if supplement_mode == "web":
+                return {
+                    "answer": _web_supplement_unavailable_answer(query, has_local_evidence=False),
+                    "llm_used": False,
+                    "answer_mode": "evidence_grounded",
+                    "source_blend": "local_grounded",
+                    "web_search_used": False,
+                    "external_supplement_unavailable": "web",
+                    "observation": "Web supplement was requested but unavailable; model knowledge was not substituted.",
+                }
             if not getattr(settings, "text_api_key", None):
                 answer = _fallback_general_answer(query, reason="missing text API key", academic=academic)
                 return {
@@ -1255,8 +1397,8 @@ def generate_grounded_answer(
             "web_search_used": False,
             "observation": "Skipped LLM answer because no indexed evidence was retrieved.",
         }
-    hybrid = _is_hybrid_answer_mode(agent_notes)
-    if hybrid and _web_search_configured(settings):
+    hybrid = _is_hybrid_answer_mode(agent_notes) and supplement_mode in {"model", "web"}
+    if hybrid and supplement_mode == "web" and _web_search_configured(settings):
         try:
             notes_text = _format_agent_notes(agent_notes)
             answer_query = _hybrid_answer_query(query, notes_text, prefer_web=True)
@@ -1266,13 +1408,14 @@ def generate_grounded_answer(
                 list(hits or []),
                 answer_contract=_answer_contract(agent_notes),
             )
-            web_result = DeepSeekChat(settings).chat_with_web_search(
+            web_generation = _verified_web_generation(
+                DeepSeekChat(settings),
                 messages=messages,
                 temperature=float(temperature),
-                max_tokens=max(256, min(4096, int(max_tokens or 1200))),
+                max_tokens=max_tokens,
             )
-            answer = clean_assistant_answer_presentation_text(str(web_result.get("content") or "")).strip()
-            if answer:
+            if web_generation:
+                answer = str(web_generation.get("answer") or "").strip()
                 finalized = _finalize_grounded_answer(
                     query,
                     answer,
@@ -1292,13 +1435,31 @@ def generate_grounded_answer(
                     "answer_mode": "hybrid_local_external",
                     "source_blend": source_blend or "hybrid_local_external",
                     "web_search_used": True,
-                    "web_citations": list(web_result.get("annotations") or [])[:12],
-                    "web_search_model": str(web_result.get("model") or ""),
+                    "web_citations": list(web_generation.get("web_citations") or [])[:8],
+                    "web_search_model": str(web_generation.get("web_search_model") or ""),
+                    "web_search_attempts": int(web_generation.get("web_search_attempts") or 1),
+                    "web_source_rejected_count": int(web_generation.get("web_source_rejected_count") or 0),
                     "quality_gate": finalized["quality_gate"],
                     "observation": "Generated a hybrid answer from local evidence plus external API web context.",
                 }
         except Exception:
             pass
+    if hybrid and supplement_mode == "web":
+        fallback = _fallback_grounded_answer(
+            query,
+            hits,
+            reason="web search unavailable; model fallback disabled",
+            agent_notes=agent_notes,
+        )
+        return {
+            "answer": f"{_web_supplement_unavailable_answer(query, has_local_evidence=True)}\n\n{fallback}".strip(),
+            "llm_used": False,
+            "answer_mode": "evidence_grounded",
+            "source_blend": "local_grounded",
+            "web_search_used": False,
+            "external_supplement_unavailable": "web",
+            "observation": "Web supplement was requested but unavailable; returned only local evidence.",
+        }
     if not getattr(settings, "text_api_key", None):
         answer = _fallback_grounded_answer(query, hits, reason="missing text API key", agent_notes=agent_notes)
         return {

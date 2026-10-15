@@ -5,11 +5,19 @@ import {
   readerLocateResultMatchesActiveRequest,
   readerSourcePathsMatch,
 } from '../../src/components/chat/reader/readerLocateGuard'
+import {
+  buildHeuristicReaderLocateRecoveryPayload,
+  shouldRecoverReaderLocateHeuristically,
+} from '../../src/components/chat/reader/readerLocateRecovery'
 import { readerHighlightsSignature, stableReaderHighlightId } from '../../src/components/chat/reader/readerSessionState'
 import {
   buildBasicReaderOpenPayload,
   inferReaderSourceNameFromPath,
 } from '../../src/components/chat/reader/readerOpenPayloadUtils'
+import {
+  applyReaderDocLocatorResolution,
+  buildReaderOpenPayloadViewModel,
+} from '../../src/components/chat/readerOpenPayloadViewModel'
 import {
   buildHighlightQueries,
   equationNumberMatchScore,
@@ -27,6 +35,12 @@ import {
   researchNoteHasCapture,
 } from '../../src/components/chat/readerResearchNoteCapture'
 import type { ResearchNoteRecord } from '../../src/api/chat'
+import type { CiteShelfItem } from '../../src/components/chat/citationState'
+import {
+  mergeShelfReaderLocatorMaintenanceResult,
+  shelfReaderLocatorMaintenanceFingerprint,
+  shelfReaderLocatorMaintenanceInput,
+} from '../../src/components/chat/shelfReaderLocatorMaintenance'
 
 const payload: ReaderOpenPayload = {
   sourcePath: 'db/Fixture/Fixture.en.md',
@@ -111,6 +125,163 @@ test('reader locate guard accepts only the active reader request', () => {
     currentConversationId: 'conv-a',
     readerOpen: true,
   })).toBe(false)
+})
+
+test('reader locate recovery removes stale identities and keeps evidence signals', () => {
+  const strictPayload: ReaderOpenPayload = {
+    ...payload,
+    strictLocate: true,
+    blockId: 'stale-block',
+    anchorId: 'stale-anchor',
+    relatedBlockIds: ['stale-neighbor'],
+    locateTarget: {
+      blockId: 'stale-target-block',
+      anchorId: 'stale-target-anchor',
+      anchorKind: 'paragraph',
+      headingPath: 'Fixture Paper / Method',
+      evidenceQuote: 'The source-backed evidence sentence.',
+    },
+    alternatives: [{
+      blockId: 'stale-alt-block',
+      anchorId: 'stale-alt-anchor',
+      snippet: 'A second evidence sentence.',
+    }],
+  }
+
+  expect(shouldRecoverReaderLocateHeuristically(result, strictPayload)).toBe(true)
+  const recovered = buildHeuristicReaderLocateRecoveryPayload(strictPayload, 8)
+  expect(recovered).toMatchObject({
+    strictLocate: false,
+    locateMode: 'heuristic',
+    locateRequestId: 8,
+    snippet: 'The source-backed evidence sentence.',
+    highlightSnippet: 'The source-backed evidence sentence.',
+    initialAltIndex: 0,
+  })
+  expect(recovered.blockId).toBeUndefined()
+  expect(recovered.anchorId).toBeUndefined()
+  expect(recovered.headingPath).toBeUndefined()
+  expect(recovered.relatedBlockIds).toBeUndefined()
+  expect(recovered.locateTarget).toBeUndefined()
+  expect(recovered.alternatives?.[0].blockId).toBeUndefined()
+  expect(recovered.alternatives?.[0].anchorId).toBeUndefined()
+  expect(recovered.alternatives?.[0].snippet).toBe('A second evidence sentence.')
+  expect(shouldRecoverReaderLocateHeuristically(result, recovered)).toBe(false)
+  expect(shouldRecoverReaderLocateHeuristically({ ...result, ok: true, status: 'exact' }, strictPayload)).toBe(false)
+})
+
+test('reader doc locator validation replaces stale identities and suppresses unresolved ones', () => {
+  const stalePayload: ReaderOpenPayload = {
+    ...payload,
+    strictLocate: true,
+    blockId: 'stale-block',
+    anchorId: 'stale-anchor',
+    headingPath: 'Paper / Methods',
+    highlightSnippet: 'The exact source evidence sentence.',
+  }
+  const view = buildReaderOpenPayloadViewModel(stalePayload)
+  const recovered = applyReaderDocLocatorResolution({
+    alternatives: view.alternatives,
+    primaryCandidate: view.primaryCandidate,
+    strictLocate: true,
+    resolution: {
+      key: 'reader-open',
+      ok: true,
+      changed: true,
+      status: 'recovered',
+      reason: 'unique_evidence_quote',
+      locator: {
+        block_id: 'fresh-block',
+        anchor_id: 'fresh-anchor',
+        anchor_kind: 'paragraph',
+        heading_path: 'Paper / Results',
+        page_start: 3,
+        page_end: 3,
+      },
+    },
+  })
+  expect(recovered.recovered).toBe(true)
+  expect(recovered.primaryCandidate).toMatchObject({
+    blockId: 'fresh-block',
+    anchorId: 'fresh-anchor',
+    headingPath: 'Paper / Results',
+  })
+  expect(recovered.alternatives[0].blockId).toBe('fresh-block')
+
+  const unresolved = applyReaderDocLocatorResolution({
+    alternatives: view.alternatives,
+    primaryCandidate: view.primaryCandidate,
+    strictLocate: true,
+    resolution: {
+      key: 'reader-open',
+      ok: false,
+      changed: false,
+      status: 'unresolved',
+      reason: 'ambiguous_or_weak_match',
+    },
+  })
+  expect(unresolved.validated).toBe(true)
+  expect(unresolved.primaryCandidate.blockId).toBe('')
+  expect(unresolved.primaryCandidate.anchorId).toBe('')
+  expect(unresolved.primaryCandidate.highlightSnippet).toBe('The exact source evidence sentence.')
+})
+
+test('shelf locator maintenance sends only source-bound evidence and merges recovered identity', () => {
+  const item = {
+    key: 'shelf-maintain-1',
+    isInpaper: false,
+    sourcePath: 'db/Old/Old.en.md',
+    sourceName: 'Old.pdf',
+    libraryMatchStatus: 'in_library',
+    libraryMatchPath: 'db/Renamed/Renamed.en.md',
+    blockId: 'stale-block',
+    anchorId: 'stale-anchor',
+    anchorKind: 'paragraph',
+    headingPath: 'Paper / Methods',
+    evidenceQuote: 'A traceable evidence sentence.',
+    readerEvidenceQuote: 'A traceable evidence sentence.',
+    shelfExcerpt: '',
+    cardEvidence: '',
+    raw: '',
+    pageStart: 1,
+    pageEnd: 1,
+  } as CiteShelfItem
+  const input = shelfReaderLocatorMaintenanceInput(item)
+  expect(input).toMatchObject({
+    key: item.key,
+    source_path: item.sourcePath,
+    fallback_source_path: item.libraryMatchPath,
+    block_id: 'stale-block',
+    evidence_quote: 'A traceable evidence sentence.',
+  })
+  expect(shelfReaderLocatorMaintenanceFingerprint(item)).toContain('stale-block')
+
+  const recovered = mergeShelfReaderLocatorMaintenanceResult(item, {
+    key: item.key,
+    ok: true,
+    changed: true,
+    status: 'recovered',
+    source_path: item.libraryMatchPath,
+    source_relocated: true,
+    locator: {
+      block_id: 'fresh-block',
+      anchor_id: 'fresh-anchor',
+      anchor_kind: 'paragraph',
+      heading_path: 'Paper / Updated methods',
+      page_start: 4,
+      page_end: 4,
+    },
+  })
+  expect(recovered).toMatchObject({
+    sourcePath: item.libraryMatchPath,
+    blockId: 'fresh-block',
+    anchorId: 'fresh-anchor',
+    anchorKind: 'paragraph',
+    headingPath: 'Paper / Updated methods',
+    pageStart: 4,
+    pageEnd: 4,
+  })
+  expect(shelfReaderLocatorMaintenanceInput({ ...item, isInpaper: true })).toBeNull()
 })
 
 test('reader note capture preserves structured markdown, page, and exact locator identity', () => {
@@ -216,6 +387,11 @@ test('reader anchor helpers understand Chinese equation and figure labels withou
 test('reader locate guard compares source paths by normalized identity', () => {
   expect(normalizeReaderSourcePathForMatch('DB\\\\Fixture//Fixture.en.md/')).toBe('db/fixture/fixture.en.md')
   expect(readerSourcePathsMatch('DB\\\\Fixture//Fixture.en.md/', 'db/fixture/fixture.en.md')).toBe(true)
+  expect(readerSourcePathsMatch(
+    'F:\\Research Papers\\Pi_zaya\\db\\Fixture\\Fixture.en.md',
+    'db/fixture/fixture.en.md',
+  )).toBe(true)
+  expect(readerSourcePathsMatch('F:\\Other\\Fixture.en.md', 'fixture.en.md')).toBe(false)
   expect(readerSourcePathsMatch('db/fixture/fixture.en.md', 'db/other/fixture.en.md')).toBe(false)
   expect(readerSourcePathsMatch('', 'db/fixture/fixture.en.md')).toBe(false)
   expect(normalizeReaderSourcePathForMatch('file:///F:/Research%20Papers/./Fixture//Paper.en.md?download=1#anchor')).toBe('f:/research papers/fixture/paper.en.md')

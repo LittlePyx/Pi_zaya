@@ -9,6 +9,7 @@ export type ReaderRegressionScenario =
   | 'image-anchor-mismatch'
   | 'candidate-fallback'
   | 'strict-missing-exact'
+  | 'strict-stale-unverified'
   | 'discussion-only'
   | 'limitations-only'
   | 'future-work-only'
@@ -519,6 +520,40 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
       blocks: readerRegressionAdjacentTableBlocks,
     }
   }
+  if (scenario === 'strict-missing-exact') {
+    return {
+      ...readerRegressionDocResponse,
+      locator_resolution: {
+        key: 'reader-open',
+        ok: true,
+        changed: true,
+        status: 'recovered',
+        reason: 'unique_evidence_quote',
+        score: 1,
+        locator: {
+          block_id: 'quote-1',
+          anchor_id: 'a-quote-1',
+          anchor_kind: 'blockquote',
+          heading_path: 'Fixture Paper / 1. Introduction',
+          page_start: 1,
+          page_end: 1,
+        },
+      },
+    }
+  }
+  if (scenario === 'strict-stale-unverified') {
+    return {
+      ...readerRegressionDocResponse,
+      locator_resolution: {
+        key: 'reader-open',
+        ok: false,
+        changed: false,
+        status: 'unresolved',
+        reason: 'ambiguous_or_weak_match',
+        score: 0.21,
+      },
+    }
+  }
   return readerRegressionDocResponse
 }
 
@@ -961,6 +996,37 @@ export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario)
         blockId: 'missing-quote',
         anchorId: 'missing-quote-anchor',
         anchorKind: 'quote',
+        hitLevel: 'exact',
+        claimType: 'quote_claim',
+        locatePolicy: 'required',
+        locateSurfacePolicy: 'primary',
+      },
+    }
+  }
+
+  if (scenario === 'strict-stale-unverified') {
+    const missingEvidence = 'The quantum detector calibration is verified by a cryogenic reference target.'
+    return {
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      headingPath: 'Fixture Paper / 3. Conclusion',
+      snippet: missingEvidence,
+      highlightSnippet: missingEvidence,
+      blockId: 'p-conclusion-1',
+      anchorId: 'a-p-conclusion-1',
+      anchorKind: 'paragraph',
+      strictLocate: true,
+      locateTarget: {
+        segmentId: 'seg-stale-unverified',
+        sourceSegmentId: 'seg-stale-unverified',
+        headingPath: 'Fixture Paper / 3. Conclusion',
+        snippet: missingEvidence,
+        highlightSnippet: missingEvidence,
+        evidenceQuote: missingEvidence,
+        anchorText: missingEvidence,
+        blockId: 'p-conclusion-1',
+        anchorId: 'a-p-conclusion-1',
+        anchorKind: 'paragraph',
         hitLevel: 'exact',
         claimType: 'quote_claim',
         locatePolicy: 'required',

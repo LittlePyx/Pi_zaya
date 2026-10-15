@@ -15,6 +15,7 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_settings, load_prefs, save_prefs
+from api.provider_connection_state import load_connection_check, remember_connection_check
 from api.internal_access import management_api_allowed, require_management_api
 from api.security import auth_token_configured, management_auth_required, management_token_configured, request_is_authenticated
 from kb.file_ops import _pick_directory_dialog
@@ -34,9 +35,16 @@ from kb.version import read_app_version
 
 router = APIRouter(prefix="/api", tags=["settings"])
 _PATH_PREF_KEYS = {"pdf_dir", "md_dir"}
-_API_KEY_PREF_KEYS = {"text_api_key", "vision_api_key"}
-_LLM_PREF_KEYS = {"text_base_url", "text_model", "vision_base_url", "vision_model"}
-_BOOL_PREF_KEYS = {"auto_backup_enabled", "quality_data_sharing_enabled"}
+_API_KEY_PREF_KEYS = {"text_api_key", "vision_api_key", "web_search_api_key"}
+_LLM_PREF_KEYS = {
+    "text_base_url",
+    "text_model",
+    "vision_base_url",
+    "vision_model",
+    "web_search_base_url",
+    "web_search_model",
+}
+_BOOL_PREF_KEYS = {"auto_backup_enabled", "quality_data_sharing_enabled", "web_search_enabled"}
 _PRIVATE_PREF_KEYS = _API_KEY_PREF_KEYS | {"quality_data_client_id"}
 _PUBLIC_PREF_KEYS = {
     "top_k",
@@ -148,6 +156,8 @@ def _normalize_pref_value(key: str, value):
         raise HTTPException(400, f"{key} must be a boolean")
     if key in _CHOICE_PREF_VALUES:
         raw = str(value or "").replace("\x00", "").strip().lower()
+        if key == "answer_mode_hint" and raw == "writing":
+            return "reading"
         if raw not in _CHOICE_PREF_VALUES[key]:
             allowed = ", ".join(sorted(_CHOICE_PREF_VALUES[key]))
             raise HTTPException(400, f"{key} must be one of: {allowed}")
@@ -207,6 +217,26 @@ def _connection_status(s) -> dict:
             "model": s.vision_model,
             "uses_text_fallback": bool(getattr(s, "vision_uses_text_fallback", False)),
         },
+        "web_search": {
+            "available": bool(
+                getattr(s, "agent_web_search_enabled", False)
+                and getattr(s, "agent_web_search_api_key", None)
+                and str(getattr(s, "agent_web_search_model", "") or "").strip()
+            ),
+            "enabled": bool(getattr(s, "agent_web_search_enabled", False)),
+            "has_api_key": bool(getattr(s, "agent_web_search_api_key", None)),
+            "base_url": str(getattr(s, "agent_web_search_base_url", "") or ""),
+            "model": str(getattr(s, "agent_web_search_model", "") or ""),
+            "reason": (
+                "disabled"
+                if not bool(getattr(s, "agent_web_search_enabled", False))
+                else "missing_api_key"
+                if not bool(getattr(s, "agent_web_search_api_key", None))
+                else "missing_model"
+                if not str(getattr(s, "agent_web_search_model", "") or "").strip()
+                else "ready"
+            ),
+        },
         "auto_route": bool(s.auto_route),
     }
 
@@ -226,7 +256,7 @@ def _public_prefs(prefs: dict, *, include_paths: bool = True) -> dict:
             continue
         if isinstance(value, (dict, list, tuple)):
             continue
-        out[clean] = value
+        out[clean] = "reading" if clean == "answer_mode_hint" and value == "writing" else value
     return out
 
 
@@ -252,6 +282,8 @@ def _provider_readiness(s, target: Literal["text", "vision"]) -> dict:
     last_test = _LLM_TEST_RESULTS.get(target)
     if last_test and last_test.get("fingerprint") != fingerprint:
         last_test = None
+    if last_test is None:
+        last_test = load_connection_check(target, fingerprint)
 
     if not has_key:
         status = "missing"
@@ -743,6 +775,10 @@ class PrefsPatch(BaseModel):
     vision_api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
     vision_base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
     vision_model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
+    web_search_enabled: bool | None = None
+    web_search_api_key: str | None = Field(None, max_length=_MAX_API_KEY_CHARS)
+    web_search_base_url: str | None = Field(None, max_length=_MAX_BASE_URL_CHARS)
+    web_search_model: str | None = Field(None, max_length=_MAX_MODEL_CHARS)
     auto_backup_enabled: bool | None = None
     quality_data_sharing_enabled: bool | None = None
 
@@ -753,7 +789,19 @@ class PrefsPatch(BaseModel):
             return None
         return str(value).replace("\x00", "").strip().lower()
 
-    @field_validator("text_api_key", "vision_api_key", "text_base_url", "vision_base_url", "text_model", "vision_model", "pdf_dir", "md_dir")
+    @field_validator(
+        "text_api_key",
+        "vision_api_key",
+        "web_search_api_key",
+        "text_base_url",
+        "vision_base_url",
+        "web_search_base_url",
+        "text_model",
+        "vision_model",
+        "web_search_model",
+        "pdf_dir",
+        "md_dir",
+    )
     @classmethod
     def _clean_text_value(cls, value: str | None) -> str | None:
         if value is None:
@@ -1068,6 +1116,7 @@ def test_llm(body: ConnectionTestBody | None = None):
             "checked_at": checked_at,
             "fingerprint": _provider_fingerprint(api_key=api_key, base_url=base_url, model=model),
         }
+        remember_connection_check(target, _LLM_TEST_RESULTS[target])
         return result
     except Exception as e:
         error_type = _classify_connection_error(e)
@@ -1080,6 +1129,7 @@ def test_llm(body: ConnectionTestBody | None = None):
             "checked_at": checked_at,
             "fingerprint": _provider_fingerprint(api_key=api_key, base_url=base_url, model=model),
         }
+        remember_connection_check(target, _LLM_TEST_RESULTS[target])
         return {"ok": False, "error": error_text, "error_type": error_type, "checked_at": checked_at}
 
 

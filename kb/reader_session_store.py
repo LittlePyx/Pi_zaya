@@ -195,6 +195,33 @@ class ReaderSessionStore:
                 return None
             return _sanitize_record(sid, record)
 
+    def located_sources(self) -> list[tuple[str, str]]:
+        """Return successful evidence locates, excluding source-only reader opens."""
+        from kb.retrieval_source_scope import source_path_key
+
+        located: set[tuple[str, str]] = set()
+        with _LOCK:
+            sessions = self._load_unlocked().get("sessions", {})
+            for record in sessions.values() if isinstance(sessions, dict) else ():
+                if not isinstance(record, dict):
+                    continue
+                state = record.get("state") or {}
+                payload = record.get("payload") or {}
+                if not isinstance(state, dict) or not isinstance(payload, dict):
+                    continue
+                result = state.get("locateResult") or {}
+                if not isinstance(result, dict):
+                    continue
+                cid = str(record.get("conversation_id") or "").strip()
+                source = source_path_key(payload.get("sourcePath"))
+                if (
+                    cid and source and (payload.get("highlightSnippet") or payload.get("snippet"))
+                    and result.get("ok") is True and result.get("status") in {"exact", "block"}
+                    and source_path_key(result.get("sourcePath")) == source
+                ):
+                    located.add((cid, source))
+        return sorted(located)
+
     def update_state(self, session_id: str, patch: dict[str, Any]) -> dict[str, Any] | None:
         sid = str(session_id or "").strip()
         if not sid:

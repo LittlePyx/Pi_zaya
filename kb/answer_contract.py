@@ -140,7 +140,9 @@ def _normalize_answer_mode_hint(answer_mode_hint: str) -> str:
         "exp": "experiment",
         "debug": "troubleshoot",
         "troubleshoot": "troubleshoot",
-        "writing": "writing",
+        # Legacy clients may still send the removed writing preset. Keep the
+        # request valid, but route it through the evidence-reading behavior.
+        "writing": "reading",
     }
     return alias.get(hint, "")
 
@@ -739,7 +741,10 @@ def _build_answer_contract_system_rules(
         "idea": "- Intent=idea: include feasibility, risk, and a minimum validation path.",
         "experiment": "- Intent=experiment: include variables/controls, metrics, and expected outcomes.",
         "troubleshoot": "- Intent=troubleshoot: prioritize likely causes, diagnosis steps, and fix order.",
-        "writing": "- Intent=writing: provide structure edits and directly reusable wording suggestions.",
+        "writing": (
+            "- Intent=writing-request: do not draft, rewrite, or polish manuscript prose. "
+            "Instead identify, organize, and locate the traceable evidence relevant to the requested section."
+        ),
     }
     lines.append(intent_rules.get(intent, intent_rules["reading"]))
     if output_mode_norm == "critical_review":
@@ -1727,9 +1732,9 @@ def _build_default_next_steps(*, intent: str, has_hits: bool, locale: str = "en"
             "Apply one change at a time and validate with a short regression test.",
         ],
         "writing": [
-            "Rewrite one paragraph using claim -> evidence -> implication order.",
-            "Replace broad statements with measurable or cited wording.",
-            "Run a final pass for logical transitions between adjacent paragraphs.",
+            "List the source-backed claims relevant to the requested section.",
+            "Attach a paper and exact evidence location to each claim.",
+            "Mark evidence gaps or conflicts that need further reading.",
         ],
     }
     by_intent_zh = {
@@ -1759,9 +1764,9 @@ def _build_default_next_steps(*, intent: str, has_hits: bool, locale: str = "en"
             "每次只改一个变量，并配合短回归测试验证修复效果。",
         ],
         "writing": [
-            "按“结论-证据-意义”重写一段，先提升主线清晰度。",
-            "把泛化表述替换为可量化或可引用的具体表述。",
-            "最后做一轮段间衔接检查，确保上下文过渡自然。",
+            "列出与目标主题相关、且有来源支持的关键结论。",
+            "为每条结论附上文献和准确的证据位置。",
+            "标出仍需补读的证据缺口或冲突。",
         ],
     }
     use_zh = str(locale or "").strip().lower().startswith("zh")
@@ -2216,6 +2221,9 @@ def build_answer_contract_payload(
     quality_payload = {
         "minimum_ok": quality.get("minimum_ok") if "minimum_ok" in quality else None,
         "prompt_family": _contract_payload_text(quality.get("prompt_family")),
+        "resolution_status": _contract_payload_text(
+            quality.get("resolution_status"), quality.get("resolutionStatus")
+        ),
         "quality_gate_status": _contract_payload_text(
             source_summary.get("quality_gate_status"),
             policy_support.get("quality_gate_status"),

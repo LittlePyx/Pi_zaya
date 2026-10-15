@@ -16,7 +16,9 @@ from fastapi import APIRouter
 from api.deps import get_chat_store, get_settings, load_prefs
 from kb.file_ops import _list_pdf_paths_fast
 from kb.library_paths import resolve_library_paths
-from kb.store import load_docs_index
+from kb.store import ready_document_ids
+from kb.reader_session_store import ReaderSessionStore
+from api.routers.settings import _provider_readiness
 from kb.version import read_app_version
 
 router = APIRouter(prefix="/api/app", tags=["app"])
@@ -170,7 +172,10 @@ def _tag_is_newer(latest: str, current: str) -> bool | None:
 
 
 def _fetch_latest_release(repo: str, timeout_s: float) -> dict[str, Any]:
-    url = f"https://api.github.com/repos/{repo}/releases/latest"
+    # GitHub's /releases/latest endpoint excludes prereleases. Pi-zaya beta
+    # builds are real published releases, so read the release list and select
+    # the newest semantic version, including prereleases.
+    url = f"https://api.github.com/repos/{repo}/releases?per_page=20"
     request = urllib.request.Request(
         url,
         headers={
@@ -184,7 +189,25 @@ def _fetch_latest_release(repo: str, timeout_s: float) -> dict[str, Any]:
     with urllib.request.urlopen(request, timeout=timeout_s) as response:
         raw = response.read(1024 * 512)
     data = json.loads(raw.decode("utf-8", "replace"))
-    return data if isinstance(data, dict) else {}
+    if isinstance(data, dict):
+        return data
+    if not isinstance(data, list):
+        return {}
+    releases = [
+        item
+        for item in data
+        if isinstance(item, dict)
+        and not bool(item.get("draft"))
+        and str(item.get("tag_name") or "").strip()
+    ]
+    if not releases:
+        return {}
+    latest = releases[0]
+    for candidate in releases[1:]:
+        newer = _tag_is_newer(candidate.get("tag_name"), latest.get("tag_name"))
+        if newer is True:
+            latest = candidate
+    return latest
 
 
 def _public_release_payload(data: dict[str, Any]) -> dict[str, Any]:
@@ -401,28 +424,37 @@ def get_onboarding_status():
     paths = resolve_library_paths(settings, load_prefs())
     imported_document_count = len(_list_pdf_paths_fast(paths.pdf_dir))
     try:
-        ready_document_count = len(load_docs_index(Path(settings.db_dir)))
+        ready_document_count = len(ready_document_ids(Path(settings.db_dir)))
     except Exception:
         ready_document_count = 0
     try:
         grounded_answer_count = get_chat_store().grounded_answer_count()
     except Exception:
         grounded_answer_count = 0
+    try:
+        located = ReaderSessionStore(Path(settings.db_dir) / "_reader_sessions.json").located_sources()
+        located_evidence_count = get_chat_store().count_located_answer_sources(located)
+    except Exception:
+        located_evidence_count = 0
 
-    text_model_ready = bool(getattr(settings, "text_api_key", "") or getattr(settings, "api_key", ""))
+    connection = _provider_readiness(settings, "text")
+    text_model_ready = connection["status"] == "ok"
     if not text_model_ready:
         current_step = "connect_model"
     elif ready_document_count <= 0:
         current_step = "prepare_document"
-    elif grounded_answer_count <= 0:
+    elif grounded_answer_count <= 0 or located_evidence_count <= 0:
         current_step = "ask_question"
     else:
         current_step = "completed"
     return {
         "text_model_ready": text_model_ready,
+        "text_model_configured": bool(connection["has_api_key"]),
+        "text_model_connection_status": connection["status"],
         "imported_document_count": imported_document_count,
         "ready_document_count": ready_document_count,
         "grounded_answer_count": grounded_answer_count,
+        "located_evidence_count": located_evidence_count,
         "current_step": current_step,
         "completed": current_step == "completed",
     }

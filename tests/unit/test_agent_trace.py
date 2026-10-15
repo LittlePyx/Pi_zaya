@@ -16,7 +16,11 @@ def test_agent_trace_serializes_completed_rag_answer():
                 },
             }
         ],
-        scope_context={"query_scope": "library", "scope_source": "test"},
+        scope_context={
+            "query_scope": "library",
+            "scope_source": "test",
+            "external_supplement_mode": "model",
+        },
     )
 
     assert trace["mode"] == "research_agent"
@@ -26,8 +30,8 @@ def test_agent_trace_serializes_completed_rag_answer():
     assert trace["verification"]["supported_claims"] == 1
     assert trace["summary"]["supported_claims"] == 1
     assert trace["summary"]["total_claims"] == 1
-    assert trace["verification"]["evidence_status"] == "needs_review"
-    assert trace["summary"]["evidence_status"] == "needs_review"
+    assert trace["verification"]["evidence_status"] == "grounded"
+    assert trace["summary"]["evidence_status"] == "grounded"
     assert trace["summary"]["evidence_hit_count"] == 1
     assert trace["summary"]["tool_call_count"] == 3
     assert trace["summary"]["query_scope"] == "library"
@@ -77,7 +81,11 @@ def test_generation_agent_notes_allow_external_academic_fallback_when_no_hits():
         "In the literature, how does retrieval augmented generation improve academic question answering?",
         evidence_hits=[],
         candidate_hits=[],
-        scope_context={"query_scope": "library", "scope_source": "test"},
+        scope_context={
+            "query_scope": "library",
+            "scope_source": "test",
+            "external_supplement_mode": "model",
+        },
     )
 
     gate = bridge["agent_notes"]["evidence_gate"]
@@ -102,7 +110,11 @@ def test_generation_agent_notes_recommend_hybrid_for_thin_local_evidence():
             }
         ],
         candidate_hits=[],
-        scope_context={"query_scope": "library", "scope_source": "test"},
+        scope_context={
+            "query_scope": "library",
+            "scope_source": "test",
+            "external_supplement_mode": "model",
+        },
     )
 
     gate = bridge["agent_notes"]["evidence_gate"]
@@ -183,7 +195,11 @@ def test_completed_trace_marks_external_answer_verification_not_applicable():
         query,
         evidence_hits=[],
         candidate_hits=[],
-        scope_context={"query_scope": "library", "scope_source": "test"},
+        scope_context={
+            "query_scope": "library",
+            "scope_source": "test",
+            "external_supplement_mode": "model",
+        },
     )
 
     trace = build_agent_trace_for_completed_answer(
@@ -220,7 +236,11 @@ def test_completed_trace_preserves_hybrid_generation_quality_gate():
             }
         ],
         candidate_hits=[],
-        scope_context={"query_scope": "library", "scope_source": "test"},
+        scope_context={
+            "query_scope": "library",
+            "scope_source": "test",
+            "external_supplement_mode": "model",
+        },
     )
 
     trace = build_agent_trace_for_completed_answer(

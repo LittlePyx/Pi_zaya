@@ -10,6 +10,10 @@ from typing import Any, Iterator, Optional
 from openai import OpenAI
 
 from .config import Settings
+from .model_call_observability import (
+    extract_provider_token_usage,
+    record_model_call_observation,
+)
 
 
 def _stream_user_visible_probe(text: str) -> str:
@@ -200,6 +204,8 @@ class DeepSeekChat:
             model=model,
         )
         for attempt in range(retry_count + 1):
+            started_at = time.monotonic()
+            resp = None
             try:
                 request_kwargs = {
                     "model": model,
@@ -214,9 +220,27 @@ class DeepSeekChat:
                     client=client,
                     **request_kwargs,
                 )
-                return (resp.choices[0].message.content or "").strip()
+                text = (resp.choices[0].message.content or "").strip()
+                record_model_call_observation(
+                    route_kind=route_kind,
+                    started_at=started_at,
+                    outcome="completed",
+                    attempt_count=attempt + 1,
+                    streaming=False,
+                    usage_source=resp,
+                )
+                return text
             except Exception as e:  # noqa: BLE001
                 last_err = e
+                record_model_call_observation(
+                    route_kind=route_kind,
+                    started_at=started_at,
+                    outcome="error",
+                    attempt_count=attempt + 1,
+                    streaming=False,
+                    usage_source=resp,
+                    error=e,
+                )
                 if attempt >= retry_count:
                     break
                 time.sleep(0.6 * (attempt + 1))
@@ -246,6 +270,8 @@ class DeepSeekChat:
         client = OpenAI(api_key=api_key, base_url=base_url)
         last_err: Optional[Exception] = None
         for attempt in range(self._settings.max_retries + 1):
+            started_at = time.monotonic()
+            resp = None
             try:
                 resp = self._create_with_guard_timeout(
                     client=client,
@@ -257,13 +283,31 @@ class DeepSeekChat:
                     timeout=self._settings.timeout_s,
                 )
                 message = resp.choices[0].message
-                return {
+                result = {
                     "content": (getattr(message, "content", None) or "").strip(),
                     "annotations": _plain_annotations(message),
                     "model": model,
                 }
+                record_model_call_observation(
+                    route_kind="web_search",
+                    started_at=started_at,
+                    outcome="completed",
+                    attempt_count=attempt + 1,
+                    streaming=False,
+                    usage_source=resp,
+                )
+                return result
             except Exception as e:  # noqa: BLE001
                 last_err = e
+                record_model_call_observation(
+                    route_kind="web_search",
+                    started_at=started_at,
+                    outcome="error",
+                    attempt_count=attempt + 1,
+                    streaming=False,
+                    usage_source=resp,
+                    error=e,
+                )
                 if attempt >= self._settings.max_retries:
                     break
                 time.sleep(0.6 * (attempt + 1))
@@ -380,6 +424,11 @@ class DeepSeekChat:
         def run() -> None:
             route_client = client
             owns_client = False
+            started_at = time.monotonic()
+            usage_counts: dict[str, int] = {}
+            outcome = "completed"
+            call_error: BaseException | None = None
+            terminal_event: tuple[str, Any] = ("done", None)
             try:
                 # Real SDK clients are recreated inside the worker.  Sharing a
                 # client created on another thread previously caused httpx pool
@@ -416,7 +465,9 @@ class DeepSeekChat:
                 resources["response"] = resp
                 for event in resp:
                     if stop.is_set():
+                        outcome = "cancelled"
                         break
+                    usage_counts.update(extract_provider_token_usage(event))
                     try:
                         choice0 = event.choices[0]
                         delta = getattr(choice0, "delta", None)
@@ -425,15 +476,26 @@ class DeepSeekChat:
                         continue
                     if piece:
                         events.put(("piece", piece))
-                events.put(("done", None))
             except Exception as exc:  # noqa: BLE001
-                events.put(("error", exc))
+                outcome = "error"
+                call_error = exc
+                terminal_event = ("error", exc)
             finally:
+                record_model_call_observation(
+                    route_kind=route_kind,
+                    started_at=started_at,
+                    outcome=outcome,
+                    attempt_count=1,
+                    streaming=True,
+                    usage_source=usage_counts,
+                    error=call_error,
+                )
                 if owns_client:
                     try:
                         route_client.close()
                     except Exception:
                         pass
+                events.put(terminal_event)
 
         worker = threading.Thread(target=run, name=f"llm-stream-{route_kind}", daemon=True)
         worker.start()
@@ -502,6 +564,10 @@ class DeepSeekChat:
                 if received_at >= absolute_deadline:
                     raise TimeoutError(
                         f"LLM stream exceeded the {total_timeout_s:.1f}s total visible-output deadline"
+                    )
+                if not emitted and first_visible_deadline is not None and received_at >= float(first_visible_deadline):
+                    raise TimeoutError(
+                        "LLM stream timed out waiting for the first visible token across provider routes"
                     )
                 if received_at - last_visible_at >= visible_timeout_s:
                     phase = "idle visible output" if emitted else "first visible token"

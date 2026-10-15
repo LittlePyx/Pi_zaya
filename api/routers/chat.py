@@ -7,7 +7,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import quote, unquote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -57,6 +57,22 @@ from kb.path_safety import (
 from kb.pdf_tools import ensure_dir
 from kb.reader_session_store import ReaderSessionStore
 from kb.research_note import research_note_docx, research_note_filename
+from kb.research_note_evidence import (
+    RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+    RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS,
+    RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS,
+    auto_resolve_research_note_source_state,
+    build_research_note_evidence_context,
+    capture_research_note_source_context_baseline,
+    record_research_note_source_baseline_check,
+    repair_research_note_source_state,
+    research_note_evidence_maintenance_due,
+    research_note_evidence_resolution_mode,
+    research_note_source_path_matches,
+    resolve_research_note_source_baseline_check,
+    review_research_note_source_state,
+    source_content_fingerprint,
+)
 from kb.task_runtime import (
     _gen_has_active_task_id,
     _is_live_assistant_text,
@@ -84,6 +100,30 @@ _CHAT_CITATION_SHELF_MAX_JSON_CHARS = 260_000
 _CHAT_CITATION_SHELF_ITEM_MAX_JSON_CHARS = 40_000
 _CHAT_RESEARCH_NOTE_MAX_CHARS = 160_000
 _CHAT_RESEARCH_NOTE_SOURCE_STATE_MAX_JSON_CHARS = 240_000
+_RESEARCH_NOTE_EVIDENCE_MAINTENANCE_LIMIT = 64
+_RESEARCH_NOTE_EVIDENCE_MAINTENANCE_BUDGET_S = 3.0
+_RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S = (5.0, 30.0, 300.0, 3_600.0, 21_600.0)
+_RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT = len(_RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S) + 1
+
+
+def _research_note_evidence_system_issue_family(reason: str) -> str:
+    normalized = str(reason or "").strip()
+    if normalized in {"unavailable", "source_missing", "source_lost"}:
+        return "missing"
+    if normalized in {"conversion_pending", "verification_failed", "source_unreadable"}:
+        return "unreadable"
+    if normalized in {"source_changed_during_capture", "source_unstable"}:
+        return "unstable"
+    return ""
+
+
+def _research_note_evidence_terminal_reason(reason: str) -> str:
+    family = _research_note_evidence_system_issue_family(reason)
+    if family == "missing":
+        return "source_lost"
+    if family == "unstable":
+        return "source_unstable"
+    return "source_unreadable"
 
 
 def _bounded_json_size(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -181,6 +221,141 @@ class ResearchNoteExportBody(BaseModel):
         if not clean:
             raise ValueError("value must not be blank")
         return clean
+
+
+class ResearchNoteEvidenceContextBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source_path: str = Field(..., min_length=1, max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    source_name: str = Field("", max_length=_CHAT_SOURCE_NAME_MAX_CHARS)
+    heading_path: str = Field("", max_length=500)
+    evidence_quote: str = Field("", max_length=12_000)
+    block_id: str = Field("", max_length=160)
+    anchor_id: str = Field("", max_length=160)
+    anchor_kind: str = Field("", max_length=40)
+    page_start: int | None = Field(None, ge=1, le=100_000)
+    page_end: int | None = Field(None, ge=1, le=100_000)
+    source_fingerprint: str = Field("", max_length=96)
+    evidence_context_snapshot: dict[str, Any] | None = None
+
+    @field_validator("source_path")
+    @classmethod
+    def _clean_evidence_context_source_path(cls, value: str) -> str:
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("source_path must not be blank")
+        return clean
+
+    @field_validator(
+        "source_name",
+        "heading_path",
+        "evidence_quote",
+        "block_id",
+        "anchor_id",
+        "anchor_kind",
+        "source_fingerprint",
+    )
+    @classmethod
+    def _clean_evidence_context_text(cls, value: str) -> str:
+        return str(value or "").replace("\x00", "").strip()
+
+
+class ResearchNoteEvidenceRepairBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    source_index: int = Field(..., ge=0, le=239)
+    source_path: str = Field(..., min_length=1, max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    capture_id: str = Field("", max_length=160)
+    old_block_id: str = Field("", max_length=160)
+    old_anchor_id: str = Field("", max_length=160)
+    old_evidence_quote: str = Field("", max_length=12_000)
+    candidate_block_id: str = Field("", max_length=160)
+    candidate_anchor_id: str = Field("", max_length=160)
+    candidate_anchor_kind: str = Field("", max_length=40)
+    candidate_evidence_quote: str = Field(..., min_length=1, max_length=12_000)
+    source_fingerprint: str = Field(..., min_length=1, max_length=96)
+
+    @field_validator(
+        "source_path",
+        "capture_id",
+        "old_block_id",
+        "old_anchor_id",
+        "old_evidence_quote",
+        "candidate_block_id",
+        "candidate_anchor_id",
+        "candidate_anchor_kind",
+        "candidate_evidence_quote",
+        "source_fingerprint",
+    )
+    @classmethod
+    def _clean_evidence_repair_text(cls, value: str) -> str:
+        return str(value or "").replace("\x00", "").strip()
+
+
+class ResearchNoteEvidenceReviewBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    decision: Literal["confirmed", "invalid"]
+    source_index: int = Field(..., ge=0, le=239)
+    source_path: str = Field(..., min_length=1, max_length=_CHAT_SOURCE_PATH_MAX_CHARS)
+    capture_id: str = Field("", max_length=160)
+    old_block_id: str = Field("", max_length=160)
+    old_anchor_id: str = Field("", max_length=160)
+    old_evidence_quote: str = Field("", max_length=12_000)
+    expected_source_fingerprint: str = Field(..., min_length=1, max_length=96)
+    current_block_id: str = Field("", max_length=160)
+    current_anchor_id: str = Field("", max_length=160)
+    current_anchor_kind: str = Field("", max_length=40)
+    current_evidence_quote: str = Field(..., min_length=1, max_length=12_000)
+    source_fingerprint: str = Field(..., min_length=1, max_length=96)
+
+    @field_validator(
+        "source_path",
+        "capture_id",
+        "old_block_id",
+        "old_anchor_id",
+        "old_evidence_quote",
+        "expected_source_fingerprint",
+        "current_block_id",
+        "current_anchor_id",
+        "current_anchor_kind",
+        "current_evidence_quote",
+        "source_fingerprint",
+    )
+    @classmethod
+    def _clean_evidence_review_text(cls, value: str) -> str:
+        return str(value or "").replace("\x00", "").strip()
+
+
+class ResearchNoteEvidenceBaselineBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    expected_revision: int = Field(..., ge=1)
+
+
+class ResearchNoteEvidenceMaintenanceItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    note_id: str = Field(..., min_length=1, max_length=120)
+    expected_revision: int = Field(..., ge=1)
+
+    @field_validator("note_id")
+    @classmethod
+    def _clean_note_id(cls, value: str) -> str:
+        clean = str(value or "").replace("\x00", "").strip()
+        if not clean:
+            raise ValueError("note_id must not be blank")
+        return clean
+
+
+class ResearchNoteEvidenceMaintenanceBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    notes: list[ResearchNoteEvidenceMaintenanceItem] = Field(
+        ...,
+        min_length=1,
+        max_length=_RESEARCH_NOTE_EVIDENCE_MAINTENANCE_LIMIT,
+    )
 
 
 class ResearchNoteCreateBody(BaseModel):
@@ -341,6 +516,27 @@ class CitationShelfBody(BaseModel):
     scope: str | None = Field(None, max_length=40)
     project_id: str | None = Field(None, max_length=120)
     allow_empty_overwrite: bool = False
+    expected_revision: int | None = Field(None, ge=0)
+    mutation_id: str = Field("", max_length=120)
+    mutations: list[dict[str, Any]] = Field(default_factory=list, max_length=120)
+
+    @field_validator("mutations")
+    @classmethod
+    def _check_mutations(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        _bounded_dict_list(value, name="shelf operations", max_items=120, max_json_chars=_CHAT_CITATION_SHELF_MAX_JSON_CHARS)
+        for op in value:
+            if not isinstance(op.get("id"), str) or not 1 <= len(op["id"]) <= 120:
+                raise ValueError("Shelf operation requires a bounded ID")
+            if not isinstance(op.get("clear", False), bool) or ("open" in op and not isinstance(op["open"], bool)):
+                raise ValueError("Invalid shelf operation flags")
+            for key in ("removedKeys", "removedIdentities", "order"):
+                entries = op.get(key, [])
+                if not isinstance(entries, list) or len(entries) > 120 or any(not isinstance(entry, str) for entry in entries):
+                    raise ValueError("Invalid shelf operation keys")
+            _bounded_dict_list(op.get("upserts", []), name="shelf upserts", max_items=120, max_json_chars=_CHAT_CITATION_SHELF_MAX_JSON_CHARS)
+        if len({op["id"] for op in value}) != len(value):
+            raise ValueError("Duplicate shelf operation ID")
+        return value
 
     @field_validator("items")
     @classmethod
@@ -1228,6 +1424,7 @@ def run_chat_research_agent(body: ResearchAgentRequest) -> ResearchAgentResponse
         selected_research_context=body.prompt_context or {},
         current_source_path=source_lock_path,
         current_source_name=source_lock_name,
+        external_supplement_mode=body.external_supplement_mode,
     )
     return ResearchAgentResponse.model_validate(payload)
 
@@ -1250,6 +1447,1014 @@ def export_chat_research_note(body: ResearchNoteExportBody):
             ),
         },
     )
+
+
+@router.post("/chat/research-note/evidence-context")
+def get_chat_research_note_evidence_context(body: ResearchNoteEvidenceContextBody):
+    source_path = _resolve_allowed_reader_source_path(body.source_path)
+    try:
+        settings = get_settings()
+        md_path = _resolve_paper_guide_md_path(
+            source_path,
+            md_root=_md_dir(),
+            db_dir=getattr(settings, "db_dir", None),
+            pdf_root=_pdf_dir(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+    if md_path is None:
+        return {
+            "status": "unavailable",
+            "reason": "converted_markdown_missing",
+            "source_name": body.source_name or Path(body.source_path).name,
+            "heading_path": body.heading_path,
+            "page_start": body.page_start,
+            "page_end": body.page_end,
+            "before": [],
+            "target": None,
+            "after": [],
+            "candidates": [],
+            "can_open_exact": False,
+            "reader_open": None,
+            "source_fingerprint": "",
+            "source_changed": bool(body.source_fingerprint),
+            "context_snapshot": None,
+        }
+    try:
+        return build_research_note_evidence_context(
+            md_path=md_path,
+            source_path=body.source_path,
+            source_name=body.source_name,
+            heading_path=body.heading_path,
+            evidence_quote=body.evidence_quote,
+            block_id=body.block_id,
+            anchor_id=body.anchor_id,
+            anchor_kind=body.anchor_kind,
+            page_start=body.page_start,
+            page_end=body.page_end,
+            source_fingerprint=body.source_fingerprint,
+            saved_context_snapshot=body.evidence_context_snapshot,
+        )
+    except Exception as exc:
+        raise HTTPException(500, "research note evidence context failed") from exc
+
+
+def _resolve_research_note_evidence_md_path(
+    source_path: str,
+    *,
+    md_root: Path,
+    pdf_root: Path,
+    db_dir: Path | str | None,
+) -> tuple[Path | None, str]:
+    """Resolve readable evidence and classify failures owned by the system.
+
+    Resolve the converted Markdown first so a retained conversion remains
+    usable after its PDF is removed. Only then require the saved reader path.
+    The caller persists the returned reason and applies bounded retry policy.
+    """
+    raw = str(source_path or "").strip()
+    if not raw:
+        return None, "source_lost"
+    try:
+        direct_md = _resolve_paper_guide_md_path(
+            raw,
+            md_root=md_root,
+            db_dir=db_dir,
+            pdf_root=pdf_root,
+        )
+    except Exception:
+        return None, "verification_failed"
+    if direct_md is not None:
+        return direct_md, ""
+
+    try:
+        allowed_source = _resolve_allowed_reader_source_path(raw)
+    except HTTPException as exc:
+        if exc.status_code in {400, 404}:
+            return None, "source_missing"
+        return None, "verification_failed"
+    except Exception:
+        return None, "verification_failed"
+
+    allowed_path = Path(allowed_source)
+    if allowed_path.suffix.lower().endswith(".md") and allowed_path.is_file():
+        return allowed_path, ""
+
+    try:
+        md_path = _resolve_paper_guide_md_path(
+            allowed_source,
+            md_root=md_root,
+            db_dir=db_dir,
+            pdf_root=pdf_root,
+        )
+    except Exception:
+        return None, "verification_failed"
+    if md_path is not None:
+        return md_path, ""
+    if Path(allowed_source).suffix.lower() == ".pdf":
+        return None, "conversion_pending"
+    return None, "source_missing"
+
+
+def _capture_chat_research_note_evidence_context_baseline(
+    note_id: str,
+    expected_revision: int,
+    *,
+    source_path_filter: tuple[str, ...] | None = None,
+    refresh_existing: bool = False,
+):
+    store = get_chat_store()
+    note = store.get_research_note(note_id)
+    if note is None:
+        raise HTTPException(404, "research note not found")
+    if int(note.get("revision") or 1) != expected_revision:
+        raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
+
+    source_state = note.get("source_state") if isinstance(note.get("source_state"), dict) else {}
+    links = source_state.get("links")
+    links = links if isinstance(links, list) else []
+    next_source_state = source_state
+    summary: dict[str, Any] = {
+        "total": 0,
+        "created": 0,
+        "skipped": 0,
+        "failed": 0,
+        "reasons": {},
+    }
+    items: list[dict[str, Any]] = []
+    checked_at = time.time()
+
+    try:
+        settings = get_settings()
+        md_root = _md_dir()
+        pdf_root = _pdf_dir()
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+
+    def record_result(
+        source_index: int,
+        link: dict[str, Any],
+        *,
+        status: Literal["created", "skipped", "failed"],
+        reason: str,
+        source_fingerprint: str = "",
+    ) -> None:
+        nonlocal next_source_state
+        if status == "created":
+            next_source_state = resolve_research_note_source_baseline_check(
+                next_source_state,
+                source_index=source_index,
+                reason=reason,
+                source_fingerprint=source_fingerprint,
+                resolved_at=checked_at,
+            )
+        elif reason not in {"already_present", "invalid"}:
+            persisted_links = next_source_state.get("links")
+            persisted_link = (
+                persisted_links[source_index]
+                if isinstance(persisted_links, list) and 0 <= source_index < len(persisted_links)
+                else None
+            )
+            previous_check = (
+                persisted_link.get("evidence_baseline_check")
+                if isinstance(persisted_link, dict)
+                else None
+            )
+            retry_count: int | None = None
+            retry_after: float | None = None
+            terminal = reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS
+            is_system_retry = bool(
+                status == "failed" or reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS
+            )
+            if is_system_retry:
+                previous_reason = str(previous_check.get("reason") or "") if isinstance(previous_check, dict) else ""
+                try:
+                    previous_count = int(previous_check.get("retry_count") or 0) if isinstance(previous_check, dict) else 0
+                except (TypeError, ValueError):
+                    previous_count = 0
+                same_issue = bool(
+                    _research_note_evidence_system_issue_family(previous_reason)
+                    and _research_note_evidence_system_issue_family(previous_reason)
+                    == _research_note_evidence_system_issue_family(reason)
+                )
+                retry_count = max(1, previous_count + 1) if same_issue else 1
+                if retry_count >= _RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT:
+                    reason = _research_note_evidence_terminal_reason(reason)
+                    status = "skipped"
+                    terminal = True
+                    retry_count = _RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT
+                else:
+                    delay_index = retry_count - 1
+                    retry_after = checked_at + _RESEARCH_NOTE_EVIDENCE_RETRY_DELAYS_S[delay_index]
+            elif terminal:
+                try:
+                    retry_count = int(previous_check.get("retry_count") or 0) if isinstance(previous_check, dict) else 0
+                except (TypeError, ValueError):
+                    retry_count = 0
+                retry_count = max(_RESEARCH_NOTE_EVIDENCE_RETRY_ATTEMPT_LIMIT, retry_count)
+            persisted_checked_at = checked_at
+            if (
+                terminal
+                and isinstance(previous_check, dict)
+                and str(previous_check.get("reason") or "") == reason
+                and bool(previous_check.get("terminal"))
+            ):
+                try:
+                    previous_checked_at = float(previous_check.get("checked_at") or 0)
+                except (TypeError, ValueError):
+                    previous_checked_at = 0.0
+                if previous_checked_at > 0:
+                    persisted_checked_at = previous_checked_at
+            next_source_state = record_research_note_source_baseline_check(
+                next_source_state,
+                source_index=source_index,
+                status=status,
+                reason=reason,
+                source_fingerprint=source_fingerprint,
+                checked_at=persisted_checked_at,
+                maintenance_version=RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION,
+                retry_count=retry_count,
+                retry_after=retry_after,
+                terminal=terminal,
+            )
+        elif reason in {"already_present", "invalid"}:
+            next_source_state = resolve_research_note_source_baseline_check(
+                next_source_state,
+                source_index=source_index,
+                reason=reason,
+                source_fingerprint=source_fingerprint,
+                resolved_at=checked_at,
+            )
+        summary[status] = int(summary[status]) + 1
+        reason_counts = summary["reasons"]
+        reason_counts[reason] = int(reason_counts.get(reason) or 0) + 1
+        item = {
+            "source_index": source_index,
+            "source_name": str(link.get("source_name") or link.get("label") or "").strip(),
+            "status": status,
+            "reason": reason,
+        }
+        persisted_links = next_source_state.get("links")
+        persisted_link = persisted_links[source_index] if isinstance(persisted_links, list) else None
+        persisted_check = persisted_link.get("evidence_baseline_check") if isinstance(persisted_link, dict) else None
+        if isinstance(persisted_check, dict) and persisted_check.get("reason") == reason:
+            item["checked_at"] = persisted_check.get("checked_at")
+            item["resolution_mode"] = persisted_check.get("resolution_mode") or (
+                research_note_evidence_resolution_mode(
+                    reason,
+                    terminal=bool(persisted_check.get("terminal")),
+                )
+            )
+        else:
+            item["resolution_mode"] = research_note_evidence_resolution_mode(
+                reason,
+                terminal=reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS,
+            )
+        items.append(item)
+
+    for source_index, raw_link in enumerate(links):
+        if not isinstance(raw_link, dict) or str(raw_link.get("kind") or "").strip() == "answer":
+            continue
+        source_path_raw = str(raw_link.get("source_path") or "").strip()
+        if source_path_filter is not None and not research_note_source_path_matches(
+            source_path_raw,
+            source_path_filter,
+        ):
+            continue
+        summary["total"] = int(summary["total"]) + 1
+        existing_context_snapshot = raw_link.get("evidence_context_snapshot")
+        existing_baseline_check = raw_link.get("evidence_baseline_check")
+        try:
+            existing_maintenance_version = (
+                int(existing_baseline_check.get("maintenance_version") or 0)
+                if isinstance(existing_baseline_check, dict)
+                else 0
+            )
+        except (TypeError, ValueError):
+            existing_maintenance_version = 0
+        existing_check_reason = (
+            str(existing_baseline_check.get("reason") or "").strip()
+            if isinstance(existing_baseline_check, dict)
+            else ""
+        )
+        existing_check_status = (
+            str(existing_baseline_check.get("status") or "").strip()
+            if isinstance(existing_baseline_check, dict)
+            else ""
+        )
+        refresh_saved_issue = bool(
+            isinstance(existing_baseline_check, dict)
+            and (
+                (
+                    existing_check_reason in {"candidate", "source_changed", "location_changed"}
+                    and existing_maintenance_version < RESEARCH_NOTE_EVIDENCE_MAINTENANCE_VERSION
+                )
+                or existing_check_status == "failed"
+                or existing_check_reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS
+            )
+        )
+        if existing_context_snapshot is not None and not refresh_existing and not refresh_saved_issue:
+            record_result(source_index, raw_link, status="skipped", reason="already_present")
+            continue
+        verification = raw_link.get("evidence_verification")
+        verification = verification if isinstance(verification, dict) else {}
+        if str(verification.get("status") or "").strip().lower() == "invalid":
+            record_result(source_index, raw_link, status="skipped", reason="invalid")
+            continue
+        md_path, unavailable_reason = _resolve_research_note_evidence_md_path(
+            source_path_raw,
+            md_root=md_root,
+            pdf_root=pdf_root,
+            db_dir=getattr(settings, "db_dir", None),
+        )
+        if md_path is None:
+            record_result(
+                source_index,
+                raw_link,
+                status="failed" if unavailable_reason == "verification_failed" else "skipped",
+                reason=unavailable_reason or "verification_failed",
+            )
+            continue
+
+        snapshot_fingerprint = (
+            str(existing_context_snapshot.get("source_fingerprint") or "").strip()
+            if isinstance(existing_context_snapshot, dict)
+            else ""
+        )
+        saved_fingerprint = str(
+            verification.get("source_fingerprint") or snapshot_fingerprint or ""
+        ).strip()
+        try:
+            verified = build_research_note_evidence_context(
+                md_path=md_path,
+                source_path=source_path_raw,
+                source_name=str(raw_link.get("source_name") or raw_link.get("label") or ""),
+                heading_path=str(raw_link.get("heading_path") or ""),
+                evidence_quote=str(raw_link.get("evidence_quote") or ""),
+                block_id=str(raw_link.get("block_id") or ""),
+                anchor_id=str(raw_link.get("anchor_id") or ""),
+                anchor_kind=str(raw_link.get("anchor_kind") or ""),
+                page_start=raw_link.get("page_start"),
+                page_end=raw_link.get("page_end"),
+                source_fingerprint=saved_fingerprint,
+                saved_context_snapshot=existing_context_snapshot,
+            )
+        except Exception:
+            record_result(source_index, raw_link, status="failed", reason="verification_failed")
+            continue
+        verified_status = str(verified.get("status") or "")
+        verified_reason = str(verified.get("reason") or "")
+        target = verified.get("target")
+        snapshot = verified.get("context_snapshot")
+        current_fingerprint = str(verified.get("source_fingerprint") or "")
+        saved_block_id = str(raw_link.get("block_id") or "").strip()
+        saved_anchor_id = str(raw_link.get("anchor_id") or "").strip()
+        target_block_id = str(target.get("block_id") or "").strip() if isinstance(target, dict) else ""
+        target_anchor_id = str(target.get("anchor_id") or "").strip() if isinstance(target, dict) else ""
+        stable_locator_changed = bool(
+            (saved_block_id and saved_block_id != target_block_id)
+            or (saved_anchor_id and saved_anchor_id != target_anchor_id)
+        )
+        automatic_action = ""
+        if (
+            verified_status == "exact"
+            and verified_reason in {
+                "exact_block",
+                "exact_anchor",
+                "quote_relocated",
+                "context_disambiguated",
+            }
+            and isinstance(target, dict)
+            and isinstance(snapshot, dict)
+        ):
+            if verified_reason == "quote_relocated":
+                automatic_action = "exact_quote_auto_relocated"
+            elif verified_reason == "context_disambiguated":
+                automatic_action = "saved_context_auto_disambiguated"
+            elif bool(verified.get("source_changed")):
+                automatic_action = "source_change_auto_verified"
+            elif stable_locator_changed:
+                automatic_action = "stable_locator_auto_aligned"
+        if automatic_action:
+            try:
+                fingerprint_after_verification = source_content_fingerprint(md_path)
+            except OSError:
+                record_result(
+                    source_index,
+                    raw_link,
+                    status="failed",
+                    reason="source_changed_during_capture",
+                    source_fingerprint=current_fingerprint,
+                )
+                continue
+            if fingerprint_after_verification != current_fingerprint:
+                record_result(
+                    source_index,
+                    raw_link,
+                    status="failed",
+                    reason="source_changed_during_capture",
+                    source_fingerprint=current_fingerprint,
+                )
+                continue
+            try:
+                next_source_state = auto_resolve_research_note_source_state(
+                    next_source_state,
+                    source_index=source_index,
+                    source_path=source_path_raw,
+                    target=target,
+                    source_fingerprint=current_fingerprint,
+                    context_snapshot=snapshot,
+                    match_reason=verified_reason,
+                    action=automatic_action,
+                    resolution_evidence=verified.get("context_disambiguation"),
+                    resolved_at=checked_at,
+                )
+            except ValueError:
+                fallback_reason = "source_changed" if bool(verified.get("source_changed")) else "location_changed"
+                record_result(
+                    source_index,
+                    raw_link,
+                    status="skipped",
+                    reason=fallback_reason,
+                    source_fingerprint=current_fingerprint,
+                )
+                continue
+            record_result(
+                source_index,
+                raw_link,
+                status="created",
+                reason=automatic_action,
+                source_fingerprint=current_fingerprint,
+            )
+            continue
+        if bool(verified.get("source_changed")):
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="source_changed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
+            continue
+        if verified_status != "exact":
+            if verified_status == "candidate":
+                reason = "candidate"
+            elif verified_reason == "converted_markdown_missing":
+                reason = "conversion_pending"
+            else:
+                reason = "verification_failed"
+            record_result(
+                source_index,
+                raw_link,
+                status="failed" if reason == "verification_failed" else "skipped",
+                reason=reason,
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
+            continue
+        if verified_reason not in {"exact_block", "exact_anchor"}:
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="location_changed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
+            continue
+        if not isinstance(target, dict) or not isinstance(snapshot, dict):
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="verification_failed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
+            continue
+        if (
+            (saved_block_id and str(target.get("block_id") or "").strip() != saved_block_id)
+            or (saved_anchor_id and str(target.get("anchor_id") or "").strip() != saved_anchor_id)
+        ):
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="location_changed",
+                source_fingerprint=str(verified.get("source_fingerprint") or ""),
+            )
+            continue
+        try:
+            fingerprint_after_verification = source_content_fingerprint(md_path)
+        except OSError:
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="source_changed_during_capture",
+                source_fingerprint=current_fingerprint,
+            )
+            continue
+        if fingerprint_after_verification != current_fingerprint:
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="source_changed_during_capture",
+                source_fingerprint=current_fingerprint,
+            )
+            continue
+        if existing_context_snapshot is not None:
+            record_result(
+                source_index,
+                raw_link,
+                status="skipped",
+                reason="already_present",
+                source_fingerprint=current_fingerprint,
+            )
+            continue
+        try:
+            next_source_state = capture_research_note_source_context_baseline(
+                next_source_state,
+                source_index=source_index,
+                source_path=source_path_raw,
+                target=target,
+                source_fingerprint=current_fingerprint,
+                context_snapshot=snapshot,
+            )
+        except ValueError:
+            record_result(
+                source_index,
+                raw_link,
+                status="failed",
+                reason="verification_failed",
+                source_fingerprint=current_fingerprint,
+            )
+            continue
+        record_result(source_index, raw_link, status="created", reason="baseline_created")
+
+    if next_source_state != source_state:
+        record, conflicted = store.update_research_note_evidence_state(
+            note_id,
+            expected_revision=expected_revision,
+            source_state=next_source_state,
+        )
+        if conflicted:
+            raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
+        if record is None:
+            raise HTTPException(409, "research note evidence baselines could not be saved")
+    else:
+        record = store.get_research_note(note_id)
+        if record is None:
+            raise HTTPException(404, "research note not found")
+        if int(record.get("revision") or 1) != expected_revision:
+            raise HTTPException(409, "research note changed; reload before establishing evidence baselines")
+    return {"note": record, "summary": summary, "items": items}
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-context-baseline")
+def capture_chat_research_note_evidence_context_baseline(
+    note_id: str,
+    body: ResearchNoteEvidenceBaselineBody,
+):
+    return _capture_chat_research_note_evidence_context_baseline(
+        note_id,
+        body.expected_revision,
+    )
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-health")
+def refresh_chat_research_note_evidence_health(
+    note_id: str,
+    body: ResearchNoteEvidenceBaselineBody,
+):
+    """Refresh all local evidence while persisting recoverable outcomes.
+
+    Unlike the legacy baseline action, this pass also checks evidence that
+    already has a saved context. Exact source moves and source revisions are
+    resolved automatically; only outcomes that genuinely require a reader's
+    judgment remain recorded as review decisions.
+    """
+    return _capture_chat_research_note_evidence_context_baseline(
+        note_id,
+        body.expected_revision,
+        refresh_existing=True,
+    )
+
+
+def maintain_research_note_evidence_for_recovered_sources(
+    *,
+    source_paths: tuple[str, ...] | None,
+    reason: str,
+) -> dict[str, Any]:
+    """Revalidate notes after source recovery without changing user note text."""
+    store = get_chat_store()
+    candidates = store.list_research_notes_for_source_paths(source_paths, limit=500)
+    summary: dict[str, Any] = {
+        "reason": str(reason or "source_recovered")[:240],
+        "candidates": len(candidates),
+        "processed": 0,
+        "updated": 0,
+        "resolved_links": 0,
+        "decision_links": 0,
+        "conflicted": 0,
+        "errors": 0,
+    }
+    for candidate in candidates:
+        note_id = str(candidate.get("id") or "").strip()
+        if not note_id:
+            continue
+        result: dict[str, Any] | None = None
+        for attempt in range(2):
+            current = store.get_research_note(note_id)
+            if current is None:
+                break
+            expected_revision = int(current.get("revision") or 1)
+            try:
+                result = _capture_chat_research_note_evidence_context_baseline(
+                    note_id,
+                    expected_revision,
+                    source_path_filter=source_paths,
+                    refresh_existing=True,
+                )
+                break
+            except HTTPException as exc:
+                if exc.status_code == 409 and attempt == 0:
+                    continue
+                if exc.status_code == 409:
+                    summary["conflicted"] = int(summary["conflicted"]) + 1
+                else:
+                    summary["errors"] = int(summary["errors"]) + 1
+                break
+            except Exception:
+                summary["errors"] = int(summary["errors"]) + 1
+                break
+        if result is None:
+            continue
+        result_summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        if int(result_summary.get("total") or 0) <= 0:
+            continue
+        summary["processed"] = int(summary["processed"]) + 1
+        record = result.get("note") if isinstance(result.get("note"), dict) else {}
+        if int(record.get("revision") or 1) != int(candidate.get("revision") or 1):
+            summary["updated"] = int(summary["updated"]) + 1
+        summary["resolved_links"] = int(summary["resolved_links"]) + int(result_summary.get("created") or 0)
+        reasons = result_summary.get("reasons") if isinstance(result_summary.get("reasons"), dict) else {}
+        summary["decision_links"] = int(summary["decision_links"]) + sum(
+            int(reasons.get(item) or 0)
+            for item in ("candidate", "source_changed", "location_changed")
+        )
+    return summary
+
+
+def migrate_research_note_sources_for_library_action(
+    *,
+    exact_path_migrations: dict[str, str],
+    prefix_path_migrations: list[tuple[str, str]],
+    reason: str,
+    update_source_name: bool = True,
+) -> dict[str, Any]:
+    """Atomically move note evidence links for a library source change."""
+    return get_chat_store().migrate_research_note_source_paths(
+        exact_path_migrations=exact_path_migrations,
+        prefix_path_migrations=prefix_path_migrations,
+        reason=reason,
+        update_source_name=update_source_name,
+    )
+
+
+def inspect_research_note_source_dependencies(
+    *,
+    exact_source_paths: list[str],
+    prefix_source_paths: list[str],
+) -> dict[str, Any]:
+    """Return bounded note dependency details for a prospective library action."""
+    return get_chat_store().summarize_research_note_source_dependencies(
+        exact_source_paths=exact_source_paths,
+        prefix_source_paths=prefix_source_paths,
+    )
+
+
+@router.post("/chat/research-notes/evidence-maintenance")
+def maintain_chat_research_note_evidence(body: ResearchNoteEvidenceMaintenanceBody):
+    """Run bounded system-owned evidence maintenance for note list summaries."""
+    store = get_chat_store()
+    started = time.monotonic()
+    now = time.time()
+    summary: dict[str, Any] = {
+        "requested": len(body.notes),
+        "processed": 0,
+        "updated": 0,
+        "deferred": 0,
+        "conflicted": 0,
+        "not_found": 0,
+        "errors": 0,
+        "resolved_links": 0,
+        "decision_links": 0,
+        "has_more": False,
+    }
+    notes: list[dict[str, Any]] = []
+    items: list[dict[str, Any]] = []
+    for item_index, item in enumerate(body.notes):
+        if item_index > 0 and time.monotonic() - started >= _RESEARCH_NOTE_EVIDENCE_MAINTENANCE_BUDGET_S:
+            remaining = len(body.notes) - item_index
+            summary["deferred"] = int(summary["deferred"]) + remaining
+            summary["has_more"] = True
+            items.extend(
+                {"note_id": pending.note_id, "status": "budget_deferred"}
+                for pending in body.notes[item_index:]
+            )
+            break
+        note = store.get_research_note(item.note_id)
+        if note is None:
+            summary["not_found"] = int(summary["not_found"]) + 1
+            items.append({"note_id": item.note_id, "status": "not_found"})
+            continue
+        current_revision = int(note.get("revision") or 1)
+        if current_revision != item.expected_revision:
+            summary["conflicted"] = int(summary["conflicted"]) + 1
+            items.append({"note_id": item.note_id, "status": "conflicted"})
+            continue
+        source_state = note.get("source_state") if isinstance(note.get("source_state"), dict) else {}
+        if not research_note_evidence_maintenance_due(source_state, now=now):
+            summary["deferred"] = int(summary["deferred"]) + 1
+            items.append({"note_id": item.note_id, "status": "not_due"})
+            continue
+        try:
+            result = capture_chat_research_note_evidence_context_baseline(
+                item.note_id,
+                ResearchNoteEvidenceBaselineBody(expected_revision=item.expected_revision),
+            )
+        except HTTPException as exc:
+            if exc.status_code == 409:
+                summary["conflicted"] = int(summary["conflicted"]) + 1
+                status = "conflicted"
+            elif exc.status_code == 404:
+                summary["not_found"] = int(summary["not_found"]) + 1
+                status = "not_found"
+            else:
+                summary["errors"] = int(summary["errors"]) + 1
+                summary["has_more"] = True
+                status = "system_deferred"
+            items.append({"note_id": item.note_id, "status": status})
+            continue
+        record = result["note"]
+        result_summary = result["summary"]
+        summary["processed"] = int(summary["processed"]) + 1
+        if int(record.get("revision") or 1) != item.expected_revision:
+            summary["updated"] = int(summary["updated"]) + 1
+        summary["resolved_links"] = int(summary["resolved_links"]) + int(result_summary.get("created") or 0)
+        reasons = result_summary.get("reasons") if isinstance(result_summary.get("reasons"), dict) else {}
+        summary["decision_links"] = int(summary["decision_links"]) + sum(
+            int(reasons.get(reason) or 0)
+            for reason in ("candidate", "source_changed", "location_changed")
+        )
+        notes.append({**record, "content_markdown": ""})
+        items.append({"note_id": item.note_id, "status": "processed"})
+    return {"notes": notes, "summary": summary, "items": items}
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-repair")
+def repair_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceRepairBody):
+    if not body.candidate_block_id and not body.candidate_anchor_id:
+        raise HTTPException(422, "candidate block or anchor required")
+    if not body.candidate_evidence_quote or not body.source_fingerprint.startswith("sha256:"):
+        raise HTTPException(422, "verified candidate text and source fingerprint required")
+    store = get_chat_store()
+    note = store.get_research_note(note_id)
+    if note is None:
+        raise HTTPException(404, "research note not found")
+
+    source_path = _resolve_allowed_reader_source_path(body.source_path)
+    try:
+        settings = get_settings()
+        md_path = _resolve_paper_guide_md_path(
+            source_path,
+            md_root=_md_dir(),
+            db_dir=getattr(settings, "db_dir", None),
+            pdf_root=_pdf_dir(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+    if md_path is None:
+        raise HTTPException(409, "converted source changed; verify the candidate again")
+
+    links = (
+        note.get("source_state", {}).get("links", [])
+        if isinstance(note.get("source_state"), dict)
+        else []
+    )
+    saved_link = (
+        links[body.source_index]
+        if isinstance(links, list)
+        and 0 <= body.source_index < len(links)
+        and isinstance(links[body.source_index], dict)
+        else {}
+    )
+    known_fingerprints = {
+        str(container.get("source_fingerprint") or "").strip()
+        for container in (
+            saved_link.get("evidence_verification"),
+            saved_link.get("evidence_context_snapshot"),
+            saved_link.get("evidence_baseline_check"),
+        )
+        if isinstance(container, dict)
+        and str(container.get("source_fingerprint") or "").strip().startswith("sha256:")
+    }
+
+    try:
+        verified = build_research_note_evidence_context(
+            md_path=md_path,
+            source_path=body.source_path,
+            evidence_quote=body.candidate_evidence_quote,
+            block_id=body.candidate_block_id,
+            anchor_id=body.candidate_anchor_id,
+            anchor_kind=body.candidate_anchor_kind,
+        )
+    except Exception as exc:
+        raise HTTPException(500, "research note evidence repair verification failed") from exc
+
+    try:
+        fingerprint_after_verification = source_content_fingerprint(md_path)
+    except OSError as exc:
+        raise HTTPException(409, "converted source changed; verify the candidate again") from exc
+    verified_fingerprint = str(verified.get("source_fingerprint") or "").strip()
+    if verified_fingerprint != fingerprint_after_verification:
+        raise HTTPException(409, "converted source changed during verification")
+    if (
+        body.source_fingerprint != fingerprint_after_verification
+        and body.source_fingerprint not in known_fingerprints
+    ):
+        raise HTTPException(409, "candidate source version is no longer current")
+    target = verified.get("target")
+    if str(verified.get("status") or "") != "exact" or not isinstance(target, dict):
+        raise HTTPException(409, "candidate now requires a new evidence choice")
+    verification_reason = str(verified.get("reason") or "").strip()
+    if verification_reason not in {"exact_block", "exact_anchor", "quote_relocated"}:
+        raise HTTPException(409, "candidate now requires a new evidence choice")
+    if verification_reason != "quote_relocated":
+        if body.candidate_block_id and str(target.get("block_id") or "") != body.candidate_block_id:
+            raise HTTPException(409, "candidate block changed during verification")
+        if body.candidate_anchor_id and str(target.get("anchor_id") or "") != body.candidate_anchor_id:
+            raise HTTPException(409, "candidate anchor changed during verification")
+
+    try:
+        source_state = repair_research_note_source_state(
+            note.get("source_state") if isinstance(note.get("source_state"), dict) else {},
+            source_index=body.source_index,
+            source_path=body.source_path,
+            capture_id=body.capture_id,
+            old_block_id=body.old_block_id,
+            old_anchor_id=body.old_anchor_id,
+            old_evidence_quote=body.old_evidence_quote,
+            target=target,
+            source_fingerprint=fingerprint_after_verification,
+            context_snapshot=(
+                verified.get("context_snapshot")
+                if isinstance(verified.get("context_snapshot"), dict)
+                else None
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    record, conflicted = store.update_research_note(
+        note_id,
+        expected_revision=int(note.get("revision") or 1),
+        source_state=source_state,
+    )
+    if conflicted:
+        latest_note = store.get_research_note(note_id)
+        if latest_note is None:
+            raise HTTPException(404, "research note not found")
+        try:
+            if source_content_fingerprint(md_path) != fingerprint_after_verification:
+                raise HTTPException(409, "converted source changed during repair")
+            source_state = repair_research_note_source_state(
+                latest_note.get("source_state") if isinstance(latest_note.get("source_state"), dict) else {},
+                source_index=body.source_index,
+                source_path=body.source_path,
+                capture_id=body.capture_id,
+                old_block_id=body.old_block_id,
+                old_anchor_id=body.old_anchor_id,
+                old_evidence_quote=body.old_evidence_quote,
+                target=target,
+                source_fingerprint=fingerprint_after_verification,
+                context_snapshot=(
+                    verified.get("context_snapshot")
+                    if isinstance(verified.get("context_snapshot"), dict)
+                    else None
+                ),
+            )
+        except HTTPException:
+            raise
+        except (OSError, ValueError) as exc:
+            raise HTTPException(409, str(exc)) from exc
+        record, conflicted = store.update_research_note(
+            note_id,
+            expected_revision=int(latest_note.get("revision") or 1),
+            source_state=source_state,
+        )
+        if conflicted:
+            raise HTTPException(409, "research note changed during repair")
+    if record is None:
+        raise HTTPException(404, "research note not found")
+    return record
+
+
+@router.post("/chat/research-notes/{note_id}/evidence-review")
+def review_chat_research_note_evidence(note_id: str, body: ResearchNoteEvidenceReviewBody):
+    if not body.current_block_id and not body.current_anchor_id:
+        raise HTTPException(422, "current evidence block or anchor required")
+    if (
+        not body.expected_source_fingerprint.startswith("sha256:")
+        or not body.source_fingerprint.startswith("sha256:")
+    ):
+        raise HTTPException(422, "saved and current source fingerprints required")
+    store = get_chat_store()
+    note = store.get_research_note(note_id)
+    if note is None:
+        raise HTTPException(404, "research note not found")
+
+    source_path = _resolve_allowed_reader_source_path(body.source_path)
+    try:
+        settings = get_settings()
+        md_path = _resolve_paper_guide_md_path(
+            source_path,
+            md_root=_md_dir(),
+            db_dir=getattr(settings, "db_dir", None),
+            pdf_root=_pdf_dir(),
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, "library directories unavailable") from exc
+    if md_path is None:
+        raise HTTPException(409, "converted source changed; review the evidence again")
+
+    try:
+        verified = build_research_note_evidence_context(
+            md_path=md_path,
+            source_path=body.source_path,
+            evidence_quote=body.current_evidence_quote,
+            block_id=body.current_block_id,
+            anchor_id=body.current_anchor_id,
+            anchor_kind=body.current_anchor_kind,
+        )
+    except Exception as exc:
+        raise HTTPException(500, "research note evidence review verification failed") from exc
+    try:
+        fingerprint_after_verification = source_content_fingerprint(md_path)
+    except OSError as exc:
+        raise HTTPException(409, "converted source changed; review the evidence again") from exc
+    if (
+        str(verified.get("source_fingerprint") or "") != body.source_fingerprint
+        or fingerprint_after_verification != body.source_fingerprint
+    ):
+        raise HTTPException(409, "converted source changed; review the evidence again")
+    target = verified.get("target")
+    if str(verified.get("status") or "") != "exact" or not isinstance(target, dict):
+        raise HTTPException(409, "evidence is no longer at the reviewed source location")
+    if str(verified.get("reason") or "") not in {"exact_block", "exact_anchor"}:
+        raise HTTPException(409, "evidence location changed; use locator repair")
+    if body.current_block_id and str(target.get("block_id") or "") != body.current_block_id:
+        raise HTTPException(409, "evidence block changed; review it again")
+    if body.current_anchor_id and str(target.get("anchor_id") or "") != body.current_anchor_id:
+        raise HTTPException(409, "evidence anchor changed; review it again")
+
+    try:
+        source_state = review_research_note_source_state(
+            note.get("source_state") if isinstance(note.get("source_state"), dict) else {},
+            source_index=body.source_index,
+            source_path=body.source_path,
+            decision=body.decision,
+            capture_id=body.capture_id,
+            old_block_id=body.old_block_id,
+            old_anchor_id=body.old_anchor_id,
+            old_evidence_quote=body.old_evidence_quote,
+            expected_source_fingerprint=body.expected_source_fingerprint,
+            target=target,
+            source_fingerprint=body.source_fingerprint,
+            context_snapshot=(
+                verified.get("context_snapshot")
+                if isinstance(verified.get("context_snapshot"), dict)
+                else None
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+    record, conflicted = store.update_research_note(
+        note_id,
+        expected_revision=int(note.get("revision") or 1),
+        source_state=source_state,
+    )
+    if conflicted:
+        raise HTTPException(409, "research note changed; review the evidence again")
+    if record is None:
+        raise HTTPException(404, "research note not found")
+    return record
 
 
 @router.get("/chat/research-notes")
@@ -1740,6 +2945,9 @@ def save_citation_shelf(
         items=body.items,
         open=body.open,
         allow_empty_overwrite=body.allow_empty_overwrite,
+        expected_revision=body.expected_revision,
+        mutation_id=body.mutation_id,
+        mutations=body.mutations,
     )
     if record is None:
         raise HTTPException(404, "conversation not found")

@@ -20,7 +20,6 @@ from api.internal_access import require_management_api
 from api.reference_ui import (
     _attach_pack_display_contract,
     _compact_reader_open_text,
-    _filter_pending_refs_hits_by_prompt_focus,
     _refs_card_polish_llm_enabled,
     _refs_prompt_focus_terms,
     _translate_summary_to_zh,
@@ -95,6 +94,7 @@ from kb.reference_index import (
     resolve_reference_entry,
 )
 from kb.source_blocks import load_source_blocks, source_blocks_to_reader_anchors
+from kb.shelf_reader_locator import maintain_shelf_reader_locator
 from api.sse import sse_generator, sse_response
 from kb.reference_sync import (
     start_reference_sync,
@@ -130,6 +130,9 @@ _REFS_META_MAX_JSON_CHARS = 90_000
 _REFS_SHELF_REPAIR_MAX_ITEMS = 120
 _REFS_SHELF_REPAIR_MAX_JSON_CHARS = 260_000
 _REFS_SHELF_REPAIR_ITEM_MAX_JSON_CHARS = 40_000
+_REFS_SHELF_READER_LOCATE_MAX_ITEMS = 120
+_REFS_SHELF_READER_LOCATE_MAX_JSON_CHARS = 220_000
+_REFS_SHELF_READER_LOCATE_ITEM_MAX_JSON_CHARS = 16_000
 
 
 def _bounded_json(value: Any, *, name: str, max_json_chars: int) -> Any:
@@ -3750,46 +3753,6 @@ def _load_authoritative_doc_list_contracts(
     return out
 
 
-def _load_pending_doc_list_contracts(
-    *,
-    store,
-    conv_id: str,
-    pending_user_msg_ids: set[int],
-) -> dict[int, list[dict]]:
-    return _load_authoritative_doc_list_contracts(
-        store=store,
-        conv_id=conv_id,
-        user_msg_ids=pending_user_msg_ids,
-    )
-
-
-def _mark_doc_list_pending_pack(*, payload_pack: dict, pending_count: int) -> dict:
-    pack2 = dict(payload_pack or {})
-    hits_out: list[dict] = []
-    for raw_hit in list(pack2.get("hits") or []):
-        if not isinstance(raw_hit, dict):
-            continue
-        hit = dict(raw_hit)
-        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-        meta2 = dict(meta or {})
-        meta2["ref_pack_state"] = "pending"
-        hit["meta"] = meta2
-        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
-        if isinstance(ui_meta, dict):
-            ui_meta2 = dict(ui_meta)
-            ui_meta2["score_pending"] = True
-            ui_meta2["score"] = None
-            ui_meta2["score_tier"] = ""
-            hit["ui_meta"] = ui_meta2
-        hits_out.append(hit)
-    pack2["hits"] = hits_out
-    pack2["pending"] = True
-    pack2["pending_hit_count"] = int(max(0, int(pending_count or 0)))
-    pack2["payload_mode"] = "pending"
-    pack2["enrichment_pending"] = True
-    return _attach_pack_display_contract(pack2)
-
-
 def _doc_list_source_paths(doc_list: list[dict] | None) -> list[str]:
     out: list[str] = []
     for item in list(doc_list or []):
@@ -3909,50 +3872,6 @@ def _normalize_authoritative_doc_list_contracts_for_refs(
     return out
 
 
-def _filter_pending_multi_paper_hits_for_display(prompt: str, hits: list[dict] | None) -> list[dict]:
-    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
-    if (not rows) or (not prompt_explicitly_requests_multi_paper_list(prompt)):
-        return rows
-    try:
-        doc_list_seed = _references_build_multi_paper_doc_list_contract(
-            prompt=prompt,
-            seed_docs=list(rows),
-            answer_hits=list(rows),
-            evidence_cards=[],
-        )
-    except Exception:
-        return rows
-    source_order = _doc_list_source_paths(doc_list_seed)
-    if not source_order:
-        return rows
-    rows_by_source: dict[str, dict] = {}
-    for row in rows:
-        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-        source_path = str((meta or {}).get("source_path") or "").strip()
-        if source_path and source_path not in rows_by_source:
-            rows_by_source[source_path] = row
-    filtered: list[dict] = []
-    seen: set[str] = set()
-    for source_path in source_order:
-        row = rows_by_source.get(source_path)
-        if not isinstance(row, dict) or source_path in seen:
-            continue
-        filtered.append(row)
-        seen.add(source_path)
-    target_count = min(3, len(rows))
-    if len(filtered) < target_count:
-        for row in rows:
-            meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-            source_path = str((meta or {}).get("source_path") or "").strip()
-            if (not source_path) or source_path in seen:
-                continue
-            filtered.append(row)
-            seen.add(source_path)
-            if len(filtered) >= target_count:
-                break
-    return filtered or rows
-
-
 def _render_authoritative_doc_list_pack(
     *,
     user_msg_id: int,
@@ -3996,143 +3915,37 @@ def _build_pending_conversation_refs_payload(
     guide_source_path: str = "",
     guide_source_name: str = "",
 ) -> dict[int, dict]:
+    """Return a progress-only payload until evidence binding is durable.
+
+    Retrieval seeds have not passed the answer/citation binding contract yet.
+    Exposing them as provisional evidence cards made an internal task look like
+    an unresolved user decision. Keep only the pack-level progress state; the
+    existing poll and background repair paths replace it automatically with a
+    grounded fast/full payload.
+    """
+    del doc_list_by_user, guide_mode, guide_source_path, guide_source_name
     out: dict[int, dict] = {}
-    authoritative_map = {
-        int(key): [dict(item) for item in list(value or []) if isinstance(item, dict)]
-        for key, value in dict(doc_list_by_user or {}).items()
-        if str(key).isdigit() or isinstance(key, int)
-    }
     for user_msg_id, pack in (refs or {}).items():
         if not isinstance(pack, dict):
             continue
-        prompt = str(pack.get("prompt") or "").strip()
-        render_locale = _ref_card_user_locale(prompt)
-        prefer_zh = render_locale == "zh"
-        focus_terms = [str(term or "").strip() for term in _refs_prompt_focus_terms(prompt) if str(term or "").strip()]
-        focus_action = prompt_reference_focus_action(prompt)
         raw_hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
-        if prompt_explicitly_requests_multi_paper_list(prompt):
-            filtered_hits = _filter_pending_multi_paper_hits_for_display(prompt, raw_hits)
-            if not filtered_hits:
-                filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)
-            filtered_hits = filtered_hits[:3]
-        else:
-            filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)[:2]
-        pending_count = 0
-        hits_out: list[dict] = []
-        for hit in raw_hits:
-            if not isinstance(hit, dict):
-                continue
-            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-            if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
-                pending_count += 1
-        authoritative_doc_list_present = int(user_msg_id) in authoritative_map
-        authoritative_doc_list = [dict(item) for item in list(authoritative_map.get(int(user_msg_id), []) or []) if isinstance(item, dict)]
-        if authoritative_doc_list_present:
-            authoritative_pack = _render_authoritative_doc_list_pack(
-                user_msg_id=int(user_msg_id),
-                pack=pack,
-                doc_list=authoritative_doc_list,
-                guide_mode=bool(guide_mode),
-                guide_source_path=str(guide_source_path or "").strip(),
-                guide_source_name=str(guide_source_name or "").strip(),
-                pending=True,
-            )
-            out[int(user_msg_id)] = _mark_doc_list_pending_pack(
-                payload_pack=authoritative_pack,
-                pending_count=pending_count,
-            )
-            continue
-        for hit in filtered_hits:
-            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-            source_path = str((meta or {}).get("source_path") or "").strip()
-            heading_path = str((meta or {}).get("ref_best_heading_path") or (meta or {}).get("top_heading") or "").strip()
-            display_name = _source_name_from_md_path(source_path) if source_path else "Reference"
-            snippet_seed = ""
-            for key in ("ref_show_snippets", "ref_snippets", "ref_overview_snippets"):
-                raw = (meta or {}).get(key)
-                if isinstance(raw, list):
-                    snippet_seed = next((str(item or "").strip() for item in raw if str(item or "").strip()), "")
-                if snippet_seed:
-                    break
-            if not snippet_seed:
-                snippet_seed = str(hit.get("text") or "").strip()
-            summary_line = _compact_reader_open_text(snippet_seed)
-            focus_text = (
-                (" 与 " if prefer_zh else " and ").join(focus_terms[:2])
-                if len(focus_terms) >= 2
-                else (
-                    focus_terms[0]
-                    if focus_terms
-                    else ("当前问题" if prefer_zh else "the requested concept")
-                )
-            )
-            section_text = heading_path or ("命中章节" if prefer_zh else "the matched section")
-            if focus_action == "compare":
-                why_line = (
-                    f"“{section_text}”正在核验 {focus_text} 的对比依据。"
-                    if prefer_zh
-                    else f"“{section_text}” is being checked for direct comparison evidence about {focus_text}."
-                )
-            elif focus_action == "define":
-                why_line = (
-                    f"“{section_text}”正在核验 {focus_text} 的定义原句。"
-                    if prefer_zh
-                    else f"“{section_text}” is being checked for the source definition of {focus_text}."
-                )
-            else:
-                why_line = (
-                    f"“{section_text}”正在核验与 {focus_text} 直接相关的原文。"
-                    if prefer_zh
-                    else f"“{section_text}” is being checked for source evidence directly about {focus_text}."
-                )
-            reader_open = {
-                "sourcePath": source_path,
-                "sourceName": display_name,
-                "headingPath": heading_path or None,
-                "snippet": summary_line or None,
-                "highlightSnippet": summary_line or None,
-                "strictLocate": False,
-            }
-            primary_evidence = {
-                "source_path": source_path,
-                "source_name": display_name,
-                "heading_path": heading_path or None,
-                "snippet": summary_line or None,
-                "highlight_snippet": summary_line or None,
-                "selection_reason": "pending_section_seed",
-                "strict_locate": False,
-            }
-            hit2 = dict(hit)
-            hit2["ui_meta"] = {
-                "display_name": display_name,
-                "heading_path": heading_path,
-                "summary_line": summary_line,
-                "summary_kind": "evidence",
-                "summary_display_role": "evidence",
-                "summary_label": "原文证据" if prefer_zh else "Source Evidence",
-                "summary_title": "待核验的原文片段" if prefer_zh else "Source Passage Being Checked",
-                "summary_generation": "pending_section_seed",
-                "summary_basis": "待核验的命中章节原文" if prefer_zh else "Provisional source text from the matched section",
-                "why_line": why_line,
-                "why_generation": "pending_focus_seed",
-                "why_basis": "命中章节与问题关键词的待核验对齐" if prefer_zh else "Provisional alignment between the matched section and question terms",
-                "render_locale": render_locale,
-                "score": None,
-                "score_pending": True,
-                "score_tier": "",
-                "primary_evidence": {key: value for key, value in primary_evidence.items() if value not in (None, "", [], {})},
-                "source_path": source_path,
-                "reader_open": {key: value for key, value in reader_open.items() if value not in (None, "", [], {})},
-            }
-            if isinstance(hit2["ui_meta"].get("reader_open"), dict) and hit2["ui_meta"].get("primary_evidence"):
-                hit2["ui_meta"]["reader_open"] = dict(hit2["ui_meta"]["reader_open"])
-                hit2["ui_meta"]["reader_open"]["primaryEvidence"] = dict(hit2["ui_meta"]["primary_evidence"])
-            hits_out.append(hit2)
-        pack2 = dict(pack)
-        pack2["hits"] = hits_out
+        pending_count = sum(
+            1
+            for hit in raw_hits
+            if isinstance(hit.get("meta"), dict)
+            and str(hit["meta"].get("ref_pack_state") or "").strip().lower() == "pending"
+        )
+        pack2 = _without_nested_render_payload(pack)
+        pack2["hits"] = []
+        for key in (
+            "cite_details",
+            "primary_evidence",
+            "primary_evidence_alignment",
+            "primary_evidence_heading_path",
+        ):
+            pack2.pop(key, None)
         pack2["pending"] = True
-        pack2["pending_hit_count"] = int(pending_count)
+        pack2["pending_hit_count"] = pending_count
         pack2["payload_mode"] = "pending"
         pack2["enrichment_pending"] = True
         out[int(user_msg_id)] = _attach_pack_display_contract(pack2)
@@ -5512,6 +5325,7 @@ class BibliometricsBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     meta: dict[str, Any]
+    allow_model_calls: bool = True
     refs_card_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
     ui_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
     target_locale: str | None = Field(None, max_length=_REFS_LOCALE_MAX_CHARS)
@@ -5559,10 +5373,41 @@ class CitationCardPolishBody(BaseModel):
         return _bounded_dict(value, name="citation card polish meta", max_json_chars=_REFS_META_MAX_JSON_CHARS)
 
 
+class ReaderDocLocatorBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    block_id: str = Field("", max_length=240)
+    anchor_id: str = Field("", max_length=240)
+    anchor_kind: str = Field("", max_length=80)
+    heading_path: str = Field("", max_length=1_200)
+    evidence_quote: str = Field("", max_length=4_000)
+    page_start: int | None = Field(None, ge=1, le=100_000)
+    page_end: int | None = Field(None, ge=1, le=100_000)
+    strict_locate: bool = False
+
+
 class ReaderDocBody(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source_path: str = Field(..., max_length=_REFS_SOURCE_PATH_MAX_CHARS)
+    locator: ReaderDocLocatorBody | None = None
+
+
+class ShelfReaderLocatorMaintenanceBody(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    items: list[dict[str, Any]] = Field(..., max_length=_REFS_SHELF_READER_LOCATE_MAX_ITEMS)
+
+    @field_validator("items")
+    @classmethod
+    def _check_items(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return _bounded_dict_list(
+            value,
+            name="shelf reader locator maintenance items",
+            max_items=_REFS_SHELF_READER_LOCATE_MAX_ITEMS,
+            max_json_chars=_REFS_SHELF_READER_LOCATE_MAX_JSON_CHARS,
+            item_max_json_chars=_REFS_SHELF_READER_LOCATE_ITEM_MAX_JSON_CHARS,
+        )
 
 
 def _bibliometrics_requested_locale(body: BibliometricsBody, meta: dict | None) -> str:
@@ -6777,9 +6622,39 @@ def _source_bound_system_a_bibliometrics(
     )
 
 
+def _background_bibliometrics(meta: dict | None) -> dict:
+    """Hydrate stored/local metadata without starting network model work."""
+
+    incoming = _prepare_bibliometrics_identity(meta, verify_library=True)
+    settings = get_settings()
+    hydrated = _prepare_bibliometrics_identity(
+        _strip_misbound_local_source_summary(
+            hydrate_repaired_citation_metadata(incoming, db_dir=settings.db_dir)
+        ),
+        verify_library=True,
+    )
+    result = _prepare_bibliometrics_identity({**incoming, **hydrated})
+    if _bibliometrics_accept_local_source_summary(result) or not str(
+        result.get("summary_line") or result.get("summaryLine") or ""
+    ).strip():
+        # An empty target locale keeps the extractive source language and never
+        # invokes the model-backed translation path during passive hydration.
+        local_summary = _local_source_summary_meta(
+            _bibliometrics_local_summary_input(result),
+            target_locale="",
+        )
+        if local_summary:
+            result = {**result, **local_summary}
+    return _prepare_bibliometrics_identity(
+        _attach_bibliometrics_summary_locale(_bibliometrics_quality_contract(result))
+    )
+
+
 @router.post("/bibliometrics")
 def get_bibliometrics(body: BibliometricsBody):
     incoming = _strip_misbound_local_source_summary(body.meta or {})
+    if not body.allow_model_calls:
+        return _background_bibliometrics(incoming)
     if _bibliometrics_is_source_bound_system_a(incoming):
         return _source_bound_system_a_bibliometrics(body, incoming)
     meta = _prepare_bibliometrics_identity(incoming, verify_library=True)
@@ -7656,6 +7531,12 @@ def get_reader_doc(body: ReaderDocBody):
         asset_roots=asset_roots,
     )
     anchors, blocks = _build_reader_anchors(md_text, md_path=md_path)
+    locator_resolution: dict[str, Any] | None = None
+    if body.locator is not None:
+        locator_item = body.locator.model_dump(exclude_none=True)
+        locator_item["key"] = "reader-open"
+        locator_item["strict_evidence"] = bool(body.locator.strict_locate)
+        locator_resolution = maintain_shelf_reader_locator(blocks, locator_item)
     source_name = md_path.name
     low = source_name.lower()
     if low.endswith(".en.md"):
@@ -7684,8 +7565,104 @@ def get_reader_doc(body: ReaderDocBody):
         "markdown": md_render,
         "anchors": anchors,
         "blocks": blocks,
+        "locator_resolution": locator_resolution,
         "cite_details": cite_details,
         "reference_cite_details": cite_details,
+    }
+
+
+def _shelf_reader_locator_source_candidates(item: dict[str, Any]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in (
+        item.get("source_path"),
+        item.get("fallback_source_path"),
+        item.get("library_match_path"),
+    ):
+        value = str(raw or "").strip()
+        key = value.replace("\\", "/").lower()
+        if not value or key in seen:
+            continue
+        seen.add(key)
+        out.append(value)
+    return out
+
+
+@router.post("/shelf/reader-locators/maintain")
+def maintain_shelf_reader_locators(body: ShelfReaderLocatorMaintenanceBody):
+    """Validate and recover persisted basket locators using local source blocks only."""
+
+    source_cache: dict[str, dict[str, Any] | None] = {}
+    results: list[dict[str, Any]] = []
+    for raw_item in body.items:
+        item = dict(raw_item or {})
+        key = str(item.get("key") or "").strip()
+        primary_source_path = str(item.get("source_path") or "").strip()
+        chosen_source_path = ""
+        source_data: dict[str, Any] | None = None
+        for candidate in _shelf_reader_locator_source_candidates(item):
+            cache_key = candidate.replace("\\", "/").lower()
+            if cache_key not in source_cache:
+                md_path = _resolve_reader_md_path(candidate)
+                if md_path is None:
+                    source_cache[cache_key] = None
+                else:
+                    try:
+                        md_text = md_path.read_text(encoding="utf-8", errors="ignore")
+                        source_cache[cache_key] = {
+                            "md_path": md_path,
+                            "doc_hash": _reader_doc_hash(md_text),
+                            "blocks": load_source_blocks(md_path, md_text=md_text),
+                            "public_source_path": root_relative_file_id(md_path, _reference_asset_roots()) or md_path.name,
+                        }
+                    except Exception:
+                        source_cache[cache_key] = None
+            cached = source_cache.get(cache_key)
+            if isinstance(cached, dict):
+                chosen_source_path = candidate
+                source_data = cached
+                break
+
+        if source_data is None:
+            results.append({
+                "key": key,
+                "ok": False,
+                "changed": False,
+                "status": "source_unavailable",
+                "reason": "reader_source_unavailable",
+                "source_path": primary_source_path,
+            })
+            continue
+
+        result = maintain_shelf_reader_locator(list(source_data.get("blocks") or []), item)
+        source_relocated = bool(
+            chosen_source_path
+            and primary_source_path
+            and chosen_source_path.replace("\\", "/").lower() != primary_source_path.replace("\\", "/").lower()
+        )
+        result.update({
+            "source_path": chosen_source_path,
+            "public_source_path": str(source_data.get("public_source_path") or ""),
+            "source_relocated": source_relocated,
+            "doc_hash": str(source_data.get("doc_hash") or ""),
+        })
+        if source_relocated and result.get("ok"):
+            result["changed"] = True
+            if str(result.get("status") or "") == "ready":
+                result["status"] = "recovered"
+            result["reason"] = f"source_relocated:{str(result.get('reason') or 'locator_ready')}"
+        results.append(result)
+
+    changed = sum(1 for item in results if item.get("ok") and item.get("changed"))
+    ready = sum(1 for item in results if item.get("ok"))
+    return {
+        "ok": True,
+        "requested": len(body.items),
+        "ready": ready,
+        "changed": changed,
+        "unresolved": max(0, len(body.items) - ready),
+        "items": results,
+        "model_calls": 0,
     }
 
 

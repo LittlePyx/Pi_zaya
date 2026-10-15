@@ -6,6 +6,7 @@ import {
 import type { CiteDetail } from './citationState'
 import { EvidenceDrawerItem } from './EvidenceDrawerItem'
 import { EvidenceDrawerSourceSummary } from './EvidenceDrawerSourceSummary'
+import { EvidenceDrawerWebSources } from './EvidenceDrawerWebSources'
 
 const { Text } = Typography
 
@@ -58,6 +59,7 @@ export function EvidenceDrawer({
 
         {drawer.visibleDetails.length > 0 ? (
           <div className="kb-evidence-list">
+            <div className="kb-evidence-section-heading">{S.evidence_local_sources_heading}</div>
             {drawer.visibleDetails.map((detail, index) => (
               <EvidenceDrawerItem
                 key={`${detail.anchor || detail.num || index}-${index}`}
@@ -69,12 +71,20 @@ export function EvidenceDrawer({
               />
             ))}
           </div>
-        ) : (
+        ) : drawer.webSources.length <= 0 && drawer.externalSourceKind !== 'model' ? (
           <Empty
             image={Empty.PRESENTED_IMAGE_SIMPLE}
-            description={S.agent_trace_evidence_not_from_kb || 'No local evidence cards for this answer.'}
+            description={S.evidence_no_local_cards || 'No local evidence cards for this answer.'}
           />
-        )}
+        ) : null}
+
+        <EvidenceDrawerWebSources sources={drawer.webSources} S={S} />
+
+        {drawer.externalSourceKind === 'model' ? (
+          <div className="kb-evidence-model-notice" data-testid="evidence-model-background-notice">
+            {S.evidence_model_background_notice}
+          </div>
+        ) : null}
       </div>
     </Drawer>
   )

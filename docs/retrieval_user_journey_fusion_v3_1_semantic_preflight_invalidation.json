@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "report_kind": "fusion_v3_1_semantic_preflight_invalidation",
+  "status": "closed_before_model_or_query_measurement",
+  "protocol_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_protocol.json",
+  "protocol_sha256": "d9c048b8bd237ad129ee013f127584f78fd1b7ccdac0537fae0a5416c6e0259d",
+  "attempted_runner_path": "tools/retrieval_eval/run_user_journey_fusion_v3_1_semantic_acceptance.py",
+  "attempted_runner_sha256": "64d6b58e65805a8548ac344db2873220cc9ab8ffd2fda0f989ffaa001524f7e6",
+  "execution_boundary": {
+    "corpus_preflight_executed": true,
+    "model_loaded": false,
+    "document_embeddings_created": 0,
+    "query_embeddings_created": 0,
+    "candidate_result_observed": false,
+    "canonical_report_written": false,
+    "product_enabled": false
+  },
+  "failure": {
+    "exception": "ValueError",
+    "message": "semantic corpus has 0 chunks, expected 1673",
+    "root_cause": "The frozen semantic slice uses an isolated 10-document corpus that is intentionally outside the current 31-document product database and Qwen index. Reusing the product-corpus index cannot evaluate this slice.",
+    "quality_conclusion_allowed": false
+  },
+  "effective_decision": {
+    "protocol_closed": true,
+    "semantic_result": "none",
+    "retry_under_same_protocol": false,
+    "replacement_allowed": "one protocol may keep the exact candidate and gate while building one dedicated Qwen index from the frozen isolated 10-document corpus before any query encoding",
+    "candidate_or_gate_change_allowed": false,
+    "product_shadow_allowed": false
+  }
+}

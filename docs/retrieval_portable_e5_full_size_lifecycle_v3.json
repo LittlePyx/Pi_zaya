@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_portable_e5_full_size_lifecycle_v3",
+  "protocol_sha256": "ff3d3ad62761e4143cebf75480db00d1338fba05456075db57556003f5a11b99",
+  "timings": {
+    "base_extraction_ms": 7372.662,
+    "worker_wall_ms": 27531.224,
+    "install_ready_ms": 12031.058,
+    "cold_load_ms": 1075.394,
+    "warm_query_p95_ms": 510.356,
+    "stale_repair_ms": 9515.624,
+    "removal_ms": 110.438
+  },
+  "runtime": {
+    "python_version": "3.10.11",
+    "cold_start": true,
+    "index_cache_hit": false,
+    "peak_process_rss_mib": 1130.551
+  },
+  "queries": [
+    {
+      "case_id": "fresh-fdm-integration-time-boundary",
+      "duration_ms": 502.253,
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "source_escape_count": 0,
+      "first_relevant_rank": 9,
+      "ranked_chunk_ids": [
+        "6b1a3c7c4aa0aaa9:1",
+        "6b1a3c7c4aa0aaa9:19",
+        "6b1a3c7c4aa0aaa9:9",
+        "6b1a3c7c4aa0aaa9:25",
+        "6b1a3c7c4aa0aaa9:4",
+        "6b1a3c7c4aa0aaa9:26",
+        "6b1a3c7c4aa0aaa9:13",
+        "6b1a3c7c4aa0aaa9:6",
+        "6b1a3c7c4aa0aaa9:20",
+        "6b1a3c7c4aa0aaa9:22"
+      ]
+    },
+    {
+      "case_id": "fresh-scinerf-overlap-rate",
+      "duration_ms": 510.782,
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "source_escape_count": 0,
+      "first_relevant_rank": 10,
+      "ranked_chunk_ids": [
+        "7f6b9404bccea454:35",
+        "7f6b9404bccea454:0",
+        "7f6b9404bccea454:9",
+        "7f6b9404bccea454:1",
+        "7f6b9404bccea454:16",
+        "7f6b9404bccea454:3",
+        "7f6b9404bccea454:4",
+        "7f6b9404bccea454:37",
+        "7f6b9404bccea454:33",
+        "7f6b9404bccea454:31"
+      ]
+    }
+  ],
+  "stale_repair": {
+    "mutated_doc_id": "11b5152564f8b679",
+    "state_before": "stale",
+    "state_after": "ready",
+    "lifecycle_state": "ready",
+    "index_build_call_count": 1
+  },
+  "removal": {
+    "created": true,
+    "lifecycle_state": "not_installed",
+    "public": {
+      "state": "not_installed",
+      "available": false,
+      "mode": "hybrid_local",
+      "reason_id": "semantic_component_not_installed",
+      "action_id": "enable",
+      "task_id": "",
+      "completed_bytes": 0,
+      "total_bytes": 0,
+      "eta_seconds": null,
+      "required_additional_bytes": 0,
+      "bm25_available": true
+    },
+    "component_pointer_present": false,
+    "index_pointer_present": false,
+    "cleanup_pending_after_worker": true,
+    "cleanup_completed_after_worker_exit": true,
+    "remaining_component_generation_count": 0
+  },
+  "execution": {
+    "explicit_consent": true,
+    "download_network_used": false,
+    "local_archive_adapter_calls": 1,
+    "transport_factory_calls": 1,
+    "bm25_available_in_all_public_states": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "storage_layout_max_path_chars": 214
+  },
+  "gate": {
+    "base_extraction_time": true,
+    "install_ready_time": true,
+    "cold_load_time": true,
+    "warm_query_p95": true,
+    "stale_repair_time": true,
+    "removal_time": true,
+    "peak_memory": true,
+    "embedded_python_exact": true,
+    "ranking_exact": true,
+    "hybrid_without_fallback": true,
+    "zero_source_escapes": true,
+    "stale_repair_completed": true,
+    "no_network": true,
+    "one_local_archive_handoff": true,
+    "bm25_continuity": true,
+    "component_disabled_after_removal": true,
+    "index_disabled_after_removal": true,
+    "cleanup_completed_after_worker_exit": true,
+    "product_remains_disabled": true,
+    "windows_path_budget": true,
+    "windows_path_layout_exact": true
+  },
+  "decision": {
+    "status": "release_component_lifecycle_passed_authorize_opt_in_ui_e2e",
+    "all_gates_passed": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "next_action": "add_management_api_and_failure_path_e2e"
+  },
+  "result_fingerprint": "b1bde7acb30be4c2b67b23bbd71df10c61e49ed2e66a39d92c3da87dd09db80d"
+}

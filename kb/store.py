@@ -256,6 +256,20 @@ def _doc_index_is_ready(rec: dict | None) -> bool:
     return True
 
 
+def ready_document_ids(db_dir: Path) -> list[str]:
+    """Use the retrieval readiness contract and its committed chunk artifacts."""
+    ready: list[str] = []
+    for doc_id, record in load_docs_index(db_dir).items():
+        if not _doc_index_is_ready(record):
+            continue
+        try:
+            if doc_chunks_path(db_dir, doc_id).stat().st_size > 0:
+                ready.append(doc_id)
+        except FileNotFoundError:
+            continue
+    return ready
+
+
 def load_all_chunks(db_dir: Path, *, include_non_ready: bool = False) -> list[dict]:
     chunks: list[dict] = []
     d = _chunks_dir(db_dir)

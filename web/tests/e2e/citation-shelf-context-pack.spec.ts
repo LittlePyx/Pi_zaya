@@ -64,11 +64,19 @@ async function fulfillJson(route: Route, body: unknown) {
   })
 }
 
-async function installBackend(page: Page) {
+async function installBackend(
+  page: Page,
+  options: {
+    initialShelfItems?: Array<Record<string, unknown>>
+    initialShelfOpen?: boolean
+    initialShelfRevision?: number
+  } = {},
+) {
   let created = true
   let generatePayload: Record<string, unknown> | null = null
   let generated = false
   let researchState: Record<string, unknown> = {}
+  const bibliometricsPayloads: Array<Record<string, unknown>> = []
   const generatePayloads: Record<string, unknown>[] = []
   const generateWaiters: Array<{
     count: number
@@ -85,11 +93,12 @@ async function installBackend(page: Page) {
   const generateSeen = waitForGenerateCount(1)
 
   await installAppShellMocks(page, { rootConversations: [CONVERSATION] })
-  await installEmptyCitationShelfMock(page, {
+  const citationShelf = await installEmptyCitationShelfMock(page, {
     scopeId: '__default__',
     projectId: null,
-    initialItems: [SHELF_ITEM],
-    initialOpen: true,
+    initialItems: options.initialShelfItems ?? [SHELF_ITEM],
+    initialOpen: options.initialShelfOpen ?? true,
+    initialRevision: options.initialShelfRevision,
   })
 
   await page.route('**/api/settings', async (route) => {
@@ -201,6 +210,7 @@ async function installBackend(page: Page) {
     await fulfillJson(route, {})
   })
   await page.route('**/api/references/bibliometrics', async (route) => {
+    bibliometricsPayloads.push(route.request().postDataJSON() as Record<string, unknown>)
     await fulfillJson(route, { bibliometrics_checked: true })
   })
   await page.route('**/api/library/quality/sources**', async (route) => {
@@ -234,20 +244,57 @@ async function installBackend(page: Page) {
   })
 
   return {
+    citationShelf,
     generateSeen,
     waitForGenerateCount,
+    getBibliometricsPayloads: () => bibliometricsPayloads.map((payload) => ({ ...payload })),
     getResearchState: () => researchState,
   }
 }
 
+test('pagehide cannot flush an open stale empty shelf over restored backend evidence', async ({ page }) => {
+  const backend = await installBackend(page, {
+    initialShelfItems: [],
+    initialShelfOpen: true,
+    initialShelfRevision: 4,
+  })
+  await page.goto('/?conversation=conv-context-pack')
+
+  await expect(page).toHaveURL(/conversation=conv-context-pack/)
+  await expect(page.locator('body')).toContainText('The baseline reference is available')
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(0)
+  await expect.poll(backend.citationShelf.getGetCount).toBeGreaterThan(0)
+
+  backend.citationShelf.seed([SHELF_ITEM], true)
+  const patchesBeforePagehide = backend.citationShelf.getPatchPayloads().length
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')))
+  await page.waitForTimeout(250)
+
+  const pagehidePatches = backend.citationShelf.getPatchPayloads().slice(patchesBeforePagehide)
+  expect(pagehidePatches.filter((payload) => (
+    Array.isArray(payload.items)
+    && payload.items.length === 0
+    && !payload.allow_empty_overwrite
+  ))).toEqual([])
+  expect(backend.citationShelf.getState().items).toHaveLength(1)
+
+  await page.reload()
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
+  await expect(page.getByTestId('citation-shelf-item')).toContainText('Fixture Paper.pdf')
+  await expect.poll(() => backend.getBibliometricsPayloads().length).toBeGreaterThan(0)
+  expect(backend.getBibliometricsPayloads().every((payload) => payload.allow_model_calls === false)).toBe(true)
+})
+
 test('selected citation shelf items are sent as next-turn prompt context', async ({ page }) => {
+  test.setTimeout(60_000)
   const backend = await installBackend(page)
   await page.goto('/?conversation=conv-context-pack')
 
   await expect(page).toHaveURL(/conversation=conv-context-pack/)
   await expect(page.locator('body')).toContainText('The baseline reference is available')
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
-  await page.locator('.kb-shelf-check').first().check({ force: true })
+  await page.locator('.kb-shelf-check').first().check()
+  await expect(page.locator('.kb-shelf-check').first()).toBeChecked()
   await expect(page.getByTestId('citation-shelf-use-context')).toBeVisible()
   await expect(page.getByTestId('citation-shelf-export-selected')).toBeVisible()
   await expect(page.getByTestId('citation-shelf-batch-organize-panel')).toHaveCount(0)
@@ -282,7 +329,8 @@ test('selected citation shelf items are sent as next-turn prompt context', async
   await expect(page.getByTestId('chat-context-pack')).toHaveCount(0)
 
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
-  await page.locator('.kb-shelf-check').first().check({ force: true })
+  await page.locator('.kb-shelf-check').first().check()
+  await expect(page.locator('.kb-shelf-check').first()).toBeChecked()
   await page.getByTestId('citation-shelf-use-context').click()
   await expect(page.getByTestId('chat-context-pack')).toContainText('1 excerpts')
   await expect.poll(() => Boolean(backend.getResearchState().selected_research_context)).toBe(true)

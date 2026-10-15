@@ -68,6 +68,36 @@ def test_citation_shelf_default_scope_and_delete(tmp_path: Path):
     assert loaded["revision"] == 0
 
 
+def test_citation_shelf_empty_open_save_requires_explicit_intent(tmp_path: Path):
+    store = ChatStore(tmp_path / "chat.sqlite3")
+    conv_id = store.create_conversation("protect hydrated shelf")
+    saved = store.save_citation_shelf(
+        conv_id=conv_id,
+        items=[{"key": "ref-protected", "main": "Protected evidence"}],
+        open=False,
+    )
+
+    guarded = store.save_citation_shelf(conv_id=conv_id, items=[], open=True)
+
+    assert saved is not None
+    assert guarded is not None
+    assert guarded["items"][0]["key"] == "ref-protected"
+    assert guarded["open"] is False
+    assert guarded["revision"] == saved["revision"]
+
+    explicit = store.save_citation_shelf(
+        conv_id=conv_id,
+        items=[],
+        open=True,
+        allow_empty_overwrite=True,
+    )
+
+    assert explicit is not None
+    assert explicit["items"] == []
+    assert explicit["open"] is True
+    assert explicit["revision"] == saved["revision"] + 1
+
+
 def test_delete_conversation_removes_conversation_scoped_shelf_only(tmp_path: Path):
     store = ChatStore(tmp_path / "chat.sqlite3")
     conv_id = store.create_conversation("conversation shelf")

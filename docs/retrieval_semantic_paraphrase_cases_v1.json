@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "id": "research_qa_semantic_paraphrase_v1",
+  "description": "Pre-registered conceptual paraphrases over frozen unseen-v2 evidence contracts. Queries were fixed before running BM25 or Dense measurements; relevance labels and source scopes are inherited without reselection.",
+  "base_fixture": {
+    "path": "docs/retrieval_eval_unseen_v2.json",
+    "id": "research_qa_unseen_corpus_v2_chunk_qrels",
+    "sha256": "4062ce7f0a1ce4afc86f44fbe74fdc375bbeeeb6b2bdc934344e4e0d53d749d7"
+  },
+  "expected_case_count": 12,
+  "expected_locale_counts": {
+    "en": 6,
+    "zh": 6
+  },
+  "minimum_cross_lingual_cases": 7,
+  "max_source_query_token_jaccard": 0.45,
+  "cases": [
+    {
+      "id": "semantic-mamba-selective-state-zh",
+      "base_case_id": "mamba-selective-state",
+      "locale": "zh",
+      "query": "在 Mamba 中，当前 token 怎样动态决定哪些历史状态应当丢弃、哪些历史应继续带到后面？",
+      "transformations": ["conceptual_paraphrase"],
+      "withheld_terms": ["selection mechanism", "input-dependent", "filter out irrelevant information", "remember relevant information"],
+      "rationale": "Expresses selective state retention as a token-conditioned discard/carry decision without naming the registered mechanism phrases."
+    },
+    {
+      "id": "semantic-kan-edge-functions-zh",
+      "base_case_id": "kan-edge-functions",
+      "locale": "zh",
+      "query": "KAN 把可训练的非线性曲线安在神经元之间的连接上还是单个神经元里？连接参数不再是标量后，由哪种曲线族承担映射？",
+      "transformations": ["conceptual_paraphrase", "cross_lingual"],
+      "withheld_terms": ["learnable activation functions on edges", "no linear weight matrices", "1D function", "spline"],
+      "rationale": "Cross-language relational paraphrase of edge functions, node aggregation, and replacement of scalar weights."
+    },
+    {
+      "id": "semantic-bitnet-ternary-efficiency-zh",
+      "base_case_id": "bitnet-ternary-efficiency",
+      "locale": "zh",
+      "query": "BitNet b1.58 的权重只有负一、零和正一时，为什么每个参数的信息量约等于 log2(3)，以及乘法器开销会怎样变化？",
+      "transformations": ["conceptual_paraphrase", "cross_lingual"],
+      "withheld_terms": ["{-1, 0, 1}", "1.58 bits", "multiplication operations", "FP16"],
+      "rationale": "Uses information-content and hardware-cost language instead of the registered ternary-efficiency wording."
+    },
+    {
+      "id": "semantic-sam2-streaming-memory-en",
+      "base_case_id": "sam2-streaming-memory",
+      "locale": "en",
+      "query": "During frame-by-frame video segmentation, how does SAM 2 carry earlier interaction and output history forward, and how can a later point, rectangle, or painted region alter subsequent masks?",
+      "transformations": ["conceptual_paraphrase"],
+      "withheld_terms": ["streaming memory", "previous prompts", "predictions", "clicks, boxes, or masks"],
+      "rationale": "Replaces the named memory and prompt forms with functional descriptions in the same language."
+    },
+    {
+      "id": "semantic-medsam-box-architecture-en",
+      "base_case_id": "medsam-box-architecture",
+      "locale": "en",
+      "query": "For MedSAM, why is a rectangular region a more dependable instruction than a click, and how do the visual, instruction, and output components exchange information?",
+      "transformations": ["conceptual_paraphrase", "cross_lingual"],
+      "withheld_terms": ["bounding boxes", "image encoder", "prompt encoder", "mask decoder", "cross-attention"],
+      "rationale": "Cross-language architecture question that describes each component by function and omits registered module names."
+    },
+    {
+      "id": "semantic-modernbert-attention-en",
+      "base_case_id": "modernbert-alternating-attention",
+      "locale": "en",
+      "query": "In ModernBERT, how often does information escape the neighborhood-only layers to see the entire sequence, and what neighborhood span and two rotary-position scales accompany that schedule?",
+      "transformations": ["conceptual_paraphrase"],
+      "withheld_terms": ["every third layer", "global attention", "128 token", "160,000", "10,000"],
+      "rationale": "Describes local/global attention by receptive-field behavior while asking for the same registered numeric details."
+    },
+    {
+      "id": "semantic-deepseek-r1-zero-boundary-en",
+      "base_case_id": "deepseek-r1-zero-boundary",
+      "locale": "en",
+      "query": "Was DeepSeek-R1-Zero bootstrapped with labelled demonstrations, and which clarity and multilingual-output problems kept the raw reinforcement-learning model from directly serving general writing and QA?",
+      "transformations": ["conceptual_paraphrase", "cross_lingual"],
+      "withheld_terms": ["without supervised fine-tuning", "poor readability", "language mixing", "open-domain question answering"],
+      "rationale": "Cross-language boundary question using labelled demonstrations and multilingual-output descriptions."
+    },
+    {
+      "id": "semantic-gemma3-vision-tokens-en",
+      "base_case_id": "gemma3-vision-tokens",
+      "locale": "en",
+      "query": "In Gemma 3, is the image tower updated jointly with the language model? Explain how an 896-pixel image is spatially compressed into a constant-length visual sequence.",
+      "transformations": ["conceptual_paraphrase", "cross_lingual"],
+      "withheld_terms": ["SigLIP", "vision encoder is frozen", "256 image tokens", "4x4 average pooling"],
+      "rationale": "Cross-language paraphrase replaces architecture and pooling names with training and spatial-compression behavior."
+    },
+    {
+      "id": "semantic-timesfm-probability-zh",
+      "base_case_id": "timesfm-probabilistic-boundary",
+      "locale": "zh",
+      "query": "TimesFM 默认学习的是未来值的完整分布，还是一个单点估计？训练时采用什么误差，若要表达不确定性还需增加哪些预测分支和目标？",
+      "transformations": ["conceptual_paraphrase"],
+      "withheld_terms": ["point forecasting", "mean squared error", "probabilistic forecasting", "output heads", "quantile loss"],
+      "rationale": "Restates the point-versus-distribution boundary in Chinese without the registered English evidence terms."
+    },
+    {
+      "id": "semantic-bindgpt-three-roles-zh",
+      "base_case_id": "bindgpt-three-roles",
+      "locale": "zh",
+      "query": "同一个 BindGPT 预训练模型能分别承担哪些三维分子生成任务？它把拓扑与构象一起生成后，省掉了哪一步先验流程？",
+      "transformations": ["conceptual_paraphrase", "cross_lingual"],
+      "withheld_terms": ["molecular graphs and conformations jointly", "graph reconstruction", "3D molecular generative model", "conformer generator", "pocket-conditioned"],
+      "rationale": "Cross-language role enumeration framed through topology/conformation generation and the removed pipeline step."
+    },
+    {
+      "id": "semantic-long-context-synthesis-zh",
+      "base_case_id": "long-context-attention-synthesis",
+      "locale": "zh",
+      "query": "对比 ModernBERT 与 Gemma 3 扩展上下文的节奏：各自隔多少层让信息跨越全文，局部层的窗口细节分别是什么？",
+      "transformations": ["conceptual_paraphrase", "cross_lingual", "multi_paper"],
+      "withheld_terms": ["every third layer", "local sliding window", "5:1 interleaving", "5 local layers"],
+      "rationale": "Cross-language multi-paper paraphrase of global-information cadence and local receptive fields."
+    },
+    {
+      "id": "semantic-segmentation-transfer-en",
+      "base_case_id": "segmentation-transfer-synthesis",
+      "locale": "en",
+      "query": "Contrast SAM 2's temporal feedback loop with MedSAM's static medical-image instruction. Which mechanism carries video history, which prompt anchors the medical target, and why are their data and prompt strategies not interchangeable?",
+      "transformations": ["conceptual_paraphrase", "cross_lingual", "multi_paper"],
+      "withheld_terms": ["streaming memory", "model in the loop", "bounding boxes", "positional encoding", "cross-attention"],
+      "rationale": "Cross-language comparison that describes both systems functionally and preserves their non-interchangeable boundary."
+    }
+  ]
+}

@@ -352,6 +352,10 @@ export function useReaderLocateEngine({
       const target = options.target || null
       const targetBlockId = String(target?.getAttribute('data-kb-block-id') || '').trim()
       const targetAnchorId = String(target?.getAttribute('data-kb-anchor-id') || '').trim()
+      const matchedBlock = readerBlocks.find((item) => (
+        (targetBlockId && String(item.block_id || '').trim() === targetBlockId)
+        || (targetAnchorId && String(item.anchor_id || '').trim() === targetAnchorId)
+      ))
       const ok = status !== 'failed'
       setLocateResult({
         locateRequestId,
@@ -366,8 +370,8 @@ export function useReaderLocateEngine({
         activeAltIndex,
         blockId: targetBlockId || activeBlockId || undefined,
         anchorId: targetAnchorId || activeAnchorId || undefined,
-        anchorKind: activeAnchorKind || undefined,
-        headingPath: activeHeadingPath || undefined,
+        anchorKind: String(matchedBlock?.kind || activeAnchorKind || '').trim() || undefined,
+        headingPath: String(matchedBlock?.heading_path || activeHeadingPath || '').trim() || undefined,
       })
     }
     const runLocate = () => {
@@ -402,7 +406,7 @@ export function useReaderLocateEngine({
       // If strict locate already resolves the explicit identity (block/anchor),
       // keep primary focus pinned to that block instead of drifting to neighbors.
       const lockPrimaryToDirectIdentity = Boolean(strictLocate && target && hasDirectIdentityHint)
-      if (!target && hasDirectIdentityHint && alternatives.length > 1) {
+      if (!target && alternatives.length > 1) {
         let resolvedAltIndex = -1
         for (let idx = 0; idx < alternatives.length; idx += 1) {
           if (idx === activeAltIndex) continue

@@ -191,11 +191,17 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
     () => prepareRefsPanelHits(entry, { activeSourcePath, activeSourceName }),
     [activeSourceName, activeSourcePath, entry],
   )
-  const visibleHits = preparedHits.hits
+  const pendingCount = preparedHits.hits.filter((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending').length
+  const hasPending = displayState === 'pending' || pendingCount > 0
+  // Defense in depth for stale caches and mixed-version clients: retrieval
+  // seeds are internal work, not evidence cards. The store keeps polling and
+  // replaces this progress state with a grounded payload automatically.
+  const visibleHits = useMemo(
+    () => (hasPending ? [] : preparedHits.hits),
+    [hasPending, preparedHits],
+  )
   const hiddenActiveSourceCount = preparedHits.hiddenActiveSourceCount
   const guideFilter = entry?.guide_filter || {}
-  const pendingCount = visibleHits.filter((hit) => String(hit?.meta?.ref_pack_state || '').trim().toLowerCase() === 'pending').length
-  const hasPending = displayState === 'pending' || pendingCount > 0
   const filteredSelfCount = positiveNumber(guideFilter.filtered_hit_count)
   const isActiveSourceFilteredOnly = hiddenActiveSourceCount > 0 && visibleHits.length === 0 && Boolean(String(activeSourcePath || activeSourceName || '').trim())
   const shouldShowGuideFilterNote = !isActiveSourceFilteredOnly && !hasPending && (
@@ -360,7 +366,10 @@ export function RefsPanel({ refs, msgId, onOpenReader, activeSourcePath, activeS
               </span>
             ),
             children: hasPending && visibleHits.length === 0 ? (
-              <div className="rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]">
+              <div
+                className="rounded-[14px] border border-[var(--border)]/70 bg-[var(--panel-2)] px-4 py-3 text-[13px] text-[var(--muted-text)]"
+                data-testid="refs-panel-pending-progress"
+              >
                 {S.refs_pending_filter}
               </div>
             ) : shouldShowGuideFilterNote ? (

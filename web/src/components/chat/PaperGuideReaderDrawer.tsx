@@ -38,6 +38,7 @@ import {
   useReaderCandidatePickerSync,
 } from './useReaderCandidatePickerState'
 import {
+  applyReaderDocLocatorResolution,
   buildReaderActiveLocateCandidate,
   buildReaderOpenPayloadViewModel,
 } from './readerOpenPayloadViewModel'
@@ -152,12 +153,31 @@ export function PaperGuideReaderDrawer({
   const {
     anchorId,
     anchorKind: primaryAnchorKind,
-    anchorNumber: primaryAnchorNumber,
     blockId,
     headingPath: primaryHeadingPath,
     highlightSnippet: primaryHighlightSnippet,
     snippet: primaryFocusSnippet,
   } = primaryCandidate
+  const readerLocatorRequest = useMemo(() => {
+    const evidenceQuote = String(primaryHighlightSnippet || primaryFocusSnippet || '').trim()
+    if (!(blockId || anchorId || evidenceQuote)) return undefined
+    return {
+      block_id: blockId || undefined,
+      anchor_id: anchorId || undefined,
+      anchor_kind: primaryAnchorKind || undefined,
+      heading_path: primaryHeadingPath || undefined,
+      evidence_quote: evidenceQuote || undefined,
+      strict_locate: strictLocate,
+    }
+  }, [
+    anchorId,
+    blockId,
+    primaryAnchorKind,
+    primaryFocusSnippet,
+    primaryHeadingPath,
+    primaryHighlightSnippet,
+    strictLocate,
+  ])
   const {
     activeAltIndex,
     altChangeSource,
@@ -170,12 +190,19 @@ export function PaperGuideReaderDrawer({
     open,
     sourcePath,
   })
+  const setSystemActiveAltIndex = useCallback((idx: number) => {
+    setActiveAltIndex(idx, 'system')
+  }, [setActiveAltIndex])
+  const setManualActiveAltIndex = useCallback((idx: number) => {
+    setActiveAltIndex(idx, 'manual')
+  }, [setActiveAltIndex])
   const {
     loading,
     error,
     markdown,
     readerAnchors,
     readerBlocks,
+    locatorResolution,
     citeDetails,
     resolvedName,
   } = useReaderDocument({
@@ -183,7 +210,15 @@ export function PaperGuideReaderDrawer({
     sourcePath,
     sourceName,
     documentOverride,
+    locator: readerLocatorRequest,
   })
+
+  const validatedLocateCandidates = useMemo(() => applyReaderDocLocatorResolution({
+    alternatives,
+    primaryCandidate,
+    resolution: locatorResolution,
+    strictLocate,
+  }), [alternatives, locatorResolution, primaryCandidate, strictLocate])
 
   const title = resolvedName || sourceName || 'Document reader'
   const {
@@ -226,12 +261,11 @@ export function PaperGuideReaderDrawer({
     expectsEquationBinding,
   } = useMemo(() => buildReaderActiveLocateCandidate({
     activeAltIndex,
-    alternatives,
-    primaryCandidate,
+    alternatives: validatedLocateCandidates.alternatives,
+    primaryCandidate: validatedLocateCandidates.primaryCandidate,
   }), [
     activeAltIndex,
-    alternatives,
-    primaryCandidate,
+    validatedLocateCandidates,
   ])
 
   const {
@@ -248,10 +282,10 @@ export function PaperGuideReaderDrawer({
     strictLocate,
     contentRef,
     readerBlocks,
-    alternatives,
+    alternatives: validatedLocateCandidates.alternatives,
     relatedBlockIds,
     activeAltIndex,
-    setActiveAltIndex: (idx) => setActiveAltIndex(idx, 'system'),
+    setActiveAltIndex: setSystemActiveAltIndex,
     activeHeadingPath,
     activeFocusSnippet,
     activeHighlightSnippet,
@@ -314,20 +348,12 @@ export function PaperGuideReaderDrawer({
   } = useMemo(() => buildReaderLocateCandidateViewModel({
     activeAltIndex,
     altChangeSource,
-    alternatives,
+    alternatives: validatedLocateCandidates.alternatives,
     candidatePickerExpanded,
     evidenceAlternatives: payloadEvidenceAlternatives,
     initialAltIndex,
     locateHint,
-    requestedCandidate: {
-      headingPath: primaryHeadingPath,
-      snippet: primaryFocusSnippet,
-      highlightSnippet: primaryHighlightSnippet,
-      anchorId,
-      blockId,
-      anchorKind: primaryAnchorKind,
-      anchorNumber: primaryAnchorNumber,
-    },
+    requestedCandidate: validatedLocateCandidates.primaryCandidate,
     S,
     strictLocate,
     title,
@@ -336,18 +362,11 @@ export function PaperGuideReaderDrawer({
     S,
     activeAltIndex,
     altChangeSource,
-    alternatives,
-    anchorId,
-    blockId,
+    validatedLocateCandidates,
     candidatePickerExpanded,
     initialAltIndex,
     locateHint,
     payloadEvidenceAlternatives,
-    primaryAnchorKind,
-    primaryAnchorNumber,
-    primaryFocusSnippet,
-    primaryHeadingPath,
-    primaryHighlightSnippet,
     strictLocate,
     title,
     visibleAlternatives,
@@ -363,6 +382,7 @@ export function PaperGuideReaderDrawer({
     activeHitLevel,
     altChangeSource,
     hasDistinctAlternatives,
+    locateResult,
     requestedAltIndex,
     S,
     statusTextFull,
@@ -375,6 +395,7 @@ export function PaperGuideReaderDrawer({
     activeHitLevel,
     altChangeSource,
     hasDistinctAlternatives,
+    locateResult,
     requestedAltIndex,
     statusTextFull,
     strictLocate,
@@ -588,7 +609,7 @@ export function PaperGuideReaderDrawer({
     outlineOpen,
     readerBlocks,
     sessionHighlights,
-    setActiveAltIndex: (idx) => setActiveAltIndex(idx, 'manual'),
+    setActiveAltIndex: setManualActiveAltIndex,
     sourcePath,
     title,
     S,

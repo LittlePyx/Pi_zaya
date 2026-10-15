@@ -1,6 +1,23 @@
 from kb.converter.md_analyzer import MarkdownAnalyzer
 
 
+def test_md_analyzer_flags_proposition_prose_inside_math_and_truncated_condition():
+    text = """Proposition 1. Suppose x is an unbiased estimator of y, i.e.
+
+![Equation](./assets/page_2_eq_3.png)
+
+dent from the noise in its complement Jc, conditional on y.
+
+$$
+Proposition 2. The J-invariant function satisfies
+$$
+"""
+    issues = MarkdownAnalyzer().analyze(text)
+    messages = {issue.message for issue in issues if issue.severity == "error"}
+    assert "Truncated proposition condition after an equation asset" in messages
+    assert "Proposition prose was classified as display math" in messages
+
+
 def test_md_analyzer_does_not_flag_numbered_section_heading_as_formula():
     md = "\n".join(
         [

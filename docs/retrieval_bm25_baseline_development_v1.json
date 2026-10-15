@@ -1,0 +1,5493 @@
+{
+  "schema_version": 1,
+  "fixture_id": "research_qa_library_development_v1_chunk_qrels",
+  "case_count": 41,
+  "corpus": {
+    "document_count": 31,
+    "chunk_count": 2251,
+    "fingerprint": "20ad35d505d2936dbd80e90df6199e4b3d51fdf4cf8872a36c9211c5d6c99d9f"
+  },
+  "fixture": {
+    "path": "docs/retrieval_eval_development_v1.json",
+    "sha256": "269cda5b1861be19a9aebf7b8b95faae6de49d41afb04e53cb2eea2aa3736478",
+    "sha256_newlines": "normalized_lf"
+  },
+  "measured_at": "2026-09-02T14:40:08.000386+00:00",
+  "report_kind": "committed_baseline_summary",
+  "channels": {
+    "bm25_raw": {
+      "channel": "bm25_raw",
+      "modes": {
+        "scoped": {
+          "case_count": 41,
+          "label_count": 46,
+          "zero_hit_cases": 10,
+          "translated_cases": 0,
+          "metrics": {
+            "contract_recall@1": 0.219512,
+            "contract_recall@10": 0.573171,
+            "contract_recall@20": 0.585366,
+            "contract_recall@3": 0.365854,
+            "contract_recall@5": 0.512195,
+            "mrr": 0.342547,
+            "ndcg@1": 0.219512,
+            "ndcg@10": 0.387628,
+            "ndcg@20": 0.391088,
+            "ndcg@3": 0.302697,
+            "ndcg@5": 0.363585,
+            "recall@1": 0.207317,
+            "recall@10": 0.573171,
+            "recall@20": 0.585366,
+            "recall@3": 0.353659,
+            "recall@5": 0.5,
+            "wrong_source_rate@1": 0.0,
+            "wrong_source_rate@10": 0.0,
+            "wrong_source_rate@20": 0.0,
+            "wrong_source_rate@3": 0.0,
+            "wrong_source_rate@5": 0.0
+          },
+          "latency_ms": {
+            "p50": 1.034,
+            "p95": 2.036,
+            "max": 2.161
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.833333,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.166667,
+                  "contract_recall@5": 0.833333,
+                  "mrr": 0.3,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.386853,
+                  "ndcg@20": 0.434143,
+                  "ndcg@3": 0.128951,
+                  "ndcg@5": 0.386853,
+                  "recall@1": 0.0,
+                  "recall@10": 0.833333,
+                  "recall@20": 1.0,
+                  "recall@3": 0.166667,
+                  "recall@5": 0.833333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh": {
+                "case_count": 38,
+                "metrics": {
+                  "contract_recall@1": 0.236842,
+                  "contract_recall@10": 0.552632,
+                  "contract_recall@20": 0.552632,
+                  "contract_recall@3": 0.381579,
+                  "contract_recall@5": 0.486842,
+                  "mrr": 0.345906,
+                  "ndcg@1": 0.236842,
+                  "ndcg@10": 0.387689,
+                  "ndcg@20": 0.387689,
+                  "ndcg@3": 0.316414,
+                  "ndcg@5": 0.361748,
+                  "recall@1": 0.223684,
+                  "recall@10": 0.552632,
+                  "recall@20": 0.552632,
+                  "recall@3": 0.368421,
+                  "recall@5": 0.473684,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "evaluation_focus": {
+              "unknown": {
+                "case_count": 41,
+                "metrics": {
+                  "contract_recall@1": 0.219512,
+                  "contract_recall@10": 0.573171,
+                  "contract_recall@20": 0.585366,
+                  "contract_recall@3": 0.365854,
+                  "contract_recall@5": 0.512195,
+                  "mrr": 0.342547,
+                  "ndcg@1": 0.219512,
+                  "ndcg@10": 0.387628,
+                  "ndcg@20": 0.391088,
+                  "ndcg@3": 0.302697,
+                  "ndcg@5": 0.363585,
+                  "recall@1": 0.207317,
+                  "recall@10": 0.573171,
+                  "recall@20": 0.585366,
+                  "recall@3": 0.353659,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 36,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.611111,
+                  "contract_recall@20": 0.611111,
+                  "contract_recall@3": 0.388889,
+                  "contract_recall@5": 0.555556,
+                  "mrr": 0.359568,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.41505,
+                  "ndcg@20": 0.41505,
+                  "ndcg@3": 0.323246,
+                  "ndcg@5": 0.392591,
+                  "recall@1": 0.236111,
+                  "recall@10": 0.611111,
+                  "recall@20": 0.611111,
+                  "recall@3": 0.375,
+                  "recall@5": 0.541667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "selected_context": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.386853,
+                  "ndcg@20": 0.386853,
+                  "ndcg@3": 0.386853,
+                  "ndcg@5": 0.386853,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "unknown": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.375,
+                  "contract_recall@3": 0.125,
+                  "contract_recall@5": 0.125,
+                  "mrr": 0.15,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.141023,
+                  "ndcg@20": 0.17649,
+                  "ndcg@3": 0.096713,
+                  "ndcg@5": 0.096713,
+                  "recall@1": 0.0,
+                  "recall@10": 0.25,
+                  "recall@20": 0.375,
+                  "recall@3": 0.125,
+                  "recall@5": 0.125,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.386853,
+                  "ndcg@20": 0.528722,
+                  "ndcg@3": 0.386853,
+                  "ndcg@5": 0.386853,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "en_locale": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.833333,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.166667,
+                  "contract_recall@5": 0.833333,
+                  "mrr": 0.3,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.386853,
+                  "ndcg@20": 0.434143,
+                  "ndcg@3": 0.128951,
+                  "ndcg@5": 0.386853,
+                  "recall@1": 0.0,
+                  "recall@10": 0.833333,
+                  "recall@20": 1.0,
+                  "recall@3": 0.166667,
+                  "recall@5": 0.833333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "figure_architecture": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "mechanism_explanation": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 0.333333,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.333333,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.333333,
+                  "ndcg@20": 0.333333,
+                  "ndcg@3": 0.333333,
+                  "ndcg@5": 0.333333,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.333333,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "new_fact_composition": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.583333,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.687202,
+                  "ndcg@20": 0.687202,
+                  "ndcg@3": 0.543643,
+                  "ndcg@5": 0.687202,
+                  "recall@1": 0.333333,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.666667,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.6,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.693426,
+                  "ndcg@20": 0.693426,
+                  "ndcg@3": 0.5,
+                  "ndcg@5": 0.693426,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh_locale": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 1.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@3": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@1": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "single-photon-pidl",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "three-d-video-real-time-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 10,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-throughput-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "spi-prospects-when-use-single-pixel",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "s2ism-three-way-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "pidl-real-spad-noise",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 9,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "cassi-dual-disperser-design",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "figure_architecture"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "fdm-speed-snr-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "denoising-classical-map",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-physics-in-training",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scigs-explicit-dynamic-scene",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "foveated-not-simple-zoom",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-adaptive-advantage",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "iism-live-cell-benefit",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spad-geiger-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 10,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.177239,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "basis-choice-vs-foveated-adaptation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-forward-model-equation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location",
+                "formula_reasoning",
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-correlation-resolution",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-motion-assumption-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale",
+                "scope_boundary"
+              ],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spd-detector-metrics",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scigs-transformation-filter",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "iism-depth-phase",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-sampling-ratio",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "pidl-cross-camera-transfer",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "scope_boundary"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spi-illumination-vs-detection",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "s2ism-array-reassignment",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "perovskite-dual-cavity-threshold",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "cassi-projective-single-shot",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "hsi-fsi-binary-pattern-cost",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "rt-spi-silver-mask",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "visual-perception-local-origin",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "nafnet-activation-free-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-heterodyne-sampling-conditions",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "three-d-video-daq-budget",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-two-stage-elimination",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-physical-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.831555,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-integration-time-boundary",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-vs-iism-depth-signal",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 41,
+          "label_count": 46,
+          "zero_hit_cases": 6,
+          "translated_cases": 0,
+          "metrics": {
+            "contract_recall@1": 0.121951,
+            "contract_recall@10": 0.45122,
+            "contract_recall@20": 0.512195,
+            "contract_recall@3": 0.231707,
+            "contract_recall@5": 0.329268,
+            "mrr": 0.2262,
+            "ndcg@1": 0.121951,
+            "ndcg@10": 0.271157,
+            "ndcg@20": 0.288032,
+            "ndcg@3": 0.186988,
+            "ndcg@5": 0.224729,
+            "recall@1": 0.121951,
+            "recall@10": 0.45122,
+            "recall@20": 0.512195,
+            "recall@3": 0.219512,
+            "recall@5": 0.317073,
+            "wrong_source_rate@1": 0.268293,
+            "wrong_source_rate@10": 0.302439,
+            "wrong_source_rate@20": 0.378049,
+            "wrong_source_rate@3": 0.300813,
+            "wrong_source_rate@5": 0.326829
+          },
+          "latency_ms": {
+            "p50": 14.003,
+            "p95": 25.248,
+            "max": 33.135
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.833333,
+                  "contract_recall@20": 0.833333,
+                  "contract_recall@3": 0.166667,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.288889,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.376638,
+                  "ndcg@20": 0.376638,
+                  "ndcg@3": 0.128951,
+                  "ndcg@5": 0.257902,
+                  "recall@1": 0.0,
+                  "recall@10": 0.833333,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.166667,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.333333,
+                  "wrong_source_rate@20": 0.516667,
+                  "wrong_source_rate@3": 0.222222,
+                  "wrong_source_rate@5": 0.266667
+                }
+              },
+              "zh": {
+                "case_count": 38,
+                "metrics": {
+                  "contract_recall@1": 0.131579,
+                  "contract_recall@10": 0.421053,
+                  "contract_recall@20": 0.486842,
+                  "contract_recall@3": 0.236842,
+                  "contract_recall@5": 0.315789,
+                  "mrr": 0.221251,
+                  "ndcg@1": 0.131579,
+                  "ndcg@10": 0.262829,
+                  "ndcg@20": 0.281037,
+                  "ndcg@3": 0.19157,
+                  "ndcg@5": 0.222111,
+                  "recall@1": 0.131579,
+                  "recall@10": 0.421053,
+                  "recall@20": 0.486842,
+                  "recall@3": 0.223684,
+                  "recall@5": 0.302632,
+                  "wrong_source_rate@1": 0.289474,
+                  "wrong_source_rate@10": 0.3,
+                  "wrong_source_rate@20": 0.367105,
+                  "wrong_source_rate@3": 0.307018,
+                  "wrong_source_rate@5": 0.331579
+                }
+              }
+            },
+            "evaluation_focus": {
+              "unknown": {
+                "case_count": 41,
+                "metrics": {
+                  "contract_recall@1": 0.121951,
+                  "contract_recall@10": 0.45122,
+                  "contract_recall@20": 0.512195,
+                  "contract_recall@3": 0.231707,
+                  "contract_recall@5": 0.329268,
+                  "mrr": 0.2262,
+                  "ndcg@1": 0.121951,
+                  "ndcg@10": 0.271157,
+                  "ndcg@20": 0.288032,
+                  "ndcg@3": 0.186988,
+                  "ndcg@5": 0.224729,
+                  "recall@1": 0.121951,
+                  "recall@10": 0.45122,
+                  "recall@20": 0.512195,
+                  "recall@3": 0.219512,
+                  "recall@5": 0.317073,
+                  "wrong_source_rate@1": 0.268293,
+                  "wrong_source_rate@10": 0.302439,
+                  "wrong_source_rate@20": 0.378049,
+                  "wrong_source_rate@3": 0.300813,
+                  "wrong_source_rate@5": 0.326829
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 36,
+                "metrics": {
+                  "contract_recall@1": 0.138889,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.555556,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.361111,
+                  "mrr": 0.241413,
+                  "ndcg@1": 0.138889,
+                  "ndcg@10": 0.298072,
+                  "ndcg@20": 0.312688,
+                  "ndcg@3": 0.202212,
+                  "ndcg@5": 0.245196,
+                  "recall@1": 0.138889,
+                  "recall@10": 0.5,
+                  "recall@20": 0.555556,
+                  "recall@3": 0.236111,
+                  "recall@5": 0.347222,
+                  "wrong_source_rate@1": 0.305556,
+                  "wrong_source_rate@10": 0.322222,
+                  "wrong_source_rate@20": 0.401389,
+                  "wrong_source_rate@3": 0.324074,
+                  "wrong_source_rate@5": 0.35
+                }
+              },
+              "selected_context": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.1,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "unknown": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.125,
+                  "contract_recall@20": 0.25,
+                  "contract_recall@3": 0.125,
+                  "contract_recall@5": 0.125,
+                  "mrr": 0.145833,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.096713,
+                  "ndcg@20": 0.138137,
+                  "ndcg@3": 0.096713,
+                  "ndcg@5": 0.096713,
+                  "recall@1": 0.0,
+                  "recall@10": 0.125,
+                  "recall@20": 0.25,
+                  "recall@3": 0.125,
+                  "recall@5": 0.125,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.2375,
+                  "wrong_source_rate@3": 0.166666,
+                  "wrong_source_rate@5": 0.2
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.386853,
+                  "ndcg@20": 0.386853,
+                  "ndcg@3": 0.386853,
+                  "ndcg@5": 0.386853,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.6,
+                  "wrong_source_rate@20": 0.6,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.4
+                }
+              },
+              "en_locale": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.833333,
+                  "contract_recall@20": 0.833333,
+                  "contract_recall@3": 0.166667,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.288889,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.376638,
+                  "ndcg@20": 0.376638,
+                  "ndcg@3": 0.128951,
+                  "ndcg@5": 0.257902,
+                  "recall@1": 0.0,
+                  "recall@10": 0.833333,
+                  "recall@20": 0.833333,
+                  "recall@3": 0.166667,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.333333,
+                  "wrong_source_rate@20": 0.516667,
+                  "wrong_source_rate@3": 0.222222,
+                  "wrong_source_rate@5": 0.266667
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.033333,
+                  "wrong_source_rate@20": 0.016667,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.066667
+                }
+              },
+              "figure_architecture": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 1.0,
+                  "wrong_source_rate@20": 1.0,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.1,
+                  "wrong_source_rate@20": 0.05,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "mechanism_explanation": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 0.333333,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.333333,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.333333,
+                  "ndcg@20": 0.333333,
+                  "ndcg@3": 0.333333,
+                  "ndcg@5": 0.333333,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.333333,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.333333,
+                  "wrong_source_rate@10": 0.466667,
+                  "wrong_source_rate@20": 0.65,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.466667
+                }
+              },
+              "new_fact_composition": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.333333,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.388889,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.452069,
+                  "ndcg@20": 0.452069,
+                  "ndcg@3": 0.333333,
+                  "ndcg@5": 0.333333,
+                  "recall@1": 0.333333,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.333333,
+                  "wrong_source_rate@10": 0.333333,
+                  "wrong_source_rate@20": 0.433333,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.333333
+                }
+              },
+              "scope_boundary": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.083334,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.178103,
+                  "ndcg@20": 0.178103,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.3,
+                  "wrong_source_rate@3": 0.166666,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.05,
+                  "wrong_source_rate@20": 0.025,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.1
+                }
+              },
+              "zh_locale": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.166667,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.356207,
+                  "ndcg@20": 0.356207,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 0.8,
+                  "wrong_source_rate@20": 0.85,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 1.0
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "single-photon-pidl",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "three-d-video-real-time-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 12,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.083333,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-throughput-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "spi-prospects-when-use-single-pixel",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "s2ism-three-way-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "pidl-real-spad-noise",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 14,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.071429,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.6,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "cassi-dual-disperser-design",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "figure_architecture"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "fdm-speed-snr-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "denoising-classical-map",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-physics-in-training",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scigs-explicit-dynamic-scene",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "foveated-not-simple-zoom",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 9,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-adaptive-advantage",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "iism-live-cell-benefit",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spad-geiger-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 12,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.083333,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "basis-choice-vs-foveated-adaptation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-forward-model-equation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location",
+                "formula_reasoning",
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "qclfm-correlation-resolution",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-motion-assumption-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale",
+                "scope_boundary"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spd-detector-metrics",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scigs-transformation-filter",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "iism-depth-phase",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-sampling-ratio",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "pidl-cross-camera-transfer",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "scope_boundary"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "spi-illumination-vs-detection",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "zh_locale"
+              ],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "s2ism-array-reassignment",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "perovskite-dual-cavity-threshold",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "cassi-projective-single-shot",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "hsi-fsi-binary-pattern-cost",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "rt-spi-silver-mask",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "visual-perception-local-origin",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "nafnet-activation-free-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-heterodyne-sampling-conditions",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "three-d-video-daq-budget",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 5,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.386853,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-two-stage-elimination",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-physical-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.60526,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-integration-time-boundary",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-vs-iism-depth-signal",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "bm25_product_queries": {
+      "channel": "bm25_product_queries",
+      "modes": {
+        "scoped": {
+          "case_count": 41,
+          "label_count": 46,
+          "zero_hit_cases": 2,
+          "translated_cases": 36,
+          "metrics": {
+            "contract_recall@1": 0.219512,
+            "contract_recall@10": 0.695122,
+            "contract_recall@20": 0.731707,
+            "contract_recall@3": 0.512195,
+            "contract_recall@5": 0.609756,
+            "mrr": 0.391328,
+            "ndcg@1": 0.219512,
+            "ndcg@10": 0.460595,
+            "ndcg@20": 0.471358,
+            "ndcg@3": 0.385014,
+            "ndcg@5": 0.427031,
+            "recall@1": 0.219512,
+            "recall@10": 0.695122,
+            "recall@20": 0.731707,
+            "recall@3": 0.5,
+            "recall@5": 0.597561,
+            "wrong_source_rate@1": 0.0,
+            "wrong_source_rate@10": 0.0,
+            "wrong_source_rate@20": 0.0,
+            "wrong_source_rate@3": 0.0,
+            "wrong_source_rate@5": 0.0
+          },
+          "latency_ms": {
+            "p50": 6.228,
+            "p95": 23.456,
+            "max": 27.862
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.277778,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.363745,
+                  "ndcg@20": 0.363745,
+                  "ndcg@3": 0.295618,
+                  "ndcg@5": 0.295618,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh": {
+                "case_count": 38,
+                "metrics": {
+                  "contract_recall@1": 0.236842,
+                  "contract_recall@10": 0.697368,
+                  "contract_recall@20": 0.736842,
+                  "contract_recall@3": 0.513158,
+                  "contract_recall@5": 0.618421,
+                  "mrr": 0.400292,
+                  "ndcg@1": 0.236842,
+                  "ndcg@10": 0.468241,
+                  "ndcg@20": 0.479854,
+                  "ndcg@3": 0.392072,
+                  "ndcg@5": 0.437406,
+                  "recall@1": 0.236842,
+                  "recall@10": 0.697368,
+                  "recall@20": 0.736842,
+                  "recall@3": 0.5,
+                  "recall@5": 0.605263,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "evaluation_focus": {
+              "unknown": {
+                "case_count": 41,
+                "metrics": {
+                  "contract_recall@1": 0.219512,
+                  "contract_recall@10": 0.695122,
+                  "contract_recall@20": 0.731707,
+                  "contract_recall@3": 0.512195,
+                  "contract_recall@5": 0.609756,
+                  "mrr": 0.391328,
+                  "ndcg@1": 0.219512,
+                  "ndcg@10": 0.460595,
+                  "ndcg@20": 0.471358,
+                  "ndcg@3": 0.385014,
+                  "ndcg@5": 0.427031,
+                  "recall@1": 0.219512,
+                  "recall@10": 0.695122,
+                  "recall@20": 0.731707,
+                  "recall@3": 0.5,
+                  "recall@5": 0.597561,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 36,
+                "metrics": {
+                  "contract_recall@1": 0.25,
+                  "contract_recall@10": 0.722222,
+                  "contract_recall@20": 0.75,
+                  "contract_recall@3": 0.555556,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.416281,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.489331,
+                  "ndcg@20": 0.496838,
+                  "ndcg@3": 0.419226,
+                  "ndcg@5": 0.467079,
+                  "recall@1": 0.25,
+                  "recall@10": 0.722222,
+                  "recall@20": 0.75,
+                  "recall@3": 0.541667,
+                  "recall@5": 0.652778,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "selected_context": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.1,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.177239,
+                  "ndcg@20": 0.177239,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "unknown": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.625,
+                  "contract_recall@3": 0.25,
+                  "contract_recall@5": 0.25,
+                  "mrr": 0.239583,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.272809,
+                  "ndcg@20": 0.315567,
+                  "ndcg@3": 0.173357,
+                  "ndcg@5": 0.173357,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.625,
+                  "recall@3": 0.25,
+                  "recall@5": 0.25,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.591235,
+                  "ndcg@20": 0.591235,
+                  "ndcg@3": 0.386853,
+                  "ndcg@5": 0.386853,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "en_locale": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.277778,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.363745,
+                  "ndcg@20": 0.363745,
+                  "ndcg@3": 0.295618,
+                  "ndcg@5": 0.295618,
+                  "recall@1": 0.0,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "figure_architecture": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.25,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.430677,
+                  "ndcg@20": 0.430677,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.430677,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "mechanism_explanation": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.666667,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.666667,
+                  "ndcg@1": 0.666667,
+                  "ndcg@10": 0.666667,
+                  "ndcg@20": 0.666667,
+                  "ndcg@3": 0.666667,
+                  "ndcg@5": 0.666667,
+                  "recall@1": 0.666667,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.666667,
+                  "recall@5": 0.666667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "new_fact_composition": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.333333,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@3": 0.333333,
+                  "contract_recall@5": 0.333333,
+                  "mrr": 0.166667,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.21031,
+                  "ndcg@20": 0.21031,
+                  "ndcg@3": 0.21031,
+                  "ndcg@5": 0.21031,
+                  "recall@1": 0.0,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.333333,
+                  "recall@3": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "scope_boundary": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.5,
+                  "ndcg@10": 0.5,
+                  "ndcg@20": 0.5,
+                  "ndcg@3": 0.5,
+                  "ndcg@5": 0.5,
+                  "recall@1": 0.5,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh_locale": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 1.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@3": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@1": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "single-photon-pidl",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "three-d-video-real-time-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-throughput-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spi-prospects-when-use-single-pixel",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "s2ism-three-way-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "pidl-real-spad-noise",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "cassi-dual-disperser-design",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "figure_architecture"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-speed-snr-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "denoising-classical-map",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-physics-in-training",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "scigs-explicit-dynamic-scene",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "foveated-not-simple-zoom",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-adaptive-advantage",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "iism-live-cell-benefit",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 9,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spad-geiger-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 5,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.306574,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "basis-choice-vs-foveated-adaptation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 8,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.193426,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "scinerf-forward-model-equation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location",
+                "formula_reasoning",
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 5,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.591235,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-correlation-resolution",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-motion-assumption-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale",
+                "scope_boundary"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "spd-detector-metrics",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scigs-transformation-filter",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "iism-depth-phase",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-sampling-ratio",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "pidl-cross-camera-transfer",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "scope_boundary"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spi-illumination-vs-detection",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "zh_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "s2ism-array-reassignment",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "perovskite-dual-cavity-threshold",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "cassi-projective-single-shot",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "hsi-fsi-binary-pattern-cost",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "rt-spi-silver-mask",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "visual-perception-local-origin",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "nafnet-activation-free-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-heterodyne-sampling-conditions",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "three-d-video-daq-budget",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 12,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.083333,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-two-stage-elimination",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-physical-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.491149,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-integration-time-boundary",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-vs-iism-depth-signal",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 10,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 6,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.177239,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 41,
+          "label_count": 46,
+          "zero_hit_cases": 0,
+          "translated_cases": 38,
+          "metrics": {
+            "contract_recall@1": 0.109756,
+            "contract_recall@10": 0.621951,
+            "contract_recall@20": 0.682927,
+            "contract_recall@3": 0.329268,
+            "contract_recall@5": 0.512195,
+            "mrr": 0.283158,
+            "ndcg@1": 0.121951,
+            "ndcg@10": 0.355315,
+            "ndcg@20": 0.372706,
+            "ndcg@3": 0.233521,
+            "ndcg@5": 0.313492,
+            "recall@1": 0.109756,
+            "recall@10": 0.621951,
+            "recall@20": 0.682927,
+            "recall@3": 0.317073,
+            "recall@5": 0.5,
+            "wrong_source_rate@1": 0.219512,
+            "wrong_source_rate@10": 0.334146,
+            "wrong_source_rate@20": 0.384146,
+            "wrong_source_rate@3": 0.284553,
+            "wrong_source_rate@5": 0.297561
+          },
+          "latency_ms": {
+            "p50": 57.204,
+            "p95": 121.014,
+            "max": 129.554
+          },
+          "ks": [
+            1,
+            3,
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.166667,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.479168,
+                  "ndcg@20": 0.479168,
+                  "ndcg@3": 0.414692,
+                  "ndcg@5": 0.414692,
+                  "recall@1": 0.166667,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.266667,
+                  "wrong_source_rate@20": 0.333333,
+                  "wrong_source_rate@3": 0.222222,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "zh": {
+                "case_count": 38,
+                "metrics": {
+                  "contract_recall@1": 0.105263,
+                  "contract_recall@10": 0.618421,
+                  "contract_recall@20": 0.684211,
+                  "contract_recall@3": 0.315789,
+                  "contract_recall@5": 0.513158,
+                  "mrr": 0.266039,
+                  "ndcg@1": 0.105263,
+                  "ndcg@10": 0.345538,
+                  "ndcg@20": 0.364302,
+                  "ndcg@3": 0.219218,
+                  "ndcg@5": 0.305503,
+                  "recall@1": 0.105263,
+                  "recall@10": 0.618421,
+                  "recall@20": 0.684211,
+                  "recall@3": 0.302632,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.236842,
+                  "wrong_source_rate@10": 0.339474,
+                  "wrong_source_rate@20": 0.388158,
+                  "wrong_source_rate@3": 0.289474,
+                  "wrong_source_rate@5": 0.305263
+                }
+              }
+            },
+            "evaluation_focus": {
+              "unknown": {
+                "case_count": 41,
+                "metrics": {
+                  "contract_recall@1": 0.109756,
+                  "contract_recall@10": 0.621951,
+                  "contract_recall@20": 0.682927,
+                  "contract_recall@3": 0.329268,
+                  "contract_recall@5": 0.512195,
+                  "mrr": 0.283158,
+                  "ndcg@1": 0.121951,
+                  "ndcg@10": 0.355315,
+                  "ndcg@20": 0.372706,
+                  "ndcg@3": 0.233521,
+                  "ndcg@5": 0.313492,
+                  "recall@1": 0.109756,
+                  "recall@10": 0.621951,
+                  "recall@20": 0.682927,
+                  "recall@3": 0.317073,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.219512,
+                  "wrong_source_rate@10": 0.334146,
+                  "wrong_source_rate@20": 0.384146,
+                  "wrong_source_rate@3": 0.284553,
+                  "wrong_source_rate@5": 0.297561
+                }
+              }
+            },
+            "query_scope": {
+              "current_paper": {
+                "case_count": 36,
+                "metrics": {
+                  "contract_recall@1": 0.111111,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.694444,
+                  "contract_recall@3": 0.361111,
+                  "contract_recall@5": 0.555556,
+                  "mrr": 0.283102,
+                  "ndcg@1": 0.111111,
+                  "ndcg@10": 0.374925,
+                  "ndcg@20": 0.381249,
+                  "ndcg@3": 0.248923,
+                  "ndcg@5": 0.332666,
+                  "recall@1": 0.111111,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.694444,
+                  "recall@3": 0.347222,
+                  "recall@5": 0.541667,
+                  "wrong_source_rate@1": 0.25,
+                  "wrong_source_rate@10": 0.35,
+                  "wrong_source_rate@20": 0.397222,
+                  "wrong_source_rate@3": 0.314815,
+                  "wrong_source_rate@5": 0.316667
+                }
+              },
+              "selected_context": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.090909,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.171033,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.5,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.4,
+                  "wrong_source_rate@20": 0.35,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.4
+                }
+              },
+              "unknown": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@1": 0.125,
+                  "contract_recall@10": 0.375,
+                  "contract_recall@20": 0.625,
+                  "contract_recall@3": 0.125,
+                  "contract_recall@5": 0.25,
+                  "mrr": 0.331731,
+                  "ndcg@1": 0.25,
+                  "ndcg@10": 0.267661,
+                  "ndcg@20": 0.346243,
+                  "ndcg@3": 0.153287,
+                  "ndcg@5": 0.219304,
+                  "recall@1": 0.125,
+                  "recall@10": 0.375,
+                  "recall@20": 0.625,
+                  "recall@3": 0.125,
+                  "recall@5": 0.25,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.175,
+                  "wrong_source_rate@20": 0.275,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.1
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_synthesis": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.5,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 1.0,
+                  "ndcg@1": 1.0,
+                  "ndcg@10": 0.806574,
+                  "ndcg@20": 0.806574,
+                  "ndcg@3": 0.613147,
+                  "ndcg@5": 0.613147,
+                  "recall@1": 0.5,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.35,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "en_locale": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.166667,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@1": 0.333333,
+                  "ndcg@10": 0.479168,
+                  "ndcg@20": 0.479168,
+                  "ndcg@3": 0.414692,
+                  "ndcg@5": 0.414692,
+                  "recall@1": 0.166667,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.266667,
+                  "wrong_source_rate@20": 0.333333,
+                  "wrong_source_rate@3": 0.222222,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "exact_location": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.666667,
+                  "wrong_source_rate@10": 0.8,
+                  "wrong_source_rate@20": 0.766667,
+                  "wrong_source_rate@3": 0.666667,
+                  "wrong_source_rate@5": 0.733333
+                }
+              },
+              "figure_architecture": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.25,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.430677,
+                  "ndcg@20": 0.430677,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.430677,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.2,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "formula_reasoning": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.4,
+                  "wrong_source_rate@20": 0.3,
+                  "wrong_source_rate@3": 0.0,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "mechanism_explanation": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.666667,
+                  "contract_recall@10": 0.666667,
+                  "contract_recall@20": 0.666667,
+                  "contract_recall@3": 0.666667,
+                  "contract_recall@5": 0.666667,
+                  "mrr": 0.666667,
+                  "ndcg@1": 0.666667,
+                  "ndcg@10": 0.666667,
+                  "ndcg@20": 0.666667,
+                  "ndcg@3": 0.666667,
+                  "ndcg@5": 0.666667,
+                  "recall@1": 0.666667,
+                  "recall@10": 0.666667,
+                  "recall@20": 0.666667,
+                  "recall@3": 0.666667,
+                  "recall@5": 0.666667,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.166667,
+                  "wrong_source_rate@20": 0.3,
+                  "wrong_source_rate@3": 0.111111,
+                  "wrong_source_rate@5": 0.066667
+                }
+              },
+              "new_fact_composition": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.333333,
+                  "wrong_source_rate@10": 0.466667,
+                  "wrong_source_rate@20": 0.433333,
+                  "wrong_source_rate@3": 0.333333,
+                  "wrong_source_rate@5": 0.4
+                }
+              },
+              "scope_boundary": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@3": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.25,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.315465,
+                  "ndcg@20": 0.315465,
+                  "ndcg@3": 0.315465,
+                  "ndcg@5": 0.315465,
+                  "recall@1": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@3": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@1": 0.0,
+                  "wrong_source_rate@10": 0.35,
+                  "wrong_source_rate@20": 0.4,
+                  "wrong_source_rate@3": 0.333334,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "system_a": {
+                "case_count": 2,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@1": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@3": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@1": 0.5,
+                  "wrong_source_rate@10": 0.55,
+                  "wrong_source_rate@20": 0.35,
+                  "wrong_source_rate@3": 0.333334,
+                  "wrong_source_rate@5": 0.5
+                }
+              },
+              "zh_locale": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@1": 0.0,
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@3": 0.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 0.25,
+                  "ndcg@1": 0.0,
+                  "ndcg@10": 0.430677,
+                  "ndcg@20": 0.430677,
+                  "ndcg@3": 0.0,
+                  "ndcg@5": 0.430677,
+                  "recall@1": 0.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@3": 0.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@1": 1.0,
+                  "wrong_source_rate@10": 0.8,
+                  "wrong_source_rate@20": 0.7,
+                  "wrong_source_rate@3": 1.0,
+                  "wrong_source_rate@5": 0.8
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "single-photon-pidl",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "three-d-video-real-time-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-throughput-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 10,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spi-prospects-when-use-single-pixel",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "s2ism-three-way-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "pidl-real-spad-noise",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 6,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.356207,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "cassi-dual-disperser-design",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "figure_architecture"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-speed-snr-tradeoff",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "denoising-classical-map",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-physics-in-training",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "scigs-explicit-dynamic-scene",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "foveated-not-simple-zoom",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "sequential-cs-adaptive-advantage",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "iism-live-cell-benefit",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 8,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spad-geiger-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 5,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.264068,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "basis-choice-vs-foveated-adaptation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 13,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.076923,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "scinerf-forward-model-equation",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location",
+                "formula_reasoning",
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 5,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "fdm-vs-3d-video-parallelism-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "cross_paper_synthesis",
+                "en_locale"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.806574,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-correlation-resolution",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scinerf-motion-assumption-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale",
+                "scope_boundary"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "spd-detector-metrics",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "system_a"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "scigs-transformation-filter",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "iism-depth-phase",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-sampling-ratio",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "pidl-cross-camera-transfer",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "scope_boundary"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "spi-illumination-vs-detection",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "zh_locale"
+              ],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "s2ism-array-reassignment",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "perovskite-dual-cavity-threshold",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "cassi-projective-single-shot",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "mechanism_explanation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "hsi-fsi-binary-pattern-cost",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "new_fact_composition"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "rt-spi-silver-mask",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "visual-perception-local-origin",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "exact_location"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "nafnet-activation-free-en",
+              "locale": "en",
+              "evaluation_focus": "",
+              "coverage_tags": [
+                "en_locale"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": false,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sph-heterodyne-sampling-conditions",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 4,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.6,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "three-d-video-daq-budget",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 20,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.05,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "sequential-cs-two-stage-elimination",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "piln-self-supervised-physical-loop",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 3,
+              "label_count": 2,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 4,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.510956,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "fdm-integration-time-boundary",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 2,
+              "label_count": 1,
+              "contract_count": 1,
+              "used_translation": true,
+              "query_variant_count": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "qclfm-vs-iism-depth-signal",
+              "locale": "zh",
+              "evaluation_focus": "",
+              "coverage_tags": [],
+              "first_relevant_rank": 11,
+              "label_count": 2,
+              "contract_count": 2,
+              "used_translation": true,
+              "query_variant_count": 6,
+              "metrics": {
+                "mrr": 0.090909,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.4,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

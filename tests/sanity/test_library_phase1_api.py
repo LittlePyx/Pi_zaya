@@ -669,6 +669,11 @@ def test_reindex_file_retries_only_target_index(
     monkeypatch.setattr(library_router, "_bg_record_task_result", fake_record)
     monkeypatch.setattr(
         library_router,
+        "enqueue_research_note_source_recovery",
+        lambda paths, *, reason: calls.setdefault("recovery", {"paths": tuple(paths), "reason": reason}),
+    )
+    monkeypatch.setattr(
+        library_router,
         "run_pdf_to_md",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("index retry must not reconvert the PDF")),
     )
@@ -686,6 +691,13 @@ def test_reindex_file_retries_only_target_index(
     assert calls["record"]["operation"] == "index_retry"
     assert calls["record"]["outcome"] == expected_outcome
     assert calls["record"]["detail"] == str(ingest_result.get("error") or "")
+    if expected_ok:
+        assert calls["recovery"] == {
+            "paths": (str(pdf), str(md)),
+            "reason": "file_reindex_ready",
+        }
+    else:
+        assert "recovery" not in calls
 
 
 def test_reindex_file_passes_explicit_quality_override_and_returns_audit_state(monkeypatch, tmp_path: Path):
@@ -743,6 +755,48 @@ def test_reindex_file_passes_explicit_quality_override_and_returns_audit_state(m
     assert calls["ingest"]["allow_blocked_quality"] is True
     assert calls["audit"]["event"] == "quality_override_confirmed"
     assert calls["audit"]["issue_codes"] == ["source_text_loss"]
+
+
+def test_successful_library_reindex_queues_recovered_source_scan(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    md_dir = tmp_path / "md_output"
+    pdf_dir = tmp_path / "pdfs"
+    db_dir = tmp_path / "db"
+    ingest_py = tmp_path / "ingest.py"
+    md_dir.mkdir()
+    pdf_dir.mkdir()
+    ingest_py.write_text("# test fixture\n", encoding="utf-8")
+    calls: list[str] = []
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_ingest_py_path", lambda: ingest_py)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=db_dir, library_db_path=tmp_path / "library.sqlite3"),
+    )
+    monkeypatch.setattr(
+        library_router.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="indexed", stderr=""),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "rebuild_structured_indices_for_root",
+        lambda *args, **kwargs: {"rebuilt": 1, "failed": 0},
+    )
+    monkeypatch.setattr(library_router, "start_reference_sync", lambda **kwargs: {"queued": 0})
+    monkeypatch.setattr(
+        library_router,
+        "enqueue_research_note_source_recovery_scan",
+        lambda *, reason: calls.append(reason) or True,
+    )
+
+    result = library_router._run_library_reindex()
+
+    assert result["ok"] is True
+    assert calls == ["library_reindex_ready"]
 
 
 def test_convert_status_ignores_stale_total_without_active_or_queue(monkeypatch):
@@ -2917,6 +2971,79 @@ def test_library_quality_repair_route_skips_busy_pdf(monkeypatch, tmp_path: Path
     assert enqueued == []
 
 
+def test_library_quality_repair_suppresses_exhausted_identical_retry(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    pdf_dir.mkdir(parents=True)
+    md_path = md_dir / "paper" / "paper.en.md"
+    md_path.parent.mkdir(parents=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path.write_text("<!-- kb_page: 1 -->\n# Paper\n", encoding="utf-8")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(db_dir=str(tmp_path / "db"), library_db_path=str(tmp_path / "library.db")),
+    )
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"queue": [], "active_tasks": []})
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        library_router,
+        "_conversion_quality_summary",
+        lambda _path: {
+            "score": 64,
+            "issues": [{"code": "weak_structure"}],
+            "conversion_report": {
+                "retry_exhausted": True,
+                "retry_exhausted_reason": "same profile stayed blocked",
+                "repair_plan": {
+                    "action": "reconvert",
+                    "scope": "document",
+                    "speed_mode": "normal",
+                    "no_llm": False,
+                },
+            },
+        },
+    )
+    repair_calls: list[str] = []
+    enqueue_calls: list[dict] = []
+    monkeypatch.setattr(
+        library_router,
+        "repair_markdown_quality",
+        lambda *_args, **_kwargs: repair_calls.append("repair") or {},
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_bg_enqueue",
+        lambda task: enqueue_calls.append(dict(task or {})) or True,
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_append_quality_repair_run",
+        lambda row: {**row, "created_at": 1, "updated_at": 1},
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/quality/repair",
+        json={"pdf_names": ["paper.pdf"], "md_autofix": False},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["enqueued"] == 0
+    assert payload["retry_exhausted"] == 1
+    assert payload["items"][0]["retry_exhausted"] is True
+    assert repair_calls == []
+    assert enqueue_calls == []
+
+
 def test_convert_pending_enqueues_only_idle_pending(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -3070,6 +3197,160 @@ def test_delete_library_file_route_deletes_pdf_and_md(monkeypatch, tmp_path: Pat
     assert ref_data["doc_count"] == 1
     assert all(str(doc.get("path") or "") != str(md_d) for doc in (ref_data.get("docs") or {}).values())
     assert fake_store.deleted == [str(pdf_d)]
+
+
+def test_delete_library_file_preserves_converted_source_for_dependent_notes(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+    md_path = md_dir / "paper" / "paper.en.md"
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+    md_path.write_text("# Paper\n\nTraceable evidence.\n", encoding="utf-8")
+
+    deleted_metadata: list[str] = []
+    migration_calls: list[dict] = []
+    recovery_calls: list[dict] = []
+    purge_calls: list[str] = []
+
+    class FakeStore:
+        def delete_by_path(self, path: Path) -> int:
+            deleted_metadata.append(str(path))
+            return 1
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+    monkeypatch.setattr(library_router, "_bg_remove_queued_tasks_for_pdf", lambda path: 0)
+    monkeypatch.setattr(library_router, "_dangerous_auto_snapshot", lambda *args, **kwargs: {"ok": True})
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_dependency_inspection",
+        lambda **kwargs: {
+            "ok": True,
+            "handled": True,
+            "note_count": 2,
+            "active_note_count": 1,
+            "archived_note_count": 1,
+            "link_count": 3,
+            "notes": [{"id": "note-1", "title": "Reading note", "archived": False, "link_count": 2}],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_migration",
+        lambda **kwargs: migration_calls.append(kwargs) or {
+            "ok": True,
+            "handled": True,
+            "notes_updated": 1,
+            "links_updated": 1,
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "_purge_library_index_for_markdown",
+        lambda db_root, source: purge_calls.append(str(source)) or {
+            "docs_removed": 1,
+            "chunks_removed": 2,
+            "reference_docs_removed": 1,
+            "errors": [],
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "enqueue_research_note_source_recovery",
+        lambda paths, reason: recovery_calls.append({"paths": list(paths), "reason": reason}) or True,
+    )
+
+    client = TestClient(app)
+    impact_response = client.post(
+        "/api/library/file/delete-impact",
+        json={"pdf_name": pdf_path.name, "also_md": True},
+    )
+    assert impact_response.status_code == 200
+    impact = impact_response.json()
+    assert impact["note_count"] == 2
+    assert impact["preservation_available"] is True
+    assert impact["deletion_blocked"] is False
+
+    response = client.post(
+        "/api/library/file/delete",
+        json={"pdf_name": pdf_path.name, "also_md": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["pdf_deleted"] is True
+    assert payload["md_deleted"] is False
+    assert payload["evidence_preserved"] is True
+    assert payload["needs_reindex"] is False
+    assert payload["dependency_protection"]["note_count"] == 2
+    assert not pdf_path.exists()
+    assert md_path.exists()
+    assert deleted_metadata == [str(pdf_path)]
+    assert purge_calls == [str(md_path)]
+    assert migration_calls[0]["exact_path_migrations"][str(pdf_path).replace("\\", "/")] == str(md_path).replace("\\", "/")
+    assert migration_calls[0]["update_source_name"] is False
+    assert recovery_calls == [{
+        "paths": [str(md_path).replace("\\", "/")],
+        "reason": "library_source_preserved_before_delete",
+    }]
+
+
+def test_delete_library_file_blocks_dependent_notes_without_converted_source(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    pdf_path = pdf_dir / "paper.pdf"
+    pdf_path.write_bytes(b"%PDF-1.4 test")
+
+    class FakeStore:
+        def delete_by_path(self, path: Path) -> int:
+            raise AssertionError("protected source must not be deleted")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(library_router, "_bg_snapshot", lambda: {"running": False, "current": ""})
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_dependency_inspection",
+        lambda **kwargs: {
+            "ok": True,
+            "handled": True,
+            "note_count": 1,
+            "active_note_count": 1,
+            "archived_note_count": 0,
+            "link_count": 1,
+            "notes": [{"id": "note-1", "title": "Reading note", "archived": False, "link_count": 1}],
+        },
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/file/delete",
+        json={"pdf_name": pdf_path.name, "also_md": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is False
+    assert payload["deletion_blocked"] is True
+    assert payload["dependency_protection"]["preservation_available"] is False
+    assert pdf_path.exists()
 
 
 def test_delete_library_file_route_keeps_markdown_and_metadata_when_pdf_delete_fails(monkeypatch, tmp_path: Path):
@@ -4438,6 +4719,123 @@ def test_auto_rename_saved_pdf_purges_old_markdown_index(monkeypatch, tmp_path: 
     assert fake_store.upserts[-1][1] == new_pdf.name
 
 
+def test_auto_rename_saved_pdf_migrates_note_sources_and_revalidates_new_paths(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    old_pdf = pdf_dir / "old.pdf"
+    old_pdf.write_bytes(b"%PDF-1.4 test")
+    old_md = md_dir / "old" / "old.en.md"
+    old_md.parent.mkdir(parents=True, exist_ok=True)
+    old_md.write_text("# Evidence\n", encoding="utf-8")
+
+    class FakeStore:
+        def upsert(self, *args, **kwargs):
+            return None
+
+    migration_calls: list[dict] = []
+    recovery_calls: list[dict] = []
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_migration",
+        lambda **kwargs: migration_calls.append(kwargs) or {
+            "ok": True,
+            "handled": True,
+            "notes_updated": 1,
+            "links_updated": 2,
+        },
+    )
+    monkeypatch.setattr(
+        library_router,
+        "enqueue_research_note_source_recovery",
+        lambda paths, reason: recovery_calls.append({"paths": list(paths), "reason": reason}) or True,
+    )
+    monkeypatch.setattr(library_router, "_bg_update_recoverable_pdf_path", lambda *_args: None)
+
+    result = library_router.auto_rename_saved_pdf_in_library(
+        pdf_path=old_pdf,
+        use_llm=False,
+        also_md=True,
+    )
+
+    new_pdf = pdf_dir / "Nature-2024-New Paper.pdf"
+    new_md = md_dir / "Nature-2024-New Paper" / "Nature-2024-New Paper.en.md"
+    assert result["ok"] is True
+    assert result["note_source_sync"]["notes_updated"] == 1
+    assert len(migration_calls) == 1
+    exact = migration_calls[0]["exact_path_migrations"]
+    prefixes = migration_calls[0]["prefix_path_migrations"]
+    assert exact[str(old_pdf).replace("\\", "/")] == str(new_pdf).replace("\\", "/")
+    assert exact[str(old_md).replace("\\", "/")] == str(new_md).replace("\\", "/")
+    assert any(old == "old" and new == "Nature-2024-New Paper" for old, new in prefixes)
+    assert recovery_calls == [{
+        "paths": [str(new_pdf).replace("\\", "/"), str(new_md).replace("\\", "/")],
+        "reason": "library_source_renamed",
+    }]
+
+
+def test_auto_rename_saved_pdf_rolls_back_when_note_source_migration_fails(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_dir = tmp_path / "pdfs"
+    md_dir = tmp_path / "md_output"
+    db_dir = tmp_path / "db"
+    pdf_dir.mkdir(parents=True, exist_ok=True)
+    md_dir.mkdir(parents=True, exist_ok=True)
+    db_dir.mkdir(parents=True, exist_ok=True)
+    old_pdf = pdf_dir / "old.pdf"
+    old_pdf.write_bytes(b"%PDF-1.4 test")
+    old_md = md_dir / "old" / "old.en.md"
+    old_md.parent.mkdir(parents=True, exist_ok=True)
+    old_md.write_text("# Evidence\n", encoding="utf-8")
+
+    class FakeStore:
+        def upsert(self, *args, **kwargs):
+            raise AssertionError("library metadata must not change after migration rollback")
+
+    monkeypatch.setattr(library_router, "_pdf_dir", lambda: pdf_dir)
+    monkeypatch.setattr(library_router, "_md_dir", lambda: md_dir)
+    monkeypatch.setattr(library_router, "_library_store", lambda: FakeStore())
+    monkeypatch.setattr(library_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(
+        library_router,
+        "extract_pdf_meta_suggestion",
+        lambda path, settings=None: SimpleNamespace(venue="Nature", year="2024", title="New Paper", crossref_meta={}),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "dispatch_research_note_source_migration",
+        lambda **kwargs: {"ok": False, "handled": True, "error": "chat database unavailable"},
+    )
+
+    result = library_router.auto_rename_saved_pdf_in_library(
+        pdf_path=old_pdf,
+        use_llm=False,
+        also_md=True,
+    )
+
+    assert result["ok"] is False
+    assert result["renamed"] is False
+    assert result["rollback"]["pdf"] is True
+    assert old_pdf.exists()
+    assert old_md.exists()
+    assert not (pdf_dir / "Nature-2024-New Paper.pdf").exists()
+
+
 def test_auto_rename_saved_pdf_avoids_existing_markdown_target_folder(monkeypatch, tmp_path: Path):
     from api.routers import library as library_router
 
@@ -4867,6 +5265,89 @@ def test_upload_commit_route_can_enqueue_convert(monkeypatch, tmp_path: Path):
     assert payload["duplicate"] is False
     assert payload["enqueued"] is True
     assert len(enqueued) == 1
+
+
+def test_external_pdf_import_route_downloads_then_queues_conversion(monkeypatch, tmp_path: Path):
+    from api.routers import library as library_router
+
+    pdf_path = tmp_path / "imported.pdf"
+    pdf_path.write_bytes(b"%PDF-1.7 imported")
+    enqueued: list[dict] = []
+    saved_calls: list[dict] = []
+
+    monkeypatch.setattr(library_router, "_md_dir", lambda: tmp_path / "md_output")
+    monkeypatch.setattr(
+        library_router,
+        "get_settings",
+        lambda: SimpleNamespace(
+            db_dir=str(tmp_path / "db"),
+            library_db_path=str(tmp_path / "library.db"),
+            max_pdf_upload_bytes=1024,
+        ),
+    )
+    monkeypatch.setattr(
+        library_router,
+        "fetch_external_pdf",
+        lambda url, max_bytes: {
+            "data": b"%PDF-1.7 imported",
+            "url": "https://arxiv.org/pdf/2601.12345",
+            "content_type": "application/pdf",
+            "file_name": "2601.12345.pdf",
+        },
+    )
+
+    def fake_save(**kwargs):
+        saved_calls.append(dict(kwargs))
+        return {
+            "duplicate": False,
+            "path": str(pdf_path),
+            "name": pdf_path.name,
+            "sha1": "abc",
+        }
+
+    monkeypatch.setattr(library_router, "save_pdf_to_library", fake_save)
+    monkeypatch.setattr(library_router, "_bg_enqueue", lambda task: enqueued.append(dict(task or {})) or True)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/external-pdf/import",
+        json={
+            "url": "https://arxiv.org/pdf/2601.12345",
+            "title": "A verified external paper",
+            "convert_now": True,
+            "speed_mode": "balanced",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["candidate_status"] == "conversion_queued"
+    assert payload["formal_evidence_ready"] is False
+    assert payload["enqueued"] is True
+    assert saved_calls[0]["base_name"] == "A verified external paper"
+    assert len(enqueued) == 1
+
+
+def test_external_pdf_import_route_reports_safe_download_rejection(monkeypatch):
+    from api.routers import library as library_router
+    from kb.web_sources import ExternalSourceError
+
+    monkeypatch.setattr(
+        library_router,
+        "fetch_external_pdf",
+        lambda url, max_bytes: (_ for _ in ()).throw(
+            ExternalSourceError("unsafe_host", "Private hosts are not allowed.")
+        ),
+    )
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/library/external-pdf/import",
+        json={"url": "https://127.0.0.1/paper.pdf", "title": "Blocked"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["code"] == "unsafe_host"
 
 
 def test_save_pdf_to_library_respects_explicit_base_name_even_with_llm_title(monkeypatch, tmp_path: Path):

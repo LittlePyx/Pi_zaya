@@ -8,15 +8,19 @@ import {
   type KeyboardEvent,
 } from 'react'
 import { Button, Input, Tag, message } from 'antd'
-import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, RobotOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
-import type { ChatImageAttachment, ChatUploadItem, QueryScope } from '../../api/chat'
+import { BookOutlined, CloseOutlined, PaperClipOutlined, PauseOutlined, RedoOutlined, SendOutlined, StopOutlined } from '@ant-design/icons'
+import type { ChatImageAttachment, ChatUploadItem, ExternalSupplementMode, QueryScope } from '../../api/chat'
 import { useT } from '../../i18n'
 import { ChatScopeControl } from './ChatScopeControl'
+import { ExternalSupplementControl } from './ExternalSupplementControl'
+import { LocalSemanticControl } from './LocalSemanticControl'
+import type { LocalSemanticComponentResponse } from '../../api/retrieval'
+import type { LocalRetrievalMode } from './useLocalSemanticRetrieval'
 
 const { TextArea } = Input
 
 interface Props {
-  onSend: (text: string) => void
+  onSend: (text: string) => boolean
   onStop: () => void
   onUpload: (files: File[]) => Promise<void>
   onRetryUploadItem: (key: string) => Promise<void>
@@ -29,11 +33,23 @@ interface Props {
   uploading: boolean
   generating: boolean
   appendSignal?: { token: number; text: string } | null
+  onAppendSignalConsumed?: (token: number) => void
   queryScope: QueryScope
   queryScopeOptions: Array<{ value: QueryScope; disabled?: boolean }>
   onQueryScopeChange: (scope: QueryScope) => void
-  agentMode: boolean
-  onAgentModeChange: (enabled: boolean) => void
+  externalSupplementMode: ExternalSupplementMode
+  onExternalSupplementModeChange: (mode: ExternalSupplementMode) => void
+  webSupplementAvailable?: boolean
+  onConfigureWebSupplement?: () => void
+  localSemanticStatus: LocalSemanticComponentResponse | null
+  localRetrievalMode: LocalRetrievalMode
+  localSemanticScopeEligible: boolean
+  localSemanticBusy?: boolean
+  onLocalRetrievalModeChange: (mode: LocalRetrievalMode) => void
+  onLocalSemanticEnable: () => Promise<unknown>
+  onLocalSemanticResume: () => Promise<unknown>
+  onLocalSemanticCancel: () => Promise<unknown>
+  onLocalSemanticRemove: () => Promise<unknown>
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -159,11 +175,23 @@ export function ChatInput({
   uploading,
   generating,
   appendSignal,
+  onAppendSignalConsumed,
   queryScope,
   queryScopeOptions,
   onQueryScopeChange,
-  agentMode,
-  onAgentModeChange,
+  externalSupplementMode,
+  onExternalSupplementModeChange,
+  webSupplementAvailable = false,
+  onConfigureWebSupplement,
+  localSemanticStatus,
+  localRetrievalMode,
+  localSemanticScopeEligible,
+  localSemanticBusy = false,
+  onLocalRetrievalModeChange,
+  onLocalSemanticEnable,
+  onLocalSemanticResume,
+  onLocalSemanticCancel,
+  onLocalSemanticRemove,
 }: Props) {
   const S = useT()
   const [text, setText] = useState('')
@@ -184,13 +212,22 @@ export function ChatInput({
     setText((current) => {
       const cur = String(current || '')
       if (!cur.trim()) return incoming
+      const currentTrimmed = cur.trim()
+      const incomingTrimmed = incoming.trim()
+      if (
+        currentTrimmed === incomingTrimmed
+        || currentTrimmed.endsWith(`\n\n${incomingTrimmed}`)
+      ) {
+        return cur
+      }
       const needsBreak = !cur.endsWith('\n')
       return `${cur}${needsBreak ? '\n\n' : ''}${incoming}`
     })
+    onAppendSignalConsumed?.(appendSignal.token)
     window.setTimeout(() => {
       ref.current?.focus()
     }, 0)
-  }, [appendSignal])
+  }, [appendSignal, onAppendSignalConsumed])
 
   const uploadSelectedFiles = async (files: File[]) => {
     const { accepted, rejected } = collectAcceptedFiles(files)
@@ -204,8 +241,7 @@ export function ChatInput({
   const submit = () => {
     const t = text.trim()
     if ((!t && pendingImages.length === 0) || generating || uploading) return
-    onSend(text)
-    setText('')
+    if (onSend(text)) setText('')
   }
 
   const onKey = (e: KeyboardEvent) => {
@@ -434,18 +470,25 @@ export function ChatInput({
                   {S.upload_file_btn}
                 </Button>
                 <ChatScopeControl value={queryScope} options={queryScopeOptions} onChange={onQueryScopeChange} />
-                <Button
-                  className={`kb-agent-mode-btn ${agentMode ? 'is-active' : ''}`}
-                  icon={<RobotOutlined />}
-                  type={agentMode ? 'primary' : 'default'}
-                  aria-pressed={agentMode}
-                  aria-label={agentMode ? S.chat_agent_mode_on_title : S.chat_agent_mode_off_title}
-                  title={agentMode ? S.chat_agent_mode_on_title : S.chat_agent_mode_off_title}
+                <LocalSemanticControl
+                  status={localSemanticStatus}
+                  preferredMode={localRetrievalMode}
+                  scopeEligible={localSemanticScopeEligible}
                   disabled={generating}
-                  onClick={() => onAgentModeChange(!agentMode)}
-                >
-                  {agentMode ? S.chat_agent_mode_on : S.chat_agent_mode_off}
-                </Button>
+                  busy={localSemanticBusy}
+                  onModeChange={onLocalRetrievalModeChange}
+                  onEnable={onLocalSemanticEnable}
+                  onResume={onLocalSemanticResume}
+                  onCancel={onLocalSemanticCancel}
+                  onRemove={onLocalSemanticRemove}
+                />
+                <ExternalSupplementControl
+                  value={externalSupplementMode}
+                  disabled={generating}
+                  webAvailable={webSupplementAvailable}
+                  onChange={onExternalSupplementModeChange}
+                  onConfigureWeb={onConfigureWebSupplement}
+                />
               </div>
               <div className="kb-chat-toolbar-right">
                 {generating ? (

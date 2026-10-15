@@ -2,13 +2,12 @@ import { useCallback, useRef, useState } from 'react'
 import { MessageList } from '../components/chat/MessageList'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type { Message } from '../api/chat'
-import { libraryApi } from '../api/library'
-import type { ReaderLocateResult, ReaderOpenPayload } from '../components/chat/reader/readerTypes'
+import type { ReaderOpenPayload } from '../components/chat/reader/readerTypes'
+import { useReaderLocateRepair } from '../components/chat/reader/useReaderLocateRepair'
 import {
   READER_REGRESSION_SOURCE_NAME,
   READER_REGRESSION_SOURCE_PATH,
 } from '../testing/readerRegressionFixtures'
-import { qualityDiagnosticsVisible } from '../utils/qualityDiagnostics'
 
 const EQUATION_TEXT = '$$\nC(r) = \\int_{t_n}^{t_f} T(t)\\sigma(r(t)) c(r(t), d) dt\n$$'
 
@@ -1723,6 +1722,21 @@ const agentAnswerContractSourcePrecedenceMessages: Message[] = [
   },
 ]
 
+const assistantActionRetryMessages: Message[] = [
+  {
+    id: 9601,
+    role: 'user',
+    content: 'Find the local evidence again.',
+    created_at: Date.now(),
+  },
+  {
+    id: 9602,
+    role: 'assistant',
+    content: 'Answer stream failed. Please retry.',
+    created_at: Date.now(),
+  },
+]
+
 const agentTraceExternalNoticeMessages: Message[] = [
   {
     id: 9501,
@@ -1791,6 +1805,86 @@ const agentTraceExternalNoticeMessages: Message[] = [
           tool_call_count: 2,
           has_errors: false,
           query_scope: 'library',
+        },
+      },
+    },
+  },
+]
+
+const agentWebSourceMessages: Message[] = [
+  {
+    id: 9551,
+    role: 'assistant',
+    content: 'This background answer uses a separately linked web source.',
+    rendered_body: 'This background answer uses a separately linked web source.',
+    copy_text: 'This background answer uses a separately linked web source.',
+    copy_markdown: 'This background answer uses a separately linked web source.',
+    created_at: Date.now(),
+    meta: {
+      agent_mode: 'research_agent',
+      answer_contract: {
+        schema_version: 1,
+        answer_profile: 'external_background',
+        source_summary: {
+          kind: 'external_not_kb',
+          label_key: 'agent_trace_source_web',
+          label: 'Web sources',
+          detail: 'No matching local evidence was used; this answer comes from linked web sources.',
+          should_show: true,
+          external_source_kind: 'web',
+          external_supplement_mode: 'web',
+          web_search_used: true,
+          web_sources: [
+            {
+              title: 'Primary web source on RAG evidence',
+              url: 'https://arxiv.org/abs/2601.12345',
+              domain: 'arxiv.org',
+              verification_status: 'verified',
+              verification_level: 'content_match',
+              claim_text: 'The external paper reports a broader retrieval result.',
+              scholarly_kind: 'arxiv',
+              doi: '10.48550/arXiv.2601.12345',
+              arxiv_id: '2601.12345',
+              pdf_url: 'https://arxiv.org/pdf/2601.12345',
+              import_eligible: true,
+            },
+          ],
+          source_policy_payload: {
+            schema_version: 3,
+            kind: 'external_not_kb',
+            source_blend: 'external_academic',
+            source_policy: 'external_allowed_with_notice',
+            answer_mode: 'external_academic_llm',
+            uses_local_knowledge_base: false,
+            uses_external_model: false,
+            uses_external_web: true,
+            requires_user_notice: true,
+            external_supplement_mode: 'web',
+            external_source_kind: 'web',
+            web_search_used: true,
+            web_source_count: 1,
+            web_sources: [
+              {
+                title: 'Primary web source on RAG evidence',
+                url: 'https://arxiv.org/abs/2601.12345',
+                domain: 'arxiv.org',
+                verification_status: 'verified',
+                verification_level: 'content_match',
+                claim_text: 'The external paper reports a broader retrieval result.',
+                scholarly_kind: 'arxiv',
+                doi: '10.48550/arXiv.2601.12345',
+                arxiv_id: '2601.12345',
+                pdf_url: 'https://arxiv.org/pdf/2601.12345',
+                import_eligible: true,
+              },
+            ],
+            badge: {
+              label_key: 'agent_trace_source_web',
+              label: 'Web sources',
+              detail: 'No matching local evidence was used; this answer comes from linked web sources.',
+              should_show: true,
+            },
+          },
         },
       },
     },
@@ -1918,8 +2012,12 @@ type RegressionScenario =
   | 'agent-source-summary-local'
   | 'agent-answer-contract-source-precedence'
   | 'agent-trace-external-notice'
+  | 'agent-web-source'
   | 'agent-trace-hybrid-notice'
   | 'agent-trace-streaming-clean'
+  | 'assistant-streaming-empty'
+  | 'assistant-streaming-summary'
+  | 'assistant-action-retry'
 
 export default function MessageListRegressionPage() {
   const scenarioParam = (() => {
@@ -1957,8 +2055,12 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-source-summary-local') return 'agent-source-summary-local'
     if (scenarioParam === 'agent-answer-contract-source-precedence') return 'agent-answer-contract-source-precedence'
     if (scenarioParam === 'agent-trace-external-notice') return 'agent-trace-external-notice'
+    if (scenarioParam === 'agent-web-source') return 'agent-web-source'
     if (scenarioParam === 'agent-trace-hybrid-notice') return 'agent-trace-hybrid-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
+    if (scenarioParam === 'assistant-streaming-empty') return 'assistant-streaming-empty'
+    if (scenarioParam === 'assistant-streaming-summary') return 'assistant-streaming-summary'
+    if (scenarioParam === 'assistant-action-retry') return 'assistant-action-retry'
     return 'structured-primary-rerank'
   })()
   const regressionMessages: Message[] = (() => {
@@ -1992,8 +2094,14 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-source-summary-local') return agentSourceSummaryLocalMessages
     if (scenario === 'agent-answer-contract-source-precedence') return agentAnswerContractSourcePrecedenceMessages
     if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
+    if (scenario === 'agent-web-source') return agentWebSourceMessages
     if (scenario === 'agent-trace-hybrid-notice') return agentTraceHybridNoticeMessages
-    if (scenario === 'agent-trace-streaming-clean') return []
+    if (scenario === 'assistant-action-retry') return assistantActionRetryMessages
+    if (
+      scenario === 'agent-trace-streaming-clean'
+      || scenario === 'assistant-streaming-empty'
+      || scenario === 'assistant-streaming-summary'
+    ) return []
     return structuredPrimaryRerankMessages
   })()
   const regressionRefs: Record<string, unknown> = (() => {
@@ -2012,13 +2120,79 @@ export default function MessageListRegressionPage() {
   const regressionGuideSourceName = scenario === 'normal-multi-doc-ambiguous-inline-locate' || scenario === 'citation-hover-race'
     ? ''
     : READER_REGRESSION_SOURCE_NAME
-  const regressionGenerationPartial = scenario === 'agent-trace-streaming-clean'
-    ? agentTraceStreamingPartial
+  const regressionActionRetryBusy = scenario === 'assistant-action-retry'
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('busy') === '1'
+  const regressionGenerationPartial = (() => {
+    if (scenario === 'agent-trace-streaming-clean') return agentTraceStreamingPartial
+    if (scenario === 'assistant-streaming-empty') return ''
+    if (scenario === 'assistant-streaming-summary') return 'Streaming local evidence answer.'
+    if (regressionActionRetryBusy) return ''
+    return undefined
+  })()
+  const regressionGenerationStage = scenario === 'assistant-streaming-empty'
+    ? 'answering'
+    : undefined
+  const regressionGenerationTrace = scenario === 'assistant-streaming-summary'
+    ? {
+        retrieval: {
+          local_retrieval: {
+            requested_mode: 'hybrid_local',
+            used_mode: 'bm25',
+            fallback_reason_id: 'dense_query_failed',
+          },
+        },
+      }
+    : undefined
+  const regressionGenerationAnswerContract = scenario === 'assistant-streaming-summary'
+    ? {
+        source_summary: {
+          source_policy_payload: {
+            kind: 'local_kb',
+            badge: {
+              should_show: true,
+              detail: 'Streaming evidence is from the local library.',
+            },
+          },
+        },
+      }
     : undefined
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
-  const [readerLocateResults, setReaderLocateResults] = useState<Record<string, ReaderLocateResult>>({})
-  const [qualityDiagnosticsEnabled] = useState(qualityDiagnosticsVisible)
-  const readerLocateQualitySubmittedRef = useRef<Set<string>>(new Set())
+  const [retriedPrompt, setRetriedPrompt] = useState('')
+  const readerOpenRef = useRef(false)
+  const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
+  const openReaderDock = useCallback((nextPayload: ReaderOpenPayload) => {
+    readerOpenRef.current = true
+    readerPayloadRef.current = nextPayload
+    setPayload(nextPayload)
+  }, [])
+  const activeRegressionConversationId = `message-list-regression:${scenario}`
+  const {
+    readerLocateResults,
+    sourceQualityRefreshToken,
+    nextReaderLocateRequestId,
+    registerReaderLocateRequest,
+    handleReaderLocateResult,
+  } = useReaderLocateRepair({
+    activeConversationId: activeRegressionConversationId,
+    readerOpenRef,
+    readerPayloadRef,
+    openReaderDock,
+  })
+  const openReaderForRegression = useCallback((nextPayload: ReaderOpenPayload) => {
+    const locateRequestId = nextReaderLocateRequestId()
+    const registeredPayload: ReaderOpenPayload = { ...nextPayload, locateRequestId }
+    const feedbackKey = String(registeredPayload.locateFeedbackKey || '').trim()
+    if (feedbackKey) {
+      registerReaderLocateRequest({
+        feedbackKey,
+        locateRequestId,
+        sourcePath: registeredPayload.sourcePath,
+        payload: registeredPayload,
+      })
+    }
+    openReaderDock(registeredPayload)
+  }, [nextReaderLocateRequestId, openReaderDock, registerReaderLocateRequest])
   const readerEnabled = typeof window !== 'undefined'
     ? new URLSearchParams(window.location.search).get('reader') === '1'
     : false
@@ -2028,46 +2202,16 @@ export default function MessageListRegressionPage() {
   const regressionShelfProjectSwitchId = typeof window !== 'undefined'
     ? (new URLSearchParams(window.location.search).get('switchProject') || '')
     : ''
+  const regressionResearchNotesEnabled = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('notes') === '1'
+    : false
   const [regressionShelfProjectId, setRegressionShelfProjectId] = useState(regressionShelfProjectInitialId)
-  const recordLocateResult = useCallback((result: ReaderLocateResult) => {
-    const key = String(result.locateFeedbackKey || '').trim()
-    if (!key) return
-    const submitKey = [key, result.locateRequestId, result.status, result.precision, result.hint, result.reason].join('|')
-    if (qualityDiagnosticsEnabled && !readerLocateQualitySubmittedRef.current.has(submitKey)) {
-      readerLocateQualitySubmittedRef.current.add(submitKey)
-      libraryApi.recordReaderLocateQuality({
-        source_path: String(result.sourcePath || ''),
-        source_name: result.sourceName,
-        locate_feedback_key: key,
-        locate_request_id: result.locateRequestId,
-        status: result.status,
-        precision: result.precision,
-        ok: result.ok,
-        repairable: result.repairable,
-        strict_locate: result.strictLocate,
-        hint: result.hint,
-        reason: result.reason,
-        active_alt_index: result.activeAltIndex,
-        block_id: result.blockId,
-        anchor_id: result.anchorId,
-        anchor_kind: result.anchorKind,
-        heading_path: result.headingPath,
-      }).catch(() => {})
-    }
-    setReaderLocateResults((current) => {
-      const prev = current[key]
-      if (
-        prev
-        && prev.locateRequestId === result.locateRequestId
-        && prev.status === result.status
-        && prev.precision === result.precision
-        && prev.hint === result.hint
-      ) {
-        return current
-      }
-      return { ...current, [key]: result }
-    })
-  }, [qualityDiagnosticsEnabled])
+  const [regressionShelfMounted, setRegressionShelfMounted] = useState(true)
+  const [regressionResearchNotesCount, setRegressionResearchNotesCount] = useState(0)
+  const [regressionResearchNotesPortalTarget, setRegressionResearchNotesPortalTarget] = useState<HTMLDivElement | null>(null)
+  const handleRegressionResearchNotesStateChange = useCallback((state: { count: number }) => {
+    setRegressionResearchNotesCount(state.count)
+  }, [])
   const dispatchReaderSelectionShelfFixture = useCallback(() => {
     window.dispatchEvent(new CustomEvent('kb:reader-selection-shelf', {
       detail: {
@@ -2104,30 +2248,62 @@ export default function MessageListRegressionPage() {
             <button
               type="button"
               className="ml-2 mt-3 rounded border border-[var(--border)] px-3 py-1 text-xs text-black/60 dark:text-white/60"
-              onClick={() => setRegressionShelfProjectId(regressionShelfProjectSwitchId)}
+              onClick={() => setRegressionShelfProjectId((current) => current === regressionShelfProjectInitialId
+                ? regressionShelfProjectSwitchId : regressionShelfProjectInitialId)}
               data-testid="message-list-switch-project-scope"
             >
               Switch project scope
             </button>
           ) : null}
+          {regressionShelfProjectSwitchId ? (
+            <button type="button" onClick={() => setRegressionShelfMounted((current) => !current)} data-testid="message-list-toggle-mount">
+              Toggle message list mount
+            </button>
+          ) : null}
           <div className="mt-2 text-[11px] text-black/40 dark:text-white/40" data-testid="message-list-current-project">
             {regressionShelfProjectId}
           </div>
+          {regressionResearchNotesEnabled ? (
+            <div className="mt-2" data-testid="message-list-research-notes-count">
+              {regressionResearchNotesCount}
+            </div>
+          ) : null}
         </div>
 
+        {regressionResearchNotesEnabled ? (
+          <div ref={setRegressionResearchNotesPortalTarget} data-testid="message-list-research-notes-portal" />
+        ) : null}
+
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
-          <MessageList
-            activeConvId={`message-list-regression:${scenario}`}
+          {regressionShelfMounted ? <MessageList
+            activeConvId={activeRegressionConversationId}
             shelfProjectId={regressionShelfProjectId}
             messages={regressionMessages}
             refs={regressionRefs}
-            onOpenReader={(nextPayload) => setPayload(nextPayload)}
+            onOpenReader={openReaderForRegression}
             readerLocateResults={readerLocateResults}
+            sourceQualityRefreshToken={sourceQualityRefreshToken}
             paperGuideSourcePath={regressionGuideSourcePath}
             paperGuideSourceName={regressionGuideSourceName}
             generationPartial={regressionGenerationPartial}
-          />
+            generationStage={regressionGenerationStage}
+            generationTrace={regressionGenerationTrace}
+            generationAnswerContract={regressionGenerationAnswerContract}
+            onRetryMessage={scenario === 'assistant-action-retry' ? setRetriedPrompt : undefined}
+            researchNotesPortalTarget={regressionResearchNotesPortalTarget}
+            researchNotesVisible={regressionResearchNotesEnabled}
+            onResearchNotesStateChange={handleRegressionResearchNotesStateChange}
+          /> : null}
         </div>
+
+        {scenario === 'assistant-action-retry' ? (
+          <div
+            className="rounded-2xl border border-[var(--border)] bg-white/60 px-3 py-3 text-xs text-black/70 dark:bg-black/20 dark:text-white/70"
+            data-testid="assistant-action-retry-prompt"
+          >
+            {retriedPrompt || '(empty)'}
+          </div>
+        ) : null}
 
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">
@@ -2149,7 +2325,7 @@ export default function MessageListRegressionPage() {
               onClose={() => {}}
               onAppendSelection={() => {}}
               presentation="inline"
-              onLocateResult={recordLocateResult}
+              onLocateResult={handleReaderLocateResult}
             />
           </div>
         ) : null}

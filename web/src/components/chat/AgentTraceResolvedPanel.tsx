@@ -25,7 +25,7 @@ export function AgentTraceResolvedPanel({
       labels={labels}
       summaryStatus={showInternalDetails
         ? viewModel.headerEvidence
-        : (viewModel.sourceSummary.evidenceLabel || labels.agent_trace_available || 'Sources available')}
+        : (labels.agent_trace_available || 'Sources available')}
       summaryContext={showInternalDetails
         ? viewModel.headerContext
         : ''}

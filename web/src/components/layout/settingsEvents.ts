@@ -1,4 +1,4 @@
-export type ApiSettingsTarget = 'text' | 'vision'
+export type ApiSettingsTarget = 'text' | 'vision' | 'web'
 export type SettingsFocusTarget = ApiSettingsTarget | 'updates'
 
 export interface OpenSettingsDetail {
@@ -9,7 +9,7 @@ export const OPEN_SETTINGS_EVENT = 'kb:open-settings'
 
 export function apiSettingsTargetFromUnknown(value: unknown): ApiSettingsTarget | '' {
   const raw = String(value || '').trim()
-  return raw === 'text' || raw === 'vision' ? raw : ''
+  return raw === 'text' || raw === 'vision' || raw === 'web' ? raw : ''
 }
 
 export function settingsFocusTargetFromUnknown(value: unknown): SettingsFocusTarget | '' {

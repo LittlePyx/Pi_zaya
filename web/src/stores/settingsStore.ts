@@ -172,6 +172,12 @@ interface SettingsState {
   visionBaseUrl: string
   hasVisionApiKey: boolean
   visionUsesTextFallback: boolean
+  webSearchAvailable: boolean
+  webSearchEnabled: boolean
+  hasWebSearchApiKey: boolean
+  webSearchBaseUrl: string
+  webSearchModel: string
+  webSearchReason: string
   autoRoute: boolean
   qualityDataSharingEnabled: boolean
   llmReadiness: LlmReadinessPayload | null
@@ -221,6 +227,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
   visionBaseUrl: '',
   hasVisionApiKey: false,
   visionUsesTextFallback: false,
+  webSearchAvailable: false,
+  webSearchEnabled: false,
+  hasWebSearchApiKey: false,
+  webSearchBaseUrl: '',
+  webSearchModel: '',
+  webSearchReason: 'disabled',
   autoRoute: false,
   qualityDataSharingEnabled: false,
   llmReadiness: null,
@@ -248,6 +260,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
       const nextRefsCardLocale = rawRefsCardLocale === 'zh' || rawRefsCardLocale === 'en' ? rawRefsCardLocale : 'auto'
       const textStatus = data.connection?.text
       const visionStatus = data.connection?.vision
+      const webSearchStatus = data.connection?.web_search
       const nextTextModel = String(textStatus?.model || data.model || '')
       const nextTextBaseUrl = String(textStatus?.base_url || data.base_url || '')
       const nextHasTextApiKey = Boolean(textStatus?.has_api_key ?? data.has_api_key)
@@ -265,6 +278,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         visionBaseUrl: nextVisionBaseUrl,
         hasVisionApiKey: nextHasVisionApiKey,
         visionUsesTextFallback: Boolean(visionStatus?.uses_text_fallback),
+        webSearchAvailable: Boolean(webSearchStatus?.available),
+        webSearchEnabled: Boolean(webSearchStatus?.enabled),
+        hasWebSearchApiKey: Boolean(webSearchStatus?.has_api_key),
+        webSearchBaseUrl: String(webSearchStatus?.base_url || ''),
+        webSearchModel: String(webSearchStatus?.model || ''),
+        webSearchReason: String(webSearchStatus?.reason || 'disabled'),
         autoRoute: Boolean(data.connection?.auto_route),
         llmReadiness: data.readiness || null,
         appReadiness: data.app_readiness || null,
@@ -275,7 +294,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
         showContext: !!p.show_context,
         answerContractV1: !!p.answer_contract_v1,
         answerDepthAuto: p.answer_depth_auto !== false,
-        answerModeHint: String(p.answer_mode_hint || ''),
+        answerModeHint: String(p.answer_mode_hint || '') === 'writing' ? 'reading' : String(p.answer_mode_hint || ''),
         answerOutputMode: String(p.answer_output_mode || ''),
         refsCardLocale: nextRefsCardLocale,
         qualityDataSharingEnabled: Boolean(p.quality_data_sharing_enabled),
@@ -422,6 +441,12 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
     if (patch.visionApiKey !== undefined && patch.visionApiKey.trim()) {
       localPatch.hasVisionApiKey = true
       localPatch.visionUsesTextFallback = false
+    }
+    if (patch.webSearchEnabled !== undefined) localPatch.webSearchEnabled = patch.webSearchEnabled
+    if (patch.webSearchBaseUrl !== undefined) localPatch.webSearchBaseUrl = patch.webSearchBaseUrl
+    if (patch.webSearchModel !== undefined) localPatch.webSearchModel = patch.webSearchModel
+    if (patch.webSearchApiKey !== undefined && patch.webSearchApiKey.trim()) {
+      localPatch.hasWebSearchApiKey = true
     }
     const rollbackKeys = Object.keys(localPatch) as Array<keyof SettingsState>
     set(localPatch)

@@ -158,7 +158,7 @@ export function ProjectActionCenter({
     <Drawer
       open={open}
       onClose={onClose}
-      width={620}
+      size={620}
       title={S.project_status_title}
       destroyOnHidden
       data-testid="project-action-center"

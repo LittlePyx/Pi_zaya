@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_scoped_fresh_authoring_v1",
+  "status": "frozen_before_source_chunk_inspection",
+  "frozen_at": "2026-09-03",
+  "purpose": "Author one new source-only scoped retrieval case for each current-library paper that is absent from the previously observed 18-journey suite.",
+  "source": {
+    "base_fixture_path": "docs/retrieval_user_journey_expansion_v1.json",
+    "base_fixture_sha256": "6463cf63ba1853fc8704eead89de0ee36061481613621b1fa72ea4b7fe5429ca",
+    "retrieval_snapshot_sha256": "09d20706edb877e5534f115f92b3252c0917caf23f3e91af55d37d7209557535",
+    "corpus_fingerprint": "20ad35d505d2936dbd80e90df6199e4b3d51fdf4cf8872a36c9211c5d6c99d9f",
+    "previous_evidence_chunk_count": 35,
+    "previous_evidence_chunk_ids_sha256": "cd815404a0c9b5a6ce09134c5c4c0acd44739b03d037ef41b26b3a02b035d482"
+  },
+  "document_selection": {
+    "rule": "all_and_only_logical_documents_never_used_in_previous_scope_doc_ids",
+    "document_count": 12,
+    "ordered_document_ids_sha256": "fe4730b8cc27a0eea54c26ad46dcd8c1952075e50de7af1de059957dd3c5700b",
+    "document_ids": [
+      "3d-sp-video",
+      "dl-spi-review",
+      "fdm-metamaterials",
+      "foveated-spi",
+      "qclfm",
+      "rt-spi-supp",
+      "scigs",
+      "scinerf",
+      "seq-cs",
+      "spd-review",
+      "sph-biological",
+      "spi-prospects"
+    ],
+    "one_case_per_document": true,
+    "single_document_scope_only": true
+  },
+  "authoring_boundary": {
+    "allowed_inputs": [
+      "frozen_docs_json",
+      "selected_document_chunk_jsonl_in_committed_order",
+      "chunk_page_metadata"
+    ],
+    "bm25_or_dense_retrieval_during_authoring_allowed": false,
+    "existing_candidate_rankings_or_scores_allowed": false,
+    "external_web_allowed": false,
+    "external_model_knowledge_allowed": false,
+    "query_must_be_answerable_from_registered_evidence": true,
+    "query_must_not_copy_a_complete_evidence_sentence": true,
+    "evidence_chunk_ids_must_be_disjoint_from_previous_suite": true,
+    "evidence_text_sha256_required": true,
+    "page_span_required": true
+  },
+  "case_contract": {
+    "case_count": 12,
+    "locale_quota": {
+      "zh": 6,
+      "en": 6
+    },
+    "required_fields": [
+      "id",
+      "query",
+      "locale",
+      "evaluation_focus",
+      "coverage_tags",
+      "query_scope",
+      "primary_doc_id",
+      "scope_doc_ids",
+      "contracts",
+      "labels",
+      "relevance"
+    ],
+    "minimum_labels_per_case": 1,
+    "maximum_labels_per_case": 2,
+    "allowed_grades": [
+      2,
+      3
+    ],
+    "output_path": "docs/retrieval_scoped_fresh_cases_v1.json"
+  },
+  "future_evaluation": {
+    "candidate_configuration_changes_allowed": 0,
+    "modes": [
+      "scoped"
+    ],
+    "minimum_recall_at_10_gain_vs_product": 0.02,
+    "recall_at_5_no_regression": true,
+    "mrr_no_regression": true,
+    "ndcg_at_10_no_regression": true,
+    "contract_recall_at_10_no_regression": true,
+    "maximum_case_recall_at_10_regressions": 0,
+    "maximum_case_mrr_regressions": 0,
+    "maximum_case_contract_recall_at_10_regressions": 0,
+    "product_enablement_on_pass": false
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

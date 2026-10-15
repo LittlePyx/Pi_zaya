@@ -1,4 +1,5 @@
 import type { Message } from '../../api/chat'
+import { messageEvidenceActionPolicy } from './messageEvidencePolicy'
 import {
   buildRefsLocateCandidatesAll,
   type LocateCandidate,
@@ -161,6 +162,7 @@ export function buildAssistantLocatePrepByMsgId(
   for (const message of opts.messages) {
     if (message.role !== 'assistant') continue
     assistantCount += 1
+    const evidencePolicy = messageEvidenceActionPolicy(message)
     const trace = opts.assistantTraceByMsgId.get(message.id)
     const renderPacket = getMessageRenderPacket(message)
     const locatePayloadSig = messageLocatePayloadSignature(message, renderPacket)
@@ -185,7 +187,9 @@ export function buildAssistantLocatePrepByMsgId(
     const hasRawCiteDetails = rawCiteDetails.length > 0
     const hasProvenancePayload = Boolean(message.provenance && typeof message.provenance === 'object')
     const hasRenderPacketLocate = Boolean(renderPacket?.readerOpen || renderPacket?.locateTarget)
-    const shouldBuildLocatePrep = opts.onOpenReaderAvailable && (
+    const shouldBuildLocatePrep = opts.onOpenReaderAvailable
+      && evidencePolicy.allowStructuredLocalLocate
+      && (
       Boolean(guideSourcePath)
       || hasRawCiteDetails
       || refHits.length > 0
@@ -257,6 +261,7 @@ export function buildAssistantLocatePrepByMsgId(
       locatePayloadSig,
       presentationRevision,
       messageGuideSourcePath,
+      evidencePolicy.reason,
       guideCandidateCount,
       locateSourcePath,
       refSig,
@@ -467,7 +472,9 @@ export function shouldSuppressLooseInlineLocate(args: {
   hasRawCiteDetails: boolean
   hasStructuredProvenance: boolean
   hasDirectProvenance: boolean
+  allowLooseLocalLocate?: boolean
 }): boolean {
+  if (args.allowLooseLocalLocate === false) return true
   if (String(args.guideSourcePath || '').trim()) return false
   if (args.hasRawCiteDetails) return false
   if (args.hasStructuredProvenance) return false

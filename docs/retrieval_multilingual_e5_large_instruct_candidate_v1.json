@@ -1,0 +1,135 @@
+{
+  "schema_version": 1,
+  "id": "multilingual_e5_large_instruct_single_vector_v1",
+  "curation_status": "frozen_before_development_measurement",
+  "selected_candidate": {
+    "model_id": "intfloat/multilingual-e5-large-instruct",
+    "revision": "274baa43b0e13e37fafa6428dbc7938e62e5c439",
+    "declared_license": "mit",
+    "architecture": "xlm-roberta-large",
+    "parameter_count_label": "0.6B",
+    "layers": 24,
+    "dimension": 1024,
+    "max_length": 512,
+    "pooling": "attention_masked_mean",
+    "normalization": "l2",
+    "query_prefix": "Instruct: Given an academic literature question, retrieve relevant passages from the user paper library that provide evidence for answering the question\nQuery: ",
+    "passage_prefix": "",
+    "provider_identity": "3dd860965cb586f731d13ac87efd0d473343197ca50632fae0434accd95d1c65",
+    "model_fingerprint": "hf-contract-sha256:4e2aaeef8f6df07b08a3fdd318add5156fd532ac6b54e6d0e7f0c2cdcbc23afd",
+    "model_safetensors_bytes": 1119825680,
+    "model_safetensors_sha256": "dd6b6e4f52db0a7aff83a13d10e6c5342ef9f6ab799bad3221f4b35ef390fa85",
+    "dtype": "float16",
+    "device": "cuda",
+    "trust_remote_code": false,
+    "product_enabled": false
+  },
+  "comparison_baseline": {
+    "model_id": "intfloat/multilingual-e5-base",
+    "revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+    "dimension": 768,
+    "max_length": 512,
+    "pooling": "attention_masked_mean",
+    "normalization": "l2",
+    "query_prefix": "query: ",
+    "passage_prefix": "passage: ",
+    "model_safetensors_bytes": 1112201288,
+    "model_safetensors_sha256": "a18a44fad1d0b46ded15928144138cff1135d5cc8233bdd90be5f18822de09a7",
+    "dtype": "float16",
+    "device": "cuda",
+    "trust_remote_code": false
+  },
+  "selection_evidence": {
+    "official_model_card": "https://huggingface.co/intfloat/multilingual-e5-large-instruct",
+    "technical_report": "https://arxiv.org/abs/2402.05672",
+    "official_claims": [
+      "MIT license",
+      "24 layers and 1024-dimensional embeddings",
+      "100-language XLM-R support with possible low-resource degradation",
+      "query instruction required; document instruction not required",
+      "attention-masked mean pooling and L2 normalization",
+      "long text truncated at 512 tokens"
+    ],
+    "why_selected": "Stronger instruction-tuned single-vector baseline with an explicit standard Transformers pooling contract, safe weights, and no new product dependency; the measured semantic failures were not caused by the 512-token limit."
+  },
+  "rejected_alternative": {
+    "model_id": "BAAI/bge-m3",
+    "revision": "5617a9f61b028005a4858fdac845db406aefb181",
+    "declared_license": "mit",
+    "dimension": 1024,
+    "max_length": 8192,
+    "functions": [
+      "dense",
+      "sparse",
+      "colbert"
+    ],
+    "official_model_card": "https://huggingface.co/BAAI/bge-m3",
+    "paper": "https://arxiv.org/abs/2402.03216",
+    "primary_weight_file": "pytorch_model.bin",
+    "primary_weight_bytes": 2271145830,
+    "primary_weight_sha256": "b5e0ce3470abf5ef3831aa1bd5553b486803e83251590ab7ff35a117cf6aad38",
+    "equivalent_safetensors_primary_weight_available": false,
+    "decision": "rejected_for_this_candidate_round",
+    "reason": "The current official revision lacks an equivalent safetensors primary weight and would add a model-specific integration surface before a stronger standard single-vector baseline is measured."
+  },
+  "development_fixture": {
+    "path": "docs/retrieval_eval_development_v1.json",
+    "sha256": "269cda5b1861be19a9aebf7b8b95faae6de49d41afb04e53cb2eea2aa3736478",
+    "id": "research_qa_library_development_v1_chunk_qrels",
+    "case_count": 41,
+    "allowed_for_tuning": true
+  },
+  "frozen_acceptance_fixture": {
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "id": "research_qa_semantic_paraphrase_v1",
+    "case_count": 12,
+    "allowed_for_tuning": false,
+    "maximum_candidate_replays": 1
+  },
+  "fusion_contract": {
+    "algorithm": "rrf",
+    "rrf_k": 20.0,
+    "sparse_weight": 2.0,
+    "dense_weight": 1.0,
+    "candidate_multiplier": 4,
+    "protected_sparse_prefix": 5,
+    "dense_source_gate_depth": 5,
+    "cross_encoder": false
+  },
+  "development_gates": {
+    "raw_large_recall_at_10_no_regression_vs_base_in_both_modes": true,
+    "raw_large_recall_at_10_min_gain_in_any_mode": 0.05,
+    "safe_rrf_preserves_product_recall_at_5_in_both_modes": true,
+    "safe_rrf_preserves_product_wrong_source_at_5_in_both_modes": true,
+    "safe_rrf_no_regression_vs_product_for": [
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "safe_rrf_recall_at_10_min_gain_in_both_modes": 0.02,
+    "index_size_ratio_vs_base_max": 1.5,
+    "p95_latency_rule": "large <= max(base * 2.5, base + 50 ms)",
+    "all_required": true
+  },
+  "frozen_replay_gates": {
+    "run_only_if_all_development_gates_pass": true,
+    "safe_rrf_recall_at_10_min_gain_vs_product": 0.15,
+    "required_modes": [
+      "scoped",
+      "full_library"
+    ],
+    "preserve_product_recall_at_5": true,
+    "preserve_product_wrong_source_at_5": true,
+    "all_required": true
+  },
+  "privacy_and_execution": {
+    "benchmark_download_requires_explicit_flag": true,
+    "subsequent_measurement_cache_only": true,
+    "normal_runtime_downloads": false,
+    "normal_runtime_model_loading": false,
+    "paper_text_uploaded": false,
+    "ordinary_user_surface_exposed": false,
+    "failure_action": "reject candidate and keep product BM25 unchanged"
+  }
+}

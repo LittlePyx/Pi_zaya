@@ -255,6 +255,40 @@ def test_bibliometrics_route_reuses_persisted_repair_cache(tmp_path, monkeypatch
     assert payload["summary_source"] == "abstract"
 
 
+def test_background_bibliometrics_never_starts_model_enrichment(tmp_path, monkeypatch):
+    db_dir = tmp_path / "db"
+    db_dir.mkdir(parents=True, exist_ok=True)
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("passive shelf hydration must not start model enrichment")
+
+    monkeypatch.setattr(references_router, "get_settings", lambda: SimpleNamespace(db_dir=db_dir))
+    monkeypatch.setattr(references_router, "enrich_citation_detail_meta", forbidden)
+    monkeypatch.setattr(references_router, "ensure_source_citation_meta", forbidden)
+    monkeypatch.setattr(references_router, "_translate_summary_to_zh", forbidden)
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/references/bibliometrics",
+        json={
+            "allow_model_calls": False,
+            "meta": {
+                "key": "background-only",
+                "citation_route": "system_a",
+                "source_path": "missing-source.md",
+                "title": "Stored evidence title",
+                "doi": "10.1000/background-only",
+            },
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "Stored evidence title"
+    assert payload["doi"] == "10.1000/background-only"
+    assert payload["bibliometrics_checked"] is True
+
+
 def test_bibliometrics_route_enriches_ready_metadata_when_summary_missing(tmp_path, monkeypatch):
     db_dir = tmp_path / "db"
     db_dir.mkdir(parents=True, exist_ok=True)

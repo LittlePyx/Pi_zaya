@@ -140,6 +140,23 @@ def test_sanitize_answer_removes_orphan_citation_only_line() -> None:
     assert cleaned == "在该配置下，测得的横向分辨率约为 120 nm [1]。"
 
 
+def test_sanitize_answer_removes_orphan_bold_shell_after_claim_pruning() -> None:
+    answer = "可提取的关键结论如下：\n\n**\n- 支持原文：Step 1. [1]"
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert "\n**\n" not in cleaned
+    assert "支持原文：Step 1. [1]" in cleaned
+
+
+def test_sanitize_answer_restores_missing_space_between_english_sentences() -> None:
+    answer = "The reader checks the source [1].Structured conversion improves retrieval [1]."
+
+    cleaned = finalize_runtime._sanitize_empty_markdown_label_fragments(answer)
+
+    assert "]. Structured" in cleaned
+
+
 def test_sanitize_answer_removes_only_empty_display_math_blocks() -> None:
     answer = "第一段 [1]。\n\n$$\n$$\n\n$$\nx = Ay\n$$\n\n第二段 [2]。"
 
@@ -4828,6 +4845,8 @@ def test_fast_exact_finalize_binds_planned_source_before_claim_audit(monkeypatch
         "AlphaNet parallelizes coded acquisition within one integration time [1]."
     ]
     assert audited_answers[0] in out["answer"]
+    assert out["answer_quality"]["finalization_outcome"]["status"] == "passed"
+    assert out["answer_quality"]["finalization_outcome"]["gate_pass_count"] == 1
 
 
 def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch):
@@ -7354,6 +7373,13 @@ def test_finalize_generation_answer_rechecks_claims_after_late_answer_mutation(m
     assert "提高十倍" not in out["answer"]
     assert out["answer_quality"]["claim_evidence"]["final_gate_applied"] is True
     assert out["answer_quality"]["claim_evidence"]["minimum_ok"] is True
+    assert out["answer_quality"]["finalization_outcome"]["status"] in {
+        "passed",
+        "repaired",
+        "narrowed",
+        "repaired_and_narrowed",
+    }
+    assert out["answer_quality"]["finalization_outcome"]["final_ok"] is True
     assert audit_calls == 1
     timing = out["answer_quality"]["_finalize_timing_ms"]
     assert timing["mode"] == "standard"

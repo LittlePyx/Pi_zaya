@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "id": "claim_entailment_nli_candidate_v1",
+  "curation_status": "frozen_before_candidate_measurement",
+  "fixture": {
+    "path": "docs/claim_entailment_eval_v1.json",
+    "sha256": "dfac6dfaf51bea2a041883e5f5454cefff60a9ab948e2ef072febcac1b4bedb4",
+    "case_count": 24
+  },
+  "candidate": {
+    "model_id": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+    "revision": "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+    "declared_license": "mit",
+    "architecture": "DebertaV2ForSequenceClassification",
+    "parameter_class": "0.3B",
+    "model_safetensors_bytes": 557652046,
+    "model_safetensors_sha256": "65af59b1ff4450b09ecbf13ca35c840dbf038b26ff8e10e5ea89ca724828ed1e",
+    "safe_weights_required": true,
+    "precision": "float32",
+    "max_length": 512,
+    "truncation": "only_first",
+    "premise": "registered evidence excerpt",
+    "hypothesis": "claim under verification",
+    "label_order": ["entailment", "neutral", "contradiction"],
+    "insufficient_mapping": "neutral",
+    "trust_remote_code": false,
+    "product_enabled": false
+  },
+  "selection_evidence": {
+    "checked_at": "2026-09-03",
+    "primary_source": "https://huggingface.co/MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+    "reported_xnli_average_accuracy": 0.808,
+    "reported_xnli_en_accuracy": 0.883,
+    "reported_xnli_zh_accuracy": 0.8116,
+    "runtime_compatibility": "The model card requires Transformers >=4.13; the benchmark runtime has 4.29.2.",
+    "alternative": {
+      "model_id": "MoritzLaurer/multilingual-MiniLMv2-L12-mnli-xnli",
+      "revision": "0d55db361c5f291640208c51ff8c181146aa8eff",
+      "declared_license": "mit",
+      "model_safetensors_bytes": 470595778,
+      "reported_xnli_average_accuracy": 0.75,
+      "reported_xnli_en_accuracy": 0.821,
+      "reported_xnli_zh_accuracy": 0.751,
+      "rejection_reason": "The 87 MB weight saving does not justify the lower reported English, Chinese, and average XNLI accuracy for a safety-oriented verifier diagnostic."
+    }
+  },
+  "privacy_and_supply_chain": {
+    "inference_location": "local_only",
+    "paper_text_uploaded": false,
+    "normal_runtime_downloads": false,
+    "benchmark_download_requires_explicit_flag": true,
+    "subsequent_measurement_cache_only": true,
+    "credentials_required": false,
+    "raw_claims_or_evidence_in_committed_report": false
+  },
+  "acceptance": {
+    "three_way_accuracy_min": 0.75,
+    "entailment_recall_min": 0.75,
+    "non_entailment_specificity_min": 0.8125,
+    "contradiction_false_support_rate_max": 0.125,
+    "lexical_adversary_false_support_rate_max": 0.0,
+    "insufficient_false_support_rate_max": 0.25,
+    "cross_lingual_accuracy_min": 0.7,
+    "truncated_pair_count_max": 0,
+    "all_required": true
+  },
+  "measurement_policy": {
+    "candidate_count": 1,
+    "run_count_on_frozen_fixture": 1,
+    "threshold_tuning_on_fixture": false,
+    "promotion_on_pass": false,
+    "decision": "A pass permits a shadow integration design only. A miss keeps semantic verification disabled and becomes failure-analysis input."
+  }
+}

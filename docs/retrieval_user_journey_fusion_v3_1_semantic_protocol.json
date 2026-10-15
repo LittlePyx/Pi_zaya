@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_fusion_v3_1_semantic_acceptance_protocol",
+  "curation_status": "frozen_after_selection_before_semantic_acceptance_runner_and_measurement",
+  "purpose": "Evaluate the unchanged selected fusion candidate once on the independently frozen semantic paraphrase slice before any product shadow integration.",
+  "evidence": {
+    "replacement_protocol_path": "docs/retrieval_user_journey_fusion_v3_1_protocol.json",
+    "replacement_protocol_sha256": "79c6b18995a50a531fd9ccf9d5d2edabb7ede9a7e3bf7ff926198f0770e3c955",
+    "selection_report_path": "docs/retrieval_user_journey_fusion_v3_1_selection.json",
+    "selection_report_sha256": "559d0ced289dad76095631fd10fa01c4f7e9cc0d6e514e150eac76d90b1bb36c",
+    "semantic_fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "semantic_fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "semantic_predecessor_report_path": "docs/retrieval_semantic_paraphrase_benchmark_v1.json",
+    "semantic_predecessor_report_sha256": "e47a15ba36e1a6f00826e91a554ba4d4d90ca82a8d0cb3d60cdbdb32a35d45a1",
+    "protected_tail_implementation_path": "kb/protected_dense_tail_retriever.py",
+    "protected_tail_implementation_sha256": "f120174d277fd190008fb0c1d5749315df83cb75fd1ca143aa864991c28d95b2"
+  },
+  "eligibility": {
+    "required_selection_outcome": "eligible_for_semantic_acceptance",
+    "selection_product_enabled": false,
+    "case_count": 12,
+    "maximum_runs": 1
+  },
+  "unchanged_candidate": {
+    "candidate_id": "protected_tail_dense_quota_2_v3",
+    "protected_sparse_prefix": 5,
+    "sparse_tail_window": 5,
+    "dense_novelty_quota": 2,
+    "candidate_multiplier": 4,
+    "fusion_output_depth": 10,
+    "candidate_retrieval_depth": 40,
+    "qwen_provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "existing_index_reused_without_build": true
+  },
+  "execution_contract": {
+    "ranking_depth": 10,
+    "reported_metric_depths": [
+      5,
+      10
+    ],
+    "scoped_and_full_library": true,
+    "query_embedding_cache": true,
+    "expected_unique_query_embeddings": 12,
+    "product_control_must_match_predecessor_for": [
+      "recall@5",
+      "recall@10",
+      "wrong_source_rate@5"
+    ],
+    "fusion_or_model_variants": 0,
+    "index_builds": 0
+  },
+  "acceptance_gate": {
+    "metric": "recall@10",
+    "minimum_gain_vs_product_in_each_mode": 0.15,
+    "required_modes": [
+      "scoped",
+      "full_library"
+    ],
+    "recall@5_equal_to_product_in_each_mode": true,
+    "wrong_source_rate@5_equal_to_product_in_each_mode": true,
+    "all_required": true
+  },
+  "failure_policy": {
+    "retry_or_candidate_change": false,
+    "product_shadow_allowed_on_failure": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

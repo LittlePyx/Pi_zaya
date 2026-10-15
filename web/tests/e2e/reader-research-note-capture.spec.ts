@@ -64,6 +64,40 @@ test.beforeEach(async ({ page }) => {
   await installAppShellMocks(page, {
     projects: [{ id: 'project-reader-note', name: 'Reader notes', created_at: 1, updated_at: 1 }],
   })
+  await page.route('**/api/chat/research-note/evidence-context', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    const target = {
+      block_id: String(body.block_id || ''),
+      anchor_id: String(body.anchor_id || ''),
+      kind: String(body.anchor_kind || 'paragraph'),
+      heading_path: String(body.heading_path || ''),
+      text: String(body.evidence_quote || ''),
+      markdown: String(body.evidence_quote || ''),
+    }
+    await fulfillJson(route, {
+      status: 'exact',
+      reason: 'exact_block',
+      source_name: String(body.source_name || ''),
+      heading_path: String(body.heading_path || ''),
+      before: [{ block_id: 'context-before', text: 'Context before the saved evidence.' }],
+      target,
+      after: [{ block_id: 'context-after', text: 'Context after the saved evidence.' }],
+      candidates: [],
+      can_open_exact: true,
+      reader_open: null,
+      source_fingerprint: 'sha256:reader-note-fixture',
+      source_changed: false,
+      context_snapshot: {
+        version: 1,
+        captured_at: 1_800_000_000,
+        source_fingerprint: 'sha256:reader-note-fixture',
+        reason: 'exact_block',
+        before: [{ block_id: 'context-before', text: 'Context before the saved evidence.' }],
+        target,
+        after: [{ block_id: 'context-after', text: 'Context after the saved evidence.' }],
+      },
+    })
+  })
 })
 
 test('selected source text saves to a new note with comment and exact locator', async ({ page }) => {
@@ -101,6 +135,14 @@ test('selected source text saves to a new note with comment and exact locator', 
   expect(Number(link?.start_offset)).toBeGreaterThanOrEqual(0)
   expect(Number(link?.end_offset)).toBeGreaterThan(Number(link?.start_offset))
   expect(String(link?.capture_id || '')).toMatch(/^reader:/)
+  expect(link?.evidence_verification).toEqual(expect.objectContaining({
+    status: 'exact',
+    reason: 'captured_context',
+    source_fingerprint: 'sha256:reader-note-fixture',
+  }))
+  const snapshot = link?.evidence_context_snapshot as Record<string, unknown>
+  expect(snapshot.source_fingerprint).toBe('sha256:reader-note-fixture')
+  expect((snapshot.before as Array<Record<string, unknown>>)[0]?.text).toBe('Context before the saved evidence.')
   expect(renderLoopErrors).toEqual([])
 })
 

@@ -23,9 +23,11 @@ import {
   buildResearchNoteAnswers,
   buildResearchNoteBody,
   buildResearchNoteSourceLinks,
+  mergeResearchNoteSourceLinks,
   researchNoteDefaultTitle,
   type ResearchNoteLabels,
 } from './researchNote'
+import { researchNoteSourceLinkWithContext } from './researchNoteEvidenceContext'
 
 interface Props {
   open: boolean
@@ -47,6 +49,32 @@ function plainPreview(value: string): string {
     .replace(/[`*_>#|~-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+}
+
+async function sourceStateWithContextSnapshots(
+  sourceState: ResearchNoteSourceState,
+): Promise<ResearchNoteSourceState> {
+  const links = Array.isArray(sourceState.links) ? sourceState.links : []
+  const next: ResearchNoteSourceLink[] = [...links]
+  const pending = links
+    .map((link, index) => ({ link, index }))
+    .filter(({ link }) => (
+      link.kind !== 'answer'
+      && !link.evidence_context_snapshot
+      && Boolean(link.source_path)
+      && Boolean(link.block_id || link.anchor_id)
+    ))
+  for (let offset = 0; offset < pending.length; offset += 6) {
+    await Promise.all(pending.slice(offset, offset + 6).map(async ({ link, index }) => {
+      try {
+        const context = await chatApi.reviewResearchNoteEvidence(link)
+        next[index] = researchNoteSourceLinkWithContext(link, context)
+      } catch {
+        // A missing conversion leaves this source without a baseline and does not block note saving.
+      }
+    }))
+  }
+  return { ...sourceState, links: next }
 }
 
 function downloadTextFile(filename: string, content: string) {
@@ -77,20 +105,6 @@ async function writeClipboard(value: string): Promise<void> {
   const copied = document.execCommand('copy')
   textarea.remove()
   if (!copied) throw new Error('clipboard-copy-failed')
-}
-
-function mergeLinks(existing: ResearchNoteSourceLink[], incoming: ResearchNoteSourceLink[]): ResearchNoteSourceLink[] {
-  const out: ResearchNoteSourceLink[] = []
-  const seen = new Set<string>()
-  for (const link of [...existing, ...incoming]) {
-    const identity = link.kind === 'answer'
-      ? `answer:${link.conversation_id || ''}:${Number(link.message_id || 0)}`
-      : `source:${String(link.source_path || '').toLowerCase()}|${link.block_id || link.anchor_id || link.heading_path || link.label}`
-    if (seen.has(identity)) continue
-    seen.add(identity)
-    out.push(link)
-  }
-  return out.slice(0, 240)
 }
 
 function draftKey(projectId: string | null | undefined, convId: string | null | undefined, messageId: number | null) {
@@ -205,7 +219,7 @@ export function ResearchNoteModal({
       const nextSourceState: ResearchNoteSourceState = {
         ...record.source_state,
         version: 1,
-        links: mergeLinks(existingLinks, incomingLinks),
+        links: mergeResearchNoteSourceLinks(existingLinks, incomingLinks),
       }
       setCurrentNote(record)
       setTargetValue(record.id)
@@ -279,21 +293,25 @@ export function ResearchNoteModal({
     setSaving(true)
     setSaveState('saving')
     try {
+      const sourceStateForSave = currentNote
+        ? sourceState
+        : await sourceStateWithContextSnapshots(sourceState)
       const record = currentNote
         ? await chatApi.updateResearchNote(currentNote.id, {
           expected_revision: currentNote.revision,
           title: safeTitle,
           content_markdown: body.trim(),
-          source_state: sourceState,
+          source_state: sourceStateForSave,
         })
         : await chatApi.createResearchNote({
           title: safeTitle,
           content_markdown: body.trim(),
           project_id: projectId || null,
           source_conv_id: activeConvId || null,
-          source_state: sourceState,
+          source_state: sourceStateForSave,
         })
       setCurrentNote(record)
+      if (!currentNote) setSourceState(record.source_state || sourceStateForSave)
       setTargetValue(record.id)
       setAutoSaveEnabled(true)
       setSaveState('saved')
@@ -328,7 +346,7 @@ export function ResearchNoteModal({
       version: 1,
       selected_message_ids: ids,
       include_shelf: withShelf,
-      links: mergeLinks(Array.isArray(current.links) ? current.links : [], links),
+      links: mergeResearchNoteSourceLinks(Array.isArray(current.links) ? current.links : [], links),
     }))
   }
 

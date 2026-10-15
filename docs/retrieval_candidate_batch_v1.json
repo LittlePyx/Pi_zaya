@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "id": "dense_candidate_batch_v1",
+  "curation_status": "frozen_before_screening",
+  "protocol": {
+    "path": "docs/retrieval_candidate_comparison_protocol_v1.json",
+    "sha256": "ca9ac9d83e10e8891c788b13d3e6a6f6d403c7da382363bbda786fe4dc3cfcfa"
+  },
+  "candidate_count": 2,
+  "candidates": [
+    {
+      "candidate_id": "qwen3_embedding_0_6b_v1",
+      "model_id": "Qwen/Qwen3-Embedding-0.6B",
+      "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+      "declared_license": "apache-2.0",
+      "architecture": "qwen3_decoder",
+      "parameter_count_label": "0.6B",
+      "layers": 28,
+      "dimension": 1024,
+      "model_context_length": 32768,
+      "benchmark_max_length": 8192,
+      "pooling": "last_token",
+      "padding_side": "left",
+      "normalization": "l2",
+      "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+      "passage_prefix": "",
+      "encoding_contract_sha256": "b4002ff1d751936b6a2f31b3ffdcbe1bc378645280622d286fc0bf77de11ed14",
+      "model_safetensors_bytes": 1191586416,
+      "model_safetensors_sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+      "minimum_transformers_version": "4.51.0",
+      "standard_auto_model": true,
+      "trust_remote_code": false,
+      "dtype": "float16",
+      "device": "cuda",
+      "batch_size": 1,
+      "official_model_card": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B",
+      "technical_report": "https://arxiv.org/abs/2506.05176",
+      "selection_reason": "Instruction-aware decoder embedding route with official multilingual and cross-lingual retrieval support, contrasted with the failed XLM-R mean-pooling candidates.",
+      "screening_runs": 0,
+      "product_enabled": false
+    },
+    {
+      "candidate_id": "granite_embedding_278m_multilingual_v1",
+      "model_id": "ibm-granite/granite-embedding-278m-multilingual",
+      "revision": "a9cb5338491faf32b73dd17b714a31821c021bbf",
+      "declared_license": "apache-2.0",
+      "architecture": "xlm_roberta_encoder",
+      "parameter_count_label": "278M",
+      "layers": 12,
+      "dimension": 768,
+      "model_context_length": 512,
+      "benchmark_max_length": 512,
+      "pooling": "cls",
+      "padding_side": "right",
+      "normalization": "l2",
+      "query_prefix": "",
+      "passage_prefix": "",
+      "encoding_contract_sha256": "3c3d42951fa84b2903cf68a3c06072ab3a7fd78621885e0c82c83e8b4b70fb49",
+      "model_safetensors_bytes": 556109872,
+      "model_safetensors_sha256": "b522423ae15d1a6fd48c55ef4f599c0c2c0737603da94e4b4815760c2c06ebac",
+      "minimum_transformers_version": "4.15.0",
+      "standard_auto_model": true,
+      "trust_remote_code": false,
+      "dtype": "float16",
+      "device": "cuda",
+      "batch_size": 4,
+      "official_model_card": "https://huggingface.co/ibm-granite/granite-embedding-278m-multilingual",
+      "technical_report": "https://arxiv.org/abs/2502.20204",
+      "selection_reason": "Retrieval-trained multilingual encoder with standard XLM-R loading and official CLS pooling, providing a compact architecture distinct from decoder embeddings and E5 mean pooling.",
+      "screening_runs": 0,
+      "product_enabled": false
+    }
+  ],
+  "excluded_alternatives": [
+    {
+      "model_id": "Snowflake/snowflake-arctic-embed-m-v2.0",
+      "reason_code": "remote_code_required",
+      "evidence": "Official Python usage requires trust_remote_code=True."
+    },
+    {
+      "model_id": "Alibaba-NLP/gte-multilingual-base",
+      "reason_code": "remote_code_required",
+      "evidence": "Pinned repository is tagged custom_code."
+    },
+    {
+      "model_id": "jinaai/jina-embeddings-v3",
+      "reason_code": "remote_code_required",
+      "evidence": "Pinned repository is tagged custom_code."
+    },
+    {
+      "model_id": "nomic-ai/nomic-embed-text-v2-moe",
+      "reason_code": "remote_code_and_weight_budget",
+      "evidence": "Pinned repository is tagged custom_code and its safetensors weight is 1,901,187,232 bytes."
+    },
+    {
+      "model_id": "BAAI/bge-m3",
+      "reason_code": "weight_budget",
+      "evidence": "Current official safetensors weight is approximately 2.27 GB, above the 1.5 GB protocol ceiling."
+    },
+    {
+      "model_id": "google/embeddinggemma-300m",
+      "reason_code": "manual_gated_access",
+      "evidence": "Official weights require an authenticated user to review and accept the Gemma usage license."
+    },
+    {
+      "model_id": "sentence-transformers/paraphrase-multilingual-mpnet-base-v2",
+      "reason_code": "task_and_context_mismatch",
+      "evidence": "Official configuration is a 128-token sentence-similarity model rather than a paragraph retrieval model."
+    },
+    {
+      "model_id": "intfloat/multilingual-e5-large",
+      "reason_code": "weight_budget",
+      "evidence": "Pinned safetensors weight is 2,239,611,368 bytes, above the 1.5 GB protocol ceiling."
+    }
+  ],
+  "benchmark_runtime": {
+    "requirements_path": "tools/retrieval_eval/candidate_runtime_requirements_v1.txt",
+    "requirements_sha256": "fd57ba1284e103f67e0ac1a76054ece975f664c23b64bcf4ac4650c469cad94e",
+    "python_version": "3.9.7",
+    "torch_version": "2.3.1+cu121",
+    "transformers_version": "4.51.3",
+    "tokenizers_version": "0.21.4",
+    "huggingface_hub_version": "0.30.2",
+    "safetensors_version": "0.5.3",
+    "virtual_environment": true,
+    "inherits_system_torch": false,
+    "isolated_torch": true,
+    "gpu_contract": "NVIDIA GeForce RTX 3070 Laptop GPU, 8192 MiB, compute capability 8.6",
+    "product_requirements_modified": false
+  },
+  "execution_boundary": {
+    "screening_fixture_accessed_before_freeze": false,
+    "confirmation_fixture_accessed_by_candidates": false,
+    "frozen_acceptance_fixture_accessed": false,
+    "model_download_requires_explicit_prepare": true,
+    "measurement_downloads": false,
+    "paper_text_uploaded": false,
+    "ordinary_user_surface_exposed": false,
+    "product_enabled": false
+  }
+}

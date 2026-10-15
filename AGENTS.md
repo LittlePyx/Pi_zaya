@@ -6,6 +6,10 @@ This file guides Codex when working in this repository.
 
 Pi_zaya is a FastAPI + React academic PDF knowledge base with RAG-powered Q&A, traceable citations, a literature basket, and conversion quality tooling. PDFs are converted to Markdown, chunked, indexed with BM25 plus structured indices, and queried through the backend API.
 
+### Product Boundary
+
+Pi_zaya supports reading papers already in the user's library and finding, locating, comparing, verifying, and organizing traceable evidence. It is not a manuscript-writing or submission-preparation tool. Do not add manuscript drafting, paragraph rewriting/polishing, submission-ready exports, or adjacent authoring workflows. Evidence outlines may organize source-backed notes, but user-facing copy must not describe them as writing outlines.
+
 The legacy Streamlit entry has been removed. Do not use `app.py`, `streamlit run`, or port `8501` as the product entry.
 
 ## Commands
@@ -59,7 +63,15 @@ Primary local URLs:
 | `kb/converter/quality_center.py` | Conversion source-quality scan/repair summaries |
 | `kb/converter/quality_repair.py` | Markdown quality analysis, repair planning, and safe repair |
 | `kb/task_runtime.py` + `kb/bg_queue_state.py` | Thread-safe background queue for PDF conversion and chat tasks |
-| `kb/retrieval_engine.py` | Query translation, heuristic filtering, result caching |
+| `kb/product_query_policy.py` | Product BM25 query translation, deterministic expansion, RRF, and fail-safe fallback |
+| `kb/retrieval_engine.py` | Evidence grouping, document focus, deep-read enrichment, and reference packing |
+| `kb/candidate_retriever.py` | Minimal candidate-retrieval protocol; keeps ranking channels outside orchestration |
+| `kb/dense_retriever.py` + `kb/hybrid_retriever.py` | Exact-cosine and BM25+dense RRF kernels; product use is explicit opt-in and limited to selected-paper/basket scope |
+| `kb/local_semantic_component_service.py` + `kb/portable_local_semantic_runtime.py` | Optional local component consent/lifecycle and the verified product runtime/index binding |
+| `kb/embedding_provider.py` + `kb/embedding_index.py` | Model-neutral experimental executor boundary and exact-vector snapshots; the product uses the separately verified local-component index path |
+| `kb/cross_encoder_reranker.py` | Model-agnostic, fail-open cross-encoder reranking boundary |
+| `kb/retrieval_metrics.py` | Recall@K, MRR, and nDCG evaluation primitives |
+| `kb/retrieval_eval_fixture.py` + `kb/retrieval_benchmark.py` | Frozen real-paper chunk qrels, corpus integrity, and raw/product-query BM25 baselines |
 | `kb/reference_index.py` | Reference extraction and Crossref enrichment |
 | `kb/reference_sync.py` | Non-blocking reference metadata sync |
 | `kb/chat_store.py` | SQLite conversations, messages, and retrieval refs |
@@ -96,6 +108,8 @@ All via environment variables. At minimum set one API key:
 - Markdown page markers use `<!-- kb_page: N -->` and must be preserved through conversion repairs.
 - React API contracts should be typed in `web/src/api`.
 - Quality fixes should flow from source diagnostics to converter/repair code, not only hide bad UI states.
+- Run `python tools/check_architecture_budgets.py`; protected oversized files may shrink but must not grow.
+- Describe sparse+dense retrieval precisely: it is optional, local, explicitly enabled, and restricted to selected-paper/basket scope; BM25 remains the default and full-library mode.
 
 ## Database Files
 

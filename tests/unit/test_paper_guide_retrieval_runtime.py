@@ -41,6 +41,24 @@ def test_refocus_terms_require_the_two_step_boundary_sentence() -> None:
     )
 
 
+def test_generic_method_scan_can_find_encoding_outside_methods_but_explicit_scope_cannot(tmp_path):
+    md = tmp_path / "paper.en.md"
+    md.write_text("# Paper\n\n## B. Encoding\n\nEach pixel is modulated on p frequencies simultaneously. The signal is multiplexed into a detector, then demodulated by lock-in amplifiers.\n\n## Methods\n\nThe apparatus was assembled on an optical table.\n", encoding="utf-8")
+    common = dict(bound_source_path=str(md), db_dir=tmp_path, limit=3, resolve_support_slot_block=lambda **_kwargs: {})
+    hits = _paper_guide_targeted_source_block_hits(prompt="What does this method parallelize? Explain simultaneous frequency encoding and demodulation.", **common)
+    assert any("frequencies simultaneously" in hit["text"] for hit in hits)
+    restricted = _paper_guide_targeted_source_block_hits(prompt="From the Methods section only, describe the apparatus setup.", **common)
+    assert not any("frequencies simultaneously" in hit["text"] for hit in restricted)
+
+
+def test_named_subsection_body_outranks_broad_method_overview(tmp_path):
+    md = tmp_path / "paper.en.md"
+    md.write_text("# Imaging\n\n## Methods\n\nThe imaging method uses a detector and signal acquisition process with multiple channels.\n\n## B. Encoding\n\nEach pixel is modulated on p frequencies simultaneously. The multiplexed signal is demodulated by lock-in amplifiers.\n", encoding="utf-8")
+    hits = _paper_guide_targeted_source_block_hits(bound_source_path=str(md), prompt="What does this method parallelize? B. Encoding frequencies simultaneously multiplexed signal demodulated lock-in amplifiers", db_dir=tmp_path, limit=1, resolve_support_slot_block=lambda **_kwargs: {})
+    assert "frequencies simultaneously" in hits[0]["text"]
+    assert "B. Encoding" in hits[0]["meta"]["heading_path"]
+
+
 def test_semantic_query_terms_request_complete_sidd_winner_table_relations() -> None:
     terms = set(
         retrieval_runtime._paper_guide_semantic_query_terms(

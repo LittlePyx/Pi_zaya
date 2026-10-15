@@ -10,13 +10,20 @@ from pathlib import Path
 from typing import Any
 
 from api.reference_ui import enrich_citation_detail_meta
-from kb.citation_meta import extract_first_doi, normalize_title_for_match, title_similarity
+from kb.citation_meta import (
+    extract_first_doi,
+    fetch_crossref_work_by_doi_status,
+    normalize_title_for_match,
+    title_similarity,
+)
 from kb.reference_index import (
     CROSSREF_CACHE_FILE_NAME,
     INDEX_FILE_NAME,
     REFERENCE_METADATA_STATUS_CODES,
     REFERENCE_MISSING_REASON_CODES,
     classify_reference_metadata,
+    parse_reference_line_metadata,
+    reference_metadata_raw_identity_conflict,
 )
 
 
@@ -315,6 +322,17 @@ def _canonicalize_detail(detail: Mapping[str, Any] | None) -> dict[str, Any]:
         "source_path": ("sourcePath",),
         "source_name": ("sourceName",),
         "ref_num": ("refNum", "reference_num", "referenceNum"),
+        "citation_source": ("citationSource",),
+        "journal_if": ("journalIf",),
+        "journal_quartile": ("journalQuartile",),
+        "journal_if_source": ("journalIfSource",),
+        "conference_tier": ("conferenceTier",),
+        "conference_ccf": ("conferenceCcf",),
+        "summary_line": ("summaryLine",),
+        "summary_source": ("summarySource",),
+        "summary_provider": ("summaryProvider",),
+        "summary_fetch_status": ("summaryFetchStatus",),
+        "summary_locale": ("summaryLocale",),
     }.items():
         if _text(out.get(canonical)):
             continue
@@ -454,6 +472,206 @@ _DOI_BOUND_STALE_FIELDS = (
     "metadata_export_acceptance",
     "metadataExportAcceptance",
 )
+
+_RAW_IDENTITY_STALE_FIELDS = (
+    *_DOI_BOUND_STALE_FIELDS,
+    "summary_line",
+    "summaryLine",
+    "summary_source",
+    "summarySource",
+    "summary_provider",
+    "summaryProvider",
+    "summary_quality",
+    "summaryQuality",
+    "summary_fetch_status",
+    "summaryFetchStatus",
+)
+
+
+def _raw_reference_conflict_state(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    data = _canonicalize_detail(detail)
+    state = reference_metadata_raw_identity_conflict(data, _raw_reference_text(data))
+    current_doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl")).lower()
+    rejected_values = data.get("raw_reference_rejected_dois")
+    rejected_dois = {
+        _norm_doi(value).lower()
+        for value in (rejected_values if isinstance(rejected_values, (list, tuple, set)) else [])
+        if _norm_doi(value)
+    }
+    rejected_doi = _norm_doi(data.get("raw_reference_rejected_doi")).lower()
+    if rejected_doi:
+        rejected_dois.add(rejected_doi)
+    if not current_doi or current_doi not in rejected_dois:
+        return state
+    parsed = state.get("parsed") if isinstance(state.get("parsed"), Mapping) else parse_reference_line_metadata(_raw_reference_text(data))
+    raw_venue = _text(parsed.get("venue")) if isinstance(parsed, Mapping) else ""
+    visible_venue = _text(data.get("venue"))
+    venue_similarity = title_similarity(raw_venue, visible_venue) if raw_venue and visible_venue else 0.0
+    return {
+        **dict(state or {}),
+        "conflict": True,
+        "title_conflict": bool(state.get("title_conflict")),
+        "parsed": dict(parsed or {}),
+        "doi": current_doi,
+        "previous_rejection": True,
+        "venue_conflict": bool(raw_venue and visible_venue and venue_similarity < 0.42),
+        "venue_similarity": round(venue_similarity, 4),
+    }
+
+
+def prefer_trusted_raw_reference_identity(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Drop a DOI-backed hybrid identity when the cited reference line disagrees."""
+    data = _canonicalize_detail(detail)
+    state = _raw_reference_conflict_state(data)
+    if not bool(state.get("conflict")):
+        return data
+    parsed = state.get("parsed") if isinstance(state.get("parsed"), Mapping) else {}
+    rejected_doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl"))
+    current_venue = _text(data.get("venue"))
+    for key in _RAW_IDENTITY_STALE_FIELDS:
+        data.pop(key, None)
+    for key in ("doi", "doi_url", "doiUrl", "volume", "issue", "pages"):
+        data.pop(key, None)
+    for key in ("title", "authors", "year", "volume", "issue", "pages"):
+        value = _text(parsed.get(key))
+        if value:
+            data[key] = value
+    raw_venue = _text(parsed.get("venue"))
+    if raw_venue and (not current_venue or bool(state.get("venue_conflict"))):
+        data["venue"] = raw_venue
+    elif current_venue:
+        data["venue"] = current_venue
+    data["raw_reference_identity_conflict"] = True
+    data["raw_reference_conflict_repaired"] = True
+    if rejected_doi:
+        data["raw_reference_rejected_doi"] = rejected_doi
+        rejected_values = data.get("raw_reference_rejected_dois")
+        rejected_dois = {
+            _norm_doi(value)
+            for value in (rejected_values if isinstance(rejected_values, (list, tuple, set)) else [])
+            if _norm_doi(value)
+        }
+        rejected_dois.add(rejected_doi)
+        data["raw_reference_rejected_dois"] = sorted(rejected_dois)
+    raw_sources = data.get("metadata_repair_sources")
+    source_values = raw_sources if isinstance(raw_sources, (list, tuple, set)) else [raw_sources]
+    sources = {_text(source) for source in source_values if _text(source)}
+    sources.add("raw_reference_identity")
+    data["metadata_repair_sources"] = sorted(sources)
+    data["metadata_repair_source"] = "raw_reference_identity"
+    return data
+
+
+def verify_inferred_doi_against_raw_reference(detail: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Reject an inferred DOI whose exact registry title disagrees with the cited line."""
+    data = _canonicalize_detail(detail)
+    raw = _raw_reference_text(data)
+    doi = _norm_doi(data.get("doi") or data.get("doi_url") or data.get("doiUrl"))
+    route = _text(data.get("citation_route") or data.get("citationRoute")).lower()
+    is_upstream_reference = route == "system_b" or bool(data.get("is_inpaper") or data.get("isInpaper"))
+    if not is_upstream_reference or not raw or not doi or extract_first_doi(raw):
+        return data
+    if bool(_raw_reference_conflict_state(data).get("conflict")):
+        return prefer_trusted_raw_reference_identity(data)
+
+    parsed = parse_reference_line_metadata(raw)
+    raw_title = _text(parsed.get("title"))
+    if not raw_title or not _text(parsed.get("year")):
+        return data
+    work, status = fetch_crossref_work_by_doi_status(doi)
+    if status != "ready" or not isinstance(work, Mapping):
+        return data
+    raw_registry_titles = work.get("title")
+    if isinstance(raw_registry_titles, (list, tuple)):
+        registry_title = next((_text(value) for value in raw_registry_titles if _text(value)), "")
+    else:
+        registry_title = _text(raw_registry_titles)
+    if not registry_title or title_similarity(raw_title, registry_title) >= 0.72:
+        return data
+
+    rejected_values = data.get("raw_reference_rejected_dois")
+    rejected_dois = {
+        _norm_doi(value)
+        for value in (rejected_values if isinstance(rejected_values, (list, tuple, set)) else [])
+        if _norm_doi(value)
+    }
+    previous_rejected_doi = _norm_doi(data.get("raw_reference_rejected_doi"))
+    if previous_rejected_doi:
+        rejected_dois.add(previous_rejected_doi)
+    rejected_dois.add(doi)
+    data["raw_reference_rejected_doi"] = doi
+    data["raw_reference_rejected_dois"] = sorted(rejected_dois)
+    data["raw_reference_registry_title"] = registry_title
+    data["raw_reference_registry_status"] = "identity_conflict"
+    return prefer_trusted_raw_reference_identity(data)
+
+
+def _persist_raw_reference_conflict_resolution(
+    original: Mapping[str, Any],
+    repaired: Mapping[str, Any],
+    *,
+    db_dir: str | Path | None,
+) -> list[str]:
+    if not db_dir:
+        return []
+    state = _raw_reference_conflict_state(original)
+    if not bool(state.get("conflict")):
+        return []
+    rejected_doi = _norm_doi(state.get("doi") or original.get("doi") or original.get("doi_url")).lower()
+    if not rejected_doi:
+        return []
+    root = Path(db_dir)
+    targets: list[str] = []
+
+    index_path = root / INDEX_FILE_NAME
+    index_data = _json_load_dict(index_path)
+    found_doc = _find_reference_doc(index_data, original) if index_data else None
+    if found_doc:
+        _doc_key, doc = found_doc
+        found_ref = _find_reference_entry(doc, original)
+        if found_ref:
+            ref_key, ref = found_ref
+            if _norm_doi(ref.get("doi") or ref.get("doi_url")).lower() == rejected_doi:
+                next_ref = dict(ref)
+                for key in (*_RAW_IDENTITY_STALE_FIELDS, "doi", "doi_url", "volume", "issue", "pages"):
+                    next_ref.pop(key, None)
+                for key in ("title", "authors", "venue", "year", "volume", "issue", "pages"):
+                    value = _text(repaired.get(key))
+                    if value:
+                        next_ref[key] = value
+                next_ref["crossref_ok"] = False
+                next_ref["match_method"] = "raw_identity_conflict_rejected"
+                next_ref["raw_reference_rejected_doi"] = rejected_doi
+                next_ref.update(classify_reference_metadata(next_ref))
+                refs = doc.get("refs")
+                if isinstance(refs, dict):
+                    refs[ref_key] = next_ref
+                    doc["refs"] = refs
+                    doc["metadata_repaired_at"] = time.time()
+                    index_data["updated_at"] = time.time()
+                    _json_save_dict(index_path, index_data)
+                    targets.append("reference_index")
+
+    cache_path = root / CROSSREF_CACHE_FILE_NAME
+    cache = _json_load_dict(cache_path)
+    cache_changed = False
+    raw_key = normalize_title_for_match(_raw_reference_text(original))[:260]
+    parsed = state.get("parsed") if isinstance(state.get("parsed"), Mapping) else {}
+    title_key = normalize_title_for_match(_text(parsed.get("title")))[:260]
+    for bucket_name, key in (("bib", raw_key), ("title", title_key)):
+        bucket = cache.get(bucket_name)
+        if not key or not isinstance(bucket, dict):
+            continue
+        record = bucket.get(key)
+        if isinstance(record, Mapping) and _norm_doi(record.get("doi") or record.get("doi_url")).lower() == rejected_doi:
+            bucket.pop(key, None)
+            cache_changed = True
+    if cache_changed:
+        cache["version"] = 1
+        cache["updated_at"] = time.time()
+        _json_save_dict(cache_path, cache)
+        targets.append("crossref_cache")
+    return targets
 
 
 def promote_trusted_library_match_identity(detail: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -607,6 +825,7 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
     external_doi = _norm_doi(data.get("external_doi") or data.get("externalDoi") or data.get("external_doi_url") or data.get("externalDoiUrl"))
     issues: list[dict[str, Any]] = []
     trusted_library_doi = _trusted_library_match_doi(data)
+    raw_identity_conflict = _raw_reference_conflict_state(data)
 
     if not source:
         issues.append(_issue("missing_source", "Missing source identity", field="source", severity="error"))
@@ -634,6 +853,37 @@ def citation_metadata_quality(detail: Mapping[str, Any] | None) -> dict[str, Any
                 detail=f"visible={doi}; library={trusted_library_doi}",
             )
         )
+    if bool(raw_identity_conflict.get("conflict")):
+        similarity = float(raw_identity_conflict.get("title_similarity") or 0.0)
+        if bool(raw_identity_conflict.get("title_conflict")):
+            issues.append(
+                _issue(
+                    "raw_reference_title_conflict",
+                    "Title conflicts with the cited reference entry",
+                    field="title",
+                    severity="error",
+                    detail=f"similarity={similarity:.4f}",
+                )
+            )
+        issues.append(
+            _issue(
+                "raw_reference_doi_identity_conflict",
+                "DOI resolves to a different work than the cited reference entry",
+                field="doi",
+                severity="error",
+                detail=f"doi={doi}; similarity={similarity:.4f}",
+            )
+        )
+        if bool(raw_identity_conflict.get("venue_conflict")):
+            issues.append(
+                _issue(
+                    "raw_reference_venue_conflict",
+                    "Venue conflicts with the cited reference entry",
+                    field="venue",
+                    severity="error",
+                    detail=f"similarity={float(raw_identity_conflict.get('venue_similarity') or 0.0):.4f}",
+                )
+            )
 
     identity_complete = bool(
         source
@@ -1491,17 +1741,23 @@ def _classify_error(exc: Exception) -> tuple[str, str]:
 
 
 def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: str | Path | None = None) -> dict[str, Any]:
-    original = _canonicalize_detail(detail)
-    key = _text(original.get("key") or original.get("anchor") or original.get("doi") or original.get("title"))
-    before = citation_metadata_quality(original)
-    before_acceptance = citation_metadata_export_acceptance({**original, "metadata_quality": before})
+    received = _canonicalize_detail(detail)
+    verified = verify_inferred_doi_against_raw_reference(received)
+    original = prefer_trusted_raw_reference_identity(verified)
+    key = _text(received.get("key") or received.get("anchor") or received.get("doi") or received.get("title"))
+    before = citation_metadata_quality(received)
+    before_acceptance = citation_metadata_export_acceptance({**received, "metadata_quality": before})
     try:
+        conflict_targets = _persist_raw_reference_conflict_resolution(verified, original, db_dir=db_dir)
         seed = hydrate_repaired_citation_metadata(original, db_dir=db_dir, include_quality=False)
+        seed = verify_inferred_doi_against_raw_reference(seed)
         repair_sources = [
             str(item or "").strip()
             for item in list(seed.get("metadata_repair_sources") or [])
             if str(item or "").strip()
         ]
+        if conflict_targets and "raw_reference_identity" not in repair_sources:
+            repair_sources.append("raw_reference_identity")
         seed_quality = citation_metadata_quality(seed)
         seed_acceptance = citation_metadata_export_acceptance({**seed, "metadata_quality": seed_quality})
         if bool(seed_quality.get("ok")) and bool(seed_acceptance.get("export_ready")):
@@ -1510,18 +1766,25 @@ def repair_citation_metadata_item(detail: Mapping[str, Any] | None, *, db_dir: s
             repaired = enrich_citation_detail_meta(seed)
             if not isinstance(repaired, dict):
                 repaired = {}
-            merged = _canonicalize_detail({**seed, **repaired})
+            merged = verify_inferred_doi_against_raw_reference({**seed, **repaired})
         raw_doi = _norm_doi(_raw_reference_text(seed))
         if raw_doi and not _norm_doi(merged.get("doi") or merged.get("doi_url")):
             merged["doi"] = raw_doi
             merged["doi_url"] = _doi_url(raw_doi)
+        # A cache/provider can replace one rejected inferred DOI with another
+        # during the same repair. Recheck the final identity so a transient
+        # registry lookup cannot let that second hybrid escape into exports.
+        merged = verify_inferred_doi_against_raw_reference(merged)
         after = citation_metadata_quality(merged)
         after_acceptance = citation_metadata_export_acceptance({**merged, "metadata_quality": after})
         promoted_raw_doi = bool(raw_doi and _norm_doi(merged.get("doi") or merged.get("doi_url")) == raw_doi)
-        changed = _changed_fields(original, merged)
+        changed = _changed_fields(received, merged)
         if promoted_raw_doi and "doi" not in changed:
             changed.append("doi")
-        persisted_targets = persist_repaired_citation_metadata(merged, db_dir) if changed or after.get("ok") else []
+        persisted_targets = list(conflict_targets)
+        if changed or after.get("ok"):
+            persisted_targets.extend(persist_repaired_citation_metadata(merged, db_dir))
+        persisted_targets = sorted(set(persisted_targets))
         if after["ok"]:
             repair_status = "repaired" if changed or not before["ok"] else "ready"
         elif changed:

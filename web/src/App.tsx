@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect } from 'react'
-import { ConfigProvider, Skeleton } from 'antd'
+import { App as AntdApp, ConfigProvider, Skeleton } from 'antd'
 import enUS from 'antd/locale/en_US'
 import zhCN from 'antd/locale/zh_CN'
 import { BrowserRouter, Navigate, Routes, Route } from 'react-router-dom'
@@ -57,36 +57,38 @@ function App() {
 
   return (
     <ConfigProvider locale={antdLocale} theme={theme === 'dark' ? darkTheme : lightTheme}>
-      {AuthGateComponent ? (
-        <Suspense fallback={null}>
-          <AuthGateComponent />
-        </Suspense>
-      ) : null}
-      <BrowserRouter>
-        <Suspense fallback={<RouteFallback />}>
-          <Routes>
-            {ENABLE_INTERNAL_ROUTES
-              && MessageListRegressionPage
-              && RefsPanelRegressionPage
-              && ReaderRegressionPage
-              && ReaderSplitRegressionPage
-              && ResearchQaReplayPage ? (
-              <>
-                <Route path="/__message_list_test__" element={<MessageListRegressionPage />} />
-                <Route path="/__refs_panel_test__" element={<RefsPanelRegressionPage />} />
-                <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
-                <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
-                <Route path="/__research_qa_replay__" element={<ResearchQaReplayPage />} />
-              </>
-            ) : null}
-            <Route path="/reader/session/:sessionId" element={<ReaderPage />} />
-            <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />
-            <Route path="/library" element={<AppLayout><LibraryPage /></AppLayout>} />
-            <Route path="/notes" element={<AppLayout><ResearchNotesPage /></AppLayout>} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </Suspense>
-      </BrowserRouter>
+      <AntdApp>
+        {AuthGateComponent ? (
+          <Suspense fallback={null}>
+            <AuthGateComponent />
+          </Suspense>
+        ) : null}
+        <BrowserRouter>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              {ENABLE_INTERNAL_ROUTES
+                && MessageListRegressionPage
+                && RefsPanelRegressionPage
+                && ReaderRegressionPage
+                && ReaderSplitRegressionPage
+                && ResearchQaReplayPage ? (
+                <>
+                  <Route path="/__message_list_test__" element={<MessageListRegressionPage />} />
+                  <Route path="/__refs_panel_test__" element={<RefsPanelRegressionPage />} />
+                  <Route path="/__reader_test__" element={<ReaderRegressionPage />} />
+                  <Route path="/__reader_split_test__" element={<ReaderSplitRegressionPage />} />
+                  <Route path="/__research_qa_replay__" element={<ResearchQaReplayPage />} />
+                </>
+              ) : null}
+              <Route path="/reader/session/:sessionId" element={<ReaderPage />} />
+              <Route path="/" element={<AppLayout><ChatPage /></AppLayout>} />
+              <Route path="/library" element={<AppLayout><LibraryPage /></AppLayout>} />
+              <Route path="/notes" element={<AppLayout><ResearchNotesPage /></AppLayout>} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </AntdApp>
     </ConfigProvider>
   )
 }

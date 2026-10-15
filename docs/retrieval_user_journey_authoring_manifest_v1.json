@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_authoring_manifest_v1",
+  "status": "questions_frozen_before_qrel_chunk_inspection",
+  "protocol_path": "docs/retrieval_user_journey_expansion_protocol_v1.json",
+  "protocol_sha256": "427941524b120242d472108e6784256754a050171f97103b6efd1f004520962c",
+  "authoring_basis": "paper titles, library-level reading intents, and protocol slots only",
+  "retriever_executed": false,
+  "qrel_chunk_inspection_started": false,
+  "cases": [
+    {
+      "id": "journey-istanet-phase-physics",
+      "locale": "zh",
+      "journey_type": "single_paper_mechanism",
+      "question": "ISTA-Net 的一个网络阶段怎样对应传统 ISTA 的梯度更新和稀疏变换步骤？我想找到网络结构仍然保留成像物理的证据。",
+      "primary_doc_id": "background:12d3dafe5e149b77",
+      "scope_doc_ids": [
+        "background:12d3dafe5e149b77"
+      ],
+      "reading_intent": "locate the mechanism that maps an iterative reconstruction algorithm into network phases"
+    },
+    {
+      "id": "journey-primal-dual-operator-exchange",
+      "locale": "en",
+      "journey_type": "single_paper_mechanism",
+      "question": "How do the learned primal and dual updates exchange information through the forward operator instead of behaving like an image-only post-processing network?",
+      "primary_doc_id": "background:debadd6aaf815c40",
+      "scope_doc_ids": [
+        "background:debadd6aaf815c40"
+      ],
+      "reading_intent": "find how measurement physics participates in learned primal-dual updates"
+    },
+    {
+      "id": "journey-dualscale-large-image-mechanism",
+      "locale": "zh",
+      "journey_type": "single_paper_mechanism",
+      "question": "这篇大尺寸单像素成像方法为什么同时使用两种尺度？请定位局部细节与全局信息在网络中如何汇合的证据。",
+      "primary_doc_id": "background:76f57e5ce4ad3e06",
+      "scope_doc_ids": [
+        "background:76f57e5ce4ad3e06"
+      ],
+      "reading_intent": "locate the dual-scale information-flow mechanism"
+    },
+    {
+      "id": "journey-realtime-spi-frame-input",
+      "locale": "en",
+      "journey_type": "single_paper_mechanism",
+      "question": "What information is presented to the neural network for each single-pixel video frame, and how can it reconstruct in real time without iterative optimization?",
+      "primary_doc_id": "background:2a53d946acae115e",
+      "scope_doc_ids": [
+        "background:2a53d946acae115e"
+      ],
+      "reading_intent": "find the per-frame neural reconstruction mechanism"
+    },
+    {
+      "id": "journey-fashionmnist-mnist-boundary",
+      "locale": "zh",
+      "journey_type": "single_paper_boundary_or_limitation",
+      "question": "Fashion-MNIST 为什么被提出作为 MNIST 的替代基准？我想核对原论文认为旧基准在哪些方面已不能区分算法能力。",
+      "primary_doc_id": "background:5de6843c26123e60",
+      "scope_doc_ids": [
+        "background:5de6843c26123e60"
+      ],
+      "reading_intent": "locate the stated limitations of MNIST and intended benchmark boundary"
+    },
+    {
+      "id": "journey-kuzushiji-modern-ocr-boundary",
+      "locale": "en",
+      "journey_type": "single_paper_boundary_or_limitation",
+      "question": "Why does recognition of historical Japanese books require dedicated data, and which properties make ordinary modern-Japanese OCR training material an unreliable substitute?",
+      "primary_doc_id": "background:a91f5c2895199749",
+      "scope_doc_ids": [
+        "background:a91f5c2895199749"
+      ],
+      "reading_intent": "find the domain-shift boundary for historical Japanese recognition"
+    },
+    {
+      "id": "journey-compensation-error-boundary",
+      "locale": "zh",
+      "journey_type": "single_paper_boundary_or_limitation",
+      "question": "综合补偿方法具体覆盖单像素系统中的哪些失配和非均匀性？请找出它仍依赖哪些校准或稳定性前提。",
+      "primary_doc_id": "background:f754fd0b565d54d9",
+      "scope_doc_ids": [
+        "background:f754fd0b565d54d9"
+      ],
+      "reading_intent": "locate compensated error sources and remaining applicability assumptions"
+    },
+    {
+      "id": "journey-hyperspectral-learned-sensing-boundary",
+      "locale": "zh",
+      "journey_type": "single_paper_boundary_or_limitation",
+      "question": "计算高光谱成像把编码孔径和重建网络一起学习时，论文指出真实硬件部署还受哪些校准、噪声或泛化条件限制？",
+      "primary_doc_id": "background:a678b5bb61394454",
+      "scope_doc_ids": [
+        "background:a678b5bb61394454"
+      ],
+      "reading_intent": "find deployment limitations of jointly learned hyperspectral sensing"
+    },
+    {
+      "id": "journey-super-subnyquist-sampling-results",
+      "locale": "zh",
+      "journey_type": "experimental_configuration_or_metric",
+      "question": "升序 Hadamard 采样在多低的采样比例下仍做了实验？请定位论文用哪些图像质量指标和对照来支持“超亚奈奎斯特”的结论。",
+      "primary_doc_id": "background:6e125bbe01292572",
+      "scope_doc_ids": [
+        "background:6e125bbe01292572"
+      ],
+      "reading_intent": "locate sampling ratios, quality metrics, and experimental controls"
+    },
+    {
+      "id": "journey-istanet-benchmark-protocol",
+      "locale": "en",
+      "journey_type": "experimental_configuration_or_metric",
+      "question": "On which benchmark images and compression ratios is ISTA-Net evaluated, and which numerical measures are used to compare reconstruction quality?",
+      "primary_doc_id": "background:12d3dafe5e149b77",
+      "scope_doc_ids": [
+        "background:12d3dafe5e149b77"
+      ],
+      "reading_intent": "locate the reconstruction evaluation protocol"
+    },
+    {
+      "id": "journey-dualscale-resolution-results",
+      "locale": "zh",
+      "journey_type": "experimental_configuration_or_metric",
+      "question": "大尺寸单像素重建实验覆盖了哪些图像分辨率和采样率？请找出速度、显存或重建质量的定量结果。",
+      "primary_doc_id": "background:76f57e5ce4ad3e06",
+      "scope_doc_ids": [
+        "background:76f57e5ce4ad3e06"
+      ],
+      "reading_intent": "locate large-image evaluation settings and quantitative resource or quality results"
+    },
+    {
+      "id": "journey-primal-dual-ct-protocol",
+      "locale": "en",
+      "journey_type": "experimental_configuration_or_metric",
+      "question": "What CT sampling geometry and training/test data are used to evaluate the learned primal-dual method, and what reconstruction measures are reported?",
+      "primary_doc_id": "background:debadd6aaf815c40",
+      "scope_doc_ids": [
+        "background:debadd6aaf815c40"
+      ],
+      "reading_intent": "locate the CT experiment geometry, data, and reported measures"
+    },
+    {
+      "id": "journey-nafnet-vs-classical-denoising-evidence",
+      "locale": "zh",
+      "journey_type": "cross_paper_evidence_comparison",
+      "question": "经典去噪方法依靠显式先验，而 NAFNet 依靠学习结构；两篇论文分别给出什么机制证据来说明噪声被怎样抑制？",
+      "primary_doc_id": "simple-baselines",
+      "scope_doc_ids": [
+        "simple-baselines",
+        "denoising-review"
+      ],
+      "reading_intent": "compare traceable mechanism evidence for explicit-prior and learned denoising"
+    },
+    {
+      "id": "journey-piln-vs-pidl-supervision",
+      "locale": "en",
+      "journey_type": "cross_paper_evidence_comparison",
+      "question": "When clean ground truth is unavailable, how do PILN and the physics-informed single-photon method obtain supervision, and what physical information does each exploit?",
+      "primary_doc_id": "piln",
+      "scope_doc_ids": [
+        "piln",
+        "pidl-single-photon"
+      ],
+      "reading_intent": "compare source-backed supervision mechanisms without generating a review narrative"
+    },
+    {
+      "id": "journey-cassi-vs-fourier-measurement-encoding",
+      "locale": "zh",
+      "journey_type": "cross_paper_evidence_comparison",
+      "question": "CASSI 和 Fourier 单像素成像怎样把待恢复信息编码进测量？请分别找出色散/掩模与频域图样所起作用的原文证据。",
+      "primary_doc_id": "hsi-fsi",
+      "scope_doc_ids": [
+        "cassi",
+        "hsi-fsi"
+      ],
+      "reading_intent": "compare physical measurement encoding across two library papers"
+    },
+    {
+      "id": "journey-s2ism-vs-iism-sectioning",
+      "locale": "zh",
+      "journey_type": "cross_paper_evidence_comparison",
+      "question": "S2ISM 与 iISM 都声称提升显微成像的分辨率和层析能力；两者分别从探测阵列重分配和干涉端口信号中提取了什么证据？",
+      "primary_doc_id": "s2ism",
+      "scope_doc_ids": [
+        "s2ism",
+        "iism"
+      ],
+      "reading_intent": "compare how two microscopy methods obtain resolution and sectioning evidence"
+    },
+    {
+      "id": "journey-visual-information-equation-location",
+      "locale": "zh",
+      "journey_type": "equation_figure_or_table_location",
+      "question": "请定位这篇视觉感知论文中把可传递信息量与空间带宽、观察时间联系起来的公式，并找出作者怎样解释公式里的限制因素。",
+      "primary_doc_id": "visual-perception",
+      "scope_doc_ids": [
+        "visual-perception"
+      ],
+      "reading_intent": "locate and interpret a specific information-capacity equation for reading"
+    },
+    {
+      "id": "journey-perovskite-device-figure-location",
+      "locale": "zh",
+      "journey_type": "equation_figure_or_table_location",
+      "question": "请定位展示双腔钙钛矿激光器层结构与两个光学模态耦合路径的图，并核对图注标出的关键器件层。",
+      "primary_doc_id": "perovskite-laser",
+      "scope_doc_ids": [
+        "perovskite-laser"
+      ],
+      "reading_intent": "locate a device-structure figure and its source-backed layer annotations"
+    }
+  ]
+}

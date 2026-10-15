@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_portable_e5_full_size_lifecycle_v1",
+  "protocol_sha256": "dc5205129d50fda61320cfb49023db216e719113f55260d86959171d61eee752",
+  "execution": {
+    "single_clean_execution_started": true,
+    "worker_completed": false,
+    "automatic_attempt_count": 2,
+    "external_network_used": false,
+    "user_library_written": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "result_root": "test_results/e5p5"
+  },
+  "failure": {
+    "stage": "atomic_component_extraction",
+    "internal_reason_id": "component_archive_invalid",
+    "lifecycle_terminal_state": "degraded_bm25",
+    "manifest_quarantined": true,
+    "public_state": "bm25_available",
+    "public_action_id": "none",
+    "bm25_available": true,
+    "user_repair_required": false
+  },
+  "attribution": {
+    "component_archive_bytes": 296365646,
+    "component_archive_sha256": "54d0f4fbd1c07913f5915dafbab224cf5510072fd767fcffd62da0e0b8ac3ad3",
+    "zip_crc_test_passed": true,
+    "payload_previously_reproduced": true,
+    "longest_archive_member_characters": 148,
+    "atomic_staging_root_characters": 128,
+    "longest_target_absolute_path_characters": 275,
+    "traditional_windows_max_path_characters": 260,
+    "root_cause": "atomic_generation_layout_exceeds_traditional_windows_path_budget",
+    "inference": true
+  },
+  "gate": {
+    "component_archive_integrity": true,
+    "zero_network": true,
+    "bm25_continuity": true,
+    "product_remains_disabled": true,
+    "full_size_install_completed": false,
+    "runtime_health_completed": false,
+    "ranking_exact": false,
+    "stale_repair_completed": false,
+    "safe_removal_completed": false,
+    "all_required": false
+  },
+  "decision": {
+    "status": "full_size_lifecycle_rejected_keep_bm25_repair_backend",
+    "all_gates_passed": false,
+    "verdict_may_be_changed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "next_action": "shorten_and_preflight_windows_component_storage_layout_then_freeze_new_candidate"
+  },
+  "result_fingerprint": "362c52a8dc745fd62f4ca7739614f95314989cccb771f1fae2fd4b01ef136225"
+}

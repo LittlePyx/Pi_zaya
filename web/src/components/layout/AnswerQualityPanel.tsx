@@ -80,7 +80,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
             { label: 'idea', value: 'idea' },
             { label: 'experiment', value: 'experiment' },
             { label: 'troubleshoot', value: 'troubleshoot' },
-            { label: 'writing', value: 'writing' },
+            { label: 'evidence boundary', value: 'writing' },
           ]}
         />
         <Select
@@ -119,7 +119,7 @@ export function AnswerQualityPanel({ open }: { open: boolean }) {
             <div className="kb-settings-quality-intents">
               {qualityIntentRows.map(([intent, rec]) => (
                 <div key={intent} className="kb-settings-quality-intent-row">
-                  <span>{intent}</span>
+                  <span>{intent === 'writing' ? 'evidence boundary' : intent}</span>
                   <span>{rec.count}</span>
                   <span>{fmtRate(Number(rec.minimum_ok_rate || 0))}</span>
                 </div>

@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_regression_seed_v1",
+  "curation_status": "deterministic_regression_seed",
+  "description": "A small committed candidate-retrieval regression set. It validates metric plumbing and exact retrieval while preserving explicit sparse semantic-gap cases. It is not a substitute for the frozen unseen-paper benchmark.",
+  "ks": [1, 3, 5],
+  "corpus": [
+    {
+      "id": "lora-method",
+      "text": "LoRA freezes the pre-trained model weights and injects trainable rank decomposition matrices into each Transformer layer.",
+      "meta": {"source_path": "lora.pdf", "page_start": 1}
+    },
+    {
+      "id": "sam-architecture",
+      "text": "Segment Anything uses an image encoder, a prompt encoder, and a lightweight mask decoder for promptable segmentation.",
+      "meta": {"source_path": "sam.pdf", "page_start": 3}
+    },
+    {
+      "id": "rag-token",
+      "text": "RAG-Token can draw a different latent document for each generated token, while RAG-Sequence uses one document across the sequence.",
+      "meta": {"source_path": "rag.pdf", "page_start": 3}
+    },
+    {
+      "id": "flashattention-io",
+      "text": "FlashAttention is an IO-aware exact attention algorithm that reduces reads and writes between HBM and on-chip SRAM.",
+      "meta": {"source_path": "flashattention.pdf", "page_start": 2}
+    },
+    {
+      "id": "ddpm-forward",
+      "text": "The diffusion forward process gradually adds Gaussian noise, and the learned reverse process removes noise to generate samples.",
+      "meta": {"source_path": "ddpm.pdf", "page_start": 2}
+    },
+    {
+      "id": "unet-overlap",
+      "text": "U-Net uses an overlap-tile strategy for seamless segmentation of arbitrarily large images.",
+      "meta": {"source_path": "unet.pdf", "page_start": 2}
+    },
+    {
+      "id": "nerf-rendering",
+      "text": "NeRF represents a scene with a continuous function and renders views using differentiable volume rendering.",
+      "meta": {"source_path": "nerf.pdf", "page_start": 2}
+    },
+    {
+      "id": "clip-objective",
+      "text": "CLIP jointly trains an image encoder and text encoder by predicting which image and text pairings are correct.",
+      "meta": {"source_path": "clip.pdf", "page_start": 3}
+    },
+    {
+      "id": "dinov2-curation",
+      "text": "DINOv2 builds a curated image dataset using retrieval from a large uncurated collection before self-supervised training.",
+      "meta": {"source_path": "dinov2.pdf", "page_start": 4}
+    },
+    {
+      "id": "restormer-mdta",
+      "text": "Restormer introduces multi-Dconv head transposed attention and a gated-Dconv feed-forward network for image restoration.",
+      "meta": {"source_path": "restormer.pdf", "page_start": 4}
+    },
+    {
+      "id": "distractor-calibration",
+      "text": "Detector calibration estimates dark count and photon response before microscopy acquisition.",
+      "meta": {"source_path": "detector.pdf", "page_start": 7}
+    },
+    {
+      "id": "distractor-optimization",
+      "text": "ADMM reconstruction alternates primal and dual optimization updates for inverse imaging.",
+      "meta": {"source_path": "admm.pdf", "page_start": 5}
+    }
+  ],
+  "cases": [
+    {"id": "exact-lora", "query": "LoRA rank decomposition matrices", "relevance": {"lora-method": 3}, "group": "exact"},
+    {"id": "exact-sam", "query": "image encoder prompt encoder mask decoder", "relevance": {"sam-architecture": 3}, "group": "exact"},
+    {"id": "exact-rag-token", "query": "RAG-Token different document each generated token", "relevance": {"rag-token": 3}, "group": "exact"},
+    {"id": "exact-flashattention", "query": "IO-aware exact attention HBM SRAM", "relevance": {"flashattention-io": 3}, "group": "exact"},
+    {"id": "exact-ddpm", "query": "diffusion forward process Gaussian noise reverse process", "relevance": {"ddpm-forward": 3}, "group": "exact"},
+    {"id": "exact-unet", "query": "U-Net overlap-tile seamless segmentation", "relevance": {"unet-overlap": 3}, "group": "exact"},
+    {"id": "exact-nerf", "query": "NeRF differentiable volume rendering", "relevance": {"nerf-rendering": 3}, "group": "exact"},
+    {"id": "exact-clip", "query": "CLIP image text pairings encoder", "relevance": {"clip-objective": 3}, "group": "exact"},
+    {"id": "exact-dinov2", "query": "DINOv2 curated dataset retrieval uncurated images", "relevance": {"dinov2-curation": 3}, "group": "exact"},
+    {"id": "exact-restormer", "query": "Restormer multi-Dconv transposed attention", "relevance": {"restormer-mdta": 3}, "group": "exact"},
+    {
+      "id": "semantic-gap-parameter-efficient-adaptation",
+      "query": "How can a new task be learned without changing the original parameters?",
+      "relevance": {"lora-method": 3},
+      "group": "semantic_gap",
+      "expected_sparse_gap": true
+    }
+  ],
+  "acceptance": {
+    "exact": {"min_recall@5": 1.0, "min_mrr": 1.0, "min_ndcg@5": 1.0}
+  }
+}

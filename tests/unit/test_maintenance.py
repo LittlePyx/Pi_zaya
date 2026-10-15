@@ -53,6 +53,7 @@ def _settings(tmp_path: Path) -> SimpleNamespace:
 def test_diagnostics_archive_contains_only_redacted_summaries(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(maintenance, "ROOT", tmp_path)
     monkeypatch.setenv("KB_DIAGNOSTICS_DIR", str(tmp_path / "diagnostics"))
+    monkeypatch.setenv("KB_USER_PREFS_PATH", str(tmp_path / "user_prefs.json"))
     settings = _settings(tmp_path)
     (tmp_path / "server.log").write_text("Authorization: Bearer sk-secret-text\nnormal line", encoding="utf-8")
     (tmp_path / "user_prefs.json").write_text(
@@ -119,6 +120,7 @@ def test_redact_mapping_handles_nested_lists_and_generic_sensitive_keys() -> Non
 def test_backup_archive_includes_recoverable_data_but_redacts_prefs(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(maintenance, "ROOT", tmp_path)
     monkeypatch.setenv("KB_BACKUP_DIR", str(tmp_path / "backups"))
+    monkeypatch.setenv("KB_USER_PREFS_PATH", str(tmp_path / "user_prefs.json"))
     settings = _settings(tmp_path)
     (tmp_path / "user_prefs.json").write_text(
         json.dumps({"theme": "light", "text_api_key": "sk-secret-text"}),

@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_product_shadow_vectorized_v1",
+  "status": "frozen_before_replacement_replay",
+  "frozen_at": "2026-09-03",
+  "parent": {
+    "protocol_path": "docs/retrieval_product_shadow_protocol_v1.json",
+    "protocol_sha256": "a7d349be9f616ecfdffd0719250b0fc77d12e959ccb1dddbff6a6858c59decea",
+    "rejected_report_path": "docs/retrieval_product_shadow_operational_v1.json",
+    "rejected_report_sha256": "90f066084ccae2ddc8fea7c41649cd55c221f6e5dceb0a61ac85b5bd3ac26998",
+    "rejected_result_fingerprint": "48e54e620d73681f3fbaf8ad7d3e86982b51f5079d7ab0f1d66878113500461e",
+    "rejected_reason": "warm_shadow_p95_ms_261.435_exceeded_250.0"
+  },
+  "allowed_implementation_changes": {
+    "dense_retriever_path": "kb/dense_retriever.py",
+    "dense_retriever_sha256": "699e3bc354e8fb41dde88a7c7338abdede6cc3d982ef7a59b351b8c6b30575fb",
+    "scoring_backend": "numpy_float32_exact_shortlist",
+    "exact_shortlist_rule": "float32_matrix_vector_boundary_then_original_python_double_precision_score_and_tie_order",
+    "error_margin_rule": "max(1e-7,8*dimension*float32_epsilon)",
+    "insufficient_shortlist_policy": "full_python_scalar_fallback",
+    "numpy_absent_policy": "full_python_scalar_fallback",
+    "provider_path": "kb/transformers_embedding_provider.py",
+    "provider_sha256": "89514e197a19cfb9c42194cd4de235339a4965190385ffca712b20459b3c4003",
+    "shadow_runtime_path": "kb/retrieval_shadow.py",
+    "shadow_runtime_sha256": "ae173ec302ff6159376cb7d0c031178a0d6eb25851af298e495d4bae34a879e7"
+  },
+  "equivalence_evidence": {
+    "seeded_unit_query_count": 40,
+    "real_index_query_vector_count": 30,
+    "real_index_shape": [
+      2251,
+      1024
+    ],
+    "real_index_top_k": 40,
+    "exact_id_order_equal": true,
+    "exact_scores_equal": true,
+    "scalar_p50_ms": 147.927,
+    "vectorized_p50_ms": 5.794,
+    "median_speedup": 25.53
+  },
+  "inherited_unchanged": {
+    "fixture_path": "docs/retrieval_user_journey_expansion_v1.json",
+    "case_count": 18,
+    "modes_per_case": [
+      "scoped",
+      "full_library"
+    ],
+    "submission_count": 36,
+    "model_provider_fusion_and_index": "exactly_parent_protocol",
+    "activation_privacy_fail_open_and_read_only_boundaries": "exactly_parent_protocol",
+    "controlled_operational_gate": "exactly_parent_protocol",
+    "maximum_warm_shadow_p95_ms": 250.0,
+    "maximum_foreground_submission_p95_ms": 5.0
+  },
+  "execution": {
+    "maximum_replacement_runs": 1,
+    "report_path": "docs/retrieval_product_shadow_vectorized_operational_v1.json",
+    "telemetry_path": "test_results/retrieval_product_shadow_vectorized_v1/observations.jsonl",
+    "no_parameter_or_threshold_changes_after_measurement": true,
+    "product_enabled_during_or_after_run": false,
+    "ordinary_user_surface_exposed": false,
+    "pass_decision": "passed_for_explicit_opt_in_design",
+    "reject_decision": "rejected_keep_dense_disabled"
+  }
+}

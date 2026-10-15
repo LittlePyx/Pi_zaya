@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_fusion_v3_1_semantic_acceptance_protocol_v2",
+  "curation_status": "frozen_after_zero-query_preflight_invalidation_before_index_build_or_measurement",
+  "purpose": "Run the unchanged semantic acceptance after creating one dedicated Qwen index from the frozen isolated semantic corpus.",
+  "predecessor": {
+    "protocol_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_protocol.json",
+    "protocol_sha256": "d9c048b8bd237ad129ee013f127584f78fd1b7ccdac0537fae0a5416c6e0259d",
+    "invalidation_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_preflight_invalidation.json",
+    "invalidation_sha256": "4f6cd34d1454e580d8407b5420d4b81e4fc7d06f8c83d660ccfc7edfcaf92ea8"
+  },
+  "inherited_contract_sha256": {
+    "eligibility": "c46eb8d1b9c1d20ab963eee95eca315d96d358c33579bfbe654f81416a63df3d",
+    "unchanged_candidate": "d1119ea2f00b6e1ad7291a2f8bc5a86d6f09cae52c4b4cde8df7ae9e14fd7fcf",
+    "acceptance_gate": "d3d15e36b4873eb4770b230ce7e171e85bbb6647e26d05e618d759e03548f602",
+    "failure_policy": "7b8f5d5b5c69201aa5a5a83ccba185a28554cddc526d1783c14dd89c4b26ec7f"
+  },
+  "isolated_corpus": {
+    "runtime_db_argument_required": true,
+    "fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "document_count": 10,
+    "chunk_count": 1673,
+    "qrel_corpus_fingerprint": "d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516",
+    "must_validate_chunk_ids_text_hashes_and_logical_documents_before_queries": true
+  },
+  "dedicated_index": {
+    "relative_path": "test_results/retrieval_user_journey_fusion_v3_1_semantic/qwen_index_v1",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "maximum_initial_builds": 1,
+    "build_must_complete_before_query_encoding": true,
+    "allow_download": false,
+    "trust_remote_code": false,
+    "product_index_unchanged": true
+  },
+  "execution_contract": {
+    "maximum_query_measurement_runs": 1,
+    "ranking_depth": 10,
+    "reported_metric_depths": [
+      5,
+      10
+    ],
+    "expected_unique_query_embeddings": 12,
+    "product_control_must_match_predecessor_for": [
+      "recall@5",
+      "recall@10",
+      "wrong_source_rate@5"
+    ],
+    "candidate_or_gate_changes": 0,
+    "model_or_prompt_variants": 0,
+    "product_enabled": false
+  }
+}

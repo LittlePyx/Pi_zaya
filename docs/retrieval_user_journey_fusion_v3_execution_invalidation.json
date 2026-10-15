@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_user_journey_fusion_v3_execution_invalidation",
+  "status": "invalid_execution_closed_without_candidate_result",
+  "protocol_path": "docs/retrieval_user_journey_fusion_v3_protocol.json",
+  "protocol_sha256": "c238b0609c3874ac2f1a4f3688ebe7b9a0957946ce4884a53def19c2488ae500",
+  "attempted_runner_path": "tools/retrieval_eval/run_user_journey_fusion_v3_selection.py",
+  "attempted_runner_sha256": "14fd282fa605f9d603ce4b2e4197ede901ab3cd5a3c98142fbcf22c757eedf6b",
+  "attempted_command": "test_results/retrieval_candidate_runtime_v1/.venv/Scripts/python.exe tools/retrieval_eval/run_user_journey_fusion_v3_selection.py --db-root db",
+  "execution_boundary": {
+    "calibration_partition_executed": true,
+    "calibration_query_count": 12,
+    "calibration_candidate_result_observed": false,
+    "canonical_report_written": false,
+    "holdout_accessed": false,
+    "semantic_acceptance_accessed": false,
+    "product_enabled": false
+  },
+  "failure": {
+    "stage": "pre_gate_product_control_projection_validation",
+    "exception": "ValueError",
+    "message": "selection product control drifted: product control metric changed for scoped journey-dualscale-resolution-results MRR and full_library journey-piln-vs-pidl-supervision MRR",
+    "root_cause": "The frozen baseline computed MRR from rank depth 20. The selection control correctly requested rank depth 10, but the projection validator compared baseline MRR values 1/13 and 1/17 instead of projecting both out-of-depth relevant ranks to MRR zero.",
+    "candidate_or_gate_quality_conclusion_allowed": false
+  },
+  "effective_decision": {
+    "fusion_v3_protocol_closed": true,
+    "selection_result": "none",
+    "holdout_allowed_under_v3": false,
+    "semantic_acceptance_allowed_under_v3": false,
+    "product_exposure_allowed": false,
+    "replacement_protocol_allowed": "v3.1 may permit exactly one replacement run only if candidate, representation, index, ranking depths, gates, and holdout policy are byte-for-byte equivalent and the sole change is depth-aware BM25 MRR projection",
+    "candidate_configuration_change_allowed": false
+  }
+}

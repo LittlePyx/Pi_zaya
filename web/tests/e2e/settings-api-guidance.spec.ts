@@ -956,6 +956,19 @@ test('settings rolls back lightweight preferences when saving fails', async ({ p
   await expect(page.getByText('{"detail":"preference save failed"}')).toHaveCount(0)
 })
 
+test('settings answer modes stay within the reading and evidence workflow', async ({ page }) => {
+  await installMinimalBackend(page)
+  await page.goto('/')
+
+  await page.locator('button[aria-label="Open settings"]').click()
+  const answerModeRow = page.locator('.kb-settings-row').filter({ hasText: 'Answer mode' })
+  await answerModeRow.getByRole('combobox').click()
+
+  const dropdown = page.locator('.ant-select-dropdown:visible')
+  await expect(dropdown).toContainText('Reading')
+  await expect(dropdown).not.toContainText('Writing')
+})
+
 test('internal settings tools can inspect and flush quality collector status', async ({ page }) => {
   await enableInternalSettingsTools(page)
   const backend = await installMinimalBackend(page)

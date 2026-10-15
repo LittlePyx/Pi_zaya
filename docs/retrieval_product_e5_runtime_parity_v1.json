@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_product_e5_runtime_parity_v1",
+  "created_at": "2026-09-03T01:22:57.095418+00:00",
+  "authorization": {
+    "stage_2_report_sha256": "9cbccb2413da6ff66725120b529cae0b111adf7fe9947a67cb1e876ee357c73e",
+    "stage_2_result_fingerprint": "18fdba85d35503d2f5f60e38191df412482ec7fc1783341b4354fa0f37848a05",
+    "product_runtime_source_sha256": "25713a37f3c00f075bb076a0c31a8eab491a46c43d32d46fe677ccd000e60e3d"
+  },
+  "runtime": {
+    "python_version": "3.10.11",
+    "onnxruntime_version": "1.23.2",
+    "tokenizers_version": "0.21.4",
+    "session_providers": [
+      "CPUExecutionProvider"
+    ],
+    "artifact_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "tokenizer_json_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+  },
+  "query_parity": {
+    "query_count": 12,
+    "expected_matrix_sha256": "6374e52e225e65333843be7aedfa5683414a60f3465f63b43434e5e54c245eed",
+    "observed_matrix_sha256": "6374e52e225e65333843be7aedfa5683414a60f3465f63b43434e5e54c245eed",
+    "maximum_absolute_difference": 0.0,
+    "exact_float32_parity": true
+  },
+  "representation_parity": {
+    "parent_count": 2251,
+    "product_window_count": 2663,
+    "benchmark_window_count": 2663,
+    "maximum_input_tokens": 453,
+    "frozen_stage_2_windows_sha256": "562265dab68376fb2083057c05927dc92f0bc4f98c6c70876e0575c78ee883f9",
+    "product_windows_sha256": "3d013e00fabea7460af59734390e3798bffc9ad5ff748bd3457ca97211bd3b6c",
+    "benchmark_windows_sha256": "3d013e00fabea7460af59734390e3798bffc9ad5ff748bd3457ca97211bd3b6c",
+    "exact_current_corpus_input_and_mapping_parity": true,
+    "parent_or_window_text_retained": false
+  },
+  "execution": {
+    "query_vectors_built": 12,
+    "document_vectors_built": 0,
+    "index_generations_built": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "decision": {
+    "passes_all": true,
+    "status": "product_executor_parity_passed",
+    "index_implementation_allowed": true,
+    "product_enablement_allowed": false
+  }
+}

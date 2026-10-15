@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlsplit
+
+from kb.web_sources import safe_external_url
 
 
 SOURCE_SUMMARY_KINDS = {
@@ -11,7 +14,7 @@ SOURCE_SUMMARY_KINDS = {
     "unknown",
 }
 
-SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION = 1
+SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION = 3
 
 
 def _record(value: Any) -> dict[str, Any]:
@@ -73,15 +76,69 @@ def _kind(*, source_blend: str, source_policy: str, answer_mode: str, evidence_h
     return "unknown"
 
 
-def _policy_flags(kind: str) -> dict[str, bool]:
+def _policy_flags(kind: str, *, external_source_kind: str = "") -> dict[str, bool]:
     uses_local = kind in {"local_kb", "local_plus_external"}
     uses_external = kind in {"local_plus_external", "external_not_kb", "general_api"}
+    uses_external_web = bool(uses_external and external_source_kind == "web")
+    uses_external_model = bool(uses_external and not uses_external_web)
     requires_notice = kind in {"local_plus_external", "external_not_kb"}
     return {
         "uses_local_knowledge_base": uses_local,
-        "uses_external_model": uses_external,
+        "uses_external_model": uses_external_model,
+        "uses_external_web": uses_external_web,
         "requires_user_notice": requires_notice,
     }
+
+
+def _generation_output(trace: dict[str, Any]) -> dict[str, Any]:
+    for raw_step in list(trace.get("steps") or []):
+        step = _record(raw_step)
+        if str(step.get("tool") or "").strip() != "generate_grounded_answer":
+            continue
+        output = _record(step.get("output"))
+        if output:
+            return output
+    return {}
+
+
+def _safe_web_url(value: object) -> str:
+    return safe_external_url(value)
+
+
+def _web_sources(value: object) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in list(value or []) if isinstance(value, list) else []:
+        item = _record(raw)
+        url = _safe_web_url(item.get("url"))
+        verification_status = str(item.get("verification_status") or "").strip().lower()
+        if not url or url in seen or verification_status != "verified":
+            continue
+        seen.add(url)
+        title = str(item.get("title") or "").replace("\x00", " ").strip()[:500]
+        try:
+            domain = str(urlsplit(url).hostname or "").lower()
+        except Exception:
+            domain = ""
+        source: dict[str, Any] = {
+            "title": title,
+            "url": url,
+            "domain": domain,
+            "verification_status": "verified",
+            "verification_level": str(item.get("verification_level") or "reachable").strip()[:40],
+            "claim_text": str(item.get("claim_text") or "").replace("\x00", " ").strip()[:320],
+            "scholarly_kind": str(item.get("scholarly_kind") or "web").strip()[:40],
+            "doi": str(item.get("doi") or "").replace("\x00", "").strip()[:300],
+            "arxiv_id": str(item.get("arxiv_id") or "").replace("\x00", "").strip()[:80],
+        }
+        pdf_url = _safe_web_url(item.get("pdf_url"))
+        if pdf_url:
+            source["pdf_url"] = pdf_url
+            source["import_eligible"] = bool(item.get("import_eligible"))
+        out.append(source)
+        if len(out) >= 8:
+            break
+    return out
 
 
 def _notice_kind(kind: str) -> str:
@@ -116,8 +173,14 @@ def _build_source_policy_payload(
     source_notice_count: int,
     quality_gate_status: str,
     should_show: bool,
+    external_supplement_mode: str = "disabled",
+    external_source_kind: str = "",
+    web_search_used: bool = False,
+    web_sources: list[dict[str, Any]] | None = None,
+    external_supplement_unavailable: str = "",
 ) -> dict[str, Any]:
-    flags = _policy_flags(kind)
+    flags = _policy_flags(kind, external_source_kind=external_source_kind)
+    sources = list(web_sources or [])[:8]
     return {
         "schema_version": SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION,
         "kind": kind,
@@ -129,7 +192,14 @@ def _build_source_policy_payload(
         "confidence": confidence,
         "uses_local_knowledge_base": flags["uses_local_knowledge_base"],
         "uses_external_model": flags["uses_external_model"],
+        "uses_external_web": flags["uses_external_web"],
         "requires_user_notice": flags["requires_user_notice"],
+        "external_supplement_mode": external_supplement_mode,
+        "external_source_kind": external_source_kind,
+        "web_search_used": bool(web_search_used),
+        "web_source_count": len(sources),
+        "web_sources": sources,
+        "external_supplement_unavailable": external_supplement_unavailable,
         "notice_kind": _notice_kind(kind),
         "citation_policy": _citation_policy(kind),
         "badge": {
@@ -163,6 +233,7 @@ def build_agent_source_summary(agent_trace: dict | None) -> dict[str, Any]:
     context = _record(trace.get("context"))
     verification = _record(trace.get("verification"))
     research_run = _record(trace.get("research_run"))
+    generation_output = _generation_output(trace)
 
     source_policy = _text(summary.get("source_policy"), research_run.get("source_policy"), context.get("source_policy"))
     evidence_status = _text(summary.get("evidence_status"), verification.get("evidence_status"))
@@ -186,6 +257,19 @@ def build_agent_source_summary(agent_trace: dict | None) -> dict[str, Any]:
         else verification.get("source_notice_count")
     )
     quality_gate_status = _text(summary.get("quality_gate_status"))
+    external_supplement_mode = _text(
+        context.get("external_supplement_mode"),
+        _record(_record(trace.get("context")).get("evidence_gate")).get("external_supplement_mode"),
+        "disabled",
+    ).lower()
+    if external_supplement_mode not in {"disabled", "model", "web"}:
+        external_supplement_mode = "disabled"
+    web_search_used = bool(generation_output.get("web_search_used") or context.get("web_search_used"))
+    web_sources = _web_sources(generation_output.get("web_citations")) if web_search_used else []
+    external_supplement_unavailable = _text(
+        generation_output.get("external_supplement_unavailable"),
+        context.get("external_supplement_unavailable"),
+    )
 
     kind = _kind(
         source_blend=source_blend,
@@ -195,6 +279,12 @@ def build_agent_source_summary(agent_trace: dict | None) -> dict[str, Any]:
     )
     if kind not in SOURCE_SUMMARY_KINDS:
         kind = "unknown"
+    external_source_kind = ""
+    if kind in {"local_plus_external", "external_not_kb", "general_api"}:
+        if web_search_used:
+            external_source_kind = "web"
+        elif external_supplement_mode == "model":
+            external_source_kind = "model"
     labels = {
         "local_kb": ("agent_trace_source_local_only", "Local KB"),
         "local_plus_external": ("agent_trace_source_local_external", "Local + external"),
@@ -211,6 +301,20 @@ def build_agent_source_summary(agent_trace: dict | None) -> dict[str, Any]:
     }
     label_key, label = labels[kind]
     detail = details[kind]
+    if external_source_kind == "web":
+        if kind == "local_plus_external":
+            label_key, label = "agent_trace_source_local_web", "Local + web"
+            detail = "Local citations come from the knowledge base; linked web sources provide separately identified background."
+        else:
+            label_key, label = "agent_trace_source_web", "Web sources"
+            detail = "No matching local evidence was used; this answer comes from linked web sources."
+    elif external_source_kind == "model":
+        if kind == "local_plus_external":
+            label_key, label = "agent_trace_source_local_model", "Local + model background"
+            detail = "Local citations come from the knowledge base; uncited background comes from model knowledge and is not verifiable evidence."
+        else:
+            label_key, label = "agent_trace_source_model", "Model background"
+            detail = "No matching local evidence was used; this is model background, not verifiable library evidence."
     confidence = _confidence(
         kind=kind,
         evidence_status=evidence_status,
@@ -237,6 +341,11 @@ def build_agent_source_summary(agent_trace: dict | None) -> dict[str, Any]:
         source_notice_count=source_notice_count,
         quality_gate_status=quality_gate_status,
         should_show=should_show,
+        external_supplement_mode=external_supplement_mode,
+        external_source_kind=external_source_kind,
+        web_search_used=web_search_used,
+        web_sources=web_sources,
+        external_supplement_unavailable=external_supplement_unavailable,
     )
 
     return {
@@ -256,4 +365,9 @@ def build_agent_source_summary(agent_trace: dict | None) -> dict[str, Any]:
         "source_notice_count": source_notice_count,
         "quality_gate_status": quality_gate_status,
         "should_show": should_show,
+        "external_supplement_mode": external_supplement_mode,
+        "external_source_kind": external_source_kind,
+        "web_search_used": web_search_used,
+        "web_sources": web_sources,
+        "external_supplement_unavailable": external_supplement_unavailable,
     }

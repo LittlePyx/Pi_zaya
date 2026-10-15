@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Button, Empty, Spin, message } from 'antd'
+import { Alert, Button, Empty, Spin, message } from 'antd'
 import { ArrowLeftOutlined, ReloadOutlined } from '@ant-design/icons'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { chatApi, type ReaderSessionRecord } from '../api/chat'
+import {
+  chatApi,
+  type ReaderSessionRecord,
+  type ResearchNoteEvidenceContextSnapshot,
+  type ResearchNoteEvidenceContextSnapshotBlock,
+  type ResearchNoteEvidenceRepairIntent,
+  type ResearchNoteEvidenceReviewIntent,
+  type ResearchNoteReaderReturnIntent,
+} from '../api/chat'
 import { PaperGuideReaderDrawer } from '../components/chat/PaperGuideReaderDrawer'
 import type {
   ReaderSelectionShelfPayload,
@@ -20,7 +28,11 @@ import {
   READER_STANDALONE_WINDOW_NAME,
   READER_SESSION_SYNC_CHANNEL,
 } from '../components/chat/reader/readerTypes'
-import { normalizeReaderSourcePathForMatch } from '../components/chat/reader/readerLocateGuard'
+import { readerSourcePathsMatch } from '../components/chat/reader/readerLocateGuard'
+import {
+  buildHeuristicReaderLocateRecoveryPayload,
+  shouldRecoverReaderLocateHeuristically,
+} from '../components/chat/reader/readerLocateRecovery'
 import {
   sanitizeReaderLocateCandidates,
   sanitizeReaderLocateTarget,
@@ -160,6 +172,289 @@ function normalizeReaderPayload(record: ReaderSessionRecord | null): ReaderOpenP
   }
 }
 
+function normalizeEvidenceRepairIntent(value: unknown): ResearchNoteEvidenceRepairIntent | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const repair = record?.repair && typeof record.repair === 'object'
+    ? record.repair as Record<string, unknown>
+    : null
+  const noteId = String(record?.note_id || '').trim()
+  const sourcePath = String(repair?.source_path || '').trim()
+  const evidenceQuote = String(repair?.candidate_evidence_quote || '').trim()
+  const fingerprint = String(repair?.source_fingerprint || '').trim()
+  const sourceIndex = Number(repair?.source_index)
+  if (
+    Number(record?.version) !== 1
+    || !noteId
+    || !sourcePath
+    || !evidenceQuote
+    || !fingerprint
+    || !Number.isInteger(sourceIndex)
+    || sourceIndex < 0
+  ) return null
+  return {
+    version: 1,
+    note_id: noteId,
+    note_title: String(record?.note_title || '').trim(),
+    source_label: String(record?.source_label || '').trim(),
+    repair: {
+      source_index: sourceIndex,
+      source_path: sourcePath,
+      capture_id: String(repair?.capture_id || '').trim() || undefined,
+      old_block_id: String(repair?.old_block_id || '').trim() || undefined,
+      old_anchor_id: String(repair?.old_anchor_id || '').trim() || undefined,
+      old_evidence_quote: String(repair?.old_evidence_quote || '').trim() || undefined,
+      candidate_block_id: String(repair?.candidate_block_id || '').trim() || undefined,
+      candidate_anchor_id: String(repair?.candidate_anchor_id || '').trim() || undefined,
+      candidate_anchor_kind: String(repair?.candidate_anchor_kind || '').trim() || undefined,
+      candidate_evidence_quote: evidenceQuote,
+      source_fingerprint: fingerprint,
+    },
+  }
+}
+
+function normalizeResearchNoteReturnIntent(value: unknown): ResearchNoteReaderReturnIntent | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const noteId = String(record?.note_id || '').trim()
+  const sourceIndex = Number(record?.source_index)
+  if (
+    Number(record?.version) !== 1
+    || !noteId
+    || !Number.isSafeInteger(sourceIndex)
+    || sourceIndex < 0
+  ) return null
+  return { version: 1, note_id: noteId, source_index: sourceIndex }
+}
+
+function researchNoteReturnUrl(
+  noteId: string,
+  sourceIndex: number,
+  extra?: Record<string, string>,
+): string {
+  const params = new URLSearchParams({ note: noteId })
+  if (Number.isSafeInteger(sourceIndex) && sourceIndex >= 0) {
+    params.set('evidence_source', String(sourceIndex))
+  }
+  Object.entries(extra || {}).forEach(([key, value]) => {
+    if (value) params.set(key, value)
+  })
+  return `/notes?${params.toString()}`
+}
+
+function normalizeEvidenceContextSnapshotBlock(value: unknown): ResearchNoteEvidenceContextSnapshotBlock | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const text = String(record?.text || '').trim()
+  if (!record || !text) return null
+  const positiveNumber = (key: string) => {
+    const number = Number(record[key])
+    return Number.isFinite(number) && number > 0 ? number : undefined
+  }
+  return {
+    block_id: String(record.block_id || '').trim() || undefined,
+    anchor_id: String(record.anchor_id || '').trim() || undefined,
+    kind: String(record.kind || '').trim() || undefined,
+    heading_path: String(record.heading_path || '').trim() || undefined,
+    page_start: positiveNumber('page_start'),
+    page_end: positiveNumber('page_end'),
+    line_start: positiveNumber('line_start'),
+    line_end: positiveNumber('line_end'),
+    text,
+  }
+}
+
+function normalizeEvidenceContextSnapshot(value: unknown): ResearchNoteEvidenceContextSnapshot | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const target = normalizeEvidenceContextSnapshotBlock(record?.target)
+  const fingerprint = String(record?.source_fingerprint || '').trim()
+  const capturedAt = Number(record?.captured_at)
+  if (!record || Number(record.version) !== 1 || !target || !fingerprint.startsWith('sha256:')) return null
+  const blockList = (input: unknown) => Array.isArray(input)
+    ? input.map(normalizeEvidenceContextSnapshotBlock).filter((item): item is ResearchNoteEvidenceContextSnapshotBlock => Boolean(item)).slice(0, 1)
+    : []
+  return {
+    version: 1,
+    captured_at: Number.isFinite(capturedAt) && capturedAt > 0 ? capturedAt : 0,
+    source_fingerprint: fingerprint,
+    reason: String(record.reason || '').trim() || undefined,
+    before: blockList(record.before),
+    target,
+    after: blockList(record.after),
+  }
+}
+
+type EvidenceContextRole = 'before' | 'target' | 'after'
+
+function evidenceContextRoleText(
+  snapshot: ResearchNoteEvidenceContextSnapshot | null | undefined,
+  role: EvidenceContextRole,
+): string {
+  if (!snapshot) return ''
+  if (role === 'target') return String(snapshot.target?.text || '').trim()
+  const blocks = role === 'before' ? snapshot.before : snapshot.after
+  return String(blocks?.[0]?.text || '').trim()
+}
+
+function evidenceContextChanged(
+  previous: ResearchNoteEvidenceContextSnapshot | null | undefined,
+  current: ResearchNoteEvidenceContextSnapshot | null | undefined,
+): boolean {
+  if (!previous || !current) return true
+  return (['before', 'target', 'after'] as EvidenceContextRole[]).some(
+    role => evidenceContextRoleText(previous, role) !== evidenceContextRoleText(current, role),
+  )
+}
+
+function renderEvidenceContextDifference(previousText: string, currentText: string, side: 'previous' | 'current') {
+  const left = Array.from(previousText)
+  const right = Array.from(currentText)
+  let prefixLength = 0
+  while (prefixLength < left.length && prefixLength < right.length && left[prefixLength] === right[prefixLength]) {
+    prefixLength += 1
+  }
+  let suffixLength = 0
+  while (
+    suffixLength < left.length - prefixLength
+    && suffixLength < right.length - prefixLength
+    && left[left.length - 1 - suffixLength] === right[right.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1
+  }
+  const source = side === 'previous' ? left : right
+  const prefix = source.slice(0, prefixLength).join('')
+  const changed = source.slice(prefixLength, source.length - suffixLength).join('')
+  const suffix = suffixLength > 0 ? source.slice(source.length - suffixLength).join('') : ''
+  if (!changed && previousText === currentText) return <>{source.join('')}</>
+  return (
+    <>
+      {prefix}
+      {changed ? <mark className={`is-${side}`}>{changed}</mark> : <mark className={`is-${side} is-empty`}>∅</mark>}
+      {suffix}
+    </>
+  )
+}
+
+function EvidenceContextSnapshotColumn({
+  snapshot,
+  counterpart,
+  side,
+  title,
+  roleLabels,
+  emptyLabel,
+  testId,
+}: {
+  snapshot: ResearchNoteEvidenceContextSnapshot
+  counterpart?: ResearchNoteEvidenceContextSnapshot | null
+  side: 'previous' | 'current'
+  title: string
+  roleLabels: Record<EvidenceContextRole, string>
+  emptyLabel: string
+  testId: string
+}) {
+  return (
+    <div data-testid={testId}>
+      <header>
+        <strong>{title}</strong>
+        {snapshot.captured_at > 0 ? <small>{new Date(snapshot.captured_at * 1000).toLocaleString()}</small> : null}
+      </header>
+      <div className="kb-reader-evidence-context-segments">
+        {(['before', 'target', 'after'] as EvidenceContextRole[]).map((role) => {
+          const text = evidenceContextRoleText(snapshot, role)
+          const otherText = evidenceContextRoleText(counterpart, role)
+          return (
+            <section className={`is-${role}`} key={role} data-testid={`${testId}-${role}`}>
+              <span>{roleLabels[role]}</span>
+              <p>
+                {text
+                  ? counterpart
+                    ? renderEvidenceContextDifference(
+                      side === 'previous' ? text : otherText,
+                      side === 'previous' ? otherText : text,
+                      side,
+                    )
+                    : text
+                  : <em>{emptyLabel}</em>}
+              </p>
+            </section>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function normalizeEvidenceReviewIntent(value: unknown): ResearchNoteEvidenceReviewIntent | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const review = record?.review && typeof record.review === 'object'
+    ? record.review as Record<string, unknown>
+    : null
+  const noteId = String(record?.note_id || '').trim()
+  const sourcePath = String(review?.source_path || '').trim()
+  const expectedFingerprint = String(review?.expected_source_fingerprint || '').trim()
+  const currentFingerprint = String(review?.source_fingerprint || '').trim()
+  const currentQuote = String(review?.current_evidence_quote || '').trim()
+  const sourceIndex = Number(review?.source_index)
+  if (
+    Number(record?.version) !== 1
+    || !noteId
+    || !sourcePath
+    || !expectedFingerprint
+    || !currentFingerprint
+    || !currentQuote
+    || !Number.isInteger(sourceIndex)
+    || sourceIndex < 0
+  ) return null
+  return {
+    version: 1,
+    note_id: noteId,
+    note_title: String(record?.note_title || '').trim(),
+    source_label: String(record?.source_label || '').trim(),
+    saved_evidence_quote: String(record?.saved_evidence_quote || '').trim(),
+    current_evidence_quote: String(record?.current_evidence_quote || currentQuote).trim(),
+    previously_invalid: Boolean(record?.previously_invalid),
+    saved_context_snapshot: normalizeEvidenceContextSnapshot(record?.saved_context_snapshot),
+    current_context_snapshot: normalizeEvidenceContextSnapshot(record?.current_context_snapshot),
+    review: {
+      source_index: sourceIndex,
+      source_path: sourcePath,
+      capture_id: String(review?.capture_id || '').trim() || undefined,
+      old_block_id: String(review?.old_block_id || '').trim() || undefined,
+      old_anchor_id: String(review?.old_anchor_id || '').trim() || undefined,
+      old_evidence_quote: String(review?.old_evidence_quote || '').trim() || undefined,
+      expected_source_fingerprint: expectedFingerprint,
+      current_block_id: String(review?.current_block_id || '').trim() || undefined,
+      current_anchor_id: String(review?.current_anchor_id || '').trim() || undefined,
+      current_anchor_kind: String(review?.current_anchor_kind || '').trim() || undefined,
+      current_evidence_quote: currentQuote,
+      source_fingerprint: currentFingerprint,
+    },
+  }
+}
+
+function normalizeSavedLocateResult(value: unknown): ReaderLocateResult | null {
+  const record = value && typeof value === 'object' ? value as Record<string, unknown> : null
+  const status = String(record?.status || '') as ReaderLocateResult['status']
+  const precision = String(record?.precision || '') as ReaderLocateResult['precision']
+  const sourcePath = String(record?.sourcePath || '').trim()
+  if (!record || !sourcePath || !status || !precision) return null
+  return {
+    locateRequestId: Number(record.locateRequestId || 0),
+    sourcePath,
+    sourceName: String(record.sourceName || '').trim() || undefined,
+    locateFeedbackKey: String(record.locateFeedbackKey || '').trim() || undefined,
+    status,
+    precision,
+    ok: Boolean(record.ok),
+    repairable: Boolean(record.repairable),
+    strictLocate: Boolean(record.strictLocate),
+    hint: String(record.hint || '').trim(),
+    reason: String(record.reason || '').trim(),
+    activeAltIndex: Number.isFinite(Number(record.activeAltIndex)) ? Number(record.activeAltIndex) : undefined,
+    blockId: String(record.blockId || '').trim() || undefined,
+    anchorId: String(record.anchorId || '').trim() || undefined,
+    anchorKind: String(record.anchorKind || '').trim() || undefined,
+    headingPath: String(record.headingPath || '').trim() || undefined,
+  }
+}
+
 export default function ReaderPage() {
   const S = useT()
   const navigate = useNavigate()
@@ -171,6 +466,12 @@ export default function ReaderPage() {
   const [error, setError] = useState('')
   const [reloadToken, setReloadToken] = useState(0)
   const [sessionHighlights, setSessionHighlights] = useState<ReaderSessionHighlight[]>([])
+  const [locateResult, setLocateResult] = useState<ReaderLocateResult | null>(null)
+  const [standaloneRecoveryPayload, setStandaloneRecoveryPayload] = useState<ReaderOpenPayload | null>(null)
+  const [repairingEvidence, setRepairingEvidence] = useState(false)
+  const [repairError, setRepairError] = useState('')
+  const [evidenceReviewDecision, setEvidenceReviewDecision] = useState<'confirmed' | 'invalid' | null>(null)
+  const [evidenceReviewError, setEvidenceReviewError] = useState('')
   const stateHydratedRef = useRef(false)
   const broadcastRef = useRef<BroadcastChannel | null>(null)
   const pendingStateRef = useRef<Record<string, unknown>>({})
@@ -198,9 +499,14 @@ export default function ReaderPage() {
         if (cancelled) return
         stateHydratedRef.current = false
         setSession(res)
+        setStandaloneRecoveryPayload(null)
         const state = (res.state && typeof res.state === 'object')
           ? res.state as Record<string, unknown>
           : {}
+        setLocateResult(normalizeSavedLocateResult(state.locateResult))
+        setRepairError('')
+        setEvidenceReviewError('')
+        setEvidenceReviewDecision(null)
         let highlights = normalizeSessionHighlights(state.highlights || state.evidenceNotes)
         const payloadFromRecord = normalizeReaderPayload(res)
         const sourcePath = String(payloadFromRecord?.sourcePath || '').trim()
@@ -226,6 +532,8 @@ export default function ReaderPage() {
         stateHydratedRef.current = false
         setSession(null)
         setSessionHighlights([])
+        setLocateResult(null)
+        setStandaloneRecoveryPayload(null)
         setError(err instanceof Error ? err.message : (S.reader_standalone_missing || 'Reader session not found.'))
       })
       .finally(() => {
@@ -236,7 +544,32 @@ export default function ReaderPage() {
     }
   }, [S.reader_standalone_missing, location.search, reloadToken, sessionId])
 
-  const payload = useMemo(() => normalizeReaderPayload(session), [session])
+  const sessionPayload = useMemo(() => normalizeReaderPayload(session), [session])
+  const repairIntent = useMemo(
+    () => normalizeEvidenceRepairIntent(
+      session?.state && typeof session.state === 'object'
+        ? (session.state as Record<string, unknown>).researchNoteEvidenceRepair
+        : null,
+    ),
+    [session?.state],
+  )
+  const evidenceReviewIntent = useMemo(
+    () => normalizeEvidenceReviewIntent(
+      session?.state && typeof session.state === 'object'
+        ? (session.state as Record<string, unknown>).researchNoteEvidenceReview
+        : null,
+    ),
+    [session?.state],
+  )
+  const researchNoteReturnIntent = useMemo(
+    () => normalizeResearchNoteReturnIntent(
+      session?.state && typeof session.state === 'object'
+        ? (session.state as Record<string, unknown>).researchNoteReturn
+        : null,
+    ),
+    [session?.state],
+  )
+  const payload = standaloneRecoveryPayload || sessionPayload
   const payloadSourcePath = String(payload?.sourcePath || '').trim()
   const sessionConversationId = String(session?.conversation_id || linkedConversationIdFromSearch(location.search)).trim()
   const sessionProjectId = String(
@@ -256,10 +589,7 @@ export default function ReaderPage() {
         : {}
       if (String(data.type || '') !== 'reader-session-state') return
       const sourcePath = String(data.sourcePath || '').trim()
-      if (
-        !normalizeReaderSourcePathForMatch(sourcePath)
-        || normalizeReaderSourcePathForMatch(sourcePath) !== normalizeReaderSourcePathForMatch(payloadSourcePath)
-      ) return
+      if (!readerSourcePathsMatch(sourcePath, payloadSourcePath)) return
       if (String(data.sessionId || '').trim() === sessionId) return
       const highlights = normalizeSessionHighlights(data.highlights)
       setSessionHighlights((current) => {
@@ -416,6 +746,19 @@ export default function ReaderPage() {
   }, [S.reader_returned_to_session, flushPendingState, payloadSourcePath, sessionConversationId, sessionId])
 
   const goBack = useCallback(() => {
+    const noteId = repairIntent?.note_id
+      || evidenceReviewIntent?.note_id
+      || researchNoteReturnIntent?.note_id
+      || ''
+    const sourceIndex = repairIntent?.repair.source_index
+      ?? evidenceReviewIntent?.review.source_index
+      ?? researchNoteReturnIntent?.source_index
+      ?? -1
+    if (noteId) {
+      flushPendingState()
+      navigate(researchNoteReturnUrl(noteId, sourceIndex))
+      return
+    }
     if (sessionConversationId) {
       if (returnToConversationWindow({ closeReader: true, openMainWindow: true })) return
       if (typeof BroadcastChannel !== 'undefined') {
@@ -429,7 +772,7 @@ export default function ReaderPage() {
       return
     }
     navigate('/')
-  }, [S.reader_returned_to_session, navigate, returnToConversationWindow, sessionConversationId])
+  }, [S.reader_returned_to_session, evidenceReviewIntent, flushPendingState, navigate, repairIntent, researchNoteReturnIntent, returnToConversationWindow, sessionConversationId])
 
   const persistReaderShelfItem = useCallback((item: Record<string, unknown>) => {
     if (!item || Object.keys(item).length <= 0) return
@@ -580,13 +923,116 @@ export default function ReaderPage() {
   }, [])
 
   const recordLocateResult = useCallback((result: ReaderLocateResult) => {
+    if (
+      !repairIntent
+      && !evidenceReviewIntent
+      && payload
+      && shouldRecoverReaderLocateHeuristically(result, payload)
+    ) {
+      const nextRequestId = Math.max(
+        Number(result.locateRequestId || 0),
+        Number(payload.locateRequestId || 0),
+      ) + 1
+      setLocateResult(null)
+      setStandaloneRecoveryPayload(
+        buildHeuristicReaderLocateRecoveryPayload(payload, nextRequestId),
+      )
+      return
+    }
+    setLocateResult(result)
+    setRepairError('')
+    setEvidenceReviewError('')
     publishState({
       locateResult: {
         ...result,
         updatedAt: Date.now(),
       },
     })
-  }, [publishState])
+  }, [evidenceReviewIntent, payload, publishState, repairIntent])
+
+  const repairCandidateLocated = useMemo(() => {
+    if (!repairIntent || !locateResult) return false
+    const repair = repairIntent.repair
+    if (!locateResult.ok || !locateResult.strictLocate || locateResult.status !== 'exact') return false
+    if (!readerSourcePathsMatch(locateResult.sourcePath, repair.source_path)) return false
+    if (repair.candidate_block_id && locateResult.blockId !== repair.candidate_block_id) return false
+    if (repair.candidate_anchor_id && locateResult.anchorId !== repair.candidate_anchor_id) return false
+    return Boolean(repair.candidate_block_id || repair.candidate_anchor_id)
+  }, [locateResult, repairIntent])
+
+  const confirmEvidenceRepair = useCallback(async () => {
+    if (!repairIntent || !repairCandidateLocated || repairingEvidence) return
+    setRepairingEvidence(true)
+    setRepairError('')
+    try {
+      await chatApi.repairResearchNoteEvidence(repairIntent.note_id, repairIntent.repair)
+      flushPendingState()
+      navigate(
+        researchNoteReturnUrl(repairIntent.note_id, repairIntent.repair.source_index, { evidence_repaired: '1' }),
+      )
+    } catch {
+      setRepairError('')
+      message.info(S.reader_evidence_repair_failed)
+      flushPendingState()
+      navigate(
+        researchNoteReturnUrl(repairIntent.note_id, repairIntent.repair.source_index, { evidence_recheck: '1' }),
+      )
+    } finally {
+      setRepairingEvidence(false)
+    }
+  }, [S.reader_evidence_repair_failed, flushPendingState, navigate, repairCandidateLocated, repairIntent, repairingEvidence])
+
+  const evidenceReviewTargetLocated = useMemo(() => {
+    if (!evidenceReviewIntent || !locateResult) return false
+    const review = evidenceReviewIntent.review
+    if (!locateResult.ok || !locateResult.strictLocate || locateResult.status !== 'exact') return false
+    if (!readerSourcePathsMatch(locateResult.sourcePath, review.source_path)) return false
+    if (review.current_block_id && locateResult.blockId !== review.current_block_id) return false
+    if (review.current_anchor_id && locateResult.anchorId !== review.current_anchor_id) return false
+    return Boolean(review.current_block_id || review.current_anchor_id)
+  }, [evidenceReviewIntent, locateResult])
+
+  const decideEvidenceReview = useCallback(async (decision: 'confirmed' | 'invalid') => {
+    if (!evidenceReviewIntent || !evidenceReviewTargetLocated || evidenceReviewDecision) return
+    setEvidenceReviewDecision(decision)
+    setEvidenceReviewError('')
+    try {
+      await chatApi.decideResearchNoteEvidenceReview(evidenceReviewIntent.note_id, {
+        ...evidenceReviewIntent.review,
+        decision,
+      })
+      flushPendingState()
+      navigate(
+        researchNoteReturnUrl(
+          evidenceReviewIntent.note_id,
+          evidenceReviewIntent.review.source_index,
+          { evidence_reviewed: decision },
+        ),
+      )
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : S.reader_evidence_review_failed
+      setEvidenceReviewError(detail)
+      message.error(S.reader_evidence_review_failed)
+    } finally {
+      setEvidenceReviewDecision(null)
+    }
+  }, [
+    S.reader_evidence_review_failed,
+    evidenceReviewDecision,
+    evidenceReviewIntent,
+    evidenceReviewTargetLocated,
+    flushPendingState,
+    navigate,
+  ])
+
+  const savedContextSnapshot = evidenceReviewIntent?.saved_context_snapshot || null
+  const currentContextSnapshot = evidenceReviewIntent?.current_context_snapshot || null
+  const localContextChanged = evidenceContextChanged(savedContextSnapshot, currentContextSnapshot)
+  const contextRoleLabels: Record<EvidenceContextRole, string> = {
+    before: S.reader_evidence_context_before,
+    target: S.reader_evidence_context_target,
+    after: S.reader_evidence_context_after,
+  }
 
   return (
     <div className="kb-reader-page">
@@ -597,7 +1043,11 @@ export default function ReaderPage() {
           className="kb-reader-page-back"
           onClick={goBack}
         >
-          {sessionConversationId ? (S.reader_standalone_back_to_session || S.reader_standalone_back || 'Back') : (S.reader_standalone_back || 'Back')}
+          {repairIntent || evidenceReviewIntent
+            ? S.reader_evidence_repair_back
+            : sessionConversationId
+              ? (S.reader_standalone_back_to_session || S.reader_standalone_back || 'Back')
+              : (S.reader_standalone_back || 'Back')}
         </Button>
         <div className="kb-reader-page-heading">
           <div className="kb-reader-page-kicker">{S.side_dock_reader || 'Reader'}</div>
@@ -612,6 +1062,135 @@ export default function ReaderPage() {
           {S.reader_reload || 'Reload'}
         </Button>
       </header>
+      {repairIntent ? (
+        <section className="kb-reader-evidence-repair" data-testid="reader-evidence-repair-panel">
+          <Alert
+            type={repairError ? 'error' : repairCandidateLocated ? 'success' : 'info'}
+            showIcon
+            message={repairCandidateLocated
+              ? S.reader_evidence_repair_exact
+              : S.reader_evidence_repair_reviewing}
+            description={repairError || (repairCandidateLocated
+              ? S.reader_evidence_repair_exact_hint
+              : S.reader_evidence_repair_reviewing_hint)}
+          />
+          <div className="kb-reader-evidence-repair-actions">
+            <Button onClick={goBack}>{S.reader_evidence_repair_cancel}</Button>
+            <Button
+              type="primary"
+              disabled={!repairCandidateLocated}
+              loading={repairingEvidence}
+              data-testid="reader-confirm-evidence-repair"
+              onClick={() => { void confirmEvidenceRepair() }}
+            >
+              {S.reader_evidence_repair_confirm}
+            </Button>
+          </div>
+        </section>
+      ) : null}
+      {evidenceReviewIntent ? (
+        <section
+          className="kb-reader-evidence-repair kb-reader-evidence-version-review"
+          data-testid="reader-evidence-review-panel"
+        >
+          <div className="kb-reader-evidence-version-review-main">
+            <Alert
+              type={evidenceReviewError ? 'error' : evidenceReviewTargetLocated ? 'success' : 'info'}
+              showIcon
+              message={evidenceReviewTargetLocated
+                ? S.reader_evidence_review_ready
+                : S.reader_evidence_review_locating}
+              description={evidenceReviewError || (evidenceReviewTargetLocated
+                ? S.reader_evidence_review_ready_hint
+                : S.reader_evidence_review_locating_hint)}
+            />
+            {evidenceReviewIntent.previously_invalid ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={S.reader_evidence_review_previously_invalid}
+              />
+            ) : null}
+            {!savedContextSnapshot ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={S.reader_evidence_context_baseline_missing}
+                description={S.reader_evidence_context_baseline_missing_hint}
+              />
+            ) : null}
+            {savedContextSnapshot && currentContextSnapshot && !localContextChanged ? (
+              <Alert
+                type="info"
+                showIcon
+                message={S.reader_evidence_context_no_local_change}
+                description={S.reader_evidence_context_no_local_change_hint}
+              />
+            ) : null}
+            <div className="kb-reader-evidence-version-compare">
+              {savedContextSnapshot ? (
+                <EvidenceContextSnapshotColumn
+                  snapshot={savedContextSnapshot}
+                  counterpart={currentContextSnapshot}
+                  side="previous"
+                  title={S.reader_evidence_context_saved}
+                  roleLabels={contextRoleLabels}
+                  emptyLabel={S.reader_evidence_context_empty}
+                  testId="reader-evidence-review-saved"
+                />
+              ) : (
+                <div data-testid="reader-evidence-review-saved" className="is-context-fallback">
+                  <header>
+                    <strong>{S.reader_evidence_review_saved_quote}</strong>
+                    <small>{S.reader_evidence_context_quote_only}</small>
+                  </header>
+                  <blockquote>{evidenceReviewIntent.saved_evidence_quote}</blockquote>
+                </div>
+              )}
+              {currentContextSnapshot ? (
+                <EvidenceContextSnapshotColumn
+                  snapshot={currentContextSnapshot}
+                  counterpart={savedContextSnapshot}
+                  side="current"
+                  title={S.reader_evidence_context_current}
+                  roleLabels={contextRoleLabels}
+                  emptyLabel={S.reader_evidence_context_empty}
+                  testId="reader-evidence-review-current"
+                />
+              ) : (
+                <div data-testid="reader-evidence-review-current" className="is-context-fallback">
+                  <header>
+                    <strong>{S.reader_evidence_review_current_quote}</strong>
+                    <small>{S.reader_evidence_context_quote_only}</small>
+                  </header>
+                  <blockquote>{evidenceReviewIntent.current_evidence_quote}</blockquote>
+                </div>
+              )}
+            </div>
+          </div>
+          <div className="kb-reader-evidence-repair-actions">
+            <Button onClick={goBack}>{S.reader_evidence_review_cancel}</Button>
+            <Button
+              danger
+              disabled={!evidenceReviewTargetLocated || Boolean(evidenceReviewDecision)}
+              loading={evidenceReviewDecision === 'invalid'}
+              data-testid="reader-invalidate-evidence-review"
+              onClick={() => { void decideEvidenceReview('invalid') }}
+            >
+              {S.reader_evidence_review_invalidate}
+            </Button>
+            <Button
+              type="primary"
+              disabled={!evidenceReviewTargetLocated || Boolean(evidenceReviewDecision)}
+              loading={evidenceReviewDecision === 'confirmed'}
+              data-testid="reader-confirm-evidence-review"
+              onClick={() => { void decideEvidenceReview('confirmed') }}
+            >
+              {S.reader_evidence_review_confirm}
+            </Button>
+          </div>
+        </section>
+      ) : null}
       <main className="kb-reader-page-main">
         {loading ? (
           <div className="kb-reader-page-state">

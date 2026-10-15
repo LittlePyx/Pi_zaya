@@ -2,19 +2,15 @@
 
 English | [简体中文](README.zh-CN.md)
 
-Pi_zaya is a local-first, evidence-grounded research agent for academic PDFs. It
-helps users read papers, retrieve evidence, trace citations, compare papers,
-generate verifiable answers, turn a project's literature basket into a
-persistent cell-level evidence matrix, and create an editable research brief
-from the verified matrix. A project research gap queue then turns audited
-missing evidence and stale dependencies into an impact-ranked, human-reviewed
-worklist. A project research status center then measures the complete structured
-workflow and routes the researcher to exactly one quality-first next action.
+Pi_zaya is a local-first, evidence-grounded reading assistant for academic PDFs.
+It helps users read papers already in their library, retrieve and compare
+evidence, trace citations to the source, verify claims, and organize
+source-backed notes and evidence matrices.
 
-This is a production-oriented AI agent / RAG engineering portfolio project, not
-a toy PDF chatbot. It connects PDF conversion, structured indexing, hybrid
-retrieval, agent planning, tool execution, claim verification, citation cards,
-and a React trace UI into one end-to-end research workflow.
+Pi_zaya does not draft, rewrite, or polish manuscripts and is not a submission
+preparation tool. Answers use only the library by default. Per conversation,
+users can explicitly allow model knowledge or web search to supplement an answer
+only when local evidence is insufficient.
 
 The product entry is FastAPI + React. The legacy Streamlit entry has been
 removed; do not use `app.py`, `streamlit run`, or port `8501` as the product
@@ -23,6 +19,10 @@ entry.
 ## Downloadable Windows beta
 
 The current published Windows beta is [`v0.1.0-beta.13`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.13).
+
+The local development candidate is `0.1.0-beta.14`, not yet published. Its artifact
+names are `Pi_zaya-v0.1.0-beta.14-windows-x64-setup.exe` and
+`Pi_zaya-v0.1.0-beta.14-windows-x64.zip`; the public download links below remain beta.13.
 
 ### Choose the right download
 
@@ -79,14 +79,13 @@ web context.
 | Anchored PDF conversion | Converts PDFs to Markdown while preserving page markers, sections, figures, formulas, and source anchors. |
 | Restart-safe conversion | Persists queued and active conversion jobs, offers explicit recovery after restart, and reuses completed page-cache artifacts without automatically spending model credits. |
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
+| Optional local semantic retrieval | After explicit consent, installs a separately verified local component and combines BM25 with local dense retrieval for the current paper or selected basket. The local beta.14 portable candidate bundles the archive for offline installation. BM25 remains the default and the full-library path. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
-| Research notes workspace | Saves conclusions from answers and direct reader captures as editable Markdown with exact paper links. Selected text, tables, equations, and figures can be added with a personal comment and tags; duplicate source ranges are detected before append. Notes can then be organized across projects with search, paper/tag/time filters, pinning, and archiving, combined into an editable writing outline, and exported as Markdown or Word. |
-| Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations; every populated factual cell opens its exact local source evidence, while unavailable facts remain empty. A persistent change inbox fingerprints full text separately from metadata, reports downstream row/comparison/brief/citation impact, blocks stale indexes, and refreshes only user-confirmed affected sources while preserving unaffected evidence. A high-precision candidate scan can prefill paired comparison contracts from structured metric tables, but requires human confirmation of every semantic mapping and a fresh server-side strict audit before producing any result. Explicit paired audits produce a result only after task, dataset, protocol, metric, target, value, and both source excerpts pass the comparison contract. Exports Markdown, CSV, or XLSX. |
-| Research briefs | Generates project-scoped, versioned Markdown briefs only from a selected verified evidence matrix, audits every substantive claim, distinguishes historically verified snapshots from the latest matrix state, and turns changed fields/citations into a reviewable incremental update. Users accept or keep each affected claim, unaffected Markdown remains byte-for-byte intact, and the merged revision receives a complete evidence audit before export. |
-| Research gap queue | Aggregates explicit missing/unsupported matrix cells, non-comparable audits, stale brief lineage, and source changes into a deterministic project worklist. It reports downstream matrix/brief/citation/comparison impact. A same-source repair path can propose exact, locatable sentences from the matrix row's own freshly indexed paper. Cross-paper discovery uses a separate two-stage review: first confirm the candidate into the literature basket, then inspect a full extractive row preview before adding that paper as a new matrix source. Neither path can attribute another paper's evidence to the original row. |
-| Project research status | Measures source freshness, matrix verification, evidence gaps, complete comparison-candidate coverage, and brief lineage, then exposes exactly one deterministic next action. Changed sources and evidence defects always outrank comparison review or export. The center shows scan coverage and phase timings and navigates directly to the affected workflow without accepting evidence or comparison conclusions. |
-| Research Agent Mode | Adds explicit planning, source policy, evidence matrix, tool-use trace, and sentence-level citation support checks on top of the existing RAG flow. |
+| Research notes workspace | Saves exact source-backed text, table, equation, and figure captures with paper links, comments, tags, search, pinning, archiving, and return-to-source navigation. Markdown and Word exports are backups for continued reading and evidence review, not submission-ready documents. |
+| Internal evidence matrices | Available only in explicitly enabled internal builds; hidden in ordinary downloads, along with dependent brief/gap/project-status entrances. Retained for development and compatibility testing. |
+| Supplement source choice | Uses the library only by default. Users may select model or web supplementation per conversation; either is used only after insufficient local evidence, and web failure never silently substitutes model knowledge. |
+| Research Agent | Applies planning, source policy, tool-use tracing, evidence sufficiency, and sentence-level citation support checks by default. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
 
 ## Architecture
@@ -95,7 +94,7 @@ web context.
 flowchart LR
   A["PDF Library"] --> B["PDF-to-Markdown Converter"]
   B --> C["Chunking + Structured Index"]
-  C --> D["Hybrid Retrieval"]
+  C --> D["BM25 + Structured Retrieval"]
   D --> E["Research Agent Runtime"]
   E --> P["Planner + Intent Router"]
   E --> R["Evidence Retriever"]
@@ -105,21 +104,6 @@ flowchart LR
   E --> Q["Research Run + Transient Evidence Matrix"]
   E --> V["Claim Verifier"]
   L["Project Literature Basket"] --> EM["Persistent Evidence Matrix"]
-  EM --> RB["Versioned Research Brief"]
-  EM --> F["Freshness + Change Impact"]
-  F --> RB
-  EM --> RG["Project Research Gap Queue"]
-  F --> RG
-  RB --> RG
-  EM --> PS["Project Research Status"]
-  F --> PS
-  RG --> PS
-  RB --> PS
-  PS --> L
-  PS --> EM
-  PS --> RB
-  RG --> L
-  RG --> EM
   P --> O["Grounded Answer + Citation Trace UI"]
   R --> O
   X --> O
@@ -128,7 +112,6 @@ flowchart LR
   Q --> O
   V --> O
   EM --> O
-  RB --> O
 ```
 
 At a high level:
@@ -139,46 +122,32 @@ At a high level:
    reader navigation.
 3. Retrieval returns candidate evidence under the current-paper, basket, or full
    library scope.
-4. Research Agent Mode plans tool calls, checks evidence sufficiency, generates
-   an answer, and verifies citation support.
+4. The Research Agent plans tool calls, checks evidence sufficiency, generates
+   an answer, and verifies citation support by default. Model or web
+   supplementation is considered only after an explicit user choice and only
+   when local evidence is insufficient.
 5. A project can turn selected literature-basket sources into a persistent,
    versioned evidence matrix. Each populated factual cell is an extract from the
    same paper and carries a reader locator; missing evidence stays visibly empty.
-6. A verified matrix can generate a versioned brief using only its audited
-   evidence. The same claim verifier blocks unsupported, unresolved,
-   missing-source, or out-of-scope evidence from receiving verified status.
-7. When the matrix advances, the brief preserves its historical audit while a
-   lineage check reports whether evidence is equivalent or identifies changed
-   fields and affected citations. A persisted update plan rewrites only the
-   affected citation-bearing blocks, shows the old/proposed Markdown, and lets
-   the user accept or retain each block. Unaffected content is not regenerated.
-   The merged revision stays bound to the same matrix and reruns the complete
-   audit; retained stale blocks force `needs_review`, while unverifiable lineage
-   blocks the operation or export.
-8. The frontend keeps the answer clean while citations, reference cards, reader
+6. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
-9. The project research gap queue reuses structured matrix, comparison, brief,
-   and source-change facts to prioritize unresolved evidence work. Cell gaps
-   first offer strict same-paper repair candidates; accepting an exact passage
-   creates a new matrix revision, reruns matrix/comparison audits, and exposes
-   affected briefs to the existing incremental review flow. Cross-paper
-   candidates exclude current matrix sources and require explicit basket
-   confirmation. A second confirmation can add the selected paper as an
-   independently grounded row after previewing every extracted or honestly
-   missing field; existing rows remain unchanged and affected briefs return to
-   the incremental review flow.
-10. A verified matrix can scan structured metric tables for high-precision
-    comparison candidates. The UI shows both exact source excerpts and every
-    prefilled task, dataset, protocol, metric, target, and result. Controlled
-    exact matches are visible, semantic mappings require an explicit checkbox,
-    and the server recomputes the candidate before running the unchanged strict
-    comparison audit. Only that audited revision can refresh research gaps or
-    brief lineage.
-11. The project research status center refreshes source/gap state, measures
-    comparison-candidate coverage across every eligible current matrix, and
-    returns one fixed quality-first action. It can route to the exact matrix,
-    comparison tab, gap queue, brief, or literature basket, but cannot resolve
-    any evidence contract on the researcher's behalf.
+
+The published beta.13 retrieves candidates with BM25, query
+translation/expansion, and structured indexes. The local development tree contains the
+next Windows build's explicit opt-in local semantic path: a separately verified
+component maintains an atomic local embedding index and combines BM25 with dense
+retrieval for current-paper and selected-basket queries. It never enables web or
+model knowledge, never uploads library content for retrieval, fails open to
+BM25, and leaves full-library retrieval on BM25. This is an exact local index,
+not an external vector database, and has not been backported to beta.13.
+
+The local beta.14 portable candidate includes the verified component archive.
+Open the retrieval control, choose **Enable local semantic retrieval**, confirm
+**Install and enable**, and wait for the local index to become ready before
+selecting hybrid retrieval. Component installation in this bundled build needs
+no download; answer generation still uses the configured model API. The archive
+adds about 286 MiB to the package and installs about 514 MiB before index/cache
+overhead. Installation and indexing remain explicit user actions.
 
 Key backend entry points:
 
@@ -187,15 +156,8 @@ Key backend entry points:
 - `api/routers/chat.py`: conversations, messages, uploads, and direct research-agent endpoint
 - `api/routers/library.py`: library, conversion, quality, metadata, and indexing APIs
 - `api/routers/evidence_matrices.py`: project evidence-matrix generation, revisions, cell audit, and export
-- `api/routers/research_briefs.py`: project brief generation, revisions, evidence audit, and export
-- `api/routers/research_gaps.py`: project gap aggregation, same-source cell repair, cross-source candidate search, and human confirmation
 - `kb/task_runtime.py`: background generation/conversion runtime
 - `kb/evidence_matrix.py`: source-balanced cell extraction, strict same-source repair, comparison boundaries, audit, and exporters
-- `kb/research_brief.py`: brief source normalization, quality contract, bibliography, and exporters
-- `kb/research_brief_lineage.py`: matrix fingerprinting, freshness, change impact, and export provenance rules
-- `kb/research_brief_update.py`: stable citation slots, affected-block planning, grounded candidate synthesis, exact-span merge, and preservation metrics
-- `kb/research_gap.py`: deterministic gap identity, priority, impact, and local candidate evidence search
-- `kb/project_status.py`: deterministic project readiness stages and unique next-action priority
 - `kb/agent/`: lightweight Research Agent layer
 
 Key frontend entry points:
@@ -206,15 +168,13 @@ Key frontend entry points:
 - `web/src/components/chat/AgentTracePanel.tsx`: Research Agent trace UI
 - `web/src/components/chat/CiteShelf.tsx`: literature basket UI
 - `web/src/components/chat/EvidenceMatrixWorkspace.tsx`: persistent matrix editor, evidence, versions, and exports
-- `web/src/components/chat/ResearchBriefWorkspace.tsx`: brief editor, preview, evidence, versions, and exports
-- `web/src/components/chat/ProjectActionCenter.tsx`: measured project status, single next action, and exact workflow navigation
 - `web/src/api/*.ts`: typed API contracts
 
-## Research Agent Mode
+## Research Agent and supplement sources
 
-Research Agent Mode is an incremental layer over the existing RAG system. It does
-not replace retrieval, prompt building, citation cards, or the default chat flow.
-When enabled, a response includes an `agent_trace` object with:
+The Research Agent is the default Q&A runtime. It does not replace retrieval,
+prompt building, or citation cards. A response can include an `agent_trace`
+object with:
 
 - `question_type`: `single_paper_qa`, `multi_paper_comparison`, `reading_guide`, `reference_followup`, or `unknown`
 - `context.planner_intent`: typed planner output with task type, required tools,
@@ -245,15 +205,26 @@ When opened, the panel shows the compact summary first; plan and tool-call logs
 stay behind a second "Execution Details" disclosure.
 When collapsed, the panel only shows compact evidence-check status and scope, not
 raw question-type labels or tool execution logs.
-Agent Mode also applies a lightweight evidence gate: answers with retrieved
-local evidence keep local snippets as the authority, while the model may add
-compact external academic background to improve framing. If OpenAI web search is
-configured, that background can use API web search; otherwise it comes from the
-normal text model. No-hit academic questions can also fall back to an external
-model answer. External fallback and hybrid answers are visibly marked so users
-can tell which claims are knowledge-base grounded and which parts are model/web
-background; no-hit fallback uses `not_applicable` for local citation
-verification.
+The runtime also applies a lightweight evidence gate. Local snippets remain the
+authority whenever they are sufficient. The composer stores one supplement
+choice per conversation:
+
+- `Library only` (default): state that evidence is insufficient without adding
+  external knowledge.
+- `Model supplement`: allow model knowledge only after insufficient local
+  evidence; never run web search.
+- `Web supplement`: try configured web search only after insufficient local
+  evidence; if it is unavailable or fails, never substitute model knowledge.
+
+Web search has a separate enable switch, API key, base URL, and model in
+Settings. The composer checks that capability before sending, and opens the
+matching settings card when a saved web choice is not ready.
+External and hybrid answers are visibly marked so users can tell which claims
+are library-grounded and which parts use explicitly requested model or web
+context. Linked web sources remain in a separate external-source section: they
+can be opened, but they cannot enter the literature basket or be saved as
+verified evidence notes. For hybrid answers, users can still save the individual
+library citation cards.
 The source blend is explicit in the trace: `local_grounded`,
 `hybrid_local_external`, `external_academic`, or `general_llm`. General
 non-library questions can use the normal text API without adding a knowledge-base
@@ -273,11 +244,10 @@ The planner uses simple heuristics first:
 - reference, citation, upstream, prior-work language -> `reference_followup`
 - otherwise -> `single_paper_qa`
 
-The runtime then applies an evidence sufficiency gate. Low-confidence retrieval
-hits are preserved in the trace for diagnosis, but only usable hits are treated
-as local evidence. If the local library is insufficient, the answer is qualified
-or routed to an external academic fallback when configured; it is not presented
-as a knowledge-base-grounded result.
+Low-confidence retrieval hits are preserved in the trace for diagnosis, but
+only usable hits are treated as local evidence. External supplementation is
+routed only when the saved user choice permits it; it is never presented as a
+knowledge-base-grounded result.
 
 The tool layer wraps existing modules instead of adding external services:
 
@@ -291,13 +261,12 @@ The tool layer wraps existing modules instead of adding external services:
 If no text LLM API key is configured, the agent still runs in degraded mode and
 returns retrieved evidence notes plus a trace instead of crashing the app.
 
-### Enable Agent Mode
+### Select a supplement source
 
-In the React chat UI, toggle the `Normal` / `Agent` button in the composer before
-sending a question. The setting is persisted per conversation and only affects
-newly sent turns, so ordinary chat stays unchanged unless the user explicitly
-enables Agent Mode. For explicit test or deep-link entry, open the app with
-`/?agent_mode=1`.
+Use the supplement-source dropdown in the React composer. The choice is
+persisted per conversation and applies only to newly sent turns. Deep links may
+use `/?external_supplement=model` or `/?external_supplement=web`; omitting the
+parameter keeps the safe `Library only` default.
 
 API options:
 
@@ -309,6 +278,7 @@ Content-Type: application/json
   "conv_id": "conversation-id",
   "prompt": "Compare these papers",
   "agent_mode": true,
+  "external_supplement_mode": "disabled",
   "query_scope": "basket",
   "prompt_context": {
     "items": [
@@ -327,13 +297,16 @@ Content-Type: application/json
 {
   "query": "How should I read this paper?",
   "top_k": 6,
+  "external_supplement_mode": "disabled",
   "query_scope": "current_paper",
   "source_lock_path": "converted-paper.md"
 }
 ```
 
 Supported `query_scope` values are `current_paper`, `basket`, and `library`.
-Default chat behavior is unchanged when `agent_mode` is omitted or false.
+The low-level generation API remains backward-compatible: omitting
+`agent_mode`, or setting it to false, keeps the legacy non-Agent path. The React
+product UI sends `agent_mode: true` and uses `Library only` by default.
 
 ## Source development quick start
 
@@ -473,13 +446,9 @@ Environment variables and `.env` values take precedence.
 8. Select source text or use a table, equation, or figure action in the Reader
    to add the exact located evidence and your comment to a new or existing
    research note.
-9. Add important papers to a project literature basket, generate and review its
-   evidence matrix, and keep honest gaps empty.
-10. Create a verified research brief from the audited matrix. If the matrix
-   changes, review the displayed affected fields/citations and update the bound
-   brief from the latest verified revision before treating it as current.
-11. Export the brief with its lineage marker, or export the matrix as Markdown,
-    CSV, or XLSX.
+9. Add important papers and excerpts to a literature basket and continue asking
+   questions within the selected source scope.
+10. Save and export source-backed reading notes for continued reading and evidence review.
 
 ## Demo
 
@@ -488,7 +457,7 @@ path for portfolio use:
 
 1. Upload one or two academic PDFs.
 2. Convert and index the papers.
-3. Ask a paper-specific question in Agent Mode.
+3. Ask a paper-specific question with the default `Library only` source policy.
 4. Open the citation card and reader locate target.
 5. Ask a comparison or reading-guide question.
 6. Open the Research Agent Trace panel to show planner intent, tool calls,

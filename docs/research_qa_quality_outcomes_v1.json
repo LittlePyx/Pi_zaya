@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "report_id": "research_qa_quality_outcomes_v1",
+  "product_boundary": "reading library papers and finding, comparing, verifying, locating, and organizing traceable evidence; not manuscript writing or submission preparation",
+  "source_reports": [
+    {
+      "id": "main_56",
+      "case_count": 56,
+      "passed": 56,
+      "failed": 0,
+      "raw_sha256": "64b46e4136e168c29b9aa65105e3eb43c92d1f6c524a8a92618e6b1df64dee86",
+      "summary_sha256": "20511de463567203df0882fdd9a521166eed1ab48b5139f6701d35fb1ce608e3",
+      "timing": {
+        "first_answer_ms": {
+          "count": 56,
+          "p50": 3121.93,
+          "p95": 4550.37,
+          "max": 6346.51
+        },
+        "answer_complete_ms": {
+          "count": 56,
+          "p50": 4720.74,
+          "p95": 10804.84,
+          "max": 13151.79
+        },
+        "cards_complete_ms": {
+          "count": 56,
+          "p50": 7747.48,
+          "p95": 12726.87,
+          "max": 14981.66
+        },
+        "latency_ms": {
+          "count": 56,
+          "p50": 8453.72,
+          "p95": 13409.4,
+          "max": 14981.66
+        },
+        "validation_complete_ms": {
+          "count": 56,
+          "p50": 8817.79,
+          "p95": 14842.12,
+          "max": 17364.7
+        },
+        "case_wall_ms": {
+          "count": 56,
+          "p50": 9052.17,
+          "p95": 14872.77,
+          "max": 17397.43
+        },
+        "answer_to_cards_ms": {
+          "count": 56,
+          "p50": 1638.88,
+          "p95": 6082.9,
+          "max": 7896.66
+        },
+        "cards_to_ui_ready_ms": {
+          "count": 56,
+          "p50": 437.09,
+          "p95": 1913.54,
+          "max": 2585.86
+        },
+        "cards_to_validation_ms": {
+          "count": 56,
+          "p50": 901.08,
+          "p95": 2602.36,
+          "max": 2879.28
+        }
+      }
+    },
+    {
+      "id": "unseen_v2_22",
+      "case_count": 22,
+      "passed": 22,
+      "failed": 0,
+      "raw_sha256": "52be5477728fc196ce7f62a9c44dfc1b4fdb5be1c75db5aebd2bd809cc4ec933",
+      "summary_sha256": "ace4fee311abf1b2ac7b081aefc0f199adeab496bdf9722a1e0f178fa12e7c74",
+      "timing": {
+        "first_answer_ms": {
+          "count": 22,
+          "p50": 4365.68,
+          "p95": 6125.11,
+          "max": 6225.92
+        },
+        "answer_complete_ms": {
+          "count": 22,
+          "p50": 9343.86,
+          "p95": 11579.24,
+          "max": 13419.59
+        },
+        "cards_complete_ms": {
+          "count": 22,
+          "p50": 10809.64,
+          "p95": 14117.27,
+          "max": 17258.65
+        },
+        "latency_ms": {
+          "count": 22,
+          "p50": 11911.87,
+          "p95": 16216.02,
+          "max": 17258.65
+        },
+        "validation_complete_ms": {
+          "count": 22,
+          "p50": 11911.87,
+          "p95": 16277.23,
+          "max": 18945.63
+        },
+        "case_wall_ms": {
+          "count": 22,
+          "p50": 11942.97,
+          "p95": 16315.09,
+          "max": 18971.55
+        },
+        "answer_to_cards_ms": {
+          "count": 22,
+          "p50": 1558.41,
+          "p95": 3835.51,
+          "max": 4381.2
+        },
+        "cards_to_ui_ready_ms": {
+          "count": 22,
+          "p50": 745.06,
+          "p95": 2100.55,
+          "max": 3721.42
+        },
+        "cards_to_validation_ms": {
+          "count": 22,
+          "p50": 909.21,
+          "p95": 2102.77,
+          "max": 3721.42
+        }
+      }
+    }
+  ],
+  "live_outcomes": {
+    "case_count": 78,
+    "passed": 78,
+    "failed": 0,
+    "categories": {
+      "answer_correctness": {
+        "case_coverage": 78,
+        "checks_applied": 223,
+        "passed": 223,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "answer_contains_required_term_groups": {
+            "applied": 67,
+            "passed": 67
+          },
+          "answer_contains_required_terms": {
+            "applied": 78,
+            "passed": 78
+          },
+          "answer_directly_addresses_question": {
+            "applied": 78,
+            "passed": 78
+          }
+        }
+      },
+      "faithfulness": {
+        "case_coverage": 74,
+        "checks_applied": 78,
+        "passed": 78,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "answer_avoids_forbidden_claims": {
+            "applied": 3,
+            "passed": 3
+          },
+          "claims_have_matching_evidence": {
+            "applied": 74,
+            "passed": 74
+          },
+          "primary_evidence_avoids_forbidden_terms": {
+            "applied": 1,
+            "passed": 1
+          }
+        }
+      },
+      "citation_completeness": {
+        "case_coverage": 78,
+        "checks_applied": 134,
+        "passed": 134,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "answer_claims_have_inline_citations": {
+            "applied": 1,
+            "passed": 1
+          },
+          "answer_high_risk_claims_are_cited": {
+            "applied": 55,
+            "passed": 55
+          },
+          "citations_include_required_docs": {
+            "applied": 78,
+            "passed": 78
+          }
+        }
+      },
+      "citation_precision_and_routing": {
+        "case_coverage": 76,
+        "checks_applied": 202,
+        "passed": 202,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "citation_card_quality": {
+            "applied": 75,
+            "passed": 75
+          },
+          "citations_avoid_unexpected_docs": {
+            "applied": 50,
+            "passed": 50
+          },
+          "citations_match_required_routes": {
+            "applied": 74,
+            "passed": 74
+          },
+          "system_b_audit": {
+            "applied": 3,
+            "passed": 3
+          }
+        }
+      },
+      "locator_accuracy": {
+        "case_coverage": 71,
+        "checks_applied": 71,
+        "passed": 71,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "citations_have_expected_locators": {
+            "applied": 71,
+            "passed": 71
+          }
+        }
+      },
+      "contradiction_boundary": {
+        "case_coverage": 4,
+        "checks_applied": 4,
+        "passed": 4,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "answer_avoids_forbidden_claims": {
+            "applied": 3,
+            "passed": 3
+          },
+          "primary_evidence_avoids_forbidden_terms": {
+            "applied": 1,
+            "passed": 1
+          }
+        }
+      },
+      "user_visible_integrity": {
+        "case_coverage": 78,
+        "checks_applied": 156,
+        "passed": 156,
+        "failed": 0,
+        "pass_rate": 1.0,
+        "check_counts": {
+          "answer_no_unresolved_citation_markers": {
+            "applied": 78,
+            "passed": 78
+          },
+          "refs_card_copy_quality": {
+            "applied": 78,
+            "passed": 78
+          }
+        }
+      }
+    }
+  },
+  "automatic_resolution": {
+    "claim_evidence_observed_cases": 78,
+    "observed_finalization_action_cases": 57,
+    "observed_finalization_action_count": 327,
+    "observed_finalization_actions": {
+      "repaired_citations": 134,
+      "rebound_citations": 13,
+      "section_source_rebound_citations": 13,
+      "repaired_modality_boundaries": 0,
+      "relocated_midphrase_citations": 0,
+      "restored_prompt_terms": 2,
+      "restored_evidence_numbers": 0,
+      "restored_source_facts": 6,
+      "added_requested_facet_boundaries": 0,
+      "trimmed_unsupported_inferences": 0,
+      "dropped_cross_source_claims": 3,
+      "dropped_hard_mismatch_claims": 19,
+      "stripped_weak_citations": 9,
+      "renderer_rejected_citations": 38,
+      "removed_unplanned_citations": 0,
+      "removed_heading_citations": 0,
+      "dropped_unsupported_unplanned_claims": 88,
+      "dropped_unsupported_inferences": 0,
+      "dropped_placeholder_sections": 2
+    },
+    "residual_detection_counts": {
+      "uncited_high_risk_claims": 0,
+      "citation_mismatch_claims": 1
+    },
+    "runtime_gate_status_counts": {},
+    "runtime_gate_observed_count": 0,
+    "stable_outcome_observed_cases": 0,
+    "stable_outcome_status_counts": {},
+    "stable_gate_pass_count": 0,
+    "stable_repair_required_cases": 0,
+    "stable_repair_succeeded_cases": 0,
+    "stable_repair_success_rate": null,
+    "attempt_count": null,
+    "attempt_observability": "not_recorded_in_historical_live_traces",
+    "final_user_visible_unresolved_count": 0,
+    "final_user_visible_unresolved_examples": []
+  },
+  "deterministic_contracts": {
+    "agent_answer_quality": {
+      "ok": true,
+      "case_count": 5,
+      "expected_answer_point_coverage": 1.0,
+      "citation_precision": 1.0,
+      "claim_support_rate": 1.0,
+      "unsupported_claim_rate": 0.0,
+      "no_evidence_refusal_accuracy": 1.0,
+      "quality_gate_observed_count": 0
+    },
+    "grounded_replay": {
+      "ok": true,
+      "case_count": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "reviewed_replay": {
+      "ok": true,
+      "case_count": 5,
+      "dataset_count": 1
+    },
+    "note_evidence_auto_resolution": {
+      "case_count": 5,
+      "passed": 5,
+      "failed": 0,
+      "cases": [
+        {
+          "id": "source_change_auto_verified",
+          "ok": true,
+          "detail": "resolved_exact_without_rewriting_quote"
+        },
+        {
+          "id": "stable_locator_auto_aligned",
+          "ok": true,
+          "detail": "resolved_exact_without_rewriting_quote"
+        },
+        {
+          "id": "exact_quote_auto_relocated",
+          "ok": true,
+          "detail": "resolved_exact_without_rewriting_quote"
+        },
+        {
+          "id": "saved_context_auto_disambiguated",
+          "ok": true,
+          "detail": "resolved_exact_without_rewriting_quote"
+        },
+        {
+          "id": "unsafe_fuzzy_candidate_rejected",
+          "ok": true,
+          "detail": "requires_review"
+        }
+      ],
+      "scope": "pure deterministic note-evidence state transitions; API orchestration remains in sanity gates"
+    }
+  },
+  "interpretation_boundaries": {
+    "correctness": "expected answer points and direct-answer fixture contracts; not open-domain human correctness",
+    "faithfulness": "claim-to-retrieved-evidence contracts over labeled cases",
+    "contradiction": "forbidden-claim and forbidden-evidence boundary checks only; this is not semantic entailment or NLI",
+    "repair_rate": "finalization actions are observed, but historical traces do not persist total attempts; no repair rate is claimed",
+    "visible_state_scan": "scans final answers and rendered citation-card copy; internal diagnostic statuses are intentionally excluded"
+  },
+  "validation": {
+    "ok": true,
+    "errors": []
+  }
+}

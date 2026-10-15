@@ -211,6 +211,15 @@ def test_basket_scope_reference_library_match_path_allows_matched_paper_body() -
     assert trace["source_path_count"] == 1
 
 
+def test_matched_basket_reference_does_not_accept_another_papers_bibliography():
+    title = "Noise2Noise Learning Image Restoration without Clean Data"
+    selected = [{"kind": "reference", "title": title,
+        "libraryMatchPath": "F:/papers/n2n.en.md", "libraryMatchStatus": "matched"}]
+    own = {"text": "The actual paper body.", "meta": {"source_path": "F:/papers/n2n.en.md"}}
+    mention = {"text": f"Related work: {title}.", "meta": {"source_path": "F:/papers/other.en.md"}}
+    assert _filter_hits_for_selected_research_context([own, mention], selected)[0] == [own]
+
+
 def test_selected_research_context_prompt_uses_library_match_label_not_local_path() -> None:
     block = _format_selected_research_context_block(
         {

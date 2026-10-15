@@ -190,6 +190,10 @@ export interface ConversionQualityReport {
   repair_attempt_count?: number
   latest_repair_attempt?: ConversionRepairAttempt | null
   repair_attempts?: ConversionRepairAttempt[]
+  retry_exhausted?: boolean
+  retry_exhausted_reason?: string
+  retry_profile_signature?: string
+  retry_issue_codes?: string[]
   recommended_action: string
   needs_reconvert: boolean
   source_quality?: ConversionSourceQuality | null
@@ -469,6 +473,57 @@ export interface RenameApplyResponse {
   items: Array<Record<string, unknown>>
 }
 
+export interface LibraryDeleteDependencyNote {
+  id: string
+  project_id?: string | null
+  title: string
+  archived: boolean
+  link_count: number
+}
+
+export interface LibraryDeleteImpactResponse {
+  ok: boolean
+  handled: boolean
+  pdf_name: string
+  note_count: number
+  active_note_count: number
+  archived_note_count: number
+  link_count: number
+  notes: LibraryDeleteDependencyNote[]
+  truncated?: boolean
+  busy: boolean
+  preservation_available: boolean
+  preservation_mode: 'converted_source' | 'none'
+  deletion_blocked: boolean
+  error?: string
+}
+
+export interface LibraryDeleteResponse {
+  ok: boolean
+  deletion_blocked?: boolean
+  pdf_deleted: boolean
+  md_deleted: boolean
+  evidence_preserved?: boolean
+  preserved_md_path?: string
+  dependency_protection?: Partial<LibraryDeleteImpactResponse>
+  note_source_sync?: {
+    ok?: boolean
+    handled?: boolean
+    notes_updated?: number
+    links_updated?: number
+    error?: string
+  }
+  removed_queued: number
+  index_cleanup?: {
+    docs_removed?: number
+    chunks_removed?: number
+    reference_docs_removed?: number
+    errors?: string[]
+  }
+  warnings: string[]
+  needs_reindex: boolean
+}
+
 export interface UploadInspectResponse {
   name: string
   sha1: string
@@ -500,6 +555,12 @@ export interface UploadCommitResponse {
   task_id: string
 }
 
+export interface ExternalPdfImportResponse extends UploadCommitResponse {
+  source_url: string
+  candidate_status: 'already_imported' | 'conversion_queued' | 'imported' | string
+  formal_evidence_ready: false
+}
+
 export interface LibraryUploadResponse {
   name: string
   duplicate?: boolean
@@ -514,6 +575,10 @@ export interface GuideSourceResponse {
   md_exists: boolean
   source_path: string
   source_name: string
+  index_state: string
+  index_status: string
+  index_ready: boolean
+  index_num_chunks: number
 }
 
 export interface LibraryReindexResponse {
@@ -1281,6 +1346,22 @@ export const libraryApi = {
     const res = await authFetch('/api/library/upload/commit', { method: 'POST', body: fd })
     return responseJson<UploadCommitResponse>(res)
   },
+  importExternalPdf: async (
+    url: string,
+    opts?: { title?: string; convertNow?: boolean; speedMode?: string },
+  ) => {
+    const res = await authFetch('/api/library/external-pdf/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        title: String(opts?.title || ''),
+        convert_now: opts?.convertNow ?? true,
+        speed_mode: String(opts?.speedMode || 'balanced'),
+      }),
+    })
+    return responseJson<ExternalPdfImportResponse>(res)
+  },
   convert: (pdfName: string, speedMode = 'balanced', opts?: { replace?: boolean }) =>
     api.post('/api/library/convert', {
       pdf_name: pdfName,
@@ -1325,21 +1406,16 @@ export const libraryApi = {
       pdf_name: pdfName,
       target,
     }),
+  inspectDeleteImpact: (pdfName: string, alsoMd = true) =>
+    api.post<LibraryDeleteImpactResponse>(
+      '/api/library/file/delete-impact',
+      {
+        pdf_name: pdfName,
+        also_md: alsoMd,
+      },
+    ),
   deleteFile: (pdfName: string, alsoMd = true) =>
-    api.post<{
-      ok: boolean
-      pdf_deleted: boolean
-      md_deleted: boolean
-      removed_queued: number
-      index_cleanup?: {
-        docs_removed?: number
-        chunks_removed?: number
-        reference_docs_removed?: number
-        errors?: string[]
-      }
-      warnings: string[]
-      needs_reindex: boolean
-    }>(
+    api.post<LibraryDeleteResponse>(
       '/api/library/file/delete',
       {
         pdf_name: pdfName,

@@ -1,5 +1,20 @@
 import { expect, test, type Route } from '@playwright/test'
-import { downloadFilename, researchNoteDownloadFilename } from '../../src/api/chat'
+import {
+  downloadFilename,
+  researchNoteDownloadFilename,
+  type ResearchNoteRecord,
+} from '../../src/api/chat'
+import {
+  buildResearchNoteOutline,
+  refreshResearchNoteOutlineSource,
+  researchNoteContentFingerprint,
+  researchNoteOutlineHasMixedProjects,
+  researchNoteOutlineProjectId,
+  researchNoteOutlineSectionHasManualEdits,
+  researchNoteOutlineSourceState,
+  researchNoteOutlineSourcesFromState,
+  researchNoteOutlineTags,
+} from '../../src/pages/researchNoteOutline'
 import { installAppShellMocks } from './mockAppShell'
 
 const PROJECT_ID = 'project-notes'
@@ -18,10 +33,111 @@ test('research note export prefers the UTF-8 title filename', () => {
   expect(researchNoteDownloadFilename('  单光子：结果 / 对比？  ')).toBe('单光子：结果 - 对比？.docx')
 })
 
+test('outline helpers inherit a shared project and deduplicate traceable sources', () => {
+  const source = {
+    kind: 'source',
+    label: 'Shared source',
+    source_path: SOURCE_PATH,
+    block_id: 'block-shared',
+  }
+  const notes: ResearchNoteRecord[] = [
+    {
+      id: 'outline-a',
+      project_id: PROJECT_ID,
+      source_conv_id: CONVERSATION_ID,
+      title: 'Outline A',
+      content_markdown: 'A',
+      source_state: { version: 1, links: [source] },
+      tags: ['SPAD', 'Noise'],
+      pinned: false,
+      archived: false,
+      revision: 2,
+      created_at: 1,
+      updated_at: 2,
+    },
+    {
+      id: 'outline-b',
+      project_id: PROJECT_ID,
+      source_conv_id: CONVERSATION_ID,
+      title: 'Outline B',
+      content_markdown: 'B',
+      source_state: { version: 1, links: [{ ...source }] },
+      tags: ['noise', 'detector'],
+      pinned: false,
+      archived: false,
+      revision: 3,
+      created_at: 1,
+      updated_at: 3,
+    },
+  ]
+
+  expect(researchNoteOutlineProjectId(notes)).toBe(PROJECT_ID)
+  expect(researchNoteOutlineHasMixedProjects(notes)).toBe(false)
+  expect(researchNoteOutlineTags(notes)).toEqual(['SPAD', 'Noise', 'detector'])
+  const sourceState = researchNoteOutlineSourceState(notes)
+  const markdown = buildResearchNoteOutline('Traceable outline', notes)
+  const outlineSources = researchNoteOutlineSourcesFromState(sourceState)
+  expect(sourceState.links).toHaveLength(1)
+  expect(markdown).toContain('## 1. Outline A\n\nA')
+  expect(markdown).not.toContain('kb_research_note_source')
+  expect(outlineSources[0]?.content_fingerprint).toBe(researchNoteContentFingerprint('A'))
+  expect(researchNoteOutlineSectionHasManualEdits(markdown, outlineSources, 'outline-a')).toBe(false)
+
+  const latest = {
+    ...notes[0],
+    title: 'Outline A updated',
+    content_markdown: 'Latest A evidence',
+    revision: 4,
+  }
+  const refreshed = refreshResearchNoteOutlineSource(markdown, sourceState, latest, 1_800_000_000)
+  expect(refreshed?.contentMarkdown).toContain('## 1. Outline A updated\n\nLatest A evidence')
+  expect(refreshed?.contentMarkdown).not.toContain('\n\nA\n')
+  expect(researchNoteOutlineSourcesFromState(refreshed?.sourceState)[0]).toEqual({
+    id: 'outline-a',
+    title: 'Outline A updated',
+    revision: 4,
+    content_fingerprint: researchNoteContentFingerprint('Latest A evidence'),
+    last_refreshed_at: 1_800_000_000,
+  })
+  expect((refreshed?.sourceState.composition as { refresh_history?: unknown[] }).refresh_history).toEqual([
+    {
+      source_id: 'outline-a',
+      from_revision: 2,
+      to_revision: 4,
+      refreshed_at: 1_800_000_000,
+      replaced_manual_edits: false,
+    },
+  ])
+
+  const manuallyEdited = markdown.replace('\n\nA\n', '\n\nManual outline wording\n')
+  expect(researchNoteOutlineSectionHasManualEdits(manuallyEdited, outlineSources, 'outline-a')).toBe(true)
+  expect(refreshResearchNoteOutlineSource(manuallyEdited, sourceState, latest)?.hadManualEdits).toBe(true)
+
+  const nestedHeadingNotes = [
+    { ...notes[0], content_markdown: 'A\n\n---\n\n## 2. Nested numbered heading\n\nKeep this content.' },
+    notes[1],
+  ]
+  const nestedHeadingState = researchNoteOutlineSourceState(nestedHeadingNotes)
+  const nestedHeadingMarkdown = buildResearchNoteOutline('Nested headings', nestedHeadingNotes)
+  const refreshedSecond = refreshResearchNoteOutlineSource(
+    nestedHeadingMarkdown,
+    nestedHeadingState,
+    { ...notes[1], content_markdown: 'Latest B evidence', revision: 5 },
+  )
+  expect(refreshedSecond?.contentMarkdown).toContain('## 2. Nested numbered heading\n\nKeep this content.')
+  expect(refreshedSecond?.contentMarkdown).toContain('## 2. Outline B\n\nLatest B evidence')
+  expect(researchNoteOutlineProjectId([{ ...notes[0], project_id: null }, notes[1]])).toBeNull()
+  expect(researchNoteOutlineHasMixedProjects([{ ...notes[0], project_id: null }, notes[1]])).toBe(true)
+})
+
 test('research notes workspace edits, combines, filters, and follows traceable sources', async ({ page }) => {
+  test.setTimeout(60_000)
   let readerPayload: Record<string, unknown> | null = null
+  let readerState: Record<string, unknown> | null = null
   let wordExportBody: Record<string, unknown> | null = null
-  let records = [
+  const evidenceContextBodies: Array<Record<string, unknown>> = []
+  let failOutlineSaves = false
+  let records: ResearchNoteRecord[] = [
     {
       id: 'note-a',
       project_id: PROJECT_ID,
@@ -46,6 +162,22 @@ test('research notes workspace edits, combines, filters, and follows traceable s
             evidence_quote: 'Photon arrival is a stochastic process.',
             block_id: 'block-noise',
             page_start: 3,
+            evidence_auto_resolution_history: [{
+              version: 1,
+              resolved_at: 1_780_000_050,
+              action: 'exact_quote_auto_relocated',
+              match_reason: 'quote_relocated',
+              from: {
+                heading_path: 'Methods / Noise modeling',
+                page_start: 2,
+                page_end: 2,
+              },
+              to: {
+                heading_path: 'Methods / Noise modeling',
+                page_start: 3,
+                page_end: 3,
+              },
+            }],
           },
         ],
       },
@@ -62,7 +194,31 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       source_conv_id: null,
       title: 'Detector trade-off',
       content_markdown: '## Finding\n\nDynamic range constrains the detector.',
-      source_state: { version: 1, links: [] },
+      source_state: {
+        version: 1,
+        links: [
+          {
+            kind: 'source',
+            label: 'Noise modeling duplicate',
+            source_name: 'Example SPAD paper',
+            source_path: SOURCE_PATH,
+            heading_path: 'Methods / Noise modeling',
+            evidence_quote: 'Photon arrival is a stochastic process.',
+            block_id: 'block-noise',
+            page_start: 3,
+          },
+          {
+            kind: 'source',
+            label: 'Detector dynamic range',
+            source_name: 'Detector paper',
+            source_path: 'db/paper/detector.md',
+            heading_path: 'Results / Dynamic range',
+            evidence_quote: 'Dynamic range constrains the detector.',
+            block_id: 'block-detector',
+            page_start: 5,
+          },
+        ],
+      },
       tags: ['detector'],
       pinned: false,
       archived: false,
@@ -101,6 +257,10 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       const index = records.findIndex(item => item.id === noteId)
       const body = request.postDataJSON() as Record<string, unknown>
       const current = records[index]
+      if (failOutlineSaves && current?.title === 'Integrated SPAD evidence outline') {
+        await fulfillJson(route, { detail: 'temporary outline save failure' }, 503)
+        return
+      }
       records[index] = {
         ...current,
         ...body,
@@ -117,11 +277,11 @@ test('research notes workspace edits, combines, filters, and follows traceable s
       const record = {
         id: `note-${records.length + 1}`,
         project_id: body.project_id as string | null || null,
-        source_conv_id: null,
+        source_conv_id: body.source_conv_id as string | null || null,
         title: String(body.title || ''),
         content_markdown: String(body.content_markdown || ''),
-        source_state: body.source_state || { version: 1, links: [] },
-        tags: [],
+        source_state: body.source_state as ResearchNoteRecord['source_state'] || { version: 1, links: [] },
+        tags: Array.isArray(body.tags) ? body.tags as string[] : [],
         pinned: false,
         archived: false,
         revision: 1,
@@ -136,14 +296,131 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   })
 
   await page.route('**/api/reader/sessions', async (route) => {
-    const body = route.request().postDataJSON() as { payload?: Record<string, unknown> }
+    const body = route.request().postDataJSON() as {
+      payload?: Record<string, unknown>
+      state?: Record<string, unknown>
+    }
     readerPayload = body.payload || null
+    readerState = body.state || null
     await fulfillJson(route, {
       id: 'reader-note-source',
       conversation_id: CONVERSATION_ID,
       message_id: 22,
       payload: body.payload,
       state: {},
+    })
+  })
+
+  await page.route('**/api/chat/research-note/evidence-context', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    evidenceContextBodies.push(body)
+    const sourcePath = String(body.source_path || '')
+    if (sourcePath.includes('detector.md')) {
+      await fulfillJson(route, {
+        status: 'candidate',
+        reason: 'saved_target_missing',
+        source_name: 'Detector paper',
+        heading_path: 'Results / Dynamic range',
+        page_start: 5,
+        page_end: 5,
+        before: [],
+        target: null,
+        after: [],
+        can_open_exact: false,
+        reader_open: null,
+        candidates: [
+          {
+            block_id: 'block-detector-candidate',
+            anchor_id: 'p_00021',
+            kind: 'paragraph',
+            heading_path: 'Results / Detector limits',
+            page_start: 6,
+            page_end: 6,
+            text: 'A similar dynamic-range observation appears in this paragraph.',
+            markdown: 'A similar dynamic-range observation appears in this paragraph.',
+            score: 0.71,
+            reader_open: {
+              sourcePath,
+              sourceName: 'Detector paper',
+              headingPath: 'Results / Detector limits',
+              snippet: 'A similar dynamic-range observation appears in this paragraph.',
+              highlightSnippet: 'A similar dynamic-range observation appears in this paragraph.',
+              blockId: 'block-detector-candidate',
+              anchorId: 'p_00021',
+              anchorKind: 'paragraph',
+              strictLocate: true,
+              locateTarget: {
+                blockId: 'block-detector-candidate',
+                anchorId: 'p_00021',
+                anchorKind: 'paragraph',
+              },
+            },
+          },
+        ],
+      })
+      return
+    }
+    await fulfillJson(route, {
+      status: 'exact',
+      reason: 'exact_block',
+      source_name: 'Example SPAD paper',
+      heading_path: 'Methods / Noise modeling',
+      page_start: 3,
+      page_end: 3,
+      before: [
+        {
+          block_id: 'block-before-noise',
+          anchor_id: 'p_00010',
+          kind: 'paragraph',
+          heading_path: 'Methods / Noise modeling',
+          page_start: 3,
+          page_end: 3,
+          text: 'The detector was calibrated before acquisition.',
+          markdown: 'The detector was calibrated before acquisition.',
+        },
+      ],
+      target: {
+        block_id: 'block-noise',
+        anchor_id: 'p_00011',
+        kind: 'paragraph',
+        heading_path: 'Methods / Noise modeling',
+        page_start: 3,
+        page_end: 3,
+        text: 'Photon arrival is a stochastic process.',
+        markdown: 'Photon arrival is a stochastic process.',
+      },
+      after: [
+        {
+          block_id: 'block-after-noise',
+          anchor_id: 'p_00012',
+          kind: 'paragraph',
+          heading_path: 'Methods / Noise modeling',
+          page_start: 3,
+          page_end: 3,
+          text: 'Dark counts were measured separately.',
+          markdown: 'Dark counts were measured separately.',
+        },
+      ],
+      candidates: [],
+      can_open_exact: true,
+      reader_open: {
+        sourcePath,
+        sourceName: 'Example SPAD paper',
+        headingPath: 'Methods / Noise modeling',
+        snippet: 'Photon arrival is a stochastic process.',
+        highlightSnippet: 'Photon arrival is a stochastic process.',
+        blockId: 'block-noise',
+        anchorId: 'p_00011',
+        anchorKind: 'paragraph',
+        strictLocate: true,
+        locateTarget: {
+          headingPath: 'Methods / Noise modeling',
+          snippet: 'Photon arrival is a stochastic process.',
+          blockId: 'block-noise',
+          anchorId: 'p_00011',
+          anchorKind: 'paragraph',
+        },
+      },
     })
   })
 
@@ -165,6 +442,31 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   await expect(page.getByRole('menuitem', { name: /研究笔记/ })).toHaveClass(/ant-menu-item-selected/)
   await expect(workspace.getByText('SPAD noise conclusion', { exact: true })).toBeVisible()
   await expect(workspace.locator('.kb-notes-source-card blockquote')).toContainText('Photon arrival is a stochastic process.')
+  await expect(page.getByTestId('research-note-source-1')).toContainText('Methods / Noise modeling · 第 3 页')
+  await expect(page.getByTestId('research-note-evidence-relocated-1')).toContainText('第 2 页 → Methods / Noise modeling · 第 3 页')
+
+  await page.getByTestId('research-note-evidence-review-1').click()
+  const exactReview = page.getByTestId('research-note-evidence-result-1')
+  await expect(exactReview).toContainText('准确定位')
+  await expect(exactReview).toContainText('第 3 页')
+  await expect(exactReview).toContainText('The detector was calibrated before acquisition.')
+  await expect(exactReview).toContainText('Photon arrival is a stochastic process.')
+  await expect(exactReview).toContainText('Dark counts were measured separately.')
+  await expect(page.getByTestId('research-note-evidence-open-1')).toBeVisible()
+  expect(evidenceContextBodies.at(-1)).toEqual(expect.objectContaining({
+    source_path: SOURCE_PATH,
+    block_id: 'block-noise',
+  }))
+
+  await page.getByTestId('workspace-note-note-b').click()
+  await page.getByTestId('research-note-evidence-review-1').click()
+  const candidateReview = page.getByTestId('research-note-evidence-result-1')
+  await expect(candidateReview).toContainText('需要核查')
+  await expect(candidateReview).toContainText('候选位置（已按保存语境排序）')
+  await expect(candidateReview).toContainText('A similar dynamic-range observation appears in this paragraph.')
+  await expect(page.getByTestId('research-note-source-1').getByRole('button', { name: '打开准确位置' })).toHaveCount(0)
+  await expect(page).toHaveURL(/\/notes$/)
+  await page.getByTestId('workspace-note-note-a').click()
 
   const titleInput = workspace.locator('.kb-notes-title-input')
   await titleInput.fill('SPAD noise evidence note')
@@ -190,17 +492,333 @@ test('research notes workspace edits, combines, filters, and follows traceable s
   const checkboxes = workspace.getByRole('checkbox', { name: '选择用于组合' })
   await checkboxes.nth(0).check()
   await checkboxes.nth(1).check()
-  await workspace.getByRole('button', { name: '组合写作提纲' }).click()
-  const outline = page.getByRole('dialog', { name: '组合写作提纲' })
+  await expect(workspace).toContainText('可追溯的证据提纲')
+  await workspace.getByRole('button', { name: '组合证据提纲' }).click()
+  const outline = page.getByRole('dialog', { name: '组合证据提纲' })
   await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/SPAD noise evidence note/)
   await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/Detector trade-off/)
-  await outline.getByRole('button', { name: 'Close' }).click()
+  await expect(outline).toContainText('所选笔记来自不同项目')
+  await outline.getByRole('textbox').nth(0).fill('Integrated SPAD evidence outline')
+  await expect(outline.getByRole('textbox').nth(1)).toHaveValue(/^# Integrated SPAD evidence outline/)
+  const noteARevisionAtComposition = records.find(record => record.id === 'note-a')?.revision
+  await page.getByTestId('research-note-outline-save').click()
+  await expect(outline).toBeHidden()
 
-  await workspace.getByRole('button', { name: '打开原文' }).click()
+  const outlineRecord = records.find(record => record.title === 'Integrated SPAD evidence outline')
+  expect(outlineRecord?.project_id).toBeNull()
+  expect(outlineRecord?.tags).toEqual(['SPAD', 'noise', 'detector'])
+  expect(outlineRecord?.source_state.links).toHaveLength(3)
+  expect(outlineRecord?.source_state.composition).toEqual({
+    kind: 'research_note_outline',
+    version: 1,
+    source_notes: [
+      {
+        id: 'note-a',
+        title: 'SPAD noise evidence note',
+        revision: noteARevisionAtComposition,
+        content_fingerprint: expect.any(String),
+      },
+      {
+        id: 'note-b',
+        title: 'Detector trade-off',
+        revision: 1,
+        content_fingerprint: expect.any(String),
+      },
+    ],
+    refresh_history: [],
+  })
+  await expect(titleInput).toHaveValue('Integrated SPAD evidence outline')
+  await expect(page.getByTestId('research-note-outline-sources')).toContainText('组成笔记（2）')
+  await expect(workspace.locator('.kb-notes-source-card')).toHaveCount(3)
+
+  await page.reload()
+  await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
+  await expect(titleInput).toHaveValue('Integrated SPAD evidence outline')
+  await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Edited, traceable conclusion/)
+
+  const outlineEditor = workspace.locator('.kb-notes-editor-body textarea')
+  const outlineBeforeManualEdit = await outlineEditor.inputValue()
+  await outlineEditor.fill(outlineBeforeManualEdit.replace(
+    'Edited, traceable conclusion.',
+    'Manual outline wording that must not be replaced silently.',
+  ))
+  await expect.poll(() => records.find(record => record.id === outlineRecord?.id)?.content_markdown)
+    .toContain('Manual outline wording')
+
+  const sourceIndex = records.findIndex(record => record.id === 'note-a')
+  const sourceBeforeUpdate = records[sourceIndex]
+  records[sourceIndex] = {
+    ...sourceBeforeUpdate,
+    title: 'SPAD noise evidence note · revised',
+    content_markdown: '## Finding\n\nUpdated source conclusion with calibrated evidence.',
+    source_state: {
+      ...sourceBeforeUpdate.source_state,
+      links: [
+        ...(sourceBeforeUpdate.source_state.links || []),
+        {
+          kind: 'source',
+          label: 'Calibration appendix',
+          source_path: 'db/paper/calibration.md',
+          block_id: 'block-calibration',
+        },
+      ],
+    },
+    revision: sourceBeforeUpdate.revision + 1,
+    updated_at: sourceBeforeUpdate.updated_at + 10,
+  }
+
+  await page.getByRole('button', { name: '检查来源笔记更新' }).click()
+  await expect(page.getByTestId('research-note-outline-update-summary')).toContainText('1 个来源有更新')
+  await expect(page.getByTestId('research-note-outline-status-note-a')).toContainText(
+    `来源修订 ${noteARevisionAtComposition} → ${records[sourceIndex].revision}`,
+  )
+  await page.getByTestId('research-note-outline-review-note-a').click()
+  const updateReview = page.getByTestId('research-note-outline-review-dialog')
+  await expect(updateReview).toContainText('Manual outline wording that must not be replaced silently.')
+  await expect(updateReview).toContainText('Updated source conclusion with calibrated evidence.')
+  await expect(updateReview).toContainText('已有手工修改')
+  failOutlineSaves = true
+  await page.getByTestId('research-note-outline-apply-refresh').click()
+
+  await expect(page.getByTestId('research-note-save-state')).toContainText('保存失败')
+  const durableRefreshDraft = await page.evaluate(noteId => {
+    const raw = localStorage.getItem(`kb:research-note-workspace-draft:${noteId}`)
+    return raw ? JSON.parse(raw) as Record<string, unknown> : null
+  }, String(outlineRecord?.id || ''))
+  expect(durableRefreshDraft?.contentMarkdown).toContain('Updated source conclusion with calibrated evidence.')
+  expect(durableRefreshDraft?.sourceState).toEqual(expect.objectContaining({
+    composition: expect.objectContaining({
+      refresh_history: [expect.objectContaining({ source_id: 'note-a', replaced_manual_edits: true })],
+    }),
+  }))
+
+  await page.reload()
+  await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
+  await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Updated source conclusion with calibrated evidence/)
+  await expect(page.getByTestId('research-note-save-state')).toContainText('保存失败')
+  failOutlineSaves = false
+  await page.getByTestId('research-note-save-now').click()
+  await expect.poll(() => records.find(record => record.id === outlineRecord?.id)?.content_markdown)
+    .toContain('Updated source conclusion with calibrated evidence.')
+  const refreshedOutline = records.find(record => record.id === outlineRecord?.id)
+  const refreshedComposition = refreshedOutline?.source_state.composition as {
+    source_notes?: Array<{ id: string; revision: number; last_refreshed_at?: number }>
+    refresh_history?: Array<Record<string, unknown>>
+  }
+  expect(refreshedComposition.source_notes?.find(source => source.id === 'note-a')?.revision)
+    .toBe(records[sourceIndex].revision)
+  expect(refreshedComposition.source_notes?.find(source => source.id === 'note-a')?.last_refreshed_at)
+    .toEqual(expect.any(Number))
+  expect(refreshedComposition.refresh_history?.at(-1)).toEqual(expect.objectContaining({
+    source_id: 'note-a',
+    from_revision: noteARevisionAtComposition,
+    to_revision: records[sourceIndex].revision,
+    replaced_manual_edits: true,
+  }))
+  expect(refreshedOutline?.source_state.links).toHaveLength(4)
+
+  await page.reload()
+  await page.getByTestId(`workspace-note-${outlineRecord?.id}`).click()
+  await expect(workspace.locator('.kb-notes-editor-body textarea')).toHaveValue(/Updated source conclusion with calibrated evidence/)
+  await expect(page.getByTestId('research-note-outline-update-summary')).toContainText('来源均为最新')
+  await expect(page.getByTestId('research-note-outline-status-note-a')).toContainText('刷新于')
+  records = records.filter(record => record.id !== 'note-b')
+  await page.getByRole('button', { name: '检查来源笔记更新' }).click()
+  await expect(page.getByTestId('research-note-outline-update-summary')).toContainText('1 个来源不可用')
+  await expect(page.getByTestId('research-note-outline-status-note-b')).toContainText('不可用')
+  await page.getByTestId('research-note-outline-source-note-a').click()
+  await expect(titleInput).toHaveValue('SPAD noise evidence note · revised')
+
+  await page.getByTestId('research-note-evidence-review-1').click()
+  await page.getByTestId('research-note-evidence-open-1').click()
   await expect.poll(() => readerPayload?.sourcePath).toBe(SOURCE_PATH)
+  expect(readerPayload).toEqual(expect.objectContaining({
+    blockId: 'block-noise',
+    anchorId: 'p_00011',
+    strictLocate: true,
+  }))
+  expect(readerState).toEqual(expect.objectContaining({
+    researchNoteReturn: {
+      version: 1,
+      note_id: 'note-a',
+      source_index: 1,
+    },
+  }))
   await expect(page).toHaveURL(/\/reader\/session\/reader-note-source/)
 
-  await page.goto('/notes')
+  await page.goto('/notes?note=note-a&evidence_source=1')
+  await expect(page).toHaveURL('/notes?note=note-a')
+  await expect(page.getByTestId('research-note-source-1')).toBeFocused()
   await workspace.getByRole('button', { name: '回到回答' }).click()
   await expect(page).toHaveURL(new RegExp(`conversation=${CONVERSATION_ID}.*note_message=22`))
+})
+
+test('workspace preserves fast-switch drafts and recovers safely from save failures and conflicts', async ({ page }) => {
+  let failSave = false
+  let conflictNextSave = false
+  let records = [
+    {
+      id: 'note-safe-a',
+      project_id: PROJECT_ID,
+      source_conv_id: CONVERSATION_ID,
+      title: 'Safety note A',
+      content_markdown: 'Initial evidence A.',
+      source_state: { version: 1, links: [] },
+      tags: ['safety'],
+      pinned: false,
+      archived: false,
+      revision: 1,
+      created_at: 1_780_100_000,
+      updated_at: 1_780_100_100,
+    },
+    {
+      id: 'note-safe-b',
+      project_id: null,
+      source_conv_id: null,
+      title: 'Safety note B',
+      content_markdown: 'Initial evidence B.',
+      source_state: { version: 1, links: [] },
+      tags: [],
+      pinned: false,
+      archived: false,
+      revision: 1,
+      created_at: 1_780_100_010,
+      updated_at: 1_780_100_090,
+    },
+  ]
+
+  await installAppShellMocks(page, {
+    projects: [{ id: PROJECT_ID, name: 'Single-photon imaging', created_at: 1, updated_at: 1 }],
+  })
+
+  await page.route('**/api/chat/research-notes**', async (route) => {
+    const request = route.request()
+    const url = new URL(request.url())
+    const path = url.pathname
+    const noteId = path.split('/').at(-1) || ''
+
+    if (request.method() === 'GET' && path === '/api/chat/research-notes') {
+      await fulfillJson(route, records
+        .filter(record => !record.archived)
+        .map(record => ({ ...record, content_markdown: '' })))
+      return
+    }
+    if (request.method() === 'GET') {
+      const record = records.find(item => item.id === noteId)
+      await fulfillJson(route, record || { detail: 'not found' }, record ? 200 : 404)
+      return
+    }
+    if (request.method() === 'PATCH') {
+      const index = records.findIndex(item => item.id === noteId)
+      const current = records[index]
+      if (!current) {
+        await fulfillJson(route, { detail: 'not found' }, 404)
+        return
+      }
+      if (failSave) {
+        await fulfillJson(route, { detail: 'temporary outage' }, 503)
+        return
+      }
+      if (conflictNextSave) {
+        conflictNextSave = false
+        records[index] = {
+          ...current,
+          title: 'External revision title',
+          content_markdown: 'Content saved by another window.',
+          revision: current.revision + 1,
+          updated_at: current.updated_at + 1,
+        }
+        await fulfillJson(route, { detail: 'research note revision conflict' }, 409)
+        return
+      }
+      const body = request.postDataJSON() as Record<string, unknown>
+      records[index] = {
+        ...current,
+        title: String(body.title || current.title),
+        content_markdown: String(body.content_markdown || current.content_markdown),
+        project_id: Object.prototype.hasOwnProperty.call(body, 'project_id') ? body.project_id as string | null : current.project_id,
+        tags: Array.isArray(body.tags) ? body.tags as string[] : current.tags,
+        revision: current.revision + 1,
+        updated_at: current.updated_at + 1,
+      }
+      await fulfillJson(route, records[index])
+      return
+    }
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>
+      const record = {
+        id: `note-safe-${records.length + 1}`,
+        project_id: body.project_id as string | null || null,
+        source_conv_id: body.source_conv_id as string | null || null,
+        title: String(body.title || ''),
+        content_markdown: String(body.content_markdown || ''),
+        source_state: body.source_state as { version: number; links: never[] } || { version: 1, links: [] },
+        tags: Array.isArray(body.tags) ? body.tags as string[] : [],
+        pinned: false,
+        archived: false,
+        revision: 1,
+        created_at: 1_780_100_200,
+        updated_at: 1_780_100_200,
+      }
+      records = [record, ...records]
+      await fulfillJson(route, record)
+      return
+    }
+    await fulfillJson(route, { ok: true })
+  })
+
+  await page.goto('/notes')
+  const workspace = page.getByTestId('research-notes-workspace')
+  const titleInput = workspace.locator('.kb-notes-title-input')
+  const editor = workspace.locator('.kb-notes-editor-body textarea')
+  await expect(titleInput).toHaveValue('Safety note A')
+
+  await titleInput.fill('Draft kept during a fast switch')
+  await page.getByTestId('workspace-note-note-safe-b').click()
+  await expect(titleInput).toHaveValue('Safety note B')
+  await page.getByTestId('workspace-note-note-safe-a').click()
+  await expect(titleInput).toHaveValue('Draft kept during a fast switch')
+  await expect.poll(() => records.find(record => record.id === 'note-safe-a')?.title)
+    .toBe('Draft kept during a fast switch')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('kb:research-note-workspace-draft:note-safe-a')))
+    .toBeNull()
+
+  failSave = true
+  await editor.fill('This edit must survive a temporary save outage.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('保存失败')
+  await expect(editor).toHaveValue('This edit must survive a temporary save outage.')
+  failSave = false
+  await page.getByTestId('research-note-save-now').click()
+  await expect.poll(() => records.find(record => record.id === 'note-safe-a')?.content_markdown)
+    .toBe('This edit must survive a temporary save outage.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('已保存')
+
+  conflictNextSave = true
+  await editor.fill('Keep this local conclusion instead of overwriting it.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('本机草稿仍保留')
+  await expect(editor).toHaveValue('Keep this local conclusion instead of overwriting it.')
+  expect(records.find(record => record.id === 'note-safe-a')?.content_markdown)
+    .toBe('Content saved by another window.')
+
+  await page.getByTestId('research-note-save-copy').click()
+  await expect(titleInput).toHaveValue(/冲突副本/)
+  await expect(editor).toHaveValue('Keep this local conclusion instead of overwriting it.')
+  expect(records[0]?.content_markdown).toBe('Keep this local conclusion instead of overwriting it.')
+  expect(records.find(record => record.id === 'note-safe-a')?.content_markdown)
+    .toBe('Content saved by another window.')
+  await expect.poll(() => page.evaluate(() => localStorage.getItem('kb:research-note-workspace-draft:note-safe-a')))
+    .toBeNull()
+
+  const copyId = records[0]?.id || ''
+  conflictNextSave = true
+  await editor.fill('A second local edit that the user chooses to discard.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('本机草稿仍保留')
+  await page.getByTestId('research-note-load-latest').click()
+  await page.locator('.ant-popconfirm').getByRole('button', { name: '载入最新版' }).click()
+  await expect(editor).toHaveValue('Content saved by another window.')
+  await expect(page.getByTestId('research-note-save-state')).toContainText('已保存')
+  await expect.poll(() => page.evaluate(
+    noteId => localStorage.getItem(`kb:research-note-workspace-draft:${noteId}`),
+    copyId,
+  )).toBeNull()
 })

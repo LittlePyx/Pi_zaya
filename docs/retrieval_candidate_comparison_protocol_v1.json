@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "id": "dense_candidate_comparison_protocol_v1",
+  "curation_status": "frozen_before_candidate_shortlist",
+  "purpose": "Nominate at most one local dense candidate without repeatedly tuning on the development or frozen semantic acceptance evidence.",
+  "development_fixture": {
+    "path": "docs/retrieval_eval_development_v1.json",
+    "sha256": "269cda5b1861be19a9aebf7b8b95faae6de49d41afb04e53cb2eea2aa3736478",
+    "case_count": 41,
+    "allowed_for_tuning": true
+  },
+  "inner_split": {
+    "algorithm": "ascending_sha256(seed:locale:case_id)_with_fixed_locale_quota",
+    "seed": "pizaya-dense-inner-confirmation-v1",
+    "confirmation_locale_quota": {
+      "en": 1,
+      "zh": 11
+    },
+    "screening_case_ids": [
+      "basis-choice-vs-foveated-adaptation",
+      "cassi-projective-single-shot",
+      "denoising-classical-map",
+      "fdm-integration-time-boundary",
+      "fdm-speed-snr-tradeoff",
+      "fdm-vs-3d-video-parallelism",
+      "foveated-not-simple-zoom",
+      "hsi-fsi-binary-pattern-cost",
+      "iism-live-cell-benefit",
+      "nafnet-activation-free-en",
+      "perovskite-dual-cavity-threshold",
+      "pidl-cross-camera-transfer",
+      "pidl-real-spad-noise",
+      "piln-self-supervised-loop",
+      "piln-self-supervised-physical-loop",
+      "qclfm-vs-iism-depth-signal",
+      "s2ism-three-way-tradeoff",
+      "scigs-transformation-filter",
+      "scinerf-forward-model-equation",
+      "scinerf-motion-assumption-en",
+      "scinerf-physics-in-training",
+      "single-photon-pidl",
+      "spad-geiger-mechanism",
+      "sph-heterodyne-sampling-conditions",
+      "sph-sampling-ratio",
+      "sph-throughput-mechanism",
+      "spi-illumination-vs-detection",
+      "spi-prospects-when-use-single-pixel",
+      "three-d-video-real-time-mechanism"
+    ],
+    "confirmation_case_ids": [
+      "cassi-dual-disperser-design",
+      "fdm-vs-3d-video-parallelism-en",
+      "iism-depth-phase",
+      "qclfm-correlation-resolution",
+      "rt-spi-silver-mask",
+      "s2ism-array-reassignment",
+      "scigs-explicit-dynamic-scene",
+      "sequential-cs-adaptive-advantage",
+      "sequential-cs-two-stage-elimination",
+      "spd-detector-metrics",
+      "three-d-video-daq-budget",
+      "visual-perception-local-origin"
+    ],
+    "screening_case_count": 29,
+    "confirmation_case_count": 12,
+    "confirmation_hidden_from_candidate_measurement": true
+  },
+  "controls": {
+    "sparse_report_path": "docs/retrieval_bm25_baseline_development_v1.json",
+    "sparse_report_sha256": "93399b9e45ce1010181581049c5903ba984e98422583bb3675a052afee9046a3",
+    "sparse_channel": "bm25_product_queries",
+    "dense_model_id": "intfloat/multilingual-e5-base",
+    "dense_revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+    "dense_query_prefix": "query: ",
+    "dense_passage_prefix": "passage: "
+  },
+  "candidate_budget": {
+    "maximum_new_candidates": 3,
+    "maximum_variants_per_candidate": 1,
+    "maximum_safetensors_bytes_each": 1500000000,
+    "maximum_embedding_dimension": 1024,
+    "required_declared_license": true,
+    "safetensors_required": true,
+    "standard_transformers_auto_model_required": true,
+    "trust_remote_code": false,
+    "immutable_revision_required": true,
+    "weight_sha256_required": true,
+    "official_query_contract_required": true,
+    "paper_text_uploaded": false
+  },
+  "frozen_retrieval_contract": {
+    "parent_chunks_unchanged": true,
+    "pooling": "official_model_contract",
+    "normalization": "l2",
+    "dtype": "float16",
+    "device": "cuda",
+    "fusion": {
+      "algorithm": "rrf",
+      "rrf_k": 20.0,
+      "sparse_weight": 2.0,
+      "dense_weight": 1.0,
+      "candidate_multiplier": 4,
+      "protected_sparse_prefix": 5,
+      "dense_source_gate_depth": 5
+    },
+    "cross_encoder": false,
+    "no_parameter_or_prompt_changes_after_any_result": true
+  },
+  "screening_stage": {
+    "all_candidates_measured_once": true,
+    "data": "screening_case_ids_only",
+    "required_raw_dense_checks": [
+      "recall@10_no_regression_vs_dense_control_in_both_modes"
+    ],
+    "required_safe_rrf_checks": [
+      "recall@5_preserved_vs_product_in_both_modes",
+      "wrong_source_rate@5_preserved_vs_product_in_both_modes",
+      "recall@10_no_regression_vs_product_in_both_modes",
+      "mrr_no_regression_vs_product_in_both_modes",
+      "ndcg@10_no_regression_vs_product_in_both_modes"
+    ],
+    "resource_checks": {
+      "index_size_ratio_vs_dense_control_max": 1.5,
+      "p95_latency_rule": "candidate <= max(control * 2.5, control + 50 ms)"
+    },
+    "all_required": true
+  },
+  "nomination": {
+    "maximum_nominees": 1,
+    "eligible_candidates_only": true,
+    "ranking_order": [
+      "highest_minimum_safe_rrf_recall@10_gain_across_modes",
+      "highest_average_safe_rrf_ndcg@10_gain_across_modes",
+      "lowest_full_library_wrong_source_rate@5",
+      "lowest_average_p95_latency",
+      "lexicographically_smallest_model_id"
+    ]
+  },
+  "confirmation_stage": {
+    "maximum_runs": 1,
+    "data": "confirmation_case_ids_only",
+    "nominee_only": true,
+    "required_raw_dense_checks": [
+      "recall@10_no_regression_vs_dense_control_in_both_modes"
+    ],
+    "required_safe_rrf_checks": [
+      "recall@5_preserved_vs_product_in_both_modes",
+      "wrong_source_rate@5_preserved_vs_product_in_both_modes",
+      "recall@10_no_regression_vs_product_in_both_modes",
+      "mrr_no_regression_vs_product_in_both_modes",
+      "ndcg@10_no_regression_vs_product_in_both_modes",
+      "at_least_one_strict_metric_gain"
+    ],
+    "all_required": true
+  },
+  "combined_development_gate": {
+    "data": "screening_and_confirmation_case_results",
+    "raw_recall_at_10_no_regression_vs_dense_control_in_both_modes": true,
+    "raw_recall_at_10_min_gain_in_any_mode": 0.05,
+    "safe_rrf_preserves_product_recall_at_5_in_both_modes": true,
+    "safe_rrf_preserves_product_wrong_source_at_5_in_both_modes": true,
+    "safe_rrf_no_regression_vs_product_for": [
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "safe_rrf_recall_at_10_min_gain_in_both_modes": 0.02,
+    "all_required": true
+  },
+  "frozen_acceptance_gate": {
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "case_count": 12,
+    "allowed_for_tuning": false,
+    "maximum_candidate_replays": 1,
+    "run_only_after_all_prior_gates_pass": true,
+    "safe_rrf_recall_at_10_min_gain_vs_product_in_both_modes": 0.15,
+    "preserve_product_recall_at_5": true,
+    "preserve_product_wrong_source_at_5": true
+  },
+  "failure_policy": {
+    "rejected_candidate_retest_under_v1": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "next_iteration_requires_new_versioned_protocol_or_new_evidence": true
+  }
+}

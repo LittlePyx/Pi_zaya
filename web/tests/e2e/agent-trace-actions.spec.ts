@@ -24,6 +24,7 @@ import {
 const LOCAL_KB_RE = /Local KB|本地文献库|鏈湴鏂囩尞搴?/
 
 const SOURCE_PANEL_RE = /Sources & evidence|依据与来源/
+const SOURCE_CHECK_AVAILABLE_RE = /Source check available|来源核对可用/
 const NEEDS_REVIEW_RE = /Needs review|需要核对/
 const REVIEW_FRACTION_RE = /Review 1\/2|需核对 1\/2/
 const CHECKED_FRACTION_RE = /Checked 1\/1|已核对 1\/1/
@@ -1476,7 +1477,188 @@ test('answer source notice view model prefers answer contract over legacy summar
     kind: 'local_kb',
     usesLocalKnowledgeBase: true,
     usesExternalModel: false,
+    usesExternalWeb: false,
     requiresUserNotice: false,
+    externalSourceKind: '',
+    externalSupplementMode: '',
+    webSources: [],
+    externalSupplementUnavailable: '',
+  })
+})
+
+test('web source notice keeps safe external links distinct from model knowledge', async ({ page }) => {
+  const model = await answerSourceNoticeViewModel(page, {
+    answerContract: {
+      source_policy_payload: {
+        kind: 'external_not_kb',
+        uses_local_knowledge_base: false,
+        uses_external_model: false,
+        uses_external_web: true,
+        external_source_kind: 'web',
+        external_supplement_mode: 'web',
+        web_sources: [
+          {
+            title: 'Primary web source',
+            url: 'https://example.org/paper#results',
+            domain: 'example.org',
+            verification_status: 'verified',
+            verification_level: 'content_match',
+          },
+          { title: 'Unsafe', url: 'javascript:alert(1)' },
+        ],
+        badge: {
+          label_key: 'agent_trace_source_web',
+          detail: 'Backend fallback detail.',
+        },
+      },
+    },
+    S: {
+      agent_trace_source_web: 'Web sources',
+      agent_trace_source_web_detail: 'Linked web sources, not local evidence.',
+      agent_trace_source_fallback: 'Source',
+    },
+  })
+
+  expect(model).toMatchObject({
+    label: 'Web sources',
+    title: 'Linked web sources, not local evidence.',
+    usesLocalKnowledgeBase: false,
+    usesExternalModel: false,
+    usesExternalWeb: true,
+    externalSourceKind: 'web',
+    externalSupplementMode: 'web',
+    webSources: [
+      { title: 'Primary web source', url: 'https://example.org/paper', domain: 'example.org' },
+    ],
+  })
+})
+
+test('research notes reject answers that contain external supplementation', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { researchNoteAnswerEvidenceEligible, buildResearchNoteAnswers } = await import('/src/components/chat/researchNote.ts')
+    const external = {
+      id: 2,
+      role: 'assistant',
+      content: 'External answer',
+      copy_markdown: 'External answer',
+      meta: {
+        agent_source_summary: {
+          kind: 'external_not_kb',
+          external_source_kind: 'web',
+        },
+      },
+    }
+    const local = {
+      id: 4,
+      role: 'assistant',
+      content: 'Local answer [1].',
+      copy_markdown: 'Local answer [1].',
+      meta: {
+        agent_source_summary: { kind: 'local_kb' },
+        cite_details: [{ num: 1, source_path: 'paper.md', evidence_quote: 'Local evidence.' }],
+      },
+    }
+    const generationFailure = {
+      id: 6,
+      role: 'assistant',
+      content: 'Answer stream failed. Please retry.',
+      copy_markdown: 'Answer stream failed. Please retry.',
+    }
+    return {
+      externalEligible: researchNoteAnswerEvidenceEligible(external as never),
+      localEligible: researchNoteAnswerEvidenceEligible(local as never),
+      generationFailureEligible: researchNoteAnswerEvidenceEligible(generationFailure as never),
+      answerIds: buildResearchNoteAnswers([
+        { id: 1, role: 'user', content: 'Question' },
+        external,
+        { id: 3, role: 'user', content: 'Local question' },
+        local,
+        { id: 5, role: 'user', content: 'Failed question' },
+        generationFailure,
+      ] as never).map((item) => item.messageId),
+    }
+  })
+
+  expect(result).toEqual({
+    externalEligible: false,
+    localEligible: true,
+    generationFailureEligible: false,
+    answerIds: [4],
+  })
+})
+
+test('message evidence policy blocks false local actions for external and failed answers', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { messageEvidenceActionPolicy } = await import('/src/components/chat/messageEvidencePolicy.ts')
+    const external = messageEvidenceActionPolicy({
+      id: 10,
+      role: 'assistant',
+      content: 'Model background',
+      meta: {
+        answer_contract: {
+          source_policy_payload: {
+            kind: 'external_not_kb',
+            uses_local_knowledge_base: false,
+          },
+        },
+      },
+    } as never)
+    const mixed = messageEvidenceActionPolicy({
+      id: 11,
+      role: 'assistant',
+      content: 'Local evidence plus model context',
+      meta: { agent_source_summary: { kind: 'local_plus_external' } },
+    } as never)
+    const failed = messageEvidenceActionPolicy({
+      id: 12,
+      role: 'assistant',
+      content: 'Empty template',
+      meta: {
+        answer_quality: { minimum_ok: false },
+        agent_source_summary: { kind: 'local_kb' },
+      },
+    } as never)
+    const noHits = messageEvidenceActionPolicy({
+      id: 13,
+      role: 'assistant',
+      content: 'No matching passage was retrieved.',
+      meta: {
+        answer_quality: { minimum_ok: true, has_hits: false },
+        agent_source_summary: { kind: 'local_kb' },
+      },
+    } as never)
+    return { external, mixed, failed, noHits }
+  })
+
+  expect(result.external).toMatchObject({
+    allowLocalCitations: false,
+    allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'external',
+  })
+  expect(result.mixed).toMatchObject({
+    allowLocalCitations: true,
+    allowStructuredLocalLocate: true,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'mixed',
+  })
+  expect(result.failed).toMatchObject({
+    allowLocalCitations: false,
+    allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'quality_failed',
+  })
+  expect(result.noHits).toMatchObject({
+    allowLocalCitations: false,
+    allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false,
+    allowResearchNote: false,
+    reason: 'insufficient_evidence',
   })
 })
 
@@ -3300,7 +3482,8 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-reference-actions')
   const traceSummary = page.locator('.kb-agent-trace > summary').first()
   await expect(traceSummary).toContainText(SOURCE_PANEL_RE)
-  await expect(traceSummary).toContainText(NEEDS_REVIEW_RE)
+  await expect(traceSummary).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(traceSummary).not.toContainText(NEEDS_REVIEW_RE)
   await expect(traceSummary).not.toContainText(REVIEW_FRACTION_RE)
   await expect(traceSummary).not.toContainText('reference_followup')
   await expect(traceSummary).not.toContainText('done')
@@ -3308,15 +3491,14 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByText('Research Agent Trace')).toHaveCount(0)
   await expect(page.getByText('Tool Calls')).toHaveCount(0)
   await page.getByText(SOURCE_PANEL_RE).click()
-  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(NEEDS_REVIEW_RE)
+  await expect(page.getByTestId('agent-trace-evidence-status')).toHaveCount(0)
   await expect(page.getByTestId('agent-trace-quality-gate')).toHaveCount(0)
-  await expect(page.locator('.kb-agent-trace-summary')).not.toContainText(REVIEW_FRACTION_RE)
+  await expect(page.locator('.kb-agent-trace-summary')).toHaveCount(0)
   await expect(page.getByText(DIAGNOSTICS_RE)).toHaveCount(0)
   await expect(page.getByTestId('agent-evidence-matrix')).toContainText(EVIDENCE_MAP_RE)
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('Fast hyperspectral single-pixel imaging')
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('frequency-division multiplexed illumination')
-  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
-  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText(MISMATCH_RE)
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toHaveCount(0)
   const ref = page.getByTestId('agent-trace-reference').first()
   await expect(ref.getByTestId('agent-trace-ref-title')).toContainText('Fast hyperspectral single-pixel imaging')
 
@@ -3351,6 +3533,8 @@ test('research agent evaluation and execution diagnostics require the internal d
   await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(ANSWER_QUALITY_RE)
   await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(REPAIRED_RE)
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText(MISMATCH_RE)
   await expect(page.getByText(DIAGNOSTICS_RE)).toBeVisible()
   await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
   await page.getByText(DIAGNOSTICS_RE).click()
@@ -3418,9 +3602,10 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
   await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(GROUNDED_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(GROUNDED_RE)
   await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(CHECKED_FRACTION_RE)
-  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(GROUNDED_RE)
+  await expect(page.getByTestId('agent-trace-evidence-status')).toHaveCount(0)
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: '1/1' })).toHaveCount(0)
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: 'library' })).toHaveCount(0)
   await expect(page.getByText('3/9')).toHaveCount(0)
@@ -3469,6 +3654,12 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
   await expect(page.getByTestId('evidence-drawer-item')).toContainText('Fixture Paper / Method')
   await expect(page.getByTestId('evidence-drawer')).not.toContainText('runtime_check')
   await expect(page.getByTestId('evidence-drawer')).not.toContainText('needs_review_count')
+  await page.getByTestId('research-note-open-9471').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeHidden()
+  await expect(page.locator('.kb-research-note-modal')).toBeVisible()
+  await page.locator('.kb-research-note-modal .ant-modal-close').click()
+  await page.getByTestId('assistant-source-notice').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeVisible()
   await page.getByTestId('evidence-open-source').click()
   await expect(page.getByTestId('message-list-open-payload')).toContainText(READER_REGRESSION_SOURCE_PATH)
   await page.locator('.kb-evidence-drawer .ant-drawer-close').click()
@@ -3476,6 +3667,49 @@ test('answer contract source badge wins over legacy source summary', async ({ pa
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('frequency-division multiplexed illumination')
   await expect(page.locator('.kb-cite-pop')).toContainText('Fixture Paper')
   await expect(page.locator('.kb-cite-pop')).toContainText('Method')
+})
+
+test('web sources stay separate from library evidence actions', async ({ page }) => {
+  let importPayload: Record<string, unknown> | null = null
+  await page.route('**/api/library/external-pdf/import', async (route) => {
+    importPayload = route.request().postDataJSON() as Record<string, unknown>
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        duplicate: false,
+        name: 'external-paper.pdf',
+        path: 'C:/fixture/external-paper.pdf',
+        sha1: 'fixture',
+        enqueued: true,
+        task_id: 'conversion-fixture',
+        source_url: 'https://arxiv.org/pdf/2601.12345',
+        candidate_status: 'conversion_queued',
+        formal_evidence_ready: false,
+      }),
+    })
+  })
+  await page.goto('/__message_list_test__?scenario=agent-web-source')
+
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-web-source')
+  await expect(page.getByTestId('assistant-source-notice')).toContainText(/Web sources|网页来源/)
+  await page.getByTestId('assistant-source-notice').click()
+  await expect(page.getByTestId('evidence-drawer')).toBeVisible()
+  await expect(page.getByTestId('evidence-web-sources')).toContainText('Primary web source on RAG evidence')
+  await expect(page.getByTestId('evidence-web-sources')).toContainText(/Link and source title checked|链接与来源标题已核验/)
+  await expect(page.getByTestId('evidence-web-sources')).toContainText('arXiv 2601.12345')
+  await expect(page.getByTestId('evidence-web-claim-0')).toContainText('broader retrieval result')
+  await expect(page.getByTestId('evidence-web-source-0')).toHaveAttribute('href', 'https://arxiv.org/abs/2601.12345')
+  await expect(page.getByTestId('evidence-add-shelf')).toHaveCount(0)
+  await expect(page.getByTestId('research-note-open-9551')).toHaveCount(0)
+  await page.getByTestId('evidence-web-import-0').click()
+  await expect(page.getByTestId('evidence-web-import-0')).toContainText(/Queued for processing|已进入处理队列/)
+  expect(importPayload).toMatchObject({
+    url: 'https://arxiv.org/pdf/2601.12345',
+    title: 'Primary web source on RAG evidence',
+    convert_now: true,
+  })
+  await expect(page.getByTestId('evidence-add-shelf')).toHaveCount(0)
 })
 
 test('external source notice is compacted outside the answer body', async ({ page }) => {
@@ -3486,7 +3720,8 @@ test('external source notice is compacted outside the answer body', async ({ pag
   await expect(page.getByTestId('assistant-source-notice')).toContainText(NOT_FROM_KB_RE)
   await expect(page.getByText('no matching local knowledge-base evidence was found')).toHaveCount(0)
   await expect(page.locator('.kb-markdown-chat')).not.toContainText('knowledge-base-grounded answer')
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NOT_FROM_KB_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(NOT_FROM_KB_RE)
 })
 
 test('hybrid source notice is compacted outside the answer body', async ({ page }) => {
@@ -3498,7 +3733,8 @@ test('hybrid source notice is compacted outside the answer body', async ({ page 
   await expect(page.getByTestId('assistant-source-notice')).toContainText(LOCAL_EXTERNAL_RE)
   await expect(page.getByText('local citations [n] come from the knowledge base')).toHaveCount(0)
   await expect(page.locator('.kb-markdown-chat')).not.toContainText('uncited background may use external model context')
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NEEDS_REVIEW_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(NEEDS_REVIEW_RE)
 })
 
 test('streaming research agent partial hides appended trace json', async ({ page }) => {

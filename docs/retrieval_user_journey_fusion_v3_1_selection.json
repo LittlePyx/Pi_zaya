@@ -1,0 +1,2299 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_user_journey_fusion_v3_1_selection",
+  "measured_at": "2026-09-02T20:23:53.375444+00:00",
+  "protocol_sha256": "79c6b18995a50a531fd9ccf9d5d2edabb7ede9a7e3bf7ff926198f0770e3c955",
+  "fixture_sha256": "6463cf63ba1853fc8704eead89de0ee36061481613621b1fa72ea4b7fe5429ca",
+  "baseline_sha256": "28748a9d590a637dcd8e2847f2ba9efc437b069ee4769feb95f3821986576fca",
+  "candidate": {
+    "candidate_id": "protected_tail_dense_quota_2_v3",
+    "algorithm": "protected_dense_tail",
+    "protected_sparse_prefix": 5,
+    "sparse_tail_window": 5,
+    "dense_novelty_quota": 2,
+    "candidate_multiplier": 4,
+    "fusion_output_depth": 10,
+    "sparse_and_dense_candidate_depth": 40,
+    "dense_novelty_excludes_sparse_ranks": 10,
+    "sparse_survivor_selection": "best_dense_rank_then_sparse_rank",
+    "sparse_survivor_output_order": "original_sparse_rank",
+    "dense_novelty_output_order": "dense_rank",
+    "tail_layout": "sparse_1_to_5_then_three_dense_supported_sparse_6_to_10_then_two_dense_novelties_at_9_to_10",
+    "dense_failure_fallback": "original_sparse_top_10",
+    "candidate_count": 1,
+    "rationale": "The calibration diagnostic found a full-library dense-only relevant passage at dense rank 2 while BM25-only evidence remained inside the protected top five."
+  },
+  "runtime": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "device": "cuda",
+    "dtype": "float16",
+    "allow_download": false,
+    "trust_remote_code": false
+  },
+  "index": {
+    "relative_path": "test_results/retrieval_candidate_screening_v1/qwen3_embedding_0_6b_v1/index_v1",
+    "build_id": "eaf61f67c2974f519e9ea6ce23f5ccbe",
+    "corpus_fingerprint": "7e3261179b44da0e2baa430ea14243ef6885a49ee73d3e921b48bfc57f35bdf5",
+    "document_count": 31,
+    "chunk_count": 2251,
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "size_bytes": 9801699,
+    "rebuild_allowed": false,
+    "rebuilt": false
+  },
+  "query_embedding_cache": {
+    "enabled": true,
+    "unique_query_count": 18,
+    "shared_across_partitions_and_modes": true
+  },
+  "selection": {
+    "calibration": {
+      "channels": {
+        "bm25_product_queries_selection_control": {
+          "channel": "bm25_product_queries_selection_control",
+          "modes": {
+            "scoped": {
+              "case_count": 12,
+              "metrics": {
+                "mrr": 0.270833,
+                "recall@5": 0.194444,
+                "recall@10": 0.222222,
+                "ndcg@10": 0.16104,
+                "contract_recall@10": 0.25,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              },
+              "latency_ms": {
+                "p50": 8.099,
+                "p95": 26.695,
+                "max": 28.613
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.168676,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.337352,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.233402,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 6,
+                  "metrics": {
+                    "mrr": 0.166667,
+                    "recall@5": 0.0,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.193044,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            },
+            "full_library": {
+              "case_count": 12,
+              "metrics": {
+                "mrr": 0.173611,
+                "recall@5": 0.152778,
+                "recall@10": 0.152778,
+                "ndcg@10": 0.118022,
+                "contract_recall@10": 0.166667,
+                "wrong_source_rate@5": 0.383333,
+                "wrong_source_rate@10": 0.416667
+              },
+              "latency_ms": {
+                "p50": 49.885,
+                "p95": 125.567,
+                "max": 149.186
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.14529,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.6,
+                    "wrong_source_rate@10": 0.4
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.2
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.9
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.270971,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "protected_tail_dense_quota_2_v3": {
+          "channel": "protected_tail_dense_quota_2_v3",
+          "modes": {
+            "scoped": {
+              "case_count": 12,
+              "metrics": {
+                "mrr": 0.280093,
+                "recall@5": 0.194444,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.19172,
+                "contract_recall@10": 0.333333,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              },
+              "latency_ms": {
+                "p50": 77.239,
+                "p95": 202.857,
+                "max": 313.536
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.168676,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.337352,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.666667,
+                    "ndcg@10": 0.30054,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.30103,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 6,
+                  "metrics": {
+                    "mrr": 0.166667,
+                    "recall@5": 0.0,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.193044,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            },
+            "full_library": {
+              "case_count": 12,
+              "metrics": {
+                "mrr": 0.191204,
+                "recall@5": 0.152778,
+                "recall@10": 0.263889,
+                "ndcg@10": 0.148702,
+                "contract_recall@10": 0.291667,
+                "wrong_source_rate@5": 0.383333,
+                "wrong_source_rate@10": 0.358333
+              },
+              "latency_ms": {
+                "p50": 202.274,
+                "p95": 271.19,
+                "max": 309.011
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.14529,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.6,
+                    "wrong_source_rate@10": 0.4
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": 10,
+                  "metrics": {
+                    "mrr": 0.1,
+                    "recall@5": 0.0,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.067138,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.30103,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.7
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.3
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.270971,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gate": {
+        "modes": {
+          "scoped": {
+            "recall@5_equal_to_product": true,
+            "wrong_source_rate@5_equal_to_product": true,
+            "recall@10_no_regression": true,
+            "mrr_no_regression": true,
+            "ndcg@10_no_regression": true,
+            "contract_recall@10_no_regression": true,
+            "wrong_source_rate@10_no_regression": true,
+            "recall@10_gain": 0.111111
+          },
+          "full_library": {
+            "recall@5_equal_to_product": true,
+            "wrong_source_rate@5_equal_to_product": true,
+            "recall@10_no_regression": true,
+            "mrr_no_regression": true,
+            "ndcg@10_no_regression": true,
+            "contract_recall@10_no_regression": true,
+            "wrong_source_rate@10_no_regression": true,
+            "recall@10_gain": 0.111111
+          }
+        },
+        "strict_recall@10_gain_in_at_least_one_mode": true,
+        "passes_all": true
+      }
+    },
+    "holdout": {
+      "channels": {
+        "bm25_product_queries_selection_control": {
+          "channel": "bm25_product_queries_selection_control",
+          "modes": {
+            "scoped": {
+              "case_count": 6,
+              "metrics": {
+                "mrr": 0.066667,
+                "recall@5": 0.166667,
+                "recall@10": 0.25,
+                "ndcg@10": 0.115467,
+                "contract_recall@10": 0.25,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              },
+              "latency_ms": {
+                "p50": 7.67,
+                "p95": 14.962,
+                "max": 16.61
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.455605,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.237198,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            },
+            "full_library": {
+              "case_count": 6,
+              "metrics": {
+                "mrr": 0.033333,
+                "recall@5": 0.083333,
+                "recall@10": 0.166667,
+                "ndcg@10": 0.075934,
+                "contract_recall@10": 0.166667,
+                "wrong_source_rate@5": 0.333333,
+                "wrong_source_rate@10": 0.333333
+              },
+              "latency_ms": {
+                "p50": 57.957,
+                "p95": 213.196,
+                "max": 257.411
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.455605,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "protected_tail_dense_quota_2_v3": {
+          "channel": "protected_tail_dense_quota_2_v3",
+          "modes": {
+            "scoped": {
+              "case_count": 6,
+              "metrics": {
+                "mrr": 0.085185,
+                "recall@5": 0.166667,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.140591,
+                "contract_recall@10": 0.333333,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              },
+              "latency_ms": {
+                "p50": 109.081,
+                "p95": 123.506,
+                "max": 127.944
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.237198,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.421773,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.184576,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            },
+            "full_library": {
+              "case_count": 6,
+              "metrics": {
+                "mrr": 0.07037,
+                "recall@5": 0.083333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.130598,
+                "contract_recall@10": 0.333333,
+                "wrong_source_rate@5": 0.333333,
+                "wrong_source_rate@10": 0.266667
+              },
+              "latency_ms": {
+                "p50": 214.987,
+                "p95": 250.373,
+                "max": 257.009
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.237198,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.361815,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.184576,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gate": {
+        "modes": {
+          "scoped": {
+            "recall@5_equal_to_product": true,
+            "wrong_source_rate@5_equal_to_product": true,
+            "recall@10_no_regression": true,
+            "mrr_no_regression": true,
+            "ndcg@10_no_regression": true,
+            "contract_recall@10_no_regression": true,
+            "wrong_source_rate@10_no_regression": true,
+            "recall@10_gain": 0.083333
+          },
+          "full_library": {
+            "recall@5_equal_to_product": true,
+            "wrong_source_rate@5_equal_to_product": true,
+            "recall@10_no_regression": true,
+            "mrr_no_regression": true,
+            "ndcg@10_no_regression": true,
+            "contract_recall@10_no_regression": true,
+            "wrong_source_rate@10_no_regression": true,
+            "recall@10_gain": 0.166666
+          }
+        },
+        "strict_recall@10_gain_in_at_least_one_mode": true,
+        "passes_all": true
+      }
+    },
+    "combined": {
+      "channels": {
+        "bm25_product_queries_selection_control": {
+          "channel": "bm25_product_queries_selection_control",
+          "modes": {
+            "scoped": {
+              "case_count": 18,
+              "metrics": {
+                "mrr": 0.202778,
+                "recall@5": 0.185185,
+                "recall@10": 0.231481,
+                "ndcg@10": 0.145849,
+                "contract_recall@10": 0.25,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.168676,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.337352,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.233402,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 6,
+                  "metrics": {
+                    "mrr": 0.166667,
+                    "recall@5": 0.0,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.193044,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.455605,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.237198,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            },
+            "full_library": {
+              "case_count": 18,
+              "metrics": {
+                "mrr": 0.126852,
+                "recall@5": 0.12963,
+                "recall@10": 0.157407,
+                "ndcg@10": 0.103993,
+                "contract_recall@10": 0.166667,
+                "wrong_source_rate@5": 0.366667,
+                "wrong_source_rate@10": 0.388889
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.14529,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.6,
+                    "wrong_source_rate@10": 0.4
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.2
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.9
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.270971,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.455605,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "protected_tail_dense_quota_2_v3": {
+          "channel": "protected_tail_dense_quota_2_v3",
+          "modes": {
+            "scoped": {
+              "case_count": 18,
+              "metrics": {
+                "mrr": 0.215123,
+                "recall@5": 0.185185,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.174677,
+                "contract_recall@10": 0.333333,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.168676,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.337352,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.666667,
+                    "ndcg@10": 0.30054,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.30103,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 6,
+                  "metrics": {
+                    "mrr": 0.166667,
+                    "recall@5": 0.0,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.193044,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.237198,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.421773,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.184576,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            },
+            "full_library": {
+              "case_count": 18,
+              "metrics": {
+                "mrr": 0.150926,
+                "recall@5": 0.12963,
+                "recall@10": 0.287037,
+                "ndcg@10": 0.142668,
+                "contract_recall@10": 0.305556,
+                "wrong_source_rate@5": 0.366667,
+                "wrong_source_rate@10": 0.327778
+              },
+              "ks": [
+                5,
+                10
+              ],
+              "cases": [
+                {
+                  "id": "journey-primal-dual-operator-exchange",
+                  "first_relevant_rank": 4,
+                  "metrics": {
+                    "mrr": 0.25,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.14529,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-dualscale-large-image-mechanism",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.6,
+                    "wrong_source_rate@10": 0.4
+                  }
+                },
+                {
+                  "id": "journey-realtime-spi-frame-input",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-fashionmnist-mnist-boundary",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-kuzushiji-modern-ocr-boundary",
+                  "first_relevant_rank": 1,
+                  "metrics": {
+                    "mrr": 1.0,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.613147,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-compensation-combined-degradation-boundary",
+                  "first_relevant_rank": 10,
+                  "metrics": {
+                    "mrr": 0.1,
+                    "recall@5": 0.0,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.067138,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-hyperspectral-prior-transfer-boundary",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.30103,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.7
+                  }
+                },
+                {
+                  "id": "journey-dualscale-resolution-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 1.0
+                  }
+                },
+                {
+                  "id": "journey-nafnet-vs-classical-denoising-evidence",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-piln-vs-pidl-supervision",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.1
+                  }
+                },
+                {
+                  "id": "journey-cassi-vs-fourier-measurement-encoding",
+                  "first_relevant_rank": 2,
+                  "metrics": {
+                    "mrr": 0.5,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.386853,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.3
+                  }
+                },
+                {
+                  "id": "journey-s2ism-vs-iism-information-source",
+                  "first_relevant_rank": 3,
+                  "metrics": {
+                    "mrr": 0.333333,
+                    "recall@5": 0.333333,
+                    "recall@10": 0.333333,
+                    "ndcg@10": 0.270971,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-istanet-phase-physics",
+                  "first_relevant_rank": 5,
+                  "metrics": {
+                    "mrr": 0.2,
+                    "recall@5": 0.5,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.237198,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-super-subnyquist-sampling-results",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-istanet-benchmark-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-primal-dual-ct-protocol",
+                  "first_relevant_rank": null,
+                  "metrics": {
+                    "mrr": 0.0,
+                    "recall@5": 0.0,
+                    "recall@10": 0.0,
+                    "ndcg@10": 0.0,
+                    "contract_recall@10": 0.0,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                },
+                {
+                  "id": "journey-visual-redundancy-figure-location",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 1.0,
+                    "ndcg@10": 0.361815,
+                    "contract_recall@10": 1.0,
+                    "wrong_source_rate@5": 1.0,
+                    "wrong_source_rate@10": 0.8
+                  }
+                },
+                {
+                  "id": "journey-perovskite-device-figure-location",
+                  "first_relevant_rank": 9,
+                  "metrics": {
+                    "mrr": 0.111111,
+                    "recall@5": 0.0,
+                    "recall@10": 0.5,
+                    "ndcg@10": 0.184576,
+                    "contract_recall@10": 0.5,
+                    "wrong_source_rate@5": 0.0,
+                    "wrong_source_rate@10": 0.0
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "gate": {
+        "modes": {
+          "scoped": {
+            "recall@10_gain": 0.101852,
+            "non_regressing_rank_metrics": true,
+            "wrong_source_rate@5_and_10_no_regression": true
+          },
+          "full_library": {
+            "recall@10_gain": 0.12963,
+            "non_regressing_rank_metrics": true,
+            "wrong_source_rate@5_and_10_no_regression": true
+          }
+        },
+        "recall@10_minimum_gain_in_at_least_one_mode": true,
+        "passes_all": true
+      }
+    }
+  },
+  "decision": {
+    "outcome": "eligible_for_semantic_acceptance",
+    "semantic_acceptance_allowed": true,
+    "product_enabled": false
+  },
+  "result_fingerprint": "55b89302358f0f4ea18a73b422f0abd554e75b01f3e5a68da84874d2593f1284",
+  "holdout_accessed": true,
+  "semantic_acceptance_accessed": false,
+  "product_enabled": false
+}

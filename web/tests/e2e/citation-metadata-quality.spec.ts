@@ -3,6 +3,9 @@ import {
   citationFormats,
   cleanCitationDisplayText,
   normalizeCiteDetail,
+  shelfItemMetadataFieldRejected,
+  shelfItemNeedsExportMetadataPass,
+  strictRepairMerge,
   toShelfItem,
   type CiteShelfItem,
 } from '../../src/components/chat/citationState'
@@ -16,6 +19,7 @@ import {
   SHELF_MAX_ITEMS,
   articleSummaryPatchFromMeta,
   dedupeShelfItems,
+  mergeShelfItemReaderLocateResult,
   mergeShelfItemWithLive,
   shelfDiscoverySourceDetail,
   shelfItemHasDisplayableArticleSummary,
@@ -138,6 +142,124 @@ test('citation shelf metadata ready follows export acceptance when present', () 
 
   expect(metadataQualityReady(ready)).toBe(true)
   expect(metadataQualityNeedsRepair(ready)).toBe(false)
+})
+
+test('citation export field rejection follows missing fields and embedded conflict codes', () => {
+  const blocked = shelfItem({
+    metadata_quality: {
+      ok: false,
+      status: 'error',
+      missing_fields: ['authors', 'venue'],
+      issues: [],
+    },
+    metadata_export_acceptance: {
+      export_ready: false,
+      missing_fields: [],
+      issue_codes: ['library_match_doi_conflict'],
+    },
+  })
+
+  expect(shelfItemMetadataFieldRejected(blocked, 'authors')).toBe(true)
+  expect(shelfItemMetadataFieldRejected(blocked, 'venue')).toBe(true)
+  expect(shelfItemMetadataFieldRejected(blocked, 'doi')).toBe(true)
+  expect(shelfItemMetadataFieldRejected(blocked, 'title')).toBe(false)
+})
+
+test('citation export revalidates DOI metadata inferred outside the raw upstream reference', () => {
+  const inferredDoi = shelfItem({
+    citation_route: 'system_b',
+    is_inpaper: true,
+    raw: 'A Researcher. A traceable upstream reference. Journal of Tests 4, 10-12 (2025).',
+    doi: '10.1000/inferred-doi',
+    metadata_quality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+    metadata_export_acceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+  })
+  const explicitDoi = shelfItem({
+    citation_route: 'system_b',
+    is_inpaper: true,
+    raw: 'A Researcher. A traceable upstream reference. doi:10.1000/explicit-doi',
+    doi: '10.1000/explicit-doi',
+    metadata_quality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+    metadata_export_acceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+  })
+
+  expect(shelfItemNeedsExportMetadataPass(inferredDoi)).toBe(true)
+  expect(shelfItemNeedsExportMetadataPass(explicitDoi)).toBe(false)
+})
+
+test('trusted metadata repair replaces a related-work identity and clears its DOI metrics', () => {
+  const rawReference = (
+    'Macias-Garza, F., Bovik, A. C., Diller, K. R., Aggarwal, S. J. & Aggarwal, J. K. '
+    + 'The missing cone problem and low-pass distortion in optical serial sectioning microscopy. '
+    + 'IEEE Trans. Acoust., Speech, Signal Process. 2, 890-893 (1988).'
+  )
+  const base = shelfItem({
+    citation_route: 'system_b',
+    is_inpaper: true,
+    raw: rawReference,
+    title: 'Missing Cone Of Frequencies And Low-Pass Distortion In Three-Dimensional Microscopic Images',
+    authors: 'Macias-Garza, F.',
+    venue: 'Optical Engineering',
+    year: '1988',
+    doi: '10.1117/12.7976703',
+    doi_url: 'https://doi.org/10.1117/12.7976703',
+    citation_count: 7,
+    journal_if: '1.1',
+    journal_quartile: 'Q4',
+    summary_line: 'Summary attached to the related journal work.',
+    summary_source: 'crossref',
+    metadata_quality: { ok: true, status: 'ready', missing_fields: [], issues: [] },
+    metadata_export_acceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+    metadata_repair_status: 'ready',
+    tags: ['keep-me'],
+    note: 'reader note',
+  })
+
+  const repaired = strictRepairMerge(base, {
+    title: 'The missing cone problem and low-pass distortion in optical serial sectioning microscopy',
+    authors: 'Macias-Garza, F.; Bovik, A. C.; Diller, K. R.; Aggarwal, S. J.; Aggarwal, J. K.',
+    venue: 'IEEE Trans. Acoust., Speech, Signal Process.',
+    year: '1988',
+    metadata_quality: { ok: false, status: 'warning', missing_fields: ['doi'], issues: [] },
+    metadata_export_acceptance: { export_ready: true, missing_fields: ['doi'], issue_codes: ['missing_doi'] },
+    metadata_repair_status: 'partial',
+    raw_reference_rejected_doi: '10.1117/12.7976703',
+    raw_reference_rejected_dois: ['10.1117/12.7976703'],
+    metadata_changed_fields: [
+      'title',
+      'authors',
+      'venue',
+      'doi',
+      'doi_url',
+      'citation_count',
+      'journal_if',
+      'journal_quartile',
+      'summary_line',
+    ],
+  })
+
+  expect(repaired?.title).toBe('The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
+  expect(repaired?.authors).toContain('Aggarwal, J. K.')
+  expect(repaired?.venue).toBe('IEEE Trans. Acoust., Speech, Signal Process.')
+  expect(repaired?.doi).toBe('')
+  expect(repaired?.doiUrl).toBe('')
+  expect(repaired?.rawReferenceRejectedDoi).toBe('10.1117/12.7976703')
+  expect(repaired?.rawReferenceRejectedDois).toEqual(['10.1117/12.7976703'])
+  expect(repaired?.citationCount).toBe(0)
+  expect(repaired?.journalIf).toBe('')
+  expect(repaired?.journalQuartile).toBe('')
+  expect(repaired?.summaryLine).toBe('')
+  expect(repaired?.tags).toEqual(['keep-me'])
+  expect(repaired?.note).toBe('reader note')
+
+  const afterLiveRefresh = mergeShelfItemWithLive(repaired as CiteShelfItem, base)
+  expect(afterLiveRefresh.doi).toBe('')
+  expect(afterLiveRefresh.doiUrl).toBe('')
+  expect(afterLiveRefresh.citationCount).toBe(0)
+  expect(afterLiveRefresh.journalIf).toBe('')
+  expect(afterLiveRefresh.journalQuartile).toBe('')
+  expect(afterLiveRefresh.summaryLine).toBe('')
+  expect(shelfItemMetadataFieldRejected(afterLiveRefresh, 'doi')).toBe(true)
 })
 
 test('citation exports omit unknown bibliographic fields instead of fabricating placeholders', () => {
@@ -499,6 +621,64 @@ test('citation shelf source-open quality uses normalized source identity', () =>
   expect(view.status).toBe('verified')
   expect(view.precision).toBe('phrase')
   expect(view.reason).toContain('phrase matched')
+})
+
+test('citation shelf persists an automatically recovered reader locator', () => {
+  const item = shelfItem({
+    key: 'shelf-recovered-locator',
+    source_path: 'F:\\papers\\discovery.en.md',
+    library_match_status: 'in_library',
+    library_match_path: 'DB\\Fixture\\Paper.en.md',
+    heading_path: 'Old heading',
+    block_id: 'stale-block',
+    anchor_id: 'stale-anchor',
+    anchor_kind: 'paragraph',
+  })
+  const recovered = mergeShelfItemReaderLocateResult(item, {
+    locateRequestId: 15,
+    locateFeedbackKey: item.key,
+    sourcePath: 'db/fixture/paper.en.md',
+    status: 'fuzzy',
+    precision: 'fuzzy',
+    ok: true,
+    repairable: false,
+    strictLocate: false,
+    hint: 'recovered',
+    reason: 'recovered',
+    blockId: 'p-method-1',
+    anchorId: 'a-p-method-1',
+    anchorKind: 'paragraph',
+    headingPath: 'Fixture Paper / Method',
+  })
+
+  expect(recovered.blockId).toBe('p-method-1')
+  expect(recovered.anchorId).toBe('a-p-method-1')
+  expect(recovered.headingPath).toBe('Fixture Paper / Method')
+  expect(mergeShelfItemReaderLocateResult(recovered, {
+    locateRequestId: 16,
+    locateFeedbackKey: item.key,
+    sourcePath: 'db/fixture/paper.en.md',
+    status: 'source_only',
+    precision: 'source_only',
+    ok: true,
+    repairable: false,
+    strictLocate: false,
+    hint: 'source opened',
+    reason: 'source opened',
+  })).toMatchObject({ blockId: '', anchorId: '', anchorKind: '', headingPath: '' })
+  expect(mergeShelfItemReaderLocateResult(item, {
+    locateRequestId: 17,
+    locateFeedbackKey: item.key,
+    sourcePath: 'db/other/paper.en.md',
+    status: 'exact',
+    precision: 'exact_anchor',
+    ok: true,
+    repairable: false,
+    strictLocate: true,
+    hint: 'wrong source',
+    reason: 'wrong source',
+    blockId: 'other-block',
+  })).toBe(item)
 })
 
 test('citation shelf source quality lookup tolerates normalized source paths', () => {

@@ -3,6 +3,10 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from kb.claim_polarity_guard import claim_polarity_conflicts, has_checkable_action_fact
+from kb.imaging_equation_binding import has_masked_frame_sum
+from kb.citation_marker_context import strip_citation_decoration
+from kb.theory_evidence import normalize_supported_variance_relation, protect_source_equations
 
 from kb.evidence_binding import (
     _claim_fact_quantities_for_evidence,
@@ -455,7 +459,7 @@ def _claim_units(answer: str) -> list[str]:
 
 
 def _plain_claim(text: str) -> str:
-    value = _CITATION_RE.sub(" ", str(text or ""))
+    value = strip_citation_decoration(str(text or ""), _CITATION_RE)
     value = re.sub(r"[*_`>#]", " ", value)
     return re.sub(r"\s+", " ", value).strip()
 
@@ -619,7 +623,7 @@ def _prepare_quantity_surfaces(
 
 def _meaningful_numbers(text: str) -> list[str]:
     _multiplier_facts, quantity_surface = _normalize_multiplier_surface(
-        _CITATION_RE.sub(" ", str(text or ""))
+        strip_citation_decoration(str(text or ""), _CITATION_RE)
     )
     return sorted(
         _quantity_label(quantity)
@@ -652,6 +656,7 @@ def _is_high_risk_claim(unit: str) -> bool:
         return False
     return bool(
         _meaningful_numbers(plain)
+        or has_checkable_action_fact(plain)
         or _RISK_RE.search(plain)
         or re.search(
             r"(?:是因为|由于|从而|进而|因而|这使得)|"
@@ -798,6 +803,14 @@ def _mentioned_source_hit_indexes(
         )
     }
     matched: list[int] = []
+    # If a named method resolves to a source's identity, mentions of that
+    # method in another paper's body are secondary discussion, not its source.
+    direct_indexes = [
+        index for index, hit in enumerate(answer_hits, 1)
+        if hit and claim_model_tokens & _source_identity_tokens(_hit_source_identity_surface(hit))
+    ]
+    if direct_indexes:
+        return direct_indexes
     for index, hit in enumerate(answer_hits, start=1):
         if not hit:
             continue
@@ -1160,6 +1173,8 @@ def _support_score(
         return 0
     if method_identity_conflicts(claim_plain, evidence_text):
         return 0
+    if claim_polarity_conflicts(claim_plain, evidence_text):
+        return 0
     claim_low = claim_plain.lower()
     claim_single_photon = bool(
         re.search(r"\bsingle[- ]?photon\b|\bspad\b|单光子", claim_low)
@@ -1300,6 +1315,7 @@ def _support_score(
     )
     if any(
         claim_pattern.search(claim_low) and not evidence_pattern.search(evidence_norm)
+        and not (claim_pattern is _MASK_COMPRESSION_DETAIL_RE and has_masked_frame_sum(evidence_text))
         for claim_pattern, evidence_pattern in explicit_relation_requirements
     ):
         return 0
@@ -3313,7 +3329,8 @@ def audit_and_repair_claim_evidence(
         hit if (not strict_plan or index in allowed_numbers) else {}
         for index, hit in enumerate(hits, start=1)
     ]
-    scoped, dropped_placeholder_sections = _drop_placeholder_sections(str(answer or ""))
+    scoped, source_equations = protect_source_equations(str(answer or ""), eligible_hits)
+    scoped, dropped_placeholder_sections = _drop_placeholder_sections(scoped)
     scoped, scoped_count = _scope_absolute_negative_claims(scoped)
     scoped, trimmed_inference_count = _trim_unsupported_boundary_inferences(scoped)
     scoped, modality_count = _repair_modality_boundary_language(scoped)
@@ -3385,6 +3402,11 @@ def audit_and_repair_claim_evidence(
         section_repairs, dropped_section_claims = [], []
     repaired, removed_heading_citations = _strip_source_only_heading_citations(repaired)
     repaired, dropped_mismatches = _drop_hard_mismatched_claims(repaired, eligible_hits)
+    repaired, normalized_variance_relations = normalize_supported_variance_relation(
+        repaired,
+        prompt=prompt,
+        evidence=[_hit_payload(hit) for hit in eligible_hits if hit],
+    )
     renderer_rejected_citations: list[dict[str, Any]] = []
     if enforce_user_visible_binding:
         repaired, renderer_rejected_citations = _strip_user_visible_rejected_citations(
@@ -3520,6 +3542,7 @@ def audit_and_repair_claim_evidence(
         "repaired_modality_boundaries": int(modality_count),
         "relocated_midphrase_citations": int(relocated_midphrase_citations),
         "restored_prompt_terms": int(spad_term_count + source_identifier_count),
+        "normalized_variance_relations": int(normalized_variance_relations),
         "restored_evidence_numbers": int(
             frame_rate_count
             + dmd_pattern_budget_count
@@ -3567,6 +3590,8 @@ def audit_and_repair_claim_evidence(
         meta["renderer_rejected_details"] = renderer_rejected_citations[:8]
     if dropped_unplanned_claims:
         meta["dropped_unplanned_claims"] = dropped_unplanned_claims[:8]
+    for token, equation in source_equations.items():
+        repaired = repaired.replace(token, equation)
     return repaired, meta
 
 

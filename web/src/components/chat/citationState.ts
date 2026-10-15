@@ -101,6 +101,8 @@ export interface CiteDetail {
   externalYear: string
   externalDoi: string
   externalDoiUrl: string
+  rawReferenceRejectedDoi: string
+  rawReferenceRejectedDois: string[]
   summaryLine: string
   summarySource: string
   summaryProvider: string
@@ -812,8 +814,31 @@ function metadataContractRejectsField(value: unknown, field: string): boolean {
     const issue = typeof item === 'object' && item !== null
       ? String((item as Record<string, unknown>).field || (item as Record<string, unknown>).code || '').trim().toLowerCase()
       : String(item || '').trim().toLowerCase()
-    return issue === target || issue.startsWith(`${target}_`) || issue.endsWith(`_${target}`)
+    const issueFields = issue.split(/[^a-z0-9]+/).filter(Boolean)
+    return issue === target || issueFields.includes(target)
   })
+}
+
+export function shelfItemMetadataFieldRejected(item: CiteShelfItem, field: string): boolean {
+  const target = String(field || '').trim().toLowerCase()
+  const rejectedDois = new Set([
+    normalizeDoiLike(item.rawReferenceRejectedDoi),
+    ...item.rawReferenceRejectedDois.map(normalizeDoiLike),
+  ].filter(Boolean))
+  const currentDoi = normalizeDoiLike(item.doi || item.doiUrl)
+  if (target === 'doi' && currentDoi && rejectedDois.has(currentDoi)) return true
+  return (
+    metadataContractRejectsField(item.metadataQuality, field)
+    || metadataContractRejectsField(item.metadataExportAcceptance, field)
+  )
+}
+
+export function shelfItemNeedsExportMetadataPass(item: CiteShelfItem): boolean {
+  if (shelfItemNeedsMetadataRepair(item, citationDisplay(item))) return true
+  if (!item.isInpaper) return false
+  const doi = normalizeDoiLike(item.doi || item.doiUrl)
+  const rawReference = String(item.raw || item.citeFmt || item.cardReferenceEntry || '').trim()
+  return Boolean(doi && rawReference && !extractDoiLike(rawReference))
 }
 
 function sourcePathIdentity(value: unknown): string {
@@ -1168,6 +1193,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     externalYear: pickText(rec, 'external_year', 'externalYear'),
     externalDoi: pickText(rec, 'external_doi', 'externalDoi'),
     externalDoiUrl: pickText(rec, 'external_doi_url', 'externalDoiUrl'),
+    rawReferenceRejectedDoi: pickText(rec, 'raw_reference_rejected_doi', 'rawReferenceRejectedDoi'),
+    rawReferenceRejectedDois: pickStringArray(rec, 'raw_reference_rejected_dois', 'rawReferenceRejectedDois'),
     summaryLine: pickText(rec, 'summary_line', 'summaryLine'),
     summarySource: pickText(rec, 'summary_source', 'summarySource'),
     summaryProvider: pickText(rec, 'summary_provider', 'summaryProvider'),
@@ -1948,10 +1975,78 @@ function jaccardTokens(a: string, b: string): number {
   return union > 0 ? inter / union : 0
 }
 
+type TrustedRepairField = {
+  property: keyof CiteDetail
+  aliases: string[]
+  empty: string | number
+}
+
+const TRUSTED_REPAIR_FIELDS: Record<string, TrustedRepairField> = {
+  title: { property: 'title', aliases: ['title'], empty: '' },
+  authors: { property: 'authors', aliases: ['authors'], empty: '' },
+  venue: { property: 'venue', aliases: ['venue'], empty: '' },
+  year: { property: 'year', aliases: ['year'], empty: '' },
+  volume: { property: 'volume', aliases: ['volume'], empty: '' },
+  issue: { property: 'issue', aliases: ['issue'], empty: '' },
+  pages: { property: 'pages', aliases: ['pages'], empty: '' },
+  doi: { property: 'doi', aliases: ['doi'], empty: '' },
+  doi_url: { property: 'doiUrl', aliases: ['doi_url', 'doiUrl'], empty: '' },
+  citation_count: { property: 'citationCount', aliases: ['citation_count', 'citationCount'], empty: 0 },
+  journal_if: { property: 'journalIf', aliases: ['journal_if', 'journalIf'], empty: '' },
+  journal_quartile: {
+    property: 'journalQuartile',
+    aliases: ['journal_quartile', 'journalQuartile'],
+    empty: '',
+  },
+  conference_tier: { property: 'conferenceTier', aliases: ['conference_tier', 'conferenceTier'], empty: '' },
+  conference_ccf: { property: 'conferenceCcf', aliases: ['conference_ccf', 'conferenceCcf'], empty: '' },
+  summary_line: { property: 'summaryLine', aliases: ['summary_line', 'summaryLine'], empty: '' },
+}
+
+function trustedRepairMergedItem(
+  base: CiteShelfItem,
+  mergedItem: CiteShelfItem,
+  candidateMeta: Record<string, unknown>,
+): CiteShelfItem {
+  const rawChangedFields = Array.isArray(candidateMeta.metadata_changed_fields)
+    ? candidateMeta.metadata_changed_fields
+    : candidateMeta.metadataChangedFields
+  if (!Array.isArray(rawChangedFields) || rawChangedFields.length <= 0) return mergedItem
+
+  const repaired: Record<string, unknown> = { ...mergedItem }
+  for (const rawField of rawChangedFields) {
+    const field = String(rawField || '').trim().toLowerCase()
+    const config = TRUSTED_REPAIR_FIELDS[field]
+    if (!config) continue
+    const alias = config.aliases.find(key => Object.prototype.hasOwnProperty.call(candidateMeta, key))
+    repaired[config.property] = alias ? candidateMeta[alias] : config.empty
+  }
+
+  if (!String(repaired.doi || '').trim()) repaired.doiUrl = ''
+  if (!Number(repaired.citationCount || 0)) repaired.citationSource = ''
+  if (!String(repaired.journalIf || '').trim()) repaired.journalIfSource = ''
+  if (!String(repaired.conferenceTier || '').trim()) repaired.conferenceRankSource = ''
+  if (!String(repaired.conferenceCcf || '').trim()) repaired.conferenceCcfSource = ''
+  if (!String(repaired.summaryLine || '').trim()) {
+    repaired.summarySource = ''
+    repaired.summaryProvider = ''
+    repaired.summaryQuality = null
+  }
+
+  const normalized = normalizeCiteDetail(repaired)
+  if (!normalized) return mergedItem
+  return {
+    ...toShelfItem(normalized),
+    key: base.key,
+    tags: normalizeShelfTags(base.tags),
+    note: normalizeShelfNote(base.note),
+  }
+}
+
 export function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<string, unknown>): CiteShelfItem | null {
   if (!candidateMeta || Object.keys(candidateMeta).length <= 0) return null
   const merged = mergeCiteMeta(base, candidateMeta)
-  const mergedItem = {
+  let mergedItem = {
     ...toShelfItem(merged),
     key: base.key,
     tags: normalizeShelfTags(base.tags),
@@ -1960,9 +2055,10 @@ export function strictRepairMerge(base: CiteShelfItem, candidateMeta: Record<str
 
   const baseDoi = normalizeDoiLike(base.doi || base.doiUrl)
   const baseRawDoi = extractDoiLike(base.raw || base.citeFmt)
-  const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
   const trustedRepair = metadataRepairMetaTrusted(candidateMeta)
   const trustedSystemARepair = trustedLocalSystemARepair(base, candidateMeta)
+  if (trustedRepair) mergedItem = trustedRepairMergedItem(base, mergedItem, candidateMeta)
+  const mergedDoi = normalizeDoiLike(mergedItem.doi || mergedItem.doiUrl)
   if (baseDoi && mergedDoi && baseDoi !== mergedDoi) {
     if (!(trustedSystemARepair || (trustedRepair && base.isInpaper && !baseRawDoi))) return null
   }
@@ -2262,7 +2358,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
     pages ? `pages={${pages}}` : '',
     doi ? `doi={${doi}}` : '',
     canonicalDoiUrl ? `url={${canonicalDoiUrl}}` : '',
-    entryType === 'misc' && sourceName ? `file={${sourceName}}` : '',
+    sourceName ? `file={${sourceName}}` : '',
   ].filter(Boolean)
   const bibtex = `@${entryType}{ref_${year || 'nd'}_${keyBase},\n  ${bibtexFields.join(',\n  ')}\n}`
 
@@ -2303,7 +2399,7 @@ export function citationFormats(detail: CiteDetail): { gbt: string; bibtex: stri
   }
   if (doi) risLines.push(`DO  - ${doi}`)
   if (canonicalDoiUrl || doi) risLines.push(`UR  - ${canonicalDoiUrl || `https://doi.org/${doi}`}`)
-  if (entryType === 'misc' && sourceName) risLines.push(`L1  - ${sourceName}`)
+  if (sourceName) risLines.push(`L1  - ${sourceName}`)
   risLines.push('ER  -')
   const ris = risLines.join('\n')
 

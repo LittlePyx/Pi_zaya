@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_expansion_protocol_v1",
+  "curation_status": "frozen_before_question_authoring_or_qrel_inspection",
+  "purpose": "Add genuinely new library-reading evidence-location questions after fusion v2 was invalidated, without expanding Pi_zaya into writing assistance or tuning against previously observed cases.",
+  "predecessor_boundary": {
+    "development_fixture_path": "docs/retrieval_eval_development_v1.json",
+    "development_fixture_sha256": "269cda5b1861be19a9aebf7b8b95faae6de49d41afb04e53cb2eea2aa3736478",
+    "semantic_fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "semantic_fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "fusion_v2_invalidation_path": "docs/retrieval_qwen_fusion_tuning_v2_invalidation.json",
+    "fusion_v2_invalidation_sha256": "38f5324286d00b544ea79e44abffd83b0b647863c17b849653ea246c0447be30",
+    "previous_case_ids_forbidden": true,
+    "previous_query_text_reuse_forbidden": true,
+    "previous_qrels_not_extended_in_place": true
+  },
+  "product_boundary": {
+    "allowed_user_goals": [
+      "find a definition or mechanism in library papers",
+      "locate limitations or applicability boundaries",
+      "find experimental configurations or reported measurements",
+      "compare traceable evidence across library papers",
+      "locate an equation, figure, or table needed for reading"
+    ],
+    "forbidden_user_goals": [
+      "draft manuscript text",
+      "rewrite or polish prose",
+      "generate a literature review narrative",
+      "prepare a submission",
+      "invent evidence outside the library"
+    ],
+    "library_sources_only": true,
+    "external_web_or_model_knowledge_for_labels": false,
+    "answer_generation_evaluated": false
+  },
+  "target_fixture": {
+    "path": "docs/retrieval_user_journey_expansion_v1.json",
+    "case_count": 18,
+    "locale_counts": {
+      "zh": 12,
+      "en": 6
+    },
+    "journey_type_counts": {
+      "single_paper_mechanism": 4,
+      "single_paper_boundary_or_limitation": 4,
+      "experimental_configuration_or_metric": 4,
+      "cross_paper_evidence_comparison": 4,
+      "equation_figure_or_table_location": 2
+    },
+    "minimum_distinct_primary_documents": 12,
+    "maximum_primary_cases_per_document": 2,
+    "cross_paper_case_count": 4,
+    "cross_paper_minimum_relevant_documents_each": 2,
+    "question_must_be_user_style_paraphrase": true,
+    "question_cannot_be_copied_from_evidence": true
+  },
+  "authoring_sequence": {
+    "step_1": "Choose document and journey-type slots without running BM25, dense, fusion, or rerankers.",
+    "step_2": "Write a natural user question from the reading intent and paper-level context, not from a retrieved passage.",
+    "step_3": "Inspect only the registered local source chunks/pages and assign qrels independent of retrieval rank.",
+    "step_4": "Run structural, corpus-identity, evidence-hash, leakage, distribution, and anti-writing checks.",
+    "step_5": "Freeze the fixture and deterministic split before any retrieval baseline or fusion-v3 design.",
+    "retriever_execution_before_step_5": false
+  },
+  "label_policy": {
+    "unit": "indexed_chunk",
+    "minimum_relevant_chunks_per_case": 1,
+    "maximum_relevant_chunks_per_case": 6,
+    "maximum_chunks_per_evidence_contract": 3,
+    "grades": {
+      "3": "direct evidence that resolves the requested reading question",
+      "2": "direct partial or contextual evidence needed with another labeled chunk"
+    },
+    "required_label_fields": [
+      "chunk_id",
+      "doc_id",
+      "grade",
+      "page_start",
+      "page_end",
+      "text_sha256",
+      "evidence_role"
+    ],
+    "scope_contains_every_relevant_document": true,
+    "cross_paper_requires_relevance_in_each_compared_document": true,
+    "labels_selected_without_retriever_rank": true,
+    "unresolved_or_ambiguous_questions_are_dropped_not_forced": true
+  },
+  "query_independence_checks": {
+    "exact_case_id_overlap_with_previous": 0,
+    "normalized_exact_query_overlap_with_previous": 0,
+    "english_max_contiguous_evidence_token_copy": 5,
+    "chinese_queries_against_english_evidence_are_translation_paraphrases": true,
+    "retrieval_result_fields_forbidden_in_fixture": [
+      "bm25_rank",
+      "dense_rank",
+      "fusion_rank",
+      "retrieved_score"
+    ]
+  },
+  "deterministic_split": {
+    "algorithm": "ascending_sha256(seed:locale:case_id)_within_locale",
+    "seed": "pizaya-user-journey-holdout-v1",
+    "holdout_locale_quota": {
+      "zh": 4,
+      "en": 2
+    },
+    "calibration_case_count": 12,
+    "holdout_case_count": 6,
+    "holdout_hidden_from_future_candidate_design": true,
+    "holdout_maximum_candidate_runs": 1,
+    "split_materialized_only_after_fixture_audit": true
+  },
+  "future_use": {
+    "first_required_report": "product BM25 baseline on all 18 cases before any fusion-v3 protocol",
+    "calibration_allowed_for_future_protocol_design": true,
+    "holdout_allowed_for_tuning": false,
+    "fusion_v2_candidate_results_cannot_be_reclassified_with_new_fixture": true,
+    "product_enabled": false
+  }
+}

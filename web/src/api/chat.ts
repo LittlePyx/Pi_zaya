@@ -1,4 +1,6 @@
 import { api, authFetch, responseError, responseJson } from './client'
+import type { CitationShelfRecord, CitationShelfRequest, CitationShelfSaveBody } from './citationShelf'
+export type { CitationShelfRecord, CitationShelfRequest, CitationShelfSaveBody } from './citationShelf'
 
 export interface Conversation {
   id: string
@@ -79,6 +81,261 @@ export interface ResearchNoteSourceLink {
   line_start?: number
   line_end?: number
   asset_src?: string
+  evidence_context_snapshot?: ResearchNoteEvidenceContextSnapshot
+  evidence_verification?: {
+    status?: string
+    reason?: string
+    verified_at?: number
+    source_fingerprint?: string
+  }
+  evidence_baseline_check?: {
+    version?: number
+    checked_at?: number
+    status?: 'skipped' | 'failed' | string
+    reason?: string; resolution_mode?: 'system_auto' | 'user_decision' | 'source_boundary' | string
+    source_fingerprint?: string
+    locator?: Record<string, unknown>
+    maintenance_version?: number
+    retry_count?: number
+    retry_after?: number
+    terminal?: boolean
+    terminal_at?: number
+  }
+  evidence_baseline_check_history?: Array<{
+    version?: number
+    checked_at?: number
+    resolved_at?: number
+    status?: 'skipped' | 'failed' | 'resolved' | string
+    reason?: string
+    source_fingerprint?: string
+    previous_status?: string
+    previous_reason?: string
+    locator?: Record<string, unknown>
+    maintenance_version?: number
+    retry_count?: number
+    retry_after?: number
+    terminal?: boolean
+    terminal_at?: number
+  }>
+  locator_repair_history?: Array<{
+    version?: number
+    repaired_at?: number
+    source_fingerprint?: string
+    from?: Record<string, unknown>
+    to?: Record<string, unknown>
+    previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+    reviewed_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  }>
+  evidence_review_history?: Array<{
+    version?: number
+    reviewed_at?: number
+    decision?: 'confirmed' | 'invalid' | string
+    source_fingerprint_before?: string
+    source_fingerprint_after?: string
+    previous_verification?: Record<string, unknown>
+    saved_locator?: Record<string, unknown>
+    reviewed_target?: Record<string, unknown>
+    previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+    reviewed_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  }>
+  evidence_auto_resolution_history?: Array<{
+    version?: number
+    resolved_at?: number
+    action?: 'source_change_auto_verified' | 'exact_quote_auto_relocated' | 'stable_locator_auto_aligned' | 'saved_context_auto_disambiguated' | string
+    match_reason?: string
+    source_fingerprint?: string
+    from?: Record<string, unknown>
+    to?: Record<string, unknown>
+    previous_verification?: Record<string, unknown>
+    previous_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+    resolved_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  }>
+  evidence_context_history?: Array<{
+    version?: number
+    action?: 'baseline_backfilled' | string
+    captured_at?: number
+    source_fingerprint?: string
+    locator?: Record<string, unknown>
+    previous_verification?: Record<string, unknown>
+  }>
+}
+
+export interface ResearchNoteEvidenceBlock {
+  block_id?: string
+  anchor_id?: string
+  kind?: string
+  heading_path?: string
+  page_start?: number | null
+  page_end?: number | null
+  line_start?: number | null
+  line_end?: number | null
+  text: string
+  markdown: string
+}
+
+export interface ResearchNoteEvidenceContextSnapshotBlock {
+  block_id?: string
+  anchor_id?: string
+  kind?: string
+  heading_path?: string
+  page_start?: number | null
+  page_end?: number | null
+  line_start?: number | null
+  line_end?: number | null
+  text: string
+}
+
+export interface ResearchNoteEvidenceContextSnapshot {
+  version: 1
+  captured_at: number
+  source_fingerprint: string
+  reason?: string
+  before: ResearchNoteEvidenceContextSnapshotBlock[]
+  target: ResearchNoteEvidenceContextSnapshotBlock
+  after: ResearchNoteEvidenceContextSnapshotBlock[]
+}
+
+export interface ResearchNoteEvidenceCandidate extends ResearchNoteEvidenceBlock {
+  score: number
+  rank?: number
+  before?: ResearchNoteEvidenceBlock[]
+  after?: ResearchNoteEvidenceBlock[]
+  context_match?: {
+    available_fields: string[]
+    matched_fields: string[]
+    field_scores?: Record<string, number>
+    score?: number
+    score_gap?: number
+    best_match?: boolean
+  }
+  reader_open: MessageProvenanceReaderOpen
+}
+
+export interface ResearchNoteEvidenceContext {
+  status: 'exact' | 'candidate' | 'unavailable' | string
+  reason: string
+  source_name: string
+  heading_path: string
+  page_start?: number | null
+  page_end?: number | null
+  before: ResearchNoteEvidenceBlock[]
+  target?: ResearchNoteEvidenceBlock | null
+  after: ResearchNoteEvidenceBlock[]
+  candidates: ResearchNoteEvidenceCandidate[]
+  can_open_exact: boolean
+  reader_open?: MessageProvenanceReaderOpen | null
+  source_fingerprint: string
+  source_changed: boolean
+  context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  context_disambiguation?: {
+    mode: 'saved_context' | string
+    score_version?: number
+    candidate_count: number
+    score?: number
+    score_gap?: number
+    available_fields: string[]
+    matched_fields: string[]
+    field_scores?: Record<string, number>
+  }
+}
+
+export interface ResearchNoteEvidenceRepairBody {
+  source_index: number
+  source_path: string
+  capture_id?: string
+  old_block_id?: string
+  old_anchor_id?: string
+  old_evidence_quote?: string
+  candidate_block_id?: string
+  candidate_anchor_id?: string
+  candidate_anchor_kind?: string
+  candidate_evidence_quote: string
+  source_fingerprint: string
+}
+
+export interface ResearchNoteEvidenceRepairIntent {
+  version: 1
+  note_id: string
+  note_title: string
+  source_label: string
+  repair: ResearchNoteEvidenceRepairBody
+}
+
+export interface ResearchNoteReaderReturnIntent {
+  version: 1
+  note_id: string
+  source_index: number
+}
+
+export interface ResearchNoteEvidenceReviewBody {
+  decision: 'confirmed' | 'invalid'
+  source_index: number
+  source_path: string
+  capture_id?: string
+  old_block_id?: string
+  old_anchor_id?: string
+  old_evidence_quote?: string
+  expected_source_fingerprint: string
+  current_block_id?: string
+  current_anchor_id?: string
+  current_anchor_kind?: string
+  current_evidence_quote: string
+  source_fingerprint: string
+}
+
+export interface ResearchNoteEvidenceReviewIntent {
+  version: 1
+  note_id: string
+  note_title: string
+  source_label: string
+  saved_evidence_quote: string
+  current_evidence_quote: string
+  previously_invalid: boolean
+  saved_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  current_context_snapshot?: ResearchNoteEvidenceContextSnapshot | null
+  review: Omit<ResearchNoteEvidenceReviewBody, 'decision'>
+}
+
+export interface ResearchNoteEvidenceBaselineItem {
+  source_index: number
+  source_name: string
+  status: 'created' | 'skipped' | 'failed'
+  reason: string; resolution_mode?: 'system_auto' | 'user_decision' | 'source_boundary' | string
+  checked_at?: number
+}
+
+export interface ResearchNoteEvidenceBaselineSummary {
+  total: number
+  created: number
+  skipped: number
+  failed: number
+  reasons: Record<string, number>
+}
+
+export interface ResearchNoteEvidenceBaselineResult {
+  note: ResearchNoteRecord
+  summary: ResearchNoteEvidenceBaselineSummary
+  items: ResearchNoteEvidenceBaselineItem[]
+}
+
+export interface ResearchNoteEvidenceMaintenanceResult {
+  notes: ResearchNoteRecord[]
+  summary: {
+    requested: number
+    processed: number
+    updated: number
+    deferred: number
+    conflicted: number
+    not_found: number
+    errors: number
+    resolved_links: number
+    decision_links: number
+    has_more: boolean
+  }
+  items: Array<{
+    note_id: string
+    status: 'processed' | 'not_due' | 'budget_deferred' | 'system_deferred' | 'conflicted' | 'not_found' | string
+  }>
 }
 
 export interface ResearchNoteSourceState {
@@ -220,6 +477,11 @@ export interface AgentSourceSummary {
   source_notice_count?: number
   quality_gate_status?: string
   should_show?: boolean
+  external_supplement_mode?: ExternalSupplementMode
+  external_source_kind?: 'web' | 'model' | '' | string
+  web_search_used?: boolean
+  web_sources?: ExternalWebSource[]
+  external_supplement_unavailable?: string
   source_policy_payload?: AgentSourcePolicyPayload | Record<string, unknown>
   [key: string]: unknown
 }
@@ -235,9 +497,16 @@ export interface AgentSourcePolicyPayload {
   confidence?: 'high' | 'medium' | 'low' | 'external' | 'unknown' | string
   uses_local_knowledge_base?: boolean
   uses_external_model?: boolean
+  uses_external_web?: boolean
   requires_user_notice?: boolean
   notice_kind?: 'none' | 'local_plus_external' | 'external_not_kb' | string
   citation_policy?: 'local_citations_required' | 'not_applicable' | string
+  external_supplement_mode?: ExternalSupplementMode
+  external_source_kind?: 'web' | 'model' | '' | string
+  web_search_used?: boolean
+  web_source_count?: number
+  web_sources?: ExternalWebSource[]
+  external_supplement_unavailable?: string
   badge?: {
     label_key?: string
     label?: string
@@ -254,6 +523,20 @@ export interface AgentSourcePolicyPayload {
     [key: string]: unknown
   }
   [key: string]: unknown
+}
+
+export interface ExternalWebSource {
+  title?: string
+  url: string
+  domain?: string
+  verification_status?: 'verified' | string
+  verification_level?: 'content_match' | 'reachable' | string
+  claim_text?: string
+  scholarly_kind?: 'doi' | 'arxiv' | 'web' | string
+  doi?: string
+  arxiv_id?: string
+  pdf_url?: string
+  import_eligible?: boolean
 }
 
 export interface AnswerRuntimeCheck {
@@ -342,6 +625,7 @@ export interface ResearchAgentRequest {
   temperature?: number
   max_tokens?: number
   query_scope?: string
+  external_supplement_mode?: ExternalSupplementMode
   prompt_context?: Record<string, unknown> | null
   source_lock_path?: string
   source_lock_name?: string
@@ -583,7 +867,7 @@ export interface ConversationResearchStateRecord {
 }
 
 export type QueryScope = 'current_paper' | 'basket' | 'library'
-
+export type ExternalSupplementMode = 'disabled' | 'model' | 'web'
 export interface MessageProvenanceSegment {
   segment_id: string
   segment_index?: number
@@ -679,30 +963,6 @@ export interface ChatImageAttachment {
   name: string
   mime: string
   url?: string
-}
-
-export interface CitationShelfRecord {
-  version: number
-  scope: string
-  scope_id: string
-  project_id?: string | null
-  items: Array<Record<string, unknown>>
-  open: boolean
-  revision: number
-  created_at: number
-  updated_at: number
-}
-
-export interface CitationShelfRequest {
-  convId?: string | null
-  projectId?: string | null
-  scope?: string
-}
-
-export interface CitationShelfSaveBody extends CitationShelfRequest {
-  items: Array<Record<string, unknown>>
-  open?: boolean
-  allowEmptyOverwrite?: boolean
 }
 
 export type ResearchBriefQualityStatus = 'verified' | 'needs_review' | 'draft' | string
@@ -1571,6 +1831,45 @@ export const chatApi = {
   },
   getResearchNote: (noteId: string) =>
     api.get<ResearchNoteRecord>(`/api/chat/research-notes/${encodeURIComponent(noteId)}`),
+  reviewResearchNoteEvidence: (link: ResearchNoteSourceLink) =>
+    api.post<ResearchNoteEvidenceContext>('/api/chat/research-note/evidence-context', {
+      source_path: link.source_path,
+      source_name: link.source_name || link.label,
+      heading_path: link.heading_path,
+      evidence_quote: link.evidence_quote,
+      page_start: link.page_start,
+      page_end: link.page_end,
+      block_id: link.block_id,
+      anchor_id: link.anchor_id,
+      anchor_kind: link.anchor_kind,
+      source_fingerprint: link.evidence_verification?.source_fingerprint,
+      evidence_context_snapshot: link.evidence_context_snapshot,
+    }),
+  repairResearchNoteEvidence: (noteId: string, body: ResearchNoteEvidenceRepairBody) =>
+    api.post<ResearchNoteRecord>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-repair`,
+      body,
+    ),
+  decideResearchNoteEvidenceReview: (noteId: string, body: ResearchNoteEvidenceReviewBody) =>
+    api.post<ResearchNoteRecord>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-review`,
+      body,
+    ),
+  captureResearchNoteEvidenceContextBaselines: (noteId: string, expectedRevision: number) =>
+    api.post<ResearchNoteEvidenceBaselineResult>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-context-baseline`,
+      { expected_revision: expectedRevision },
+    ),
+  refreshResearchNoteEvidenceHealth: (noteId: string, expectedRevision: number) =>
+    api.post<ResearchNoteEvidenceBaselineResult>(
+      `/api/chat/research-notes/${encodeURIComponent(noteId)}/evidence-health`,
+      { expected_revision: expectedRevision },
+    ),
+  maintainResearchNoteEvidence: (notes: Array<{ note_id: string; expected_revision: number }>) =>
+    api.post<ResearchNoteEvidenceMaintenanceResult>(
+      '/api/chat/research-notes/evidence-maintenance',
+      { notes },
+    ),
   createResearchNote: (body: ResearchNoteCreateBody) =>
     api.post<ResearchNoteRecord>('/api/chat/research-notes', body),
   updateResearchNote: (noteId: string, body: ResearchNoteUpdateBody) =>
@@ -1809,6 +2108,9 @@ export const chatApi = {
       scope: body.scope || 'project',
       project_id: body.projectId ?? null,
       allow_empty_overwrite: body.allowEmptyOverwrite ?? false,
+      expected_revision: body.expectedRevision,
+      mutation_id: body.mutationId,
+      mutations: body.mutations,
     }),
   appendCitationShelfItem: (body: CitationShelfRequest & { item: Record<string, unknown>; open?: boolean }) =>
     api.post<CitationShelfRecord>(citationShelfItemsUrl(body), {

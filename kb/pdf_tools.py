@@ -1208,6 +1208,48 @@ def run_pdf_to_md(
         except Exception as e:
             return False, f"open pdf failed: {e}"
 
+        try:
+            fallback_title = re.sub(r"\s+", " ", str((doc.metadata or {}).get("title") or "")).strip()
+        except Exception:
+            fallback_title = ""
+
+        def _fallback_structure(text: str, *, page_index: int) -> str:
+            """Promote only source-explicit labels before paragraph reflow."""
+
+            lines = [re.sub(r"\s+", " ", line).strip() for line in str(text or "").splitlines()]
+            nonempty = [line for line in lines if line]
+            first_line = nonempty[0] if nonempty else ""
+            out: list[str] = []
+            structural_re = re.compile(
+                r"^(?:abstract|introduction|background|related\s+work|methods?|methodology|"
+                r"experiments?|results?|discussion|limitations?|conclusions?|future\s+work|"
+                r"acknowledg(?:e)?ments?|references|bibliography|appendix)\s*$",
+                flags=re.IGNORECASE,
+            )
+            numbered_re = re.compile(r"^(\d+(?:\.\d+)*)\.?\s+\S+")
+            for line in lines:
+                if not line:
+                    out.append("")
+                    continue
+                if (
+                    page_index == 0
+                    and line == first_line
+                    and fallback_title
+                    and line.casefold() == fallback_title.casefold()
+                ):
+                    out.append(f"# {line}")
+                    continue
+                if structural_re.fullmatch(line):
+                    out.append(f"## {line}")
+                    continue
+                numbered = numbered_re.match(line)
+                if numbered:
+                    depth = len(str(numbered.group(1)).split("."))
+                    out.append(f"{'#' * min(3, depth + 1)} {line}")
+                    continue
+                out.append(line)
+            return "\n".join(out).strip()
+
         parts: list[str] = []
         try:
             total_pages = int(getattr(doc, "page_count", 0) or 0)
@@ -1223,8 +1265,14 @@ def run_pdf_to_md(
                     txt = (page.get_text("text") or "").strip()
                 except Exception:
                     txt = ""
+                txt = _fallback_structure(txt, page_index=i)
+                # Keep the same physical-page contract as the primary converter.
+                # The fallback is used after converter startup/runtime failures, so
+                # dropping anchors here turns an otherwise readable text PDF into a
+                # permanently quality-blocked document.
+                marker = f"<!-- kb_page: {i + 1} -->"
+                parts.append(f"{marker}\n\n{txt}".rstrip())
                 if txt:
-                    parts.append(txt)
                     fallback_chars += len(txt)
                     fallback_controls += _count_control_chars(txt)
                 if progress_cb is not None:
@@ -1238,17 +1286,39 @@ def run_pdf_to_md(
             except Exception:
                 pass
 
-        body = "\n\n---\n\n".join(parts).strip()
+        body = "\n\n".join(parts).strip()
         if body and _is_corrupted_text_layer(fallback_chars, fallback_controls):
+            marker_block = "\n\n".join(
+                f"<!-- kb_page: {page_no} -->"
+                for page_no in range(1, max(1, int(total_pages or 0)) + 1)
+            )
             body = (
+                f"{marker_block}\n\n"
                 "[PDF extraction warning]\n\n"
                 "Fallback text extraction detected a corrupted PDF text layer "
                 "(likely missing Unicode font mapping). "
                 "This output is intentionally replaced to avoid ingesting garbled symbols.\n\n"
                 f"stats: chars={fallback_chars}, control_chars={fallback_controls}"
             )
-        elif not body:
-            body = "（未能从 PDF 提取到可检索的文本：可能是扫描版，或文本被嵌入为图片。）"
+        elif fallback_chars <= 0:
+            marker_block = "\n\n".join(
+                f"<!-- kb_page: {page_no} -->"
+                for page_no in range(1, max(1, int(total_pages or 0)) + 1)
+            )
+            body = (
+                f"{marker_block}\n\n"
+                "（未能从 PDF 提取到可检索的文本：可能是扫描版，或文本被嵌入为图片。）"
+            )
+
+        # Reuse the deterministic Markdown structure pass from the primary
+        # converter.  It promotes explicit Abstract/Methods/Results/References
+        # labels and formats reference entries without inventing source content.
+        try:
+            from .converter.post_processing import postprocess_markdown
+
+            body = postprocess_markdown(body)
+        except Exception:
+            pass
 
         try:
             md_path.write_text(body, encoding="utf-8")

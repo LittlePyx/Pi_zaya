@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_scoped_fresh_e5_v1",
+  "status": "frozen_before_candidate_replay",
+  "frozen_at": "2026-09-03",
+  "purpose": "Blindly compare the unchanged product BM25 channel and fixed E5 protected-tail selector on twelve source-only authored, previously unused, single-paper scopes.",
+  "authorization": {
+    "authoring_protocol_path": "docs/retrieval_scoped_fresh_authoring_protocol_v1.json",
+    "authoring_protocol_sha256": "c9d29e8ec68c02733cdbe7b155b77d11818de8f09c71fbaa00ffaf659a5f3cf3",
+    "fixture_path": "docs/retrieval_scoped_fresh_cases_v1.json",
+    "fixture_sha256": "3472826090e032739903db91dd8c359adbc68bff6fcbe40ec9f136bb945b1d27",
+    "fixture_case_count": 12,
+    "fixture_label_count": 21,
+    "fixture_document_count": 12,
+    "fixture_chunk_count": 702,
+    "fixture_corpus_fingerprint": "5d65f3a033d62e15c3b90b7c32314452cb49334652d1db0f0e74a55a2b125317",
+    "retriever_executed_before_protocol_freeze": false,
+    "candidate_configuration_changes_allowed": 0
+  },
+  "existing_corpus_and_index": {
+    "working_db_path": "test_results/retrieval_product_e5_user_journey_v1/db",
+    "working_db_retrieval_snapshot_sha256": "09d20706edb877e5534f115f92b3252c0917caf23f3e91af55d37d7209557535",
+    "index_path": "test_results/retrieval_product_e5_user_journey_v1/index",
+    "index_tree_sha256": "4b6858d3c1afc5239e4e6eaa98f6eabe7b87b24f2df7b58315764128046b23e6",
+    "build_id": "a66067c83cd0440abc8381b31a7b154f",
+    "document_count": 31,
+    "parent_count": 2251,
+    "window_count": 2663,
+    "index_bytes": 4870347,
+    "index_rebuild_allowed": false,
+    "index_write_allowed": false,
+    "database_write_allowed": false
+  },
+  "candidate": {
+    "candidate_id": "multilingual_e5_small_official_onnx_v1",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "model_path": "test_results/retrieval_lighter_runtime_v1/artifacts/multilingual_e5_small_official_onnx_v1/model.onnx",
+    "model_bytes": 470268510,
+    "model_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "tokenizer_path": "test_results/retrieval_lighter_runtime_v1/artifacts/multilingual_e5_small_official_onnx_v1/tokenizer/tokenizer.json",
+    "tokenizer_bytes": 17082730,
+    "tokenizer_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+    "artifact_tree_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "embedding_dimension": 384,
+    "representation_id": "e5_small_full_coverage_parent_collapsed_windows_v1",
+    "selector_configuration": {
+      "retrieval_mode": "hybrid_local",
+      "source_scope": "scoped",
+      "protected_sparse_prefix": 5,
+      "evaluated_k": 10
+    },
+    "product_sources": {
+      "executor_path": "kb/e5_small_embedding_runtime.py",
+      "executor_sha256": "25713a37f3c00f075bb076a0c31a8eab491a46c43d32d46fe677ccd000e60e3d",
+      "index_path": "kb/local_semantic_window_index.py",
+      "index_sha256": "38aabbe8ee861e8e2b59fac153cce08d9ad154057878e2617621f1faab48a36e",
+      "runtime_path": "kb/local_semantic_runtime.py",
+      "runtime_sha256": "3b9b20ef237eba07c2c0375abe635e6df79e24b7cbfa12d82f43bde412ddadc3",
+      "selector_path": "kb/local_retrieval_selector.py",
+      "selector_sha256": "a6787eb8fb650d51ece6c728dc8290be8c33ee065f15f9df8be9114024725417",
+      "fusion_path": "kb/protected_dense_tail_retriever.py",
+      "fusion_sha256": "f120174d277fd190008fb0c1d5749315df83cb75fd1ca143aa864991c28d95b2"
+    }
+  },
+  "runtime_environment": {
+    "python_version": "3.10.11",
+    "model_runtime_python": "test_results/retrieval_lighter_runtime_v1/.venv/Scripts/python.exe",
+    "product_dependency_site_packages": ".ci_venv_2/Lib/site-packages",
+    "python_no_user_site": true,
+    "package_install_allowed": false,
+    "numpy_version": "2.2.6",
+    "onnxruntime_version": "1.23.2",
+    "tokenizers_version": "0.21.4",
+    "rank_bm25_version": "0.2.2",
+    "rank_bm25_source_sha256": "2f28cc795415C01E9F3DB5A8ED019774F9CBA747B272C9C304271589B8081AC6"
+  },
+  "execution": {
+    "modes": [
+      "scoped"
+    ],
+    "selection_call_count": 12,
+    "full_library_calls_allowed": 0,
+    "embedding_build_calls_allowed": 0,
+    "result_root": "test_results/retrieval_scoped_fresh_e5_v1",
+    "worker_result_path": "test_results/retrieval_scoped_fresh_e5_v1/worker_v1.json",
+    "report_path": "docs/retrieval_scoped_fresh_e5_v1.json",
+    "hard_subprocess_timeout_seconds": 240,
+    "allow_external_network": false,
+    "allow_model_download": false,
+    "candidate_enabled_only_inside_offline_replay": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "report_persisted_before_outcome_validation": true
+  },
+  "runtime_gates": {
+    "maximum_subprocess_wall_ms": 180000.0,
+    "maximum_peak_process_rss_mib": 6144.0,
+    "maximum_warm_selector_p95_ms": 1000.0,
+    "required_index_build_calls": 0,
+    "required_selection_calls": 12,
+    "required_cold_load_count": 1,
+    "minimum_warm_cache_hit_count": 11,
+    "maximum_fallback_count": 0,
+    "maximum_source_escape_count": 0,
+    "required_protected_prefix_rate": 1.0,
+    "required_product_sparse_input_unchanged_rate": 1.0,
+    "require_working_db_unchanged": true,
+    "require_existing_index_unchanged": true,
+    "require_artifact_model_tokenizer_unchanged": true,
+    "all_required": true
+  },
+  "quality_gates": {
+    "required_no_regression": [
+      "recall@5",
+      "recall@10",
+      "mrr",
+      "ndcg@10",
+      "contract_recall@10"
+    ],
+    "minimum_recall_at_10_gain": 0.02,
+    "maximum_case_regressions": {
+      "recall@10": 0,
+      "contract_recall@10": 0,
+      "mrr": 0
+    },
+    "all_required": true
+  },
+  "decision": {
+    "pass_status": "fresh_scoped_suite_passed_authorize_packaging_experiment",
+    "runtime_failure_status": "fresh_scoped_runtime_rejected_keep_bm25",
+    "quality_failure_status": "fresh_scoped_quality_rejected_keep_bm25",
+    "product_enablement_allowed": false,
+    "user_mode_control_allowed": false,
+    "candidate_tuning_on_failure_allowed": false
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "external_web_or_model_knowledge_used": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

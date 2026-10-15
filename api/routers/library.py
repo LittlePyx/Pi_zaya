@@ -48,6 +48,7 @@ from kb.task_runtime import (
     _bg_resume_task,
     _bg_update_recoverable_pdf_path,
 )
+from kb.web_sources import ExternalSourceError, fetch_external_pdf
 from kb.file_ops import (
     _list_pdf_paths_fast,
     _next_pdf_dest_path,
@@ -68,6 +69,8 @@ from kb.converter.quality_repair import (
     append_conversion_repair_attempt,
     conversion_quality_result_path,
     conversion_quality_report_is_stale,
+    conversion_retry_exhaustion,
+    conversion_retry_profile_signature,
     conversion_repair_strategy_for_issue,
     load_conversion_quality_result,
     plan_conversion_quality_repair,
@@ -92,6 +95,13 @@ from kb.maintenance import create_auto_snapshot
 from kb.pdf_tools import PdfMetaSuggestion, extract_pdf_meta_suggestion, run_pdf_to_md, open_in_explorer
 from kb.reference_index import INDEX_FILE_NAME as REFERENCE_INDEX_FILE_NAME
 from kb.reference_sync import start_reference_sync
+from kb.research_note_maintenance import (
+    dispatch_research_note_source_dependency_inspection,
+    dispatch_research_note_source_migration,
+    enqueue_research_note_source_recovery,
+    enqueue_research_note_source_recovery_scan,
+)
+from kb.path_safety import reference_source_roots, root_relative_file_id
 from kb.store import (
     atomic_write_json,
     compute_doc_id,
@@ -366,6 +376,24 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
     stale = conversion_quality_report_is_stale(md_path, report)
     center_summary = {} if stale else quality_center_summary(report)
     repair_plan = {} if stale else (report.get("repair_plan") if isinstance(report.get("repair_plan"), dict) else {})
+    retry_state: dict = {"exhausted": False}
+    if not stale and str(repair_plan.get("action") or "").strip().lower() == "reconvert":
+        source_pdf_path = str(source_quality.get("source_pdf_path") or "").strip()
+        current_profile_signature = ""
+        if source_pdf_path:
+            try:
+                current_profile_signature = conversion_retry_profile_signature(
+                    source_pdf_path,
+                    speed_mode=str(repair_plan.get("speed_mode") or "normal"),
+                    no_llm=bool(repair_plan.get("no_llm")),
+                    settings=get_settings(),
+                )
+            except Exception:
+                current_profile_signature = ""
+        retry_state = conversion_retry_exhaustion(
+            report,
+            current_profile_signature=current_profile_signature,
+        )
     return {
         "available": True,
         "stale": bool(stale),
@@ -382,6 +410,10 @@ def _conversion_quality_report_summary(md_path: Path, report: dict) -> dict | No
         "repair_attempt_count": len(repair_attempts),
         "latest_repair_attempt": latest_attempt,
         "repair_attempts": repair_attempts[-5:],
+        "retry_exhausted": bool(retry_state.get("exhausted")),
+        "retry_exhausted_reason": str(retry_state.get("reason") or ""),
+        "retry_profile_signature": str(retry_state.get("profile_signature") or ""),
+        "retry_issue_codes": list(retry_state.get("issue_codes") or [])[:30],
         "recommended_action": "" if stale else str(report.get("recommended_action") or ""),
         "needs_reconvert": False if stale else bool(report.get("needs_reconvert")),
         "source_quality": source_quality,
@@ -5506,6 +5538,170 @@ def _sync_md_after_pdf_rename_basic(*, md_root: Path, src_pdf: Path, dest_pdf: P
         return {"ok": False, "msg": str(exc)}
 
 
+def _portable_research_note_source_path(value: Path | str) -> str:
+    raw = str(value or "").replace("\x00", "").strip()
+    if not raw:
+        return ""
+    try:
+        candidate = Path(raw).expanduser()
+        text = str(candidate.resolve(strict=False)) if candidate.is_absolute() else str(candidate)
+    except Exception:
+        text = raw
+    return text.replace("\\", "/").strip().rstrip("/")
+
+
+def _research_note_source_migrations_for_library_rename(
+    *,
+    src_pdf: Path,
+    dest_pdf: Path,
+    md_root: Path,
+    old_md_main: Path,
+    old_md_exists: bool,
+    also_md: bool,
+    db_dir: Path | str | None,
+) -> tuple[dict[str, str], list[tuple[str, str]], list[str]]:
+    """Build collision-safe aliases for persisted note source paths."""
+    exact: dict[str, str] = {}
+    prefixes: list[tuple[str, str]] = []
+
+    def add_exact(old_value: Path | str, new_value: Path | str) -> None:
+        old_text = _portable_research_note_source_path(old_value)
+        new_text = _portable_research_note_source_path(new_value)
+        if old_text and new_text and old_text.casefold() != new_text.casefold():
+            exact[old_text] = new_text
+
+    def add_prefix(old_value: Path | str, new_value: Path | str) -> None:
+        old_text = _portable_research_note_source_path(old_value)
+        new_text = _portable_research_note_source_path(new_value)
+        if old_text and new_text and old_text.casefold() != new_text.casefold():
+            prefixes.append((old_text, new_text))
+
+    add_exact(src_pdf, dest_pdf)
+    add_exact(src_pdf.name, dest_pdf.name)
+    recovery_paths = [_portable_research_note_source_path(dest_pdf)]
+    if not (bool(also_md) and bool(old_md_exists)):
+        return exact, prefixes, recovery_paths
+
+    old_folder = Path(md_root) / src_pdf.stem
+    new_folder, new_md_main, new_md_exists = _resolve_library_md_output_paths(md_root, dest_pdf)
+    if not new_md_exists:
+        return exact, prefixes, recovery_paths
+
+    add_exact(old_md_main, new_md_main)
+    if old_md_main.name.casefold() == f"{src_pdf.stem}.en.md".casefold():
+        add_exact(old_md_main.name, new_md_main.name)
+    add_prefix(old_folder, new_folder)
+    add_prefix(old_folder.name, new_folder.name)
+
+    project_root = Path(__file__).resolve().parents[2]
+    for base in (project_root, Path(md_root).parent):
+        try:
+            add_exact(old_md_main.relative_to(base), new_md_main.relative_to(base))
+        except Exception:
+            pass
+        try:
+            add_prefix(old_folder.relative_to(base), new_folder.relative_to(base))
+        except Exception:
+            pass
+
+    roots = reference_source_roots(md_root=md_root, db_dir=db_dir)
+    old_public_main = root_relative_file_id(old_md_main, roots)
+    new_public_main = root_relative_file_id(new_md_main, roots)
+    if old_public_main and new_public_main:
+        add_exact(old_public_main, new_public_main)
+    old_public_folder = root_relative_file_id(old_folder, roots)
+    new_public_folder = root_relative_file_id(new_folder, roots)
+    if old_public_folder and new_public_folder:
+        add_prefix(old_public_folder, new_public_folder)
+
+    recovery_paths.append(_portable_research_note_source_path(new_md_main))
+    return exact, prefixes, recovery_paths
+
+
+def _research_note_source_aliases_for_library_file(
+    *,
+    pdf_path: Path,
+    md_root: Path,
+    md_main: Path,
+    md_exists: bool,
+    db_dir: Path | str | None,
+) -> dict[str, list[str]]:
+    """Return explicit, collision-conscious source identities for one library paper."""
+    pdf_exact: list[str] = []
+    md_exact: list[str] = []
+    md_prefix: list[str] = []
+
+    def add(target: list[str], value: Path | str) -> None:
+        text = _portable_research_note_source_path(value)
+        if text and text.casefold() not in {item.casefold() for item in target}:
+            target.append(text)
+
+    add(pdf_exact, pdf_path)
+    add(pdf_exact, pdf_path.name)
+    if not md_exists:
+        return {"pdf_exact": pdf_exact, "md_exact": md_exact, "md_prefix": md_prefix}
+
+    md_folder = Path(md_root) / pdf_path.stem
+    add(md_exact, md_main)
+    if md_main.name.casefold() == f"{pdf_path.stem}.en.md".casefold():
+        add(md_exact, md_main.name)
+    add(md_prefix, md_folder)
+    add(md_prefix, md_folder.name)
+
+    project_root = Path(__file__).resolve().parents[2]
+    for base in (project_root, Path(md_root).parent):
+        try:
+            add(md_exact, md_main.relative_to(base))
+        except Exception:
+            pass
+        try:
+            add(md_prefix, md_folder.relative_to(base))
+        except Exception:
+            pass
+
+    roots = reference_source_roots(md_root=md_root, db_dir=db_dir)
+    public_main = root_relative_file_id(md_main, roots)
+    if public_main:
+        add(md_exact, public_main)
+    public_folder = root_relative_file_id(md_folder, roots)
+    if public_folder:
+        add(md_prefix, public_folder)
+    return {"pdf_exact": pdf_exact, "md_exact": md_exact, "md_prefix": md_prefix}
+
+
+def _research_note_delete_impact(
+    *,
+    pdf_path: Path,
+    md_root: Path,
+    md_main: Path,
+    md_exists: bool,
+    db_dir: Path | str | None,
+) -> tuple[dict, dict[str, list[str]]]:
+    aliases = _research_note_source_aliases_for_library_file(
+        pdf_path=pdf_path,
+        md_root=md_root,
+        md_main=md_main,
+        md_exists=md_exists,
+        db_dir=db_dir,
+    )
+    dependency = dispatch_research_note_source_dependency_inspection(
+        exact_source_paths=[*aliases["pdf_exact"], *aliases["md_exact"]],
+        prefix_source_paths=aliases["md_prefix"],
+    )
+    note_count = max(0, int(dependency.get("note_count") or 0))
+    inspection_ok = bool(dependency.get("ok")) or not bool(dependency.get("handled"))
+    preservation_available = note_count <= 0 or bool(md_exists)
+    return {
+        **dependency,
+        "ok": inspection_ok,
+        "pdf_name": pdf_path.name,
+        "note_count": note_count,
+        "preservation_available": preservation_available,
+        "deletion_blocked": not inspection_ok or not preservation_available,
+        "preservation_mode": "converted_source" if note_count > 0 and md_exists else "none",
+    }, aliases
+
+
 def _build_rename_suggestion_item(*, pdf_path: Path, pdf_dir: Path, md_dir: Path, use_llm: bool) -> dict:
     try:
         st = pdf_path.stat()
@@ -5779,6 +5975,50 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
                 "rollback": {"pdf": bool(rollback_pdf), "md": rollback_md},
             }
 
+    note_source_sync = {
+        "ok": True,
+        "handled": False,
+        "notes_updated": 0,
+        "links_updated": 0,
+    }
+    recovery_paths: list[str] = [str(dest_pdf)]
+    if renamed:
+        exact_migrations, prefix_migrations, recovery_paths = _research_note_source_migrations_for_library_rename(
+            src_pdf=src_pdf,
+            dest_pdf=dest_pdf,
+            md_root=md_d,
+            old_md_main=old_md_main,
+            old_md_exists=bool(old_md_exists),
+            also_md=bool(also_md),
+            db_dir=getattr(settings, "db_dir", None),
+        )
+        note_source_sync = dispatch_research_note_source_migration(
+            exact_path_migrations=exact_migrations,
+            prefix_path_migrations=prefix_migrations,
+            reason="library_source_renamed",
+        )
+        if bool(note_source_sync.get("handled")) and not bool(note_source_sync.get("ok")):
+            rollback_pdf = _safe_move_path(dest_pdf, src_pdf)
+            rollback_md = {"ok": True, "msg": "skipped"}
+            if bool(also_md) and bool(old_md_exists):
+                rollback_md = _sync_md_after_pdf_rename_basic(
+                    md_root=md_d,
+                    src_pdf=dest_pdf,
+                    dest_pdf=src_pdf,
+                )
+            return {
+                "ok": False,
+                "error": str(note_source_sync.get("error") or "research note source synchronization failed"),
+                "path": str(src_pdf if rollback_pdf else dest_pdf),
+                "name": (src_pdf if rollback_pdf else dest_pdf).name,
+                "sha1": sha1,
+                "citation_meta": citation_meta,
+                "renamed": False,
+                "md_sync": md_sync,
+                "note_source_sync": note_source_sync,
+                "rollback": {"pdf": bool(rollback_pdf), "md": rollback_md},
+            }
+
     index_cleanup = {
         "docs_removed": 0,
         "chunks_removed": 0,
@@ -5808,6 +6048,13 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
             _bg_update_recoverable_pdf_path(src_pdf, dest_pdf)
         except Exception:
             pass
+        try:
+            enqueue_research_note_source_recovery(
+                recovery_paths,
+                reason="library_source_renamed",
+            )
+        except Exception:
+            pass
 
     return {
         "ok": True,
@@ -5817,6 +6064,7 @@ def auto_rename_saved_pdf_in_library(*, pdf_path: Path, base_name: str = "", use
         "citation_meta": citation_meta,
         "renamed": bool(renamed),
         "md_sync": md_sync,
+        "note_source_sync": note_source_sync,
         "index_cleanup": index_cleanup,
     }
 
@@ -6478,6 +6726,28 @@ async def inspect_upload_pdf(file: UploadFile = File(...), use_llm: bool = Form(
     )
 
 
+def _enqueue_saved_pdf_conversion(saved: dict, *, speed_mode: str) -> tuple[bool, str]:
+    if bool(saved.get("duplicate")):
+        return False, ""
+    s = get_settings()
+    md_d = _md_dir()
+    md_d.mkdir(parents=True, exist_ok=True)
+    pdf_path = Path(str(saved.get("path") or "")).expanduser()
+    if not _path_is_file(pdf_path):
+        return False, ""
+    no_llm = str(speed_mode or "").strip().lower() == "no_llm"
+    task = _build_bg_task(
+        pdf_path=pdf_path,
+        out_root=md_d,
+        db_dir=s.db_dir,
+        no_llm=no_llm,
+        replace=True,
+        speed_mode=str(speed_mode or "balanced"),
+    )
+    enqueued = bool(_bg_enqueue(task))
+    return enqueued, str(task.get("_tid") or "") if enqueued else ""
+
+
 @router.post("/upload/commit", dependencies=[Depends(require_management_api)])
 async def commit_upload_pdf(
     file: UploadFile = File(...),
@@ -6505,26 +6775,64 @@ async def commit_upload_pdf(
     enqueued = False
     task_id = ""
     if bool(convert_now) and (not bool(saved.get("duplicate"))):
-        s = get_settings()
-        md_d = _md_dir()
-        md_d.mkdir(parents=True, exist_ok=True)
-        pdf_path = Path(str(saved.get("path") or "")).expanduser()
-        if _path_is_file(pdf_path):
-            no_llm = str(speed_mode or "").strip().lower() == "no_llm"
-            task = _build_bg_task(
-                pdf_path=pdf_path,
-                out_root=md_d,
-                db_dir=s.db_dir,
-                no_llm=no_llm,
-                replace=True,
-                speed_mode=str(speed_mode or "balanced"),
-            )
-            enqueued = bool(_bg_enqueue(task))
-            task_id = str(task.get("_tid") or "") if enqueued else ""
+        enqueued, task_id = _enqueue_saved_pdf_conversion(saved, speed_mode=speed_mode)
     return {
         **saved,
         "enqueued": bool(enqueued),
         "task_id": task_id,
+    }
+
+
+class ImportExternalPdfBody(BaseModel):
+    url: str
+    title: str = ""
+    convert_now: bool = True
+    speed_mode: str = "balanced"
+
+
+@router.post("/external-pdf/import", dependencies=[Depends(require_management_api)])
+def import_external_pdf(body: ImportExternalPdfBody):
+    try:
+        fetched = fetch_external_pdf(
+            body.url,
+            max_bytes=max_pdf_upload_bytes(get_settings()),
+        )
+    except ExternalSourceError as exc:
+        status_code = 413 if exc.code == "too_large" else 400
+        raise HTTPException(
+            status_code,
+            detail={
+                "code": exc.code,
+                "message": exc.detail or "The external PDF could not be imported safely.",
+            },
+        ) from exc
+
+    data = bytes(fetched.get("data") or b"")
+    file_name = str(fetched.get("file_name") or "external-source.pdf")
+    content_type = str(fetched.get("content_type") or "application/pdf")
+    ensure_pdf_upload(data, file_name=file_name, content_type=content_type)
+    saved = save_pdf_to_library(
+        file_name=file_name,
+        data=data,
+        base_name=str(body.title or "").strip(),
+    )
+    enqueued = False
+    task_id = ""
+    if bool(body.convert_now) and not bool(saved.get("duplicate")):
+        enqueued, task_id = _enqueue_saved_pdf_conversion(saved, speed_mode=body.speed_mode)
+    if bool(saved.get("duplicate")):
+        candidate_status = "already_imported"
+    elif enqueued:
+        candidate_status = "conversion_queued"
+    else:
+        candidate_status = "imported"
+    return {
+        **saved,
+        "enqueued": bool(enqueued),
+        "task_id": task_id,
+        "source_url": str(fetched.get("url") or body.url),
+        "candidate_status": candidate_status,
+        "formal_evidence_ready": False,
     }
 
 
@@ -7780,6 +8088,7 @@ def repair_library_quality(body: QualityRepairBody):
 
     enqueued = 0
     repaired = 0
+    retry_exhausted = 0
     skipped_busy = 0
     failed = sum(1 for item in items if not bool(item.get("ok")))
     auto_backup = None
@@ -7874,9 +8183,46 @@ def repair_library_quality(body: QualityRepairBody):
         )
         repair_payload: dict = {}
         active_plan: dict = {}
+        preflight_quality: dict | None = None
+        if md_exists and _path_is_within(md_path, [md_d]):
+            try:
+                preflight_quality = _conversion_quality_summary(md_path) or {}
+            except Exception:
+                preflight_quality = None
+        preflight_report = (
+            preflight_quality.get("conversion_report")
+            if isinstance(preflight_quality, dict)
+            and isinstance(preflight_quality.get("conversion_report"), dict)
+            else {}
+        )
+        if bool(preflight_report.get("retry_exhausted")):
+            active_plan = _quality_repair_plan_from_summary(preflight_quality or {})
+            remaining_issue_codes = [
+                str(issue.get("code") or "")
+                for issue in list((preflight_quality or {}).get("issues") or [])
+                if isinstance(issue, dict) and str(issue.get("code") or "").strip()
+            ]
+            repair_payload = {
+                "md_path": str(md_path),
+                "quality_before": preflight_quality,
+                "quality_after": preflight_quality,
+                "remaining_issue_codes": remaining_issue_codes[:12],
+                "repair_plan": active_plan,
+                "planned_action": "none",
+                "planned_scope": str(active_plan.get("scope") or ""),
+                "retry_exhausted": True,
+                "retry_exhausted_reason": str(preflight_report.get("retry_exhausted_reason") or ""),
+            }
+            items.append({**base_item, **repair_payload, "ok": True, "enqueued": False})
+            retry_exhausted += 1
+            continue
         if bool(body.md_autofix) and md_exists and _path_is_within(md_path, [md_d]):
             try:
-                before_quality = _conversion_quality_summary(md_path) or {}
+                before_quality = (
+                    preflight_quality
+                    if preflight_quality is not None
+                    else (_conversion_quality_summary(md_path) or {})
+                )
                 before_issues = [
                     str(issue.get("code") or "")
                     for issue in list(before_quality.get("issues") or [])
@@ -7970,7 +8316,11 @@ def repair_library_quality(body: QualityRepairBody):
                     "repair_error": str(exc)[:240] or "markdown autofix failed",
                 }
         elif md_exists:
-            before_quality = _conversion_quality_summary(md_path) or {}
+            before_quality = (
+                preflight_quality
+                if preflight_quality is not None
+                else (_conversion_quality_summary(md_path) or {})
+            )
             before_issue_codes = [
                 str(issue.get("code") or "")
                 for issue in list(before_quality.get("issues") or [])
@@ -8154,6 +8504,7 @@ def repair_library_quality(body: QualityRepairBody):
         "enqueued": int(enqueued),
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
+        "retry_exhausted": int(retry_exhausted),
         "needs_reindex": bool(needs_reindex),
         "reader_locate_reindex": int(len(reader_locate_reindex_items)),
         "before_avg_score": int(round(sum(before_scores) / len(before_scores))) if before_scores else 0,
@@ -8199,7 +8550,11 @@ def repair_library_quality(body: QualityRepairBody):
             else (
                 "Reader locate source anchors need index refresh."
                 if reader_locate_reindex_items and not repaired_items
-                else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+                else (
+                    "The system already completed the same source recovery without improvement; identical retries were suppressed."
+                    if retry_exhausted > 0
+                    else ("Markdown source repair completed; index refresh is pending." if needs_reindex else "No source repair required.")
+                )
             )
         ),
     })
@@ -8215,8 +8570,33 @@ def repair_library_quality(body: QualityRepairBody):
         "impact": impact,
         "skipped_busy": int(skipped_busy),
         "failed": int(failed),
+        "retry_exhausted": int(retry_exhausted),
         "auto_backup": auto_backup,
         "items": items,
+    }
+
+
+@router.post("/file/delete-impact", dependencies=[Depends(require_management_api)])
+def inspect_library_file_delete_impact(body: DeleteLibraryFileBody):
+    pdf_name = str(body.pdf_name or "").strip()
+    md_d = _md_dir()
+    pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
+    _, md_main, md_exists_before = _resolve_library_md_output_paths(md_d, pdf_path)
+    settings = get_settings()
+
+    snap = _bg_snapshot()
+    busy = _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name)
+    impact, _aliases = _research_note_delete_impact(
+        pdf_path=pdf_path,
+        md_root=md_d,
+        md_main=md_main,
+        md_exists=bool(md_exists_before),
+        db_dir=getattr(settings, "db_dir", None),
+    )
+    return {
+        **impact,
+        "busy": bool(busy),
+        "deletion_blocked": bool(busy) or bool(impact.get("deletion_blocked")),
     }
 
 
@@ -8226,16 +8606,77 @@ def delete_library_file(body: DeleteLibraryFileBody):
     md_d = _md_dir()
     pdf_path = _resolve_library_pdf_name_arg(pdf_name, require_exists=True)
     _, md_main, md_exists_before = _resolve_library_md_output_paths(md_d, pdf_path)
+    settings = get_settings()
 
     snap = _bg_snapshot()
     if _is_pdf_active_in_snapshot(snap=snap, pdf_path=pdf_path, pdf_name=pdf_name):
         raise HTTPException(409, "file is currently converting")
+
+    dependency, aliases = _research_note_delete_impact(
+        pdf_path=pdf_path,
+        md_root=md_d,
+        md_main=md_main,
+        md_exists=bool(md_exists_before),
+        db_dir=getattr(settings, "db_dir", None),
+    )
+    if bool(dependency.get("handled")) and not bool(dependency.get("ok")):
+        return {
+            "ok": False,
+            "deletion_blocked": True,
+            "pdf_deleted": False,
+            "md_deleted": False,
+            "removed_queued": 0,
+            "warnings": ["research note dependency inspection failed"],
+            "needs_reindex": False,
+            "dependency_protection": dependency,
+        }
+    dependent_note_count = max(0, int(dependency.get("note_count") or 0))
+    if dependent_note_count > 0 and not bool(md_exists_before):
+        return {
+            "ok": False,
+            "deletion_blocked": True,
+            "pdf_deleted": False,
+            "md_deleted": False,
+            "removed_queued": 0,
+            "warnings": ["converted source required to preserve research note evidence"],
+            "needs_reindex": False,
+            "dependency_protection": dependency,
+        }
 
     auto_backup = _dangerous_auto_snapshot(
         "library_file_delete",
         label=pdf_path.stem,
         metadata={"pdf_name": pdf_name, "also_md": bool(body.also_md), "remove_queued": bool(body.remove_queued)},
     )
+
+    note_source_sync = {
+        "ok": True,
+        "handled": False,
+        "notes_updated": 0,
+        "links_updated": 0,
+    }
+    evidence_preserved = dependent_note_count > 0 and bool(md_exists_before)
+    if evidence_preserved:
+        preserved_source = _portable_research_note_source_path(md_main)
+        note_source_sync = dispatch_research_note_source_migration(
+            exact_path_migrations={path: preserved_source for path in aliases["pdf_exact"]},
+            prefix_path_migrations=[],
+            reason="library_source_preserved_before_delete",
+            update_source_name=False,
+        )
+        if not bool(note_source_sync.get("handled")) or not bool(note_source_sync.get("ok")):
+            return {
+                "ok": False,
+                "deletion_blocked": True,
+                "pdf_deleted": False,
+                "md_deleted": False,
+                "removed_queued": 0,
+                "warnings": ["research note evidence preservation failed"],
+                "needs_reindex": False,
+                "dependency_protection": dependency,
+                "note_source_sync": note_source_sync,
+                "auto_backup": auto_backup,
+            }
 
     removed_queued = 0
     if bool(body.remove_queued):
@@ -8247,7 +8688,7 @@ def delete_library_file(body: DeleteLibraryFileBody):
     pdf_ok, pdf_err = _safe_delete_file(pdf_path)
     md_deleted = False
     md_warn = ""
-    if bool(pdf_ok) and bool(body.also_md):
+    if bool(pdf_ok) and bool(body.also_md) and not evidence_preserved:
         try:
             md_root = md_d.resolve()
             target = (md_d / pdf_path.stem).resolve()
@@ -8275,12 +8716,24 @@ def delete_library_file(body: DeleteLibraryFileBody):
         "reference_docs_removed": 0,
         "errors": [],
     }
-    if bool(pdf_ok) and bool(body.also_md) and (bool(md_deleted) or not bool(md_exists_before)):
+    should_purge_index = bool(pdf_ok) and bool(body.also_md) and (
+        evidence_preserved or bool(md_deleted) or not bool(md_exists_before)
+    )
+    if should_purge_index:
         try:
             _clear_conversion_quality_cache(md_main)
-            index_cleanup = _purge_library_index_for_markdown(get_settings().db_dir, md_main)
+            index_cleanup = _purge_library_index_for_markdown(settings.db_dir, md_main)
         except Exception as exc:
             index_cleanup["errors"] = [str(exc)[:240]]
+
+    if evidence_preserved:
+        try:
+            enqueue_research_note_source_recovery(
+                [_portable_research_note_source_path(md_main)],
+                reason="library_source_preserved_before_delete",
+            )
+        except Exception:
+            pass
 
     warnings: list[str] = []
     if (not pdf_ok) and pdf_err:
@@ -8292,14 +8745,25 @@ def delete_library_file(body: DeleteLibraryFileBody):
     for err in list(index_cleanup.get("errors") or []):
         if str(err or "").strip():
             warnings.append(f"index: {str(err)[:240]}")
+    needs_reindex = bool(pdf_ok) and (
+        not bool(body.also_md)
+        or not should_purge_index
+        or bool(metadata_warn)
+        or bool(index_cleanup.get("errors"))
+    )
     return {
-        "ok": bool(pdf_ok) and (not bool(body.also_md) or bool(md_deleted)),
+        "ok": bool(pdf_ok) and (not bool(body.also_md) or bool(md_deleted) or evidence_preserved),
+        "deletion_blocked": False,
         "pdf_deleted": bool(pdf_ok),
         "md_deleted": bool(md_deleted) if bool(body.also_md) else False,
+        "evidence_preserved": evidence_preserved,
+        "preserved_md_path": _portable_research_note_source_path(md_main) if evidence_preserved else "",
+        "dependency_protection": dependency,
+        "note_source_sync": note_source_sync,
         "removed_queued": int(removed_queued),
         "index_cleanup": index_cleanup,
         "warnings": warnings,
-        "needs_reindex": bool(pdf_ok),
+        "needs_reindex": needs_reindex,
         "auto_backup": auto_backup,
     }
 
@@ -8503,6 +8967,7 @@ def resolve_library_guide_source(body: GuideSourceBody):
         raise HTTPException(400, "markdown not ready")
 
     source_name = _strip_known_source_ext(pdf_name) or pdf_name
+    index_view = _library_markdown_index_state(md_main, _load_docs_index_state())
     return {
         "ok": True,
         "pdf_name": pdf_name,
@@ -8512,6 +8977,10 @@ def resolve_library_guide_source(body: GuideSourceBody):
         # Bind to PDF path; runtime maps to latest markdown on disk.
         "source_path": str(pdf_path),
         "source_name": source_name,
+        "index_state": str(index_view.get("index_state") or "not_indexed"),
+        "index_status": str(index_view.get("index_status") or "missing"),
+        "index_ready": bool(index_view.get("index_ready")),
+        "index_num_chunks": int(index_view.get("index_num_chunks") or 0),
     }
 
 
@@ -8582,6 +9051,11 @@ def reindex_file(body: ReindexFileBody):
         started_at=started_at,
         detail=error,
     )
+    if ready:
+        enqueue_research_note_source_recovery(
+            (str(pdf_path), str(md_main)),
+            reason="file_reindex_ready",
+        )
     return {
         "ok": ready,
         "task_id": task_id,
@@ -8660,6 +9134,8 @@ def _run_library_reindex() -> dict:
             )
         except Exception as exc:
             refsync_error = str(exc)
+    if ok:
+        enqueue_research_note_source_recovery_scan(reason="library_reindex_ready")
     return {
         "ok": bool(ok),
         "stdout": result.stdout[-500:],

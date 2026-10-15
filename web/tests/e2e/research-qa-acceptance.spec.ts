@@ -762,6 +762,7 @@ test('research note organizes selected answers, traceable sources, basket excerp
     updated_at: number
   } | null = null
   let researchNotePatchCount = 0
+  let researchNoteSnapshotCalls = 0
   await page.route('**/api/chat/research-notes**', async (route) => {
     const request = route.request()
     const url = new URL(request.url())
@@ -814,6 +815,45 @@ test('research note organizes selected answers, traceable sources, basket excerp
       contentType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       headers: { 'content-disposition': 'attachment; filename="pi-zaya-research-note.docx"' },
       body: 'docx-fixture',
+    })
+  })
+  await page.route('**/api/chat/research-note/evidence-context', async (route) => {
+    researchNoteSnapshotCalls += 1
+    const body = route.request().postDataJSON() as Record<string, unknown>
+    const target = {
+      block_id: String(body.block_id || ''),
+      anchor_id: String(body.anchor_id || ''),
+      kind: String(body.anchor_kind || 'paragraph'),
+      heading_path: String(body.heading_path || ''),
+      text: String(body.evidence_quote || ''),
+      markdown: String(body.evidence_quote || ''),
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        status: 'exact',
+        reason: target.block_id ? 'exact_block' : 'exact_anchor',
+        source_name: String(body.source_name || ''),
+        heading_path: target.heading_path,
+        before: [{ block_id: 'context-before', text: 'Saved context before this evidence.' }],
+        target,
+        after: [{ block_id: 'context-after', text: 'Saved context after this evidence.' }],
+        candidates: [],
+        can_open_exact: true,
+        reader_open: null,
+        source_fingerprint: 'sha256:research-note-context',
+        source_changed: false,
+        context_snapshot: {
+          version: 1,
+          captured_at: 1_800_000_000,
+          source_fingerprint: 'sha256:research-note-context',
+          reason: target.block_id ? 'exact_block' : 'exact_anchor',
+          before: [{ block_id: 'context-before', text: 'Saved context before this evidence.' }],
+          target,
+          after: [{ block_id: 'context-after', text: 'Saved context after this evidence.' }],
+        },
+      }),
     })
   })
 
@@ -893,6 +933,9 @@ test('research note organizes selected answers, traceable sources, basket excerp
   await expect(modal).toContainText('已自动保存')
   expect(persistedNote).not.toBeNull()
   expect((persistedNote?.source_state.links as unknown[]).length).toBeGreaterThan(2)
+  expect(researchNoteSnapshotCalls).toBeGreaterThan(0)
+  const noteLinks = persistedNote?.source_state.links as Array<Record<string, unknown>>
+  expect(noteLinks.some(link => Boolean(link.evidence_context_snapshot))).toBe(true)
   await modal.getByRole('button', { name: /关\s*闭/ }).click()
 
   const noteTab = page.getByRole('tab', { name: /研究笔记/ })

@@ -88,6 +88,26 @@ export async function installIdleReferenceMocks(page: Page) {
       items: [],
     })
   })
+  await context.route('**/api/references/shelf/reader-locators/maintain', async (route) => {
+    const payload = postJson<{ items?: Array<{ key?: string, source_path?: string }> }>(route)
+    const requestedItems = Array.isArray(payload?.items) ? payload.items : []
+    await fulfillJson(route, {
+      ok: true,
+      requested: requestedItems.length,
+      ready: 0,
+      changed: 0,
+      unresolved: requestedItems.length,
+      model_calls: 0,
+      items: requestedItems.map((item) => ({
+        key: String(item.key || ''),
+        ok: false,
+        changed: false,
+        status: 'unresolved',
+        reason: 'reader source fixture not configured',
+        source_path: String(item.source_path || ''),
+      })),
+    })
+  })
   await context.route('**/api/references/reader/doc**', async (route) => {
     await fulfillJson(route, { detail: 'reader source fixture not configured' }, 404)
   })
@@ -100,11 +120,14 @@ export async function installEmptyCitationShelfMock(
     projectId?: string | null
     initialItems?: Array<Record<string, unknown>>
     initialOpen?: boolean
+    initialRevision?: number
   } = {},
 ) {
   let items = (options.initialItems || []).map((item) => ({ ...item }))
   let open = Boolean(options.initialOpen)
-  let revision = items.length > 0 ? 1 : 0
+  let revision = options.initialRevision ?? (items.length > 0 ? 1 : 0)
+  let getCount = 0
+  const patchPayloads: Array<{ items?: unknown[]; open?: boolean; allow_empty_overwrite?: boolean }> = []
   const scopeId = options.scopeId || options.projectId || 'e2e-project'
   const projectId = options.projectId === undefined ? String(scopeId) : options.projectId
   const fulfillShelf = async (route: Route) => {
@@ -134,12 +157,17 @@ export async function installEmptyCitationShelfMock(
       return
     }
     if (request.method() === 'PATCH') {
-      const payload = postJson<{ items?: unknown[]; open?: boolean }>(route)
+      const payload = postJson<{ items?: unknown[]; open?: boolean; allow_empty_overwrite?: boolean }>(route)
+      patchPayloads.push({ ...(payload || {}) })
       if (Array.isArray(payload?.items)) {
-        items = payload.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
-        revision += 1
+        const nextItems = payload.items.filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+        const protectsExistingItems = nextItems.length <= 0 && items.length > 0 && !payload.allow_empty_overwrite
+        if (!protectsExistingItems) {
+          items = nextItems
+          open = Boolean(payload?.open)
+          revision += 1
+        }
       }
-      open = Boolean(payload?.open)
       await fulfillShelf(route)
       return
     }
@@ -150,6 +178,22 @@ export async function installEmptyCitationShelfMock(
       await fulfillShelf(route)
       return
     }
+    getCount += 1
     await fulfillShelf(route)
   })
+
+  return {
+    seed(nextItems: Array<Record<string, unknown>>, nextOpen = open) {
+      items = nextItems.map((item) => ({ ...item }))
+      open = nextOpen
+      revision += 1
+    },
+    getGetCount: () => getCount,
+    getPatchPayloads: () => patchPayloads.map((payload) => ({ ...payload })),
+    getState: () => ({
+      items: items.map((item) => ({ ...item })),
+      open,
+      revision,
+    }),
+  }
 }

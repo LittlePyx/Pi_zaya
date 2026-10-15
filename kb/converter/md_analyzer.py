@@ -208,6 +208,15 @@ class MarkdownAnalyzer:
                 if in_formula:
                     # End of formula
                     formula_lines = i - formula_start
+                    formula_body = " ".join(lines[formula_start:i - 1])
+                    if re.search(r"\b(?:Proposition|Theorem|Lemma)\b", formula_body) and len(re.findall(r"\b[A-Za-z]{3,}\b", formula_body)) >= 4:
+                        self.issues.append(QualityIssue(
+                            category='formula',
+                            severity='error',
+                            message='Proposition prose was classified as display math',
+                            line_number=formula_start,
+                            suggestion='Reconvert the page and preserve mixed inline-equation prose.'
+                        ))
                     if formula_lines < 2:
                         self.issues.append(QualityIssue(
                             category='formula',
@@ -252,6 +261,19 @@ class MarkdownAnalyzer:
                 line_number=potential_formulas_as_headings[0][0],
                 suggestion='These should be in $$ blocks, not headings. Check formula detection logic.'
             ))
+
+        for i, line in enumerate(lines, 1):
+            if not re.search(r"^[a-z]{2,6}\s+from the\s+.+\bconditional on\b", line.strip(), re.I):
+                continue
+            nearby = " ".join(lines[max(0, i - 7):i])
+            if "Proposition" in nearby and re.search(r"!\[(?:Equation|Formula|Math)\]", nearby, re.I):
+                self.issues.append(QualityIssue(
+                    category='formula',
+                    severity='error',
+                    message='Truncated proposition condition after an equation asset',
+                    line_number=i,
+                    suggestion='Reconvert the page; an inline equation crop dropped surrounding prose.'
+                ))
         
         # Check formula count
         if formula_count == 0 and len(lines) > 50:

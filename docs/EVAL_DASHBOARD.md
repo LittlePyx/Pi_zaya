@@ -127,7 +127,8 @@ whether source notices are present but not repeated.
 | Compact source summary accuracy | Automated | Track `source_summary_accuracy`, `source_summary_present_rate`, and `source_summary_shape_accuracy` for the user-facing `agent_source_summary` chip payload. | Fixture/replay |
 | Source policy payload accuracy | Automated | Track `source_policy_payload_accuracy` and `source_policy_payload_present_rate` for local-KB, hybrid, external-with-notice, and general API source rules. | Fixture/replay |
 | Answer runtime self-check | Semi-automated | Inspect stored `message.meta.answer_runtime_check` or stream `answer_runtime_check` for profile/source-summary/notice-shape/clutter failures. Deterministic pre-storage repair may remove debug clutter, dedupe source notices, or add one required source notice; the check remains meta-only and should not be rendered in the main answer. | TBD |
-| Answer quality repair rate | Semi-automated | Count generated answers whose quality gate status is `passed`, `repaired`, or `fallback` in tool outputs; leave rates null when no gate status is recorded. | TBD |
+| Answer finalization outcome | Automated/local | Read `message.meta.answer_quality.finalization_outcome` v1 for gate passes, compact action counters, final status, and whether repair was required/succeeded. It contains no prompt, answer, evidence text, path, or claim rows. | New runs |
+| Answer quality repair rate | Semi-automated | For runs with complete `finalization_outcome` v1 coverage, divide `repair_succeeded=true` cases by `repair_required=true` cases. Leave the rate null for historical or partial traces instead of inferring attempts from final actions. | New runs |
 | Source policy disclosure | Automated/manual | Confirm `agent_trace.research_run.source_policy` and `agent_source_summary.source_policy_payload` distinguish local-only, local+external background, external-with-notice, and general API answers. | TBD |
 | Trace summary readability | Automated/manual | Confirm `agent_trace.summary` exposes claim support, scope, tool-call count, and error status, while plan/tool logs remain behind the UI's Execution Details disclosure. | TBD |
 | Trace audit replay | Automated/manual | Use `GET /api/messages/{message_id}/agent-trace` to confirm stored traces can be re-opened without adding default answer clutter. | TBD |
@@ -216,6 +217,18 @@ python tools\research_qa\run_agent_trace_eval.py --json-out test_results\agent_t
 This command validates both `docs/research_agent_golden_v0.jsonl` and
 `docs/research_agent_eval_v1.jsonl` by default. Use `--skip-quality` to run only
 planner/schema validation.
+
+Aggregate final answer/evidence outcomes from the authoritative live reports:
+
+```powershell
+python tools\research_qa\build_quality_outcome_report.py
+python tools\research_qa\build_quality_outcome_report.py --validate-only
+```
+
+The committed report is `docs/research_qa_quality_outcomes_v1.json`. It keeps
+historical repair attempts null because those traces predate
+`finalization_outcome` v1; new fully covered runs can report a real repair
+success denominator.
 
 Real Research Agent answer replay:
 

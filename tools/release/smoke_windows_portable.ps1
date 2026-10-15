@@ -216,6 +216,29 @@ try {
     if ($health.version -ne $expectedVersion) { throw "Health version '$($health.version)' did not match '$expectedVersion'." }
     if ($build.version -ne $expectedVersion) { throw "Build version '$($build.version)' did not match '$expectedVersion'." }
     if ($frontPage.StatusCode -ne 200) { throw "Frontend root returned HTTP $($frontPage.StatusCode)." }
+    if ([bool]$manifest.local_semantic_component_archive_included) {
+        $componentManifest = Get-Content -LiteralPath (Join-Path $bundle "kb\local_semantic_component_manifest.json") -Raw | ConvertFrom-Json
+        $componentArchive = Join-Path $bundle ("components\" + [string]$componentManifest.archive_name)
+        if (-not (Test-Path -LiteralPath $componentArchive -PathType Leaf)) {
+            throw "Declared bundled semantic archive is missing."
+        }
+        if ((Get-FileHash -LiteralPath $componentArchive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $componentManifest.archive_sha256) {
+            throw "Bundled semantic archive hash does not match its manifest."
+        }
+        $component = Invoke-RestMethod -Uri "http://127.0.0.1:$port/api/retrieval/local-component" -TimeoutSec 10
+        if (-not [bool]$component.install_available -or -not [bool]$component.show_mode_control -or [bool]$component.component.network_required_for_install) {
+            throw "Bundled semantic component is not available for explicit offline installation."
+        }
+        if ($CleanProfile -and ([string]$component.hybrid_local.state -ne "not_installed" -or [bool]$component.hybrid_local.available)) {
+            throw "Clean-profile launch installed or enabled the semantic component without consent."
+        }
+    }
+    foreach ($route in @("library", "notes", "reader/session/smoke-route")) {
+        $deepPage = Invoke-WebRequest -Uri "http://127.0.0.1:$port/$route" -TimeoutSec 10 -UseBasicParsing
+        if ($deepPage.StatusCode -ne 200 -or $deepPage.Content -ne $frontPage.Content) {
+            throw "Frontend deep link '$route' did not serve the same React entry."
+        }
+    }
     if ($CleanProfile) {
         $expectedDataRoot = if ($explicitDataDir) {
             [IO.Path]::GetFullPath($DataDir)

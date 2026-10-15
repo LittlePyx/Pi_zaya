@@ -1,3 +1,5 @@
+import type { ReaderLocateResult } from './reader/readerTypes'
+
 export type ReaderLocateBadgeTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
 
 export interface ReaderLocateMetaBadge {
@@ -16,6 +18,7 @@ export interface ReaderLocateStatusViewModelInput {
   altChangeSource: string
   hasDistinctAlternatives: boolean
   requestedAltIndex: number
+  locateResult?: ReaderLocateResult | null
   statusTextFull: string
   strictLocate: boolean
   S: Record<string, string>
@@ -35,17 +38,79 @@ export function buildReaderLocateResultBadge({
   activeAnchorKind,
   activeHeadingPath,
   activeHitLevel,
+  locateResult,
   S,
   statusTextFull,
   strictLocate,
 }: Pick<
   ReaderLocateStatusViewModelInput,
-  'activeAnchorKind' | 'activeHeadingPath' | 'activeHitLevel' | 'S' | 'statusTextFull' | 'strictLocate'
+  'activeAnchorKind' | 'activeHeadingPath' | 'activeHitLevel' | 'locateResult' | 'S' | 'statusTextFull' | 'strictLocate'
 >): ReaderLocateMetaBadge | null {
   const hint = String(statusTextFull || '').trim().toLowerCase()
   const hitLevel = String(activeHitLevel || '').trim().toLowerCase()
   const anchorKind = String(activeAnchorKind || '').trim().toLowerCase()
-  const title = statusTextFull || undefined
+  const title = String(locateResult?.reason || locateResult?.hint || statusTextFull || '').trim() || undefined
+  const actualStatus = String(locateResult?.status || '').trim().toLowerCase()
+
+  if (actualStatus) {
+    if (actualStatus === 'failed') {
+      return {
+        key: 'result',
+        label: S.reader_locate_unresolved || 'Unresolved',
+        title,
+        tone: 'danger',
+        testId: 'reader-locate-resolution',
+      }
+    }
+    if (actualStatus === 'section') {
+      return {
+        key: 'result',
+        label: S.reader_locate_section_only || 'Section only',
+        title,
+        tone: strictLocate ? 'warning' : 'neutral',
+        testId: 'reader-locate-resolution',
+      }
+    }
+    if (actualStatus === 'fuzzy') {
+      return {
+        key: 'result',
+        label: S.reader_locate_fallback_evidence || 'Fallback evidence',
+        title,
+        tone: 'warning',
+        testId: 'reader-locate-resolution',
+      }
+    }
+    if (actualStatus === 'block') {
+      return {
+        key: 'result',
+        label: S.reader_locate_bound_block || 'Bound block',
+        title,
+        tone: 'success',
+        testId: 'reader-locate-resolution',
+      }
+    }
+    if (actualStatus === 'exact') {
+      const boundAnchor = ['equation', 'figure', 'inline_formula'].includes(anchorKind)
+      return {
+        key: 'result',
+        label: boundAnchor
+          ? (S.reader_locate_bound_anchor || 'Bound anchor')
+          : (S.reader_locate_exact_target || 'Exact target'),
+        title,
+        tone: 'success',
+        testId: 'reader-locate-resolution',
+      }
+    }
+    if (actualStatus === 'source_only') {
+      return {
+        key: 'result',
+        label: S.reader_locate_section_open || 'Source open',
+        title,
+        tone: 'neutral',
+        testId: 'reader-locate-resolution',
+      }
+    }
+  }
 
   if (
     /\b(strict locate stopped|not found)\b/i.test(hint)
@@ -129,6 +194,7 @@ export function buildReaderLocateStatusViewModel({
   activeHitLevel,
   altChangeSource,
   hasDistinctAlternatives,
+  locateResult,
   requestedAltIndex,
   S,
   statusTextFull,
@@ -150,6 +216,7 @@ export function buildReaderLocateStatusViewModel({
     activeAnchorKind,
     activeHeadingPath,
     activeHitLevel,
+    locateResult,
     S,
     statusTextFull,
     strictLocate,

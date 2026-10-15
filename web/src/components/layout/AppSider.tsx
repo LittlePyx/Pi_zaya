@@ -404,6 +404,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const visionUsesTextFallback = useSettingsStore((s) => s.visionUsesTextFallback)
   const showInternalSettingsTools = internalSettingsToolsVisible()
+  const sidebarConversationIds = useMemo(() => new Set([
+    ...rootConversations.map((conversation) => conversation.id),
+    ...Object.values(projectConversations).flat().map((conversation) => conversation.id),
+  ]), [projectConversations, rootConversations])
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
@@ -465,6 +469,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (loc.pathname !== '/') return
     const linkedConversationId = linkedConversationIdFromSearch(loc.search)
     if (!linkedConversationId) return
+    if (!sidebarConversationIds.has(linkedConversationId)) return
     if (activeConvId !== linkedConversationId) {
       void selectConv(linkedConversationId)
     }
@@ -472,7 +477,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (nextSearch !== loc.search) {
       nav({ pathname: '/', search: nextSearch }, { replace: true })
     }
-  }, [activeConvId, loc.pathname, loc.search, nav, selectConv])
+  }, [activeConvId, loc.pathname, loc.search, nav, selectConv, sidebarConversationIds])
 
   useEffect(() => {
     if (loc.pathname !== '/' || !activeConvId) return
@@ -706,10 +711,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
   const removeConversation = useCallback(async (conversationId: string) => {
     const wasActive = String(conversationId || '').trim() === String(activeConvId || '').trim()
-    await deleteConv(conversationId)
+    const deletion = deleteConv(conversationId)
     if (wasActive) {
       nav({ pathname: '/', search: conversationSearch(loc.search, '') }, { replace: true })
     }
+    await deletion
   }, [activeConvId, deleteConv, loc.search, nav])
 
   const moveConversationWithFeedback = useCallback(async (conversationId: string, targetProjectId: string | null) => {

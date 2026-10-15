@@ -2152,6 +2152,8 @@ def _core_parse_rows(html_text: str) -> list[dict]:
     # The endpoint occasionally returns a large or malformed page.  Parsing is
     # intentionally bounded so metadata warming can never starve the API.
     payload = str(html_text or "")[:4_000_000]
+    if "</tr" not in payload.casefold():
+        return []
     parser = _CoreRankingTableParser()
     try:
         parser.feed(payload)

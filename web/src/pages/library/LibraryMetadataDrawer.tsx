@@ -92,7 +92,7 @@ export function LibraryMetadataDrawer({
       onClose={onClose}
       closable={!busy}
       keyboard={!busy}
-      maskClosable={!busy}
+      mask={{ closable: !busy }}
       destroyOnClose={false}
     >
       <div className="kb-lib-meta-drawer">
@@ -335,7 +335,7 @@ export function LibraryMetadataDrawer({
           title={S.lib_meta_unsaved_title}
           closable={!busy}
           keyboard={!busy}
-          maskClosable={false}
+          mask={{ closable: false }}
           onCancel={onContinueEditing}
           footer={[
             <Button key="continue" disabled={busy} onClick={onContinueEditing}>

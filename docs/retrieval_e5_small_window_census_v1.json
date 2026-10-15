@@ -1,0 +1,113 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_e5_small_window_census_v1",
+  "measured_at": "2026-09-03T00:30:18.476588+00:00",
+  "protocol_sha256": "ca464188ca3b6d8ec89e61f07fd7d0b9b4c08f79b17481951fe883f5030d3fe0",
+  "source_corpus": {
+    "tree_sha256_before": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "tree_sha256_after": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "document_count": 10,
+    "parent_chunk_count": 1673
+  },
+  "tokenizer": {
+    "tokenizer_json_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+    "tokenizers_version": "0.21.4",
+    "passage_prefix_token_count": 3,
+    "query_prefix_token_count": 4,
+    "bos_token_id": 0,
+    "pad_token_id": 1,
+    "eos_token_id": 2,
+    "maximum_model_tokens": 512
+  },
+  "workload": {
+    "parent_count": 1673,
+    "window_count": 2016,
+    "window_count_multiplier": 1.205021,
+    "stress_parent_count": 64,
+    "stress_window_count": 74,
+    "query_count": 12,
+    "content_token_distribution": {
+      "count": 1673,
+      "minimum": 2,
+      "p50": 220,
+      "p95": 730,
+      "p99": 1954,
+      "maximum": 4050,
+      "sum": 473464
+    },
+    "windows_per_parent_distribution": {
+      "count": 1673,
+      "minimum": 1,
+      "p50": 1,
+      "p95": 2,
+      "p99": 5,
+      "maximum": 11,
+      "sum": 2016
+    },
+    "input_token_distribution": {
+      "count": 2016,
+      "minimum": 7,
+      "p50": 256,
+      "p95": 453,
+      "p99": 453,
+      "maximum": 453,
+      "sum": 553184
+    },
+    "stress_input_token_distribution": {
+      "count": 74,
+      "minimum": 26,
+      "p50": 277,
+      "p95": 453,
+      "p99": 453,
+      "maximum": 453,
+      "sum": 20908
+    },
+    "query_input_token_distribution": {
+      "count": 12,
+      "minimum": 33,
+      "p50": 46,
+      "p95": 57,
+      "p99": 57,
+      "maximum": 57,
+      "sum": 553
+    },
+    "minimum_observed_overlap_tokens": 64,
+    "maximum_observed_overlap_tokens": 447,
+    "projected_raw_vector_bytes": 3096576
+  },
+  "coverage": {
+    "truncated_parent_count": 0,
+    "uncovered_content_token_count": 0,
+    "truncated_query_count": 0,
+    "returned_parent_chunks_remain_complete": true,
+    "paper_text_retained_in_report": false,
+    "query_text_retained_in_report": false
+  },
+  "execution": {
+    "python_version": "3.10.11",
+    "tokenizer_load_calls": 1,
+    "model_load_calls": 0,
+    "onnx_session_calls": 0,
+    "model_inference_runs": 0,
+    "vectors_created": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "decision": {
+    "checks": {
+      "input_length": true,
+      "parent_truncation": true,
+      "content_coverage": true,
+      "query_truncation": true,
+      "window_multiplier": true,
+      "projected_index_bytes": true
+    },
+    "passes_all": true,
+    "status": "window_census_passed_freeze_stage_1",
+    "stage_1_allowed": true,
+    "full_build_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "result_fingerprint": "9ff2c8f4dc9f81ade0cbae5286ade071a1d0e8fcfeaecc9cae6ba6f33b33c3cf"
+}

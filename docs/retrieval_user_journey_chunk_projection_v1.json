@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "status": "frozen_qrel_source_projection",
+  "purpose": "Minimal public source projection used to rebuild the frozen user-journey qrel fixture when the private local DB is unavailable.",
+  "source_registry": "docs/retrieval_user_journey_qrel_registry_v1.json",
+  "chunk_count": 35,
+  "chunks": [
+    {
+      "id": "12d3dafe5e149b77:23",
+      "text": "both admit efficient solutions, and we cast them into two separate modules in the $k$-th phase of ISTA-Net, namely the $r^{(k)}$ **module** and the $x^{(k)}$ **module**, as illustrated in Figure 2.\n- **$r^{(k)}$ Module**: It corresponds to Eq. (2) and is used to generate the immediate reconstruction result $r^{(k)}$. Note that $\\boldsymbol{\\Phi}^\\top (\\boldsymbol{\\Phi} x^{(k-1)} - y)$ is essentially the gradient of the data-fidelity term $\\frac{1}{2} \\| \\boldsymbol{\\Phi} x - y \\|_2^2$, computed at $x^{(k-1)}$. To preserve the ISTA structure while increasing network flexibility, we allow the step size $\\rho$ to vary across iterations (while it is fixed in traditional ISTA), so the output of this module with input $x^{(k-1)}$ is finally defined as:\n$$\n\\mathbf{r}^{(k)} = \\mathbf{x}^{(k-1)} - \\rho^{(k)} \\boldsymbol{\\Phi}^\\top (\\boldsymbol{\\Phi} \\mathbf{x}^{(k-1)} - \\mathbf{y}). \\tag{7}\n$$\n- **$x^{(k)}$ Module**: It aims to compute $x^{(k)}$ according to Eq. (6) with input $r^{(k)}$. Note that Eq. (6) is actually the proximal mapping $prox_{\\lambda \\mathcal{F}}(r^{(k)})$ associated with the nonlinear transform $\\mathcal{F}(\\cdot)$. In this paper, we propose to solve $prox_{\\lambda \\mathcal{F}}(r^{(k)})$ efficiently in two steps, which is also one of our main contributions.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 4,
+        "page_end": 4
+      }
+    },
+    {
+      "id": "12d3dafe5e149b77:28",
+      "text": "Therefore, $x^{(k)}$ can be efficiently computed in closed-form as:\n$$\n\\mathbf{x}^{(k)} = \\widetilde{\\mathcal{F}}(soft(\\mathcal{F}(\\mathbf{r}^{(k)}), \\theta)). \\tag{11}\n$$\nIt is worth emphasizing that $\\theta$, as a shrinkage threshold, is a learnable parameter in this module. Similarly, to increase network capacity, we do not constrain that $\\mathcal{F}(\\cdot)$, $\\widetilde{\\mathcal{F}}(\\cdot)$, and $\\theta$ be the same at each phase. That is, each phase of ISTA-Net has its own $\\{\\mathcal{F}^{(k)}(\\cdot), \\widetilde{\\mathcal{F}}^{(k)}(\\cdot), \\theta^{(k)}\\}$, as illustrated in Figure 2. Therefore, with all the learnable parameters, the output $x^{(k)}$ in this module should be updated as:\n$$\n\\mathbf{x}^{(k)} = \\widetilde{\\mathcal{F}}^{(k)}(soft(\\mathcal{F}^{(k)}(\\mathbf{r}^{(k)}), \\theta^{(k)})). \\tag{12}\n$$\n**Figure 2.** clearly illustrates how Eq. (6) with the closed-form solution in Eq. (12) is mapped into a deep network in the $k$-th phase of ISTA-Net.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 5,
+        "page_end": 5
+      }
+    },
+    {
+      "id": "12d3dafe5e149b77:34",
+      "text": "912 randomly cropped image blocks (each of size $33 \\times 33$), i.e. $N_b = 88,912$ and $N = 1,089$. Then, for a given C-S ratio, the corresponding measurement matrix $\\Phi \\in \\mathbb{R}^{M \\times N}$ is constructed by generating a random Gaussian matrix and then orthogonalizing its rows, i.e. $\\Phi \\Phi^\\top = I$, where $I$ is the identity matrix. Applying $y_i = \\Phi x_i$ yields the set of CS measurements, where $x_i$ is the vectorized version of an image block. We use TensorFlow [1] to implement and train the ISTA-Nets separately for a range of CS ratios $\\{1\\%, 4\\%, 10\\%, 25\\%, 30\\%, 40\\%, 50\\%\\}$. To train the networks, we use Adam optimization [19] with a learning rate of 0.0001 (200 epochs), and a batch size of 64. All the experiments are performed on a workstation with Intel Core i7-6820 CPU and GTX1060 GPU. Training ISTA-Nets with phase number $N_p = 9$ roughly takes 10 hours. For testing, we utilize two widely used benchmark datasets: Set11 [21] and BSD68 [27], which have 11 and 68 gray images, respectively. The reconstruction results are reported as the average Peak Signal-to-Noise Ratio (PSNR) over the test images.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 6,
+        "page_end": 6
+      }
+    },
+    {
+      "id": "2a53d946acae115e:12",
+      "text": "The number and shape of these filters in terms of height, width and depth are chosen to improve\n![Figure 2](./assets/page_3_fig_1.png)\n**Figure 2.** The deep convolutional auto-encoder network (DCAN) architecture. The DCAN is a computational model, comprising encoding (measurement) and decoding (reconstruction) layers, whose objective is to reproduce an input image or scene as an output image. These layers are essentially mappings defined by filters which pass or convolve over the feature maps with strides of one horizontally and vertically. The input scene is measured or encoded by $M$ binary filters $128 \\times 128$ (for 30 Hz or 15 Hz frame rates $M = 333$ or $M = 666$ respectively) and reconstructed or decoded using a fully connected layer and a series of three convolutional blocks. After the fully connected layers is a normalisation layer and between the convolutional layers is a non-linear activation layer, not shown here. The DCAN is trained using a large library of images. During training the parameter values (filter weights) are optimised using the stochastic gradient descent method with respect to minimising a standard cost function measuring the Euclidean distance between the predicted output and the desired output.\nthe resolution of the output and were informed by the super resolution",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "2a53d946acae115e:24",
+      "text": "## Discussion\nHere we propose and test a novel technique for optimising low dimension feature identification with binary weights and reconstruction using a deep convolutional auto-encoder network. The method deals simultaneously with feature identification and reconstruction. It incorporates a new regularization approach that encourages binary weights, with the goal being to use the proven performance of continuous deep neural networks to learn bases in order to represent images efficiently. The alternative approach of compressive sensing is based on the assumption that a small collection of non-adaptive linear measurements of a compressible signal or image contain enough information for reconstruction and processing. At high levels of compression this may not be the case. We use deep learning to solve the inverse problem and reconstruct the image but also to learn an optimised measurement basis appropriate to the scene. We can think of the optimised sampling basis used in this approach as having learned the features common in the training library, without being defined explicitly by the user. In addition the compressive sensing solution is iterative and computationally costly whereas the deep learning solution is fast and deterministic.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 5,
+        "page_end": 5
+      }
+    },
+    {
+      "id": "3583e628c41883ee:10",
+      "text": "The detected intensity $I_{det}$ corresponds to a confocal iSCAT measurement in reflection mode and can be expressed as:\n$$\n\\begin{aligned} I_{\\text{det}} &\\propto \\left| \\vec{E}_{\\text{ref}} + \\vec{E}_{\\text{sca}} \\right|^2 \\\\ &= \\left| \\vec{E}_{\\text{ref}} \\right|^2 + \\left| \\vec{E}_{\\text{sca}} \\right|^2 + 2 \\left| \\vec{E}_{\\text{ref}} \\right| \\left| \\vec{E}_{\\text{sca}} \\right| \\cos(\\Delta\\varphi) \\\\ &= \\left| \\vec{E}_{\\text{inc}} \\right|^2 \\left( r^2 + |s|^2 + 2 r |s| \\cos(\\Delta\\varphi) \\right) \\end{aligned} \\tag{1}\n$$\nwhere $|\\vec{E}_{inc}|$ is the incident electric field amplitude, $r$ is the reflectivity at the coverglass imaging medium interface, and $|s|$ is the scattering amplitude of the object [16,17]. In a confocal geometry, the interference occurs between two quasi-spherical waves and the relative phase between reflected and scattered electric fields is:\n$$\n\\Delta\\varphi = \\frac{4\\pi}{\\lambda} n z + \\varphi_{\\text{Gouy}} \\tag{2}\n$$\nwith $n$ the refractive index of the medium, $z$ the axial position of the scatterer relative to the interface, $\\lambda$ the illumination wavelength, and $\\varphi_{Gouy}$ the Gouy phase [17,25,27].\n![Figure 1](./assets/page_3_fig_1.png)",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "3583e628c41883ee:6",
+      "text": "iSCAT to visualize intracellular structures in live cells using a combination of illumination and detection scheme, combining label-free contrast with optical sectioning in three-dimensional space.\nIn this work, we propose and demonstrate the experimental implementation of *interferometric Scanning Microscopy* (iISM). By combining the principles of ISM and iSCAT, iISM enables high resolution ($\\sim$120 nm laterally), and label-free imaging inside live cells at substantially reduced illumination power. In order to extend the ISM concept to an interferometric point-spread function (iPSF), we developed an adaptive pixel-reassignment (APR) algorithm tailored to coherent detection. This workflow restores high-resolution reconstruction with enhanced contrast-to-noise ratio (CNR) at about 10-fold lower incident illumination power per diffraction-limited spot compared to conventional confocal microscopy. We quantify with test objects, and then showcase the capabilities of iISM in live-cell imaging of intracellular organelles, including the dynamics of structures such as the endoplasmic reticulum. Furthermore, we demonstrate the complementarity of iISM and fluorescence ISM for correlative imaging of the actin cytoskeleton in fixed cells.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "50f9c165105534b5:1",
+      "text": "## Abstract\n**Abstract:** This paper describes a single-shot spectral imaging approach based on the concept of compressive sensing. The primary features of the system design are two dispersive elements, arranged in opposition and surrounding a binary-valued aperture code. In contrast to thin-film approaches to spectral filtering, this structure results in easily-controllable, spatially-varying, spectral filter functions with narrow features. Measurement of the input scene through these filters is equivalent to projective measurement in the spectral domain, and hence can be treated with the compressive sensing frameworks recently developed by a number of groups. We present a reconstruction framework and demonstrate its application to experimental data.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "5b48741ab08dbad8:4",
+      "text": "## Structure of the integrated dual-cavity perovskite laser\nThe structure of the integrated dual-cavity device is shown in Fig. 1a. The two sub-units, each containing a microcavity, were heterogeneously integrated to form a multi-layer device stack. During device operation, the directional electroluminescence (EL) from the PeLED in the first microcavity (microcavity I) is absorbed by a perovskite single crystal in the second microcavity (microcavity II), which supports light\n![Fig. 1](./assets/page_2_fig_1.png)\n**Fig. 1 | Structure and basic optical properties of the integrated dual-cavity perovskite laser.** a, Schematic of the device. b, A cross-sectional schematic of the device structure (left), and high-angle annular dark-field scanning transmission electron microscopy (HAADF-STEM) images of a device (layer thicknesses unoptimized) (right). See Methods for detailed fabrication processes. c, A top-view SEM image of an FAPbI₃ single crystal used in microcavity II. d, A schematic top view of the device. The Au and ITO electrodes are the anode and cathode, respectively. e, Reflection spectra of DBR1 in microcavity I and DBR2 in microcavity II, together with the EL spectrum of the Cs₀.₅FA₀.₅PbI₃Br microcavity PeLED and the PL spectrum of the FAPbI₃ single crystal. Ref., refelction; a.u., arbitrary units. Scale bars, 400 nm (b, top right); 200 nm (b, bottom right); 10 μm (c).",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "5b48741ab08dbad8:6",
+      "text": "PeLED sub-unit has a structure of glass/distributed Bragg reflector (DBR)/indium tin oxide (ITO)/ZnO/polyethylenimine ethoxylated (PEIE)/Cs₀.₅FA₀.₅PbI₃Br perovskite/poly(9,9-dioctyl-fluorene-co-n-(4-butylphenyl) diphenylamine) (TFB)/MoOₓ/Au (Fig. 1b). The DBR (DBR1) consists of alternating layers of SiO₂/TiO₂, featuring a high reflectance (>99%) at about 680 nm. The Au electrode is about 20-nm thick, showing semi-transparency with an optical reflectance of 45% at 680 nm (Supplementary Fig. 1). The cavity mode at around 680 nm can be supported by microcavity I (Supplementary Note 1). The perovskite single-crystal microcavity (microcavity II) was constructed by high-quality FAPbI₃ perovskite single crystals embedded in two high-reflectance (>98% at around 800 nm) DBRs (DBR2 and DBR3) (Fig. 1b). The typical size of the crystals is about 0.08 mm² (0.29 mm × 0.27 mm) (Supplementary Fig. 2). The perovskite single crystals were grown *in situ* between the DBRs through space-confined inverse-temperature crystallization³⁴⁻³⁷ (Extended Data Fig. 1a) (Methods). The thickness of the single crystals can be controlled by the height of the gold spacer between the two DBRs³⁴,³⁵, and was optimized to be approximately 180 nm. Scanning electron microscopy (SEM) images of the single crystals show a uniform surface morphology (Fig. 1c and Extended Data Fig. 1b). The root-mean-square roughness of the samples is about 0.7 nm (Extended Data Fig. 1c). Two-dimensional (2D) X-ray diffraction (XRD) results of the FAPbI₃ single crystals exhibit high crystallinity (Extended Data Fig. 2a). The XRD patterns of the FAPbI₃ crystals show two sharp diffraction peaks corresponding to the (200) and (400) planes (Extended Data Fig. 2b), indicating that the perovskite is of cubic phase³⁶. The single-crystal samples show sharper and fewer XRD peaks compared with the polycrystalline films with a similar composition, consistent with the higher crystallinity of the samples³⁷.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "5de6843c26123e60:3",
+      "text": "scikit-learn) and deep learning frameworks (e.g. Tensorflow, Pytorch) provide helper functions and convenient examples that use MNIST out of the box.\nOur aim with this work is to create a good benchmark dataset which has all the accessibility of MNIST, namely its small size, straightforward encoding and permissive license. We took the approach of sticking to the 10 classes 70,000 grayscale images in the size of $28 \\times 28$ as in the original MNIST. In fact, the only change one needs to use this dataset is to change the URL from where the MNIST dataset is fetched. Moreover, Fashion-MNIST poses a more challenging classification task than the simple MNIST digits data, whereas the latter has been trained to accuracies above 99.7% as reported in Wan et al. [2013], Ciregan et al. [2012].\nWe also looked at the EMNIST dataset provided by Cohen et al. [2017], an extended version of MNIST that extends the number of classes by introducing uppercase and lowercase characters. How-",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "6e125bbe01292572:1",
+      "text": "## Abstract\nSingle pixel imaging (SPI) captures images without array detectors or raster scanning. When combined with compressive sensing techniques it enables novel solutions for high-speed optical imaging and spectroscopy. However, when it comes to the real-time capture and analysis of a fast event, the challenge is the inherent trade-off between frame rate and image resolution. Due to the lack of sufficient sparsity and the intrinsic iterative process, conventional compressed sensing techniques have limited improvement in capturing natural scenes and displaying the images in real time. In this work, we demonstrate a novel alternative compressive imaging approach employing an efficient and easy-implementation sampling scheme based on reordering the deterministic Hadamard basis through their total variation. By this means, the number of measurements and acquisition are reduced significantly without needing complex minimization algorithms. We can recover a $128 \\times 128$ image with a sampling ratio of 5% at the signal peak signal-to-noise ratio (PSNR) of 23.8 dB, achieving super sub-Nyquist sampling SPI. Compared to other widely used sampling e.g. standard Hadamard protocols and Gaussian matrix methods, this approach results in a significant improvement both in the compression ratio and image reconstruction quality, enabling SPI for high frame rate imaging or video applications.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "6e125bbe01292572:7",
+      "text": "### Image reconstruction and assessment.\nThe SPI with CS technique works by taking sequential measurements and can be described mathematically by (2),\n$$\n\\boldsymbol{y}_{M \\times 1} = H_{M \\times N} \\boldsymbol{x}_{N \\times 1} + \\boldsymbol{e}_{M \\times 1} \\tag{2}\n$$\nwhere $\\boldsymbol{x}_{N \\times 1}$ is a 1D vector reshaped from a $n \\times n$ pixel image; $H_{M \\times N}$ represents the $M$ sampling masks each formed by reshaping one row of the measurement matrix $H(M \\times N)$, $m < N$, $N = n \\times n$, $\\boldsymbol{y}_{M \\times 1}$ is the measurement vector of length $M$ and $\\boldsymbol{e}_{M \\times 1}$ is the noise vector which is the same size as $\\boldsymbol{y}_{M \\times 1}$. Equation 2 is an underdetermined linear system of equations and the physically relevant solution is obtained by optimization methods. Here, we use the TVAL3 solver to reconstruct the image [18]. The quality of reconstruction, for thorough comparison, is evaluated by 3 indices: percentage root mean squared error (RMSE), Peak Signal to Noise Ratio (PSNR) and Structural Similarity (SSIM). All images are normalized to unity.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "76f57e5ce4ad3e06:24",
+      "text": "\\mathbf{W}_l), \\tag{16}\n$$\nwhere $W^h \\in \\mathbb{R}^{C_1 \\times C_1}, W^l \\in \\mathbb{R}^{C_2 \\times C_2}$ are two learnable projection matrices and $Concat$ denotes the channel concatenation.\nAs illustrated in Fig. 2 (c), the high-frequency attention performs regular attention within N-pixel windows, and the low-frequency attention performs cross-scale attention between *query* and average-pooled *key*, *value* within pN-pixel windows. As average pooling can act as a low-pass filter [35], such dual-scale attention has two sizes of receptive fields on the input and the average-pooled input, enabling highand low-frequency aggregation.\n**Channel-wise Self-Attention (C-SA).** Since that S-SA focuses on capturing spatial information within local windows, we incorporate a channel-wise self-attention (C-SA) to capture channel-wise global information [19]. As illustrated in Fig. 2 (d), C-SA squeezes the spatial information into channels first and then a multilayer perceptron applies to it to calculate the channel attention, which will be used to weight the feature map. Given an input $F \\in \\mathbb{R}^{H \\times W \\times C}$, the output of C-SA is formulated as\n$$\n\\mathrm{C\\text{-}SA}(\\mathbf{F}) = \\mathbf{F} * \\mathrm{Sigmoid}(\\mathrm{ReLU}(\\mathrm{GAP}(\\mathbf{F}) \\mathbf{W}_1) \\mathbf{W}_2), \\tag{17}\n$$",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 5,
+        "page_end": 5
+      }
+    },
+    {
+      "id": "76f57e5ce4ad3e06:32",
+      "text": "However, noise is not avoidable in real optical system and thus they serve as the references. Clearly, our method leads to the best visual results.\n**Large-Scale Results.** As mentioned previously, previous SPI methods [22,38,50], vectorizing 2D image into 1D signal to process, leads to a huge measurement matrix and thus high computational costs in the forward model and the gradient descent projection, which makes it difficult to train on large-scale images. Our method utilizes Kronecker SPI to replace a huge measurement matrix with two small measurement matrices. The maximal resolution of our DMD is $768 \\times 1024$. We try to capture image with $768 \\times 1024$ pixels at the sampling ratio 12.5%, namely compress 768,432 pixels into 78,304 measurements. The size of two measurement matrices are $256 \\times 768$ and $384 \\times 1024$. We use the two matrices to train our HATNet on 20,000 images with $768 \\times 1024$ pixels, which are cropped from DIV2K dataset. To relieve memory and computational overheads, we properly reduce the number of stage and channel. Due to the high training costs, we do not re-train previous methods for comparison. Fig. 5 reports the large-scale reconstructed results of our HATNet and ISTA-TV. Our HATNet outperforms ISTA-TV by a large margin in the case of large-scale SPI reconstruction.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 7,
+        "page_end": 7
+      }
+    },
+    {
+      "id": "76f57e5ce4ad3e06:39",
+      "text": "✓ | ✓ | ✓ | ✓ | **32.26** | **0.9182** |\n| (b) |  | ✓ | ✓ | ✓ | 31.48 | 0.9053 |\n| (c) | ✓ |  | ✓ | ✓ | 31.56 | 0.9074 |\n| (d) | ✓ | ✓ |  | ✓ | 31.78 | 0.9112 |\n| (e) | ✓ | ✓ | ✓ |  | 32.15 | 0.9140 |\n**Table 3.** Comparison between Kronecker SPI and Vectorized SPI at SR = 25%.\n| Method | Kronecker SPI | Vectorized SPI |\n| --- | --- | --- |\n|  | $X \\in \\mathbb{R}^{N \\times N}, Y \\in \\mathbb{R}^{M \\times M}$ · $\\Phi \\in \\mathbb{R}^{M \\times N}, \\Psi \\in \\mathbb{R}^{M \\times N}, \\alpha = M^2 / N^2$ | $x = vec(X), y = vec(Y)$ · $A \\in \\mathbb{R}^{M^2 \\times N^2}, \\alpha = M^2 / N^2$ |\n| Measurement | $Y = \\Phi X \\Psi^\\top \\Rightarrow y = A x, A = \\Psi \\otimes \\Phi$ | $y = A x$ |\n| Gradient descent | $Z_k = X_{k-1} + \\rho \\Phi^\\top (Y - \\Phi X_{k-1} \\Psi^\\top) \\Psi$ | $z_k = x_{k-1} + \\rho A^\\top (y - A x_{k-1})$ |\n| Complexity | $\\mathcal{O}((\\sqrt{\\alpha} + \\alpha) N^3)$ | $\\mathcal{O}(\\alpha N^4)$ |\n| GPU memory (G) | 3.02 | 10.74 |\n| Inference time (s) | 0.38 | 0.55 |\n**Table 4.** Comparison between block-based sampling and full-size sampling of Kronecker SPI at SR = 10%.\n| Method | DGUNet $^+$ [34] | OCTFU $^+$ [44] | HATNet (ours) |\n| --- | --- | --- | --- |\n| Block-based | 30.92/0.9088 | 30.73/0.9037 | 31.62/0.9115 |\n| Full-size | 31.65/0.9110 | 31.51/0.9102 | 32.26/0.9154 |",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 8,
+        "page_end": 8
+      }
+    },
+    {
+      "id": "7c042cc84da037c6:3",
+      "text": "### THE NATURE OF REDUNDANCY IN VISUAL STIMULATION: A DEMONSTRATION\nConsider the very simple situation presented in Fig. 1. With a modicum of effort, the reader may be able to see this as an ink bottle on the corner of a desk. Let us suppose that the background is a uniformly white wall, that the desk is a uniform brown, and that the bottle is completely black. The visual stimulation from these objects is highly redundant in the sense that portions of the field are highly predictable from other portions. In order to demonstrate this fact and its perceptual significance, we may employ a variant of the “guessing game” technique with which Shannon (17) has studied the\n![FIG. 1. Illustration of redundant visual stimulation](./assets/page_1_fig_1.png)\n**Figure 1.** Illustration of redundant visual stimulation",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "7c042cc84da037c6:4",
+      "text": "redundancy of printed English. We may divide the picture into arbitrarily small elements which we “transmit” to a subject (S) in a cumulative sequence, having him guess at the color of each successive element until he is correct. This method of analysis resembles the scanning process used in television and facsimile systems, and accomplishes the like purpose of transforming two spatial dimensions into a single sequence in time. We are in no way supposing or assuming, however, that perception normally involves any such scanning process. If the picture is divided into 50 rows and 80 columns, as indicated, our S will guess at each of 4,000 cells as many times as necessary to determine which of the three colors it has. If his error score is significantly less than chance $[2/3 \\times 4,000 + 1/2(2/3 \\times 4,000) = 4,000]$, it is evident that the picture is to some degree redundant. Actually, he may be expected to guess his way through Fig. 1 with only 15 or 20 errors. It is fairly apparent that the technique described, in its present form, is limited in applicability to simple and somewhat contrived situations. With suitable modification it may have general usefulness as a research tool, but it is introduced into the present paper for demonstrational purposes only.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "8a29ea79c6633439:10",
+      "text": "coefficient, one can project the corresponding Fourier basis pattern(s) onto the object and use the single-pixel detector to measure the inner product between Fourier basis patterns and the object. As such, the Fourier spectrum can be reconstructed from the single-pixel measurements. Fourier transform was proposed in the late 1800s by Joseph Fourier and has been widely used in a number of fields. It allows any signal to be decomposed into a set of orthogonal sinusoidal waveforms of different frequencies. For example, images as two-dimensional signals are allowed to be broken down into a combination of sinusoidal intensity patterns. The two-dimensional Fourier transform $F\\{\\}$ of an image $I(x,y)$ is defined as\n$$\n\\tilde{I}_\\text{F}(u,v) = F\\{I(x,y)\\} = \\sum_{x=0}^{M-1} \\sum_{y=0}^{N-1} I(x,y) \\exp\\left[-\\mathrm{j}2\\pi\\left(\\frac{ux}{M} + \\frac{vy}{N}\\right)\\right], \\tag{8}\n$$\nwhere $(x,y)$ is the coordinate in the spatial domain and $(u,v)$ is the coordinate in the Fourier domain. A Fourier basis pattern $P_\\text{F}(x,y)$ can be obtained by applying an inverse Fourier transform to a delta function $\\delta_\\text{F}(u,v,\\varphi)$,\n$$\nP_\\text{F}(x,y) = \\frac{1}{2}\\Big[1 + \\operatorname{real}\\big\\{F^{-1}\\{\\delta_\\text{F}(u,v,\\varphi)\\}\\big\\}\\Big], \\tag{9}\n$$\nwhere $\\operatorname{real}\\{\\}$ denotes the real part, $F^{-1}\\{\\}$ denotes an inverse Fourier transform, and",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 6,
+        "page_end": 6
+      }
+    },
+    {
+      "id": "a678b5bb61394454:10",
+      "text": "as a 1D vector and treat the prior information within different dimensions in an indiscriminative way, which ignores the high-dimensionality nature of HSI and results in poor reconstruction quality.\nIn recent years, deep learning techniques have been employed for image restoration. Several methods on deep neural network attempted to learn prior knowledge for natural image compressive imaging [25,26]. However, the heterogeneity of HSI makes those methods difficult to be extended for computational hyperspectral imaging. A convolutional autoencoder (AE) was proposed in [27] to learn a nonlinear sparse representation for CASSI. A recent method named HSCNN used a convolutional network to finish the reconstruction task [28]. But these methods all try to learn a single prior information and can not exploit the high-dimensionality intrinsic nature of HSI. Moreover, few experiments are carried out to verify that these networks can be applied to the actual hardware systems.\nBased on our observation that high-dimensional tensors are more faithful to deliver intrinsic properties, we propose a DLTR based method to further promote the reconstruction fidelity. Besides, extensive experiments on actual hardware implementations validate the generalization of our method.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "a91f5c2895199749:10",
+      "text": "mapped to it. For instance, as seen in Figure 5, there are 3 different ways to write 「つ」 because this character was derived from different Kanji (川 and 津).\nAnother example of this many-to-one mapping is shown in Figure 6. Even though Kuzushiji-MNIST was created as drop-in replacement for the MNIST dataset, the characteristics of Hentaigana and Arabic numbers are completely different, and is one reason why we believe the Kuzushiji-MNIST dataset is more challenging than MNIST.\n![Figure 7](./assets/page_4_fig_1.png)\n**Figure 7.** Examples of some of the 3832 classes in Kuzushiji-Kanji.\nThe high class imbalance in Kuzushiji-49 and Kuzushiji-Kanji is due to the appearance frequency in the real source books, and kept that way to represent the real data distribution. Kuzushiji-49, as the name suggests, has 49 classes (266,407 images) and Kuzushiji-Kanji has a total of 3832 classes (140,426 images), ranging from 1,766 examples to only a single example per class. Kuzushiji-MNIST and Kuzushiji-49 consist of grayscale images of 28x28 pixel resolution, consistent with the MNIST dataset, while the Kuzushiji-Kanji images are of a larger 64x64 pixel resolution.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 4,
+        "page_end": 4
+      }
+    },
+    {
+      "id": "a91f5c2895199749:2",
+      "text": "## 1 Introduction\nRecorded historical documents give us a peek into the past. We are able to glimpse the world before our time; and see its culture, norms, and values to reflect on our own. Japan has very unique historical pathway. Historically, Japan and its culture was relatively isolated from the West, until the Meiji restoration in 1868 where Japanese leaders reformed its education system to modernize its culture. This caused drastic changes in the Japanese language, writing and printing systems. Due to the modernization of Japanese language in this era, cursive Kuzushiji (くずし字) script is no longer taught in the official school curriculum. Even though Kuzushiji had been used for over 1000 years, most Japanese natives today cannot read books written or published over 150 years ago. [10,20]\n![Figure 1](./assets/page_1_fig_1.png)\n**Figure 1.** Most Japanese cannot read books over 150 years old, written in cursive *Kuzushiji* style. The 10 classes of Kuzushiji-MNIST, first column showing the modern *Hiragana* counterpart (left). Example of a Kuzushiji literature scroll, *Genjimonogatari Uta Awase* 『源氏歌合絵巻』 [21] (right).",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "aad10fa9972c8a2c:9",
+      "text": "### 2.1. Methods\nThe schematic illustration of the proposed ILNet is presented in Fig. 1. The ILNet-enhanced SPI experiment setup consists of an expended laser source, a digital micromirror device (DMD), a bucket detector, an object, and a computer. Initially, a 10 mW laser with a wavelength of $\\lambda = 532$ nm is expanded by the beam expander lens. The expanded laser then illuminates on the DMD, which includes an array of $1280 \\times 800$ square micromirrors with a $10.6\\ \\mu\\mathrm{m}$ pitch. The DMD modulates the laser by utilizing a series of random speckle patterns $S_N(x,y)$ previously stored in the computer. Afterward, the SPD collects the intensity signals $I_N(real)$ of the beam as it passes through the object. The $I_N(real)$ is subsequently transmitted to the computer for further analysis. The ILNet architecture is depicted in Fig. 1. The ILNet first uses the part-based model to divide image features into different parts to facilitate fine-grained learning, which can reconstruct a random 2D signal into a 2D object image with better image details. The intensity signals $I_N(out)$ of the reconstructed image are then calculated. Next, the difference between the $I_N(out)$ of the retrieved image and the $I_N(real)$ captured by the SPD is used as a loss function to train the parameters of ILNet. The reconstructed image can be updated for each iteration. To further enhance the efficiency of image reconstruction through neural networks, we attempt to leverage the 2D image generated by ILNet as input for the subsequent iterations. Providing prior information to the neural network ensures superior final images with low sampling rates after multiple iterative loops. Mathematically, this iterative process can be expressed as follows:",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "b10afc967fb55e1b:9",
+      "text": "![Figure 1](./assets/page_3_fig_1.png)\n**Figure 1.** ISM. **a**, Sketch of an ISM device. The inset shows the fingerprints relative to the different axial positions of the sample. **b**, Simulated PSFs of an ideal ISM system at $z = 0$ nm (in focus) and $z = 720$ nm (out of focus) with $\\lambda = 640$ nm and NA = 1.4. **c**, Sketch of the ISM image formation. The images of an in-focus sample appear brighter at the centre of the detector coordinate and dimmer at the periphery. The brightness of the images of the out-of-focus samples decays slower along the detector coordinate, encoding the axial information into the ISM dataset. The reconstruction algorithm builds two images from a single-plane dataset, one with the in-focus image and the background discarded. The out-of-focus sections of the sample are projected into a single image, which is subsequently discarded. **d**, Comparison of a confocal image with the ISM image reconstructed by the s²ISM algorithm on synthetic tubulin filaments.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 3,
+        "page_end": 3
+      }
+    },
+    {
+      "id": "bc9b37581c93be49:9",
+      "text": "## Variational denoising methods\nExisting denoising methods use image priors and minimize an energy function $E$ to calculate the denoised image $\\hat{x}$. First, we obtain a function $E$ from a noisy image $y$, and then a low number is corresponded to a noise-free image through a mapping procedure. Then, we can determine a denoised image $\\hat{x}$ by minimizing $E$:\n$$\n\\hat{x} \\in \\arg \\min_x E(x) \\tag{2}\n$$\nThe motivation for variational denoising methods of Eq. (2) is maximum a posterior (MAP) probability estimate. From a Bayesian perspective, the MAP probability estimate of $x$ is\n$$\n\\hat{x} = \\arg \\max_x P(x|y) = \\arg \\max_x \\frac{P(y|x)P(x)}{P(y)} \\tag{3}\n$$\nwhich can be equivalently formulated as\n$$\n\\hat{x} = \\arg \\max_x \\log P(y|x) + \\log P(x) \\tag{4}\n$$\nwhere the first term $P(y|x)$ is a likelihood function of $x$, and the second term $P(x)$ represents the image prior. In the case of AWGN, the objective function can generally be formulated as\n$$\n\\hat{x} = \\arg \\min_x \\frac{1}{2} \\|y - x\\|_2^2 + \\lambda R(x) \\tag{5}\n$$",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "debadd6aaf815c40:12",
+      "text": "### II. CONTRIBUTION AND OVERVIEW OF PAPER\nThis paper proposes the *Learned Primal-Dual* algorithm, a general framework for solving inverse problems that combines deep learning with model based reconstruction. The proposed learned iterative reconstruction scheme involves convolutional neural networks (CNNs) in both the reconstruction and data space, and these are connected by the forward operator and its adjoint. We train the networks to minimize the mean squared error of the reconstruction and demonstrate that this achieves very high performance in CT reconstruction, surpassing recent learning based methods on both analytical and human data.\nWe emphasize that we learn the whole reconstruction operator, mapping data to reconstruction, and not just a post-processing nor only the prior in isolation.\nIn addition, we make all of our code and learned parameters open source so that the community can reproduce the results and apply the methods to other inverse problems [16].",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "debadd6aaf815c40:22",
+      "text": "The above modifications result in a new algorithm, henceforth called the *Learned Primal-Dual* algorithm, that is outlined in algorithm 3.\nAlgorithm 3 Learned Primal-Dual\n1: Initialize $f_0 \\in X^{N_{primal}}, h_0 \\in U^{N_{dual}}$ 2: **for** $i = 1, \\dots, I$ **do** 3: $\\quad h_i \\leftarrow \\Gamma_{\\theta^d_i}\\big(h_{i-1}, \\mathcal{K}(f^{(2)}_{i-1}), g\\big)$ 4: $\\quad f_i \\leftarrow \\Lambda_{\\theta^p_i}\\big(f_{i-1}, [\\partial \\mathcal{K}(f^{(1)}_{i-1})]^*(h^{(1)}_i)\\big)$ 5: **return** $f_I^{(1)}$",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 4,
+        "page_end": 4
+      }
+    },
+    {
+      "id": "debadd6aaf815c40:27",
+      "text": "## A. Test cases\n*a) Ellipse phantoms:* This problem is identical to [5] and we restate it briefly. Training data is randomly generated ellipses on a $128 \\times 128$ pixel domain. The forward operator is the ray transform and hence $\\mathcal{T} = \\mathcal{P}$.\nThe projection geometry was a sparse 30 view parallel beam geometry with 182 detector pixels. 5% additive Gaussian noise was added to the projections. Since the forward operator is linear, the adjoint of the derivative is simply the adjoint, which for the ray transform is the back-projection\n$$\n[\\partial \\mathcal{T}(f)]^* = \\mathcal{P}^*.\n$$\n*b) Human phantoms:* In order to evaluate the algorithm on a clinically realistic use-case we consider reconstruction of simulated data from human abdomen CT scans as provided by Mayo Clinic for the AAPM Low Dose CT Grand Challenge [24]. The data includes full dose CT scans from 10 patients, of which we used 9 for training and 1 for evaluation. We used the 3 mm slice thickness reconstructions, resulting in 2168 training images, each $512 \\times 512$ pixel in size. Thus, given that we minimize the pointwise error, the total number of data-points is $512^2 \\times 2168 \\approx 5 \\times 10^8$.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 5,
+        "page_end": 5
+      }
+    },
+    {
+      "id": "debadd6aaf815c40:28",
+      "text": "Thus, given that we minimize the pointwise error, the total number of data-points is $512^2 \\times 2168 \\approx 5 \\times 10^8$.\nWe used a two-dimensional fan-beam geometry with 1000 angles, 1000 pixels, source to axis distance 500 mm and axis to detector distance 500 mm. In this setting, we consider the more physically correct non-linear forward model given by Beer-Lamberts law\n$$\n\\mathcal{T}(f)(\\ell) = e^{-\\mu \\mathcal{P}(f)(\\ell)}\n$$\nwhere the unit of $f$ is g/cm$^3$ and $\\mu$ is the mass attenuation coefficient, in this work selected to 0.2 cm$^2$/g which is approximately the value in water at x-ray energies. We used Poisson noise corresponding to $10^4$ incident photons per pixel before attenuation, which would correspond to a low dose CT scan. We find the action of the adjoint of the derivative by straightforward computation\n$$\n[\\partial \\mathcal{T}(f)]^*(g) = -\\mu \\mathcal{P}^*\\big(e^{-\\mu \\mathcal{P}(f)(\\cdot)} g(\\cdot)\\big) \\quad \\text{for } g \\in \\mathcal{Y}.\n$$\nThe forward model can also be linearised by applying $-\\log(\\cdot)/\\mu$ to both the data and forward operator, which then simply becomes the ray-transform as for the ellipse data. We implemented both the pre-log (non-linear) and post-log (linear) forward models and compare their results.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 5,
+        "page_end": 5
+      }
+    },
+    {
+      "id": "debadd6aaf815c40:39",
+      "text": "We hence report values from using the same training scheme as for our other algorithms in order to give a more fair comparison.\nAdditionally, our comparison includes learned PDHG, algorithm 2, as well as the following two simplified versions of the Learned Primal-Dual algorithm. The first is a *Learned Primal* algorithm, which does not learn any parameters for the dual proximal, instead it returns the residual\n$$\n\\Gamma_{\\theta_i^d}\\big(h_{i-1}, \\mathcal{T}(f_{i-1}^{(2)}), g\\big) = \\mathcal{T}(f_{i-1}^{(2)}) - g\n$$\nThe second, *FBP + residual denoising* algorithm, further simplifies the problem by discarding the forward operator completely, and can be seen as selecting\n$$\n\\Lambda_{\\theta_i^p}\\big(f_{i-1}, [\\partial \\mathcal{T}(f_{i-1}^{(1)})]^*(h_i^{(1)})\\big) = \\Lambda_{\\theta_i^p}(f_{i-1})\n$$\nSince this method does not have access to the data $g$, we select the initial guess according to a FBP, see (10). This makes the algorithm a learned denoiser.\nFor the human phantoms we compare both non-linear and linearized versions of the forward operator, but given that training times are noticeably longer, we only compare to the previously established methods of FBP, TV and U-Net denoising.\nAll learned algorithms were trained using the same training scheme as outlined in section IV-B1, and measure the run-time, PSNR and the structural similarity index (SSIM) [36].",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 7,
+        "page_end": 7
+      }
+    },
+    {
+      "id": "f754fd0b565d54d9:1",
+      "text": "## Abstract\n**Abstract** Single-pixel imaging (SPI) faces significant challenges in reconstructing high-quality images under complex real-world degradation conditions. This paper presents an innovative degradation model for the physical processes in SPI, providing the first comprehensive and quantitative analysis of various SPI noise sources encountered in real-world applications. Especially, pattern-dependent global noise propagation and object jitter modelling methods for SPI are proposed. Subsequently, a deep-blind neural network is developed to remove the necessity of obtaining parameters of all the degradation factors in real-world image compensation. Our method can operate without degradation parameters and significantly improve the resolution and fidelity of SPI image reconstruction. The deep-blind network training is guided by the proposed comprehensive SPI degradation model that describes real-world SPI impairments, enabling the network to generalize across a wide range of degradation combinations. The experiment validates its advanced performance in real-world SPI imaging at ultra-low sampling rates. The proposed method holds great potential for applications in remote sensing, biomedical imaging, and privacy-preserving surveillance.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "f754fd0b565d54d9:25",
+      "text": "### Simulation results\nTo evaluate the robustness of the proposed degradation compensation framework under complex, unfavorable conditions, simulation experiments are conducted on various representative degradations commonly found in SPI, including (1) Blur, including isotropic and anisotropic Gaussian kernels, with varying standard deviations to simulate different degrees of defocus and scattering; (2) Noise, encompassing both additive and multiplicative types, further categorized into pattern-dependent (e.g., signal-dependent Poisson noise and jitter-induced multiplicative noise) and pattern-independent (e.g., sensor readout noise and illumination fluctuations). Each noise source is sampled with a variance drawn from a predefined interval; (3) Sampling ratios, which are randomly selected within the range of 5.0% to 6.25% to simulate ultra-low acquisition conditions. This structured stochastic degradation strategy allows the network to experience a broad distribution of degradation conditions during training, thereby enhancing its generalization to blind and real-world SPI scenarios. The details of data generation are provided in Supplementary Section 4. The definitions of degradation levels are provided in Supplementary Section 5.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 6,
+        "page_end": 6
+      }
+    },
+    {
+      "id": "f754fd0b565d54d9:5",
+      "text": "perfectly static. Due to the sequential acquisition process of SPI, even minor temporal fluctuations—such as object motion, platform jitter, or illumination instability—can cause significant inconsistencies across measurements. This introduces complex and global artefacts in the reconstructed image, highlighting the need for a degradation model that faithfully captures the temporal sensitivity of SPI systems. In 2020, Huang et al. investigated temporal fluctuations in SPI caused by object or platform trembling [19]. They propose to treat the movement process as a number of intermediate static states. However, it requires extensive computation. Scattering-like degradations—such as haze, fog, optical defocus, and mild underwater turbidity—are ubiquitous in real-world environments and can profoundly impact the effectiveness of SPI applications. Le et al.[20] conducted underwater SPI to examine the robustness of CGI reconstruction under scattering and attenuation. Huang et al.[21] extended their analysis to wind conditions by modeling the optical wavefront with airflow-induced phase perturbations. While some degradation factors of SPI imaging have been studied, pattern-dependent global noise propagation process and object jitter modeling methods remain to be further investigated. More importantly, most of the existing degradation compensation methods only compensate for one degradation factor and require accurate degradation parameters. A comprehensive study and a feasible solution for complex real-world degradations are needed in the SPI field.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 2,
+        "page_end": 2
+      }
+    },
+    {
+      "id": "f986970932c37441:1",
+      "text": "## Abstract\nHigh-resolution single-photon imaging remains a big challenge due to the complex hardware manufacturing craft and noise disturbances. Here, we introduce deep learning into SPAD, enabling super-resolution single-photon imaging with enhancement of bit depth and imaging quality. We first studied the complex photon flow model of SPAD electronics to accurately characterize multiple physical noise sources, and collected a real SPAD image dataset ($64 \\times 32$ pixels, 90 scenes, 10 different bit depths, 3 different illumination flux, 2790 images in total) to calibrate noise model parameters. With this physical noise model, we synthesized a large-scale realistic single-photon image dataset (image pairs of 5 different resolutions with maximum megapixels, 17250 scenes, 10 different bit depths, 3 different illumination flux, 2.6 million images in total) for subsequent network training. To tackle the severe super-resolution challenge of SPAD inputs with low bit depth, low resolution, and heavy noise, we further built a deep transformer network with a content-adaptive self-attention mechanism and gated fusion modules, which can dig global contextual features to remove multi-source noise and extract full-frequency details. We applied the technique in a series of experiments including microfluidic inspection, Fourier ptychography, and high-speed imaging. The experiments validate the technique’s state-of-the-art super-resolution SPAD imaging performance.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 1,
+        "page_end": 1
+      }
+    },
+    {
+      "id": "fae405527c4ab80e:20",
+      "text": "for simplicity, e.g. reshaping the feature maps. (b) PlainNet's block, which contains the most common components. (c) Our proposed baseline. Compared to (b), Channel Attention (CA) and LayerNorm are adopted. Besides, ReLU is replaced by GELU. (d) Our proposed Nonlinear Activation Free Network's block. It replaces CA/GELU with Simplified Channel Attention (SCA) and SimpleGate respectively. The details of these components are shown in Fig 4.",
+      "meta": {
+        "evidence_ready": true,
+        "page_start": 6,
+        "page_end": 6
+      }
+    }
+  ]
+}

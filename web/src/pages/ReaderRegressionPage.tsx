@@ -21,6 +21,7 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   if (raw === 'image-anchor-mismatch') return 'image-anchor-mismatch'
   if (raw === 'candidate-fallback') return 'candidate-fallback'
   if (raw === 'strict-missing-exact') return 'strict-missing-exact'
+  if (raw === 'strict-stale-unverified') return 'strict-stale-unverified'
   if (raw === 'discussion-only') return 'discussion-only'
   if (raw === 'limitations-only') return 'limitations-only'
   if (raw === 'future-work-only') return 'future-work-only'

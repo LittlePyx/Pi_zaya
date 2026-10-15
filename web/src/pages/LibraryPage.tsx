@@ -15,6 +15,7 @@ import {
 } from '@ant-design/icons'
 import type {
   LibraryFileItem,
+  LibraryDeleteImpactResponse,
   LibraryQualityActionHistoryItem,
   LibraryQualityFeatureHealthItem,
   LibraryQualityPriorityAction,
@@ -28,7 +29,7 @@ import { useChatStore } from '../stores/chatStore'
 import { useLibraryStore } from '../stores/libraryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { useOnboardingStore } from '../stores/onboardingStore'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useT } from '../i18n'
 import {
   WorkbenchMetricStrip,
@@ -158,6 +159,7 @@ export default function LibraryPage() {
   const store = useLibraryStore()
   const createPaperGuideConversation = useChatStore((s) => s.createPaperGuideConversation)
   const nav = useNavigate()
+  const location = useLocation()
 
   const settingsLoaded = useSettingsStore((s) => s.loaded)
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
@@ -223,6 +225,7 @@ export default function LibraryPage() {
     inspectSelectedDrafts,
     inspectSingleDraft,
     invertUploadDraftSelection,
+    openDuplicateDraft,
     pagedUploadDrafts,
     retryFailedDrafts,
     retryableFailedUploadDrafts,
@@ -383,6 +386,13 @@ export default function LibraryPage() {
     convertedFiles,
     tabKey,
   })
+  useEffect(() => {
+    const source = String(new URLSearchParams(location.search).get('source') || '').trim()
+    if (!source) return
+    setBrowseMode('list')
+    setTabKey('all')
+    setFileKeyword(source)
+  }, [location.search, setFileKeyword])
   const qualityReviewCount = useMemo(() => store.files.filter((x) => hasConversionQualityIssue(x)).length, [store.files])
   const qualityReadyCount = useMemo(
     () => store.files.filter((x) => conversionQualityStatus(x.conversion_quality) === 'good').length,
@@ -731,6 +741,7 @@ export default function LibraryPage() {
     setQualityRepairImpact,
     setQualityRepairRun,
   })
+
   const qualityCenterView = useLibraryQualityCenterViewModel({
     S,
     reportStats: qualityReportStats,
@@ -1184,7 +1195,15 @@ export default function LibraryPage() {
     }
     const res = await store.deleteFile(item.name, true)
     if (res.ok) {
-      message.success(S.lib_msg_deleted_name.replace('{name}', item.name))
+      if (res.evidence_preserved) {
+        message.success(
+          S.lib_msg_delete_evidence_preserved
+            .replace('{name}', item.name)
+            .replace('{n}', String(res.dependency_protection?.note_count || 0)),
+        )
+      } else {
+        message.success(S.lib_msg_deleted_name.replace('{name}', item.name))
+      }
       if (Number(res.removed_queued || 0) > 0) {
         message.info(S.lib_msg_delete_removed_queued.replace('{n}', String(res.removed_queued)))
       }
@@ -1193,23 +1212,71 @@ export default function LibraryPage() {
       }
       return
     }
+    if (res.deletion_blocked) {
+      message.warning(
+        res.dependency_protection?.preservation_available === false
+          ? S.lib_menu_delete_dependency_blocked
+          : S.lib_menu_delete_dependency_check_failed,
+      )
+      return
+    }
     const warning = Array.isArray(res.warnings) && res.warnings.length > 0
       ? `: ${res.warnings.join('; ')}`
       : ''
     message.warning(S.lib_msg_delete_not_complete.replace('{warning}', warning))
   }
 
-  const confirmDeleteOne = (item: LibraryFileItem) => {
+  const confirmDeleteOne = async (item: LibraryFileItem) => {
+    if (item.task_state !== 'idle') {
+      message.warning(S.lib_menu_delete_busy)
+      return
+    }
+    const hide = message.loading(S.lib_menu_delete_checking, 0)
+    let impact: LibraryDeleteImpactResponse
+    try {
+      impact = await libraryApi.inspectDeleteImpact(item.name, true)
+    } catch {
+      hide()
+      message.error(S.lib_menu_delete_dependency_check_failed)
+      return
+    }
+    hide()
+    if (impact.busy) {
+      message.warning(S.lib_menu_delete_busy)
+      return
+    }
+    if (!impact.ok) {
+      message.error(S.lib_menu_delete_dependency_check_failed)
+      return
+    }
+    if (impact.deletion_blocked || (impact.note_count > 0 && !impact.preservation_available)) {
+      message.warning(S.lib_menu_delete_dependency_blocked)
+      return
+    }
+    const preserveEvidence = impact.note_count > 0 && impact.preservation_available
     Modal.confirm({
-      title: S.lib_menu_delete_confirm_title,
+      title: preserveEvidence ? S.lib_menu_delete_dependency_title : S.lib_menu_delete_confirm_title,
       content: (
         <div className="kb-lib-delete-confirm">
           <Text strong>{item.name}</Text>
-          <Text type="secondary">{S.lib_menu_delete_confirm_detail}</Text>
-          <Text type="secondary">{S.lib_menu_delete_confirm_index}</Text>
+          {preserveEvidence ? (
+            <>
+              <Text type="secondary">
+                {S.lib_menu_delete_dependency_detail
+                  .replace('{notes}', String(impact.note_count))
+                  .replace('{links}', String(impact.link_count))}
+              </Text>
+              <Text type="secondary">{S.lib_menu_delete_dependency_preserve}</Text>
+            </>
+          ) : (
+            <>
+              <Text type="secondary">{S.lib_menu_delete_confirm_detail}</Text>
+              <Text type="secondary">{S.lib_menu_delete_confirm_index}</Text>
+            </>
+          )}
         </div>
       ),
-      okText: S.lib_menu_delete_ok,
+      okText: preserveEvidence ? S.lib_menu_delete_dependency_ok : S.lib_menu_delete_ok,
       okType: 'danger',
       cancelText: S.lib_menu_delete_cancel,
       onOk: async () => {
@@ -1289,11 +1356,13 @@ export default function LibraryPage() {
       let sourcePath = ''
       let sourceName = stripKnownSourceExt(item.name) || item.name
       let resolvedMdPath = ''
+      let sourceReady = Boolean(item.index_ready)
       try {
         const resolved = await libraryApi.resolveGuideSource(item.name)
         sourcePath = String(resolved.source_path || '').trim()
         sourceName = String(resolved.source_name || '').trim() || sourceName
         resolvedMdPath = String(resolved.md_path || '').trim()
+        sourceReady = Boolean(resolved.index_ready)
       } catch {
         // Backward-compatible fallback when backend route is not available yet.
         sourcePath = String(item.md_path || '').trim()
@@ -1304,6 +1373,7 @@ export default function LibraryPage() {
       await createPaperGuideConversation({
         sourcePath,
         sourceName,
+        sourceReady,
         title: convTitle,
       })
       if (resolvedMdPath && resolvedMdPath !== String(item.md_path || '').trim()) {
@@ -1499,6 +1569,7 @@ export default function LibraryPage() {
       uploadErrorReason={uploadErrorReason}
       uploadDraftFilterOptions={uploadDraftFilterOptions}
       uploadUseLlm={uploadUseLlm}
+      uploadLlmAvailable={textModelReady}
       uploadInspecting={uploadInspecting}
       uploadSaving={uploadSaving}
       uploadLocked={uploadLocked}
@@ -1515,6 +1586,7 @@ export default function LibraryPage() {
       onClearErrorReason={() => setUploadErrorReason('all')}
       onSelectAllDrafts={selectAllUploadDrafts}
       onInvertDraftSelection={invertUploadDraftSelection}
+      onOpenDuplicateDraft={openDuplicateDraft}
       onInspectSelectedDrafts={inspectSelectedDrafts}
       onSaveSelectedDrafts={saveSelectedDrafts}
       onSelectFailedDrafts={selectFailedDrafts}

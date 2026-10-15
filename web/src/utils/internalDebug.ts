@@ -1,5 +1,6 @@
 const TRUE_VALUES = new Set(['1', 'true', 'yes', 'on'])
-const INTERNAL_DEBUG_BUILD_ENABLED = import.meta.env.VITE_ENABLE_INTERNAL_DEBUG === '1'
+const VITE_ENV = (typeof import.meta.env === 'object' ? import.meta.env : {}) as Record<string, string | boolean | undefined>
+const INTERNAL_DEBUG_BUILD_ENABLED = VITE_ENV.VITE_ENABLE_INTERNAL_DEBUG === '1'
 
 function isTrueFlag(value: unknown) {
   return TRUE_VALUES.has(String(value || '').trim().toLowerCase())
@@ -29,7 +30,7 @@ export function internalDebugBrowserEnabled() {
 }
 
 export function internalSettingsToolsVisible() {
-  if (import.meta.env.VITE_SHOW_INTERNAL_SETTINGS === '1') return true
+  if (VITE_ENV.VITE_SHOW_INTERNAL_SETTINGS === '1') return true
   if (!INTERNAL_DEBUG_BUILD_ENABLED) return false
   if (typeof window === 'undefined') return false
   try {

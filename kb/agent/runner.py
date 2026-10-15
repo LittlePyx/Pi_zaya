@@ -8,10 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from kb.reference_query_family import prompt_requests_answer_audit
+from kb.claim_verification_observability import record_production_claim_verification
+from kb.local_observability import emit_local_observation
 
 from .planner import plan_research_intent, plan_research_question
 from .research_run import build_research_run
-from .source_policy import decide_answer_source
+from .source_policy import decide_answer_source, normalize_external_supplement_mode
 from .tools import (
     build_reading_guide,
     compare_papers,
@@ -532,6 +534,9 @@ def _pre_generation_evidence_gate(
             scope_context=scope_context or {},
             question_type=question_type,
         ),
+        external_supplement_mode=str(
+            (scope_context or {}).get("external_supplement_mode") or "disabled"
+        ),
     )
     return decision.to_evidence_gate()
 
@@ -786,6 +791,9 @@ def build_generation_agent_notes(
         "metrics": dict(research_run_payload.get("metrics") or {}),
     }
     hybrid_generation = _hybrid_generation_recommended(gate, public_confidence, hits)
+    external_supplement_mode = normalize_external_supplement_mode(
+        str(scoped_context.get("external_supplement_mode") or "disabled")
+    )
     return {
         "question_type": question_type,
         "planner_intent": intent.to_dict(),
@@ -802,6 +810,7 @@ def build_generation_agent_notes(
             "answer_source_blend": str(gate.get("source_blend") or ""),
             "answer_mode": str(gate.get("answer_mode") or ""),
             "source_policy": str(gate.get("source_policy") or ""),
+            "external_supplement_mode": external_supplement_mode,
             "hybrid_generation_recommended": bool(hybrid_generation),
             "pre_answer_evidence_matrix_rows": len(agent_notes["evidence_matrix"]),
             "pre_answer_source_policy": agent_notes["research_run"]["source_policy"],
@@ -908,6 +917,38 @@ def _finalize_agent_trace(
         }
     )
     trace.research_run = research_run
+    verification_steps = [
+        step for step in trace.steps if str(step.tool or "") == "verify_answer_citations"
+    ]
+    verification_elapsed_ms = sum(
+        max(0, int(step.elapsed_ms or 0)) for step in verification_steps
+    )
+    verification_step_status = (
+        str(verification_steps[-1].status or "done") if verification_steps else "done"
+    )
+    record_production_claim_verification(
+        evidence_status=str(trace.verification.evidence_status),
+        total_claim_count=int(trace.verification.total_claims or 0),
+        supported_claim_count=int(trace.verification.supported_claims or 0),
+        unsupported_claim_count=int(trace.verification.unsupported_claims or 0),
+        duration_ms=verification_elapsed_ms,
+        step_status=verification_step_status,
+    )
+    emit_local_observation(
+        "pi_zaya.agent_run",
+        {
+            "outcome_id": f"agent_run.{final_status}",
+            "status": final_status,
+            "duration_ms": tool_elapsed_ms,
+            "question_type_id": str(trace.question_type),
+            "verification_outcome_id": str(trace.verification.evidence_status),
+            "retrieval_hit_count": len(hits),
+            "tool_call_count": len(trace.steps),
+            "tool_error_count": int(tool_status_counts.get("error") or 0),
+            "supported_claim_count": int(trace.verification.supported_claims or 0),
+            "unsupported_claim_count": int(trace.verification.unsupported_claims or 0),
+        },
+    )
 
 
 def run_research_agent(
@@ -925,6 +966,7 @@ def run_research_agent(
     current_source_path: str = "",
     current_source_name: str = "",
     answer_contract: str = "",
+    external_supplement_mode: str = "disabled",
 ) -> dict[str, Any]:
     intent = plan_research_intent(query)
     question_type, plan = plan_research_question(query)
@@ -936,6 +978,9 @@ def run_research_agent(
         source="direct_research_agent",
     )
     scope_context["research_run_id"] = f"rr_{uuid.uuid4().hex[:16]}"
+    scope_context["external_supplement_mode"] = normalize_external_supplement_mode(
+        external_supplement_mode
+    )
     scope_context["planner_intent"] = intent.to_dict()
     scope_context["planner_confidence"] = intent.confidence
     scope_context["evidence_need"] = intent.evidence_need
@@ -1109,12 +1154,14 @@ def build_agent_trace_for_completed_answer(
     question_type, plan = plan_research_question(query)
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
     resolved_answer_mode = str(answer_mode or _answer_mode(agent_notes) or "").strip()
+    verification_started_at = time.perf_counter()
     if resolved_answer_mode in {"general_llm", "external_academic_llm"}:
         verification = _general_answer_verification()
     elif prompt_requests_answer_audit(query) and hits:
         verification = _answer_audit_source_verification(answer, hits)
     else:
         verification = verify_completed_answer(answer, hits, answer_mode=resolved_answer_mode)
+    verification_elapsed_ms = int(round((time.perf_counter() - verification_started_at) * 1000))
     final_status = _normalize_trace_status(status)
     context = dict(scope_context or {})
     context.setdefault("planner_intent", intent.to_dict())
@@ -1171,6 +1218,7 @@ def build_agent_trace_for_completed_answer(
                 )
             ),
             output=verification.to_dict(),
+            elapsed_ms=verification_elapsed_ms,
         )
     )
     _finalize_agent_trace(

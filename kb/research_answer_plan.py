@@ -23,6 +23,12 @@ class ResearchAnswerPlan:
 
 
 _PLAN_CARDS: dict[str, ResearchAnswerPlan] = {
+    "comprehensive_reading": ResearchAnswerPlan(
+        kind="comprehensive_reading",
+        evidence_need="separate source passages for the research problem, method, quantitative results (including tables/figures/metrics), and any requested limitation or scope boundary.",
+        answer_shape="answer every requested facet in order; report concrete result values when available; give each facet its own source-backed section.",
+        avoid="letting an Introduction passage stand in for Results, reporting that metrics are absent before checking Results/tables/figures, or merging requested facets into a generic summary.",
+    ),
     "paper_summary": ResearchAnswerPlan(
         kind="paper_summary",
         evidence_need="problem statement, core method, main result, and stated limitation or scope.",
@@ -76,6 +82,78 @@ def _normalize_family(value: str) -> str:
     return str(value or "").strip().lower()
 
 
+_RESEARCH_FACET_PATTERNS: dict[str, tuple[str, ...]] = {
+    "problem": (
+        r"\bresearch\s+(?:problem|question|challenge)\b",
+        r"\bwhat\s+problem\b",
+        r"\bproblem\s+(?:statement|setting)\b",
+        r"\bmotivation\b",
+        r"研究问题",
+        r"什么问题",
+        r"问题设定",
+        r"研究动机",
+        r"解决.{0,12}问题",
+    ),
+    "method": (
+        r"\bmethods?\b",
+        r"\bapproach\b",
+        r"\bhow\s+(?:it|the\s+method)\s+works?\b",
+        r"\barchitecture\b",
+        r"\balgorithm\b",
+        r"方法",
+        r"原理",
+        r"算法",
+        r"架构",
+        r"怎么做",
+    ),
+    "results": (
+        r"\bkey\s+results?\b",
+        r"\bmain\s+results?\b",
+        r"\bquantitative\s+(?:results?|metrics?|evaluation)\b",
+        r"\b(?:psnr|ssim|auc|accuracy|f1|bleu|rouge)\b",
+        r"\b\d+(?:\.\d+)?\s*(?:db|%|percent)\b",
+        r"关键结果",
+        r"主要结果",
+        r"量化结果",
+        r"实验结果",
+        r"性能指标",
+        r"结果如何",
+    ),
+    "limitations": (
+        r"\blimitations?\b",
+        r"\bweakness(?:es)?\b",
+        r"\bfailure\s+(?:case|mode)s?\b",
+        r"\bscope\s+boundary\b",
+        r"局限",
+        r"不足",
+        r"失败案例",
+        r"适用边界",
+    ),
+}
+
+
+def infer_research_question_facets(text: str) -> list[str]:
+    value = str(text or "").strip()
+    if not value:
+        return []
+    return [
+        facet
+        for facet, patterns in _RESEARCH_FACET_PATTERNS.items()
+        if _has_any(patterns, value)
+    ]
+
+
+def build_research_facet_queries(prompt: str) -> list[tuple[str, str]]:
+    facets = infer_research_question_facets(prompt)
+    query_by_facet = {
+        "problem": "research problem motivation challenge objective introduction",
+        "method": "method approach architecture algorithm workflow implementation",
+        "results": "results quantitative evaluation table figure metrics PSNR SSIM performance improvement",
+        "limitations": "limitations discussion assumptions failure cases scope future work",
+    }
+    return [(facet, query_by_facet[facet]) for facet in facets]
+
+
 def infer_research_answer_plan(
     *,
     prompt: str,
@@ -96,6 +174,7 @@ def infer_research_answer_plan(
     family = _normalize_family(paper_guide_prompt_family)
     intent = _normalize_family(answer_intent)
     output_mode = _normalize_family(answer_output_mode)
+    requested_facets = infer_research_question_facets(q)
 
     if re.search(r"(?i)\bauthor\s+biograph(?:y|ies)\b|\bauthor\s+profiles?\b", q) or (
         re.search(r"\u4f5c\u8005", q)
@@ -105,6 +184,12 @@ def infer_research_answer_plan(
         )
     ):
         return _PLAN_CARDS["fact_extraction"]
+
+    if family in {"", "overview", "method"} and (
+        len(requested_facets) >= 3
+        or (len(requested_facets) >= 2 and "results" in requested_facets)
+    ):
+        return _PLAN_CARDS["comprehensive_reading"]
 
     if family in {"citation_lookup"}:
         return _PLAN_CARDS["literature_positioning"]

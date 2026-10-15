@@ -1,0 +1,515 @@
+{
+  "schema_version": 1,
+  "report_kind": "multilingual_nli_claim_baseline",
+  "measured_at": "2026-09-02T17:14:06.637438+00:00",
+  "fixture": {
+    "path": "docs/claim_entailment_eval_v1.json",
+    "sha256": "dfac6dfaf51bea2a041883e5f5454cefff60a9ab948e2ef072febcac1b4bedb4"
+  },
+  "registry": {
+    "path": "docs/claim_entailment_nli_candidate_v1.json",
+    "sha256": "c51e6cda75c77ddb8aa222f3e18f97e44f3ceb11fa7be48eb5c18f6841f5f049"
+  },
+  "runtime": {
+    "python": "3.9.7",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "transformers": "4.29.2",
+    "safetensors": "0.4.5",
+    "sentencepiece": "0.1.99"
+  },
+  "candidate": {
+    "model_id": "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli",
+    "revision": "8adb042d524ecd5c26d3e3ba0e3fbcf7e2d0864c",
+    "architecture": "DebertaV2ForSequenceClassification",
+    "tokenizer": "DebertaV2TokenizerFast",
+    "label_order": [
+      "entailment",
+      "neutral",
+      "contradiction"
+    ],
+    "max_length": 512,
+    "truncation": "only_first",
+    "batch_size": 8,
+    "device": "cuda",
+    "precision": "float32",
+    "allow_download": false,
+    "trust_remote_code": false,
+    "safe_weights_required": true,
+    "load_duration_ms": 5516.61,
+    "pair_count": 24,
+    "truncated_pair_count": 0,
+    "max_observed_tokens": 93,
+    "score_duration_ms": 2373.027,
+    "torch_version": "1.12.1+cu116",
+    "product_enabled": false
+  },
+  "result": {
+    "case_count": 24,
+    "metrics": {
+      "three_way_accuracy": 0.791667,
+      "binary_support_accuracy": 0.916667,
+      "entailment_recall": 0.875,
+      "non_entailment_specificity": 0.9375,
+      "contradiction_false_support_rate": 0.125,
+      "lexical_adversary_false_support_rate": 0.0,
+      "insufficient_false_support_rate": 0.0,
+      "cross_lingual_accuracy": 0.916667
+    },
+    "label_confusion": {
+      "entailment": {
+        "entailment": 7,
+        "neutral": 1,
+        "contradiction": 0
+      },
+      "neutral": {
+        "entailment": 0,
+        "neutral": 6,
+        "contradiction": 2
+      },
+      "contradiction": {
+        "entailment": 1,
+        "neutral": 1,
+        "contradiction": 6
+      }
+    },
+    "cases": [
+      {
+        "id": "mamba-entails",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "faithful_paraphrase",
+        "scores": {
+          "entailment": 0.971581,
+          "neutral": 0.026912,
+          "contradiction": 0.001506
+        }
+      },
+      {
+        "id": "mamba-contradicts",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "lexical_negation_reversal",
+        "scores": {
+          "entailment": 0.000156,
+          "neutral": 0.000559,
+          "contradiction": 0.999285
+        }
+      },
+      {
+        "id": "mamba-insufficient",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "unsupported_training_detail",
+        "scores": {
+          "entailment": 0.002656,
+          "neutral": 0.60334,
+          "contradiction": 0.394003
+        }
+      },
+      {
+        "id": "bitnet-entails-zh",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_faithful_paraphrase",
+        "scores": {
+          "entailment": 0.970598,
+          "neutral": 0.028881,
+          "contradiction": 0.000521
+        }
+      },
+      {
+        "id": "bitnet-contradicts-zh",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_value_reversal",
+        "scores": {
+          "entailment": 0.001075,
+          "neutral": 0.004055,
+          "contradiction": 0.99487
+        }
+      },
+      {
+        "id": "bitnet-insufficient-zh",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_unsupported_hardware_metric",
+        "scores": {
+          "entailment": 0.006795,
+          "neutral": 0.968472,
+          "contradiction": 0.024733
+        }
+      },
+      {
+        "id": "sam2-entails",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "faithful_paraphrase",
+        "scores": {
+          "entailment": 0.990338,
+          "neutral": 0.008414,
+          "contradiction": 0.001248
+        }
+      },
+      {
+        "id": "sam2-contradicts",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "lexical_negation_reversal",
+        "scores": {
+          "entailment": 0.000316,
+          "neutral": 0.000763,
+          "contradiction": 0.998921
+        }
+      },
+      {
+        "id": "sam2-insufficient",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "unsupported_memory_capacity",
+        "scores": {
+          "entailment": 0.000479,
+          "neutral": 0.986629,
+          "contradiction": 0.012892
+        }
+      },
+      {
+        "id": "medsam-entails-zh",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_faithful_paraphrase",
+        "scores": {
+          "entailment": 0.994028,
+          "neutral": 0.005842,
+          "contradiction": 0.000129
+        }
+      },
+      {
+        "id": "medsam-contradicts-zh",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_relation_reversal",
+        "scores": {
+          "entailment": 0.000123,
+          "neutral": 0.003316,
+          "contradiction": 0.99656
+        }
+      },
+      {
+        "id": "medsam-insufficient-zh",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_unsupported_architecture_count",
+        "scores": {
+          "entailment": 0.001,
+          "neutral": 0.967551,
+          "contradiction": 0.031449
+        }
+      },
+      {
+        "id": "modernbert-entails",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "faithful_numeric_paraphrase",
+        "scores": {
+          "entailment": 0.992491,
+          "neutral": 0.005929,
+          "contradiction": 0.00158
+        }
+      },
+      {
+        "id": "modernbert-contradicts",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "lexical_role_swap",
+        "scores": {
+          "entailment": 0.453355,
+          "neutral": 0.026599,
+          "contradiction": 0.520046
+        }
+      },
+      {
+        "id": "modernbert-insufficient",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": false,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "unsupported_context_limit",
+        "scores": {
+          "entailment": 0.009882,
+          "neutral": 0.045386,
+          "contradiction": 0.944732
+        }
+      },
+      {
+        "id": "deepseek-entails-zh",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_faithful_paraphrase",
+        "scores": {
+          "entailment": 0.998897,
+          "neutral": 0.000926,
+          "contradiction": 0.000177
+        }
+      },
+      {
+        "id": "deepseek-contradicts-zh",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_scope_reversal",
+        "scores": {
+          "entailment": 0.001122,
+          "neutral": 0.00056,
+          "contradiction": 0.998317
+        }
+      },
+      {
+        "id": "deepseek-insufficient-zh",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_unsupported_dataset_size",
+        "scores": {
+          "entailment": 0.000459,
+          "neutral": 0.655932,
+          "contradiction": 0.343609
+        }
+      },
+      {
+        "id": "gemma3-entails",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "neutral",
+        "expected_supported": true,
+        "observed_supported": false,
+        "correct_three_way": false,
+        "correct_binary_support": false,
+        "locale": "en",
+        "adversary_type": "faithful_numeric_paraphrase",
+        "scores": {
+          "entailment": 0.045312,
+          "neutral": 0.948047,
+          "contradiction": 0.006641
+        }
+      },
+      {
+        "id": "gemma3-contradicts",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": false,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "lexical_role_and_numeric_swap",
+        "scores": {
+          "entailment": 0.08156,
+          "neutral": 0.807646,
+          "contradiction": 0.110795
+        }
+      },
+      {
+        "id": "gemma3-insufficient",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": false,
+        "correct_binary_support": true,
+        "locale": "en",
+        "adversary_type": "unsupported_parameter_count",
+        "scores": {
+          "entailment": 0.002131,
+          "neutral": 0.164277,
+          "contradiction": 0.833591
+        }
+      },
+      {
+        "id": "timesfm-entails-zh",
+        "fixture_label": "entailment",
+        "expected_nli_label": "entailment",
+        "observed_nli_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_faithful_paraphrase",
+        "scores": {
+          "entailment": 0.997329,
+          "neutral": 0.002236,
+          "contradiction": 0.000435
+        }
+      },
+      {
+        "id": "timesfm-contradicts-zh",
+        "fixture_label": "contradiction",
+        "expected_nli_label": "contradiction",
+        "observed_nli_label": "entailment",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct_three_way": false,
+        "correct_binary_support": false,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_role_reversal",
+        "scores": {
+          "entailment": 0.726839,
+          "neutral": 0.03105,
+          "contradiction": 0.242111
+        }
+      },
+      {
+        "id": "timesfm-insufficient-zh",
+        "fixture_label": "insufficient",
+        "expected_nli_label": "neutral",
+        "observed_nli_label": "neutral",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct_three_way": true,
+        "correct_binary_support": true,
+        "locale": "zh",
+        "adversary_type": "cross_lingual_unsupported_quantile_count",
+        "scores": {
+          "entailment": 0.000863,
+          "neutral": 0.971686,
+          "contradiction": 0.027451
+        }
+      }
+    ]
+  },
+  "acceptance": {
+    "thresholds": {
+      "three_way_accuracy_min": 0.75,
+      "entailment_recall_min": 0.75,
+      "non_entailment_specificity_min": 0.8125,
+      "contradiction_false_support_rate_max": 0.125,
+      "lexical_adversary_false_support_rate_max": 0.0,
+      "insufficient_false_support_rate_max": 0.25,
+      "cross_lingual_accuracy_min": 0.7,
+      "truncated_pair_count_max": 0,
+      "all_required": true
+    },
+    "checks": {
+      "three_way_accuracy": true,
+      "entailment_recall": true,
+      "non_entailment_specificity": true,
+      "contradiction_false_support_rate": true,
+      "lexical_adversary_false_support_rate": true,
+      "insufficient_false_support_rate": true,
+      "cross_lingual_accuracy": true,
+      "truncated_pair_count": true
+    },
+    "passes_all": true
+  },
+  "decision": {
+    "status": "eligible_for_shadow_design",
+    "product_enabled": false,
+    "reason": "All pre-registered gates passed; this permits only a shadow arbitration design."
+  }
+}

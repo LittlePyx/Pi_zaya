@@ -47,6 +47,7 @@ from kb.paper_guide_provenance import (
 from kb.retrieval_engine import _deep_read_md_for_context
 from kb.source_blocks import load_source_blocks, normalize_inline_markdown, normalize_match_text
 from kb.store import compute_file_sha1
+from kb.direct_question_evidence import direct_question_evidence_hits
 
 
 def _paper_guide_strip_bound_source_hint(prompt: str, bound_source_path: str) -> str:
@@ -1842,6 +1843,9 @@ def _paper_guide_targeted_source_block_hits(
     q = _paper_guide_strip_bound_source_hint(prompt, bound_source_path)
     if not q:
         return []
+    direct_hits = direct_question_evidence_hits(md_path, q, limit=limit)
+    if direct_hits:
+        return direct_hits
     # Index-first targeted hits: for figure panel requests, use figure_index.json caption clauses
     # rather than scanning generic blocks. This improves stability and panel-specific locate.
     try:
@@ -2058,6 +2062,9 @@ def _paper_guide_targeted_source_block_hits(
         if box_context_match:
             score += 14.0
         heading_low = heading.lower()
+        literal_heading = re.sub(r"\s+", " ", heading.split(" / ")[-1]).strip()
+        if str(block.get("kind") or "") != "heading" and len(literal_heading) >= 6 and re.search(rf"(?<!\w){re.escape(literal_heading)}(?!\w)", q, flags=re.I):
+            score += 24.0
         if (
             not is_citation_lookup
             and not explicit_ref_list_request

@@ -3,6 +3,7 @@ from __future__ import annotations
 from email.message import Message
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 import urllib.error
 
 from fastapi.testclient import TestClient
@@ -43,11 +44,12 @@ def test_app_version_payload_uses_current_build_info(monkeypatch):
 
 def test_onboarding_status_advances_only_after_grounded_answer(monkeypatch, tmp_path: Path):
     settings = SimpleNamespace(db_dir=tmp_path / "db", text_api_key="configured", api_key="configured")
-    store = SimpleNamespace(grounded_answer_count=lambda: 0)
+    store = SimpleNamespace(grounded_answer_count=lambda: 0, count_located_answer_sources=lambda pairs: 0)
     monkeypatch.setattr(app_router, "get_settings", lambda: settings)
     monkeypatch.setattr(app_router, "load_prefs", lambda: {})
     monkeypatch.setattr(app_router, "_list_pdf_paths_fast", lambda path: [path / "paper.pdf"])
-    monkeypatch.setattr(app_router, "load_docs_index", lambda path: {"paper": {"title": "Paper"}})
+    monkeypatch.setattr(app_router, "ready_document_ids", lambda path: ["paper"])
+    monkeypatch.setattr(app_router, "_provider_readiness", lambda s, target: {"status": "ok", "has_api_key": True})
     monkeypatch.setattr(app_router, "get_chat_store", lambda: store)
 
     payload = app_router.get_onboarding_status()
@@ -58,6 +60,10 @@ def test_onboarding_status_advances_only_after_grounded_answer(monkeypatch, tmp_
     assert payload["completed"] is False
 
     store.grounded_answer_count = lambda: 1
+    pending_locate = app_router.get_onboarding_status()
+    assert pending_locate["current_step"] == "ask_question"
+    assert pending_locate["completed"] is False
+    store.count_located_answer_sources = lambda pairs: 1
     completed = app_router.get_onboarding_status()
     assert completed["current_step"] == "completed"
     assert completed["completed"] is True
@@ -68,7 +74,8 @@ def test_onboarding_status_keeps_model_setup_first(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(app_router, "get_settings", lambda: settings)
     monkeypatch.setattr(app_router, "load_prefs", lambda: {})
     monkeypatch.setattr(app_router, "_list_pdf_paths_fast", lambda path: [])
-    monkeypatch.setattr(app_router, "load_docs_index", lambda path: {})
+    monkeypatch.setattr(app_router, "ready_document_ids", lambda path: [])
+    monkeypatch.setattr(app_router, "_provider_readiness", lambda s, target: {"status": "missing", "has_api_key": False})
     monkeypatch.setattr(app_router, "get_chat_store", lambda: SimpleNamespace(grounded_answer_count=lambda: 0))
 
     payload = app_router.get_onboarding_status()
@@ -95,6 +102,22 @@ def test_prerelease_version_ordering():
     assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0-beta.1") is False
     assert app_router._tag_is_newer("v0.1.0-beta.alpha", "0.1.0-beta.1") is True
     assert app_router._tag_is_newer("v0.1.0-beta.1", "0.1.0-beta.alpha") is False
+
+
+def test_fetch_latest_release_includes_published_prereleases(monkeypatch):
+    response = MagicMock()
+    response.read.return_value = (
+        b'[{"tag_name":"v0.1.0-beta.12","draft":false,"prerelease":true},'
+        b'{"tag_name":"v0.1.0-beta.13","draft":false,"prerelease":true},'
+        b'{"tag_name":"v0.1.0-beta.14","draft":true,"prerelease":true}]'
+    )
+    response.__enter__.return_value = response
+    response.__exit__.return_value = False
+    monkeypatch.setattr(app_router.urllib.request, "urlopen", lambda request, timeout: response)
+
+    payload = app_router._fetch_latest_release("LittlePyx/Pi_zaya", 1.0)
+
+    assert payload["tag_name"] == "v0.1.0-beta.13"
 
 
 def test_update_check_reports_newer_latest_release(monkeypatch):

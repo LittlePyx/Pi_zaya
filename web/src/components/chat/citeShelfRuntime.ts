@@ -7,6 +7,7 @@ import {
   normalizeShelfItemKind,
   normalizeShelfNote,
   normalizeShelfTags,
+  shelfItemMetadataFieldRejected,
   shelfItemMetadataQualityReady,
   shelfItemNeedsMetadataRepair,
   shelfItemRepairFingerprint,
@@ -19,6 +20,8 @@ import {
   isSystemBContextSummarySource,
   resolveSystemBArticleSummary,
 } from './systemBArticleSummary'
+import { readerSourcePathsMatch } from './reader/readerLocateGuard'
+import type { ReaderLocateResult } from './reader/readerTypes'
 
 export { looksLowValueShelfSummary }
 export const SHELF_MAX_ITEMS = 120
@@ -474,6 +477,8 @@ export function sameShelfItem(a: CiteShelfItem, b: CiteShelfItem): boolean {
     && a.externalYear === b.externalYear
     && a.externalDoi === b.externalDoi
     && a.externalDoiUrl === b.externalDoiUrl
+    && a.rawReferenceRejectedDoi === b.rawReferenceRejectedDoi
+    && JSON.stringify(a.rawReferenceRejectedDois) === JSON.stringify(b.rawReferenceRejectedDois)
     && a.summaryLine === b.summaryLine
     && a.summarySource === b.summarySource
     && a.summaryProvider === b.summaryProvider
@@ -510,6 +515,45 @@ export function sameShelfItems(a: CiteShelfItem[], b: CiteShelfItem[]): boolean 
     if (!sameShelfItem(a[i], b[i])) return false
   }
   return true
+}
+
+export function mergeShelfItemReaderLocateResult(
+  item: CiteShelfItem,
+  result: ReaderLocateResult | null | undefined,
+): CiteShelfItem {
+  if (!result || !result.ok || String(result.status || '').trim().toLowerCase() === 'failed') return item
+  const feedbackKey = String(result.locateFeedbackKey || '').trim()
+  if (feedbackKey && feedbackKey !== item.key) return item
+  const resultPath = String(result.sourcePath || '').trim()
+  const sourceMatches = [item.sourcePath, item.libraryMatchPath]
+    .some((path) => readerSourcePathsMatch(resultPath, String(path || '').trim()))
+  if (!sourceMatches) return item
+
+  const status = String(result.status || '').trim().toLowerCase()
+  const precise = ['exact', 'block', 'fuzzy'].includes(status)
+  const blockId = precise ? String(result.blockId || '').trim() : ''
+  const anchorId = precise ? String(result.anchorId || '').trim() : ''
+  const headingPath = status === 'source_only'
+    ? ''
+    : String(result.headingPath || item.headingPath || '').trim()
+  const anchorKind = blockId || anchorId
+    ? String(result.anchorKind || item.anchorKind || '').trim()
+    : ''
+  if (
+    String(item.blockId || '').trim() === blockId
+    && String(item.anchorId || '').trim() === anchorId
+    && String(item.anchorKind || '').trim() === anchorKind
+    && String(item.headingPath || '').trim() === headingPath
+  ) {
+    return item
+  }
+  return {
+    ...item,
+    blockId,
+    anchorId,
+    anchorKind,
+    headingPath,
+  }
 }
 
 export function shelfItemsForBackend(items: CiteShelfItem[]): Array<Record<string, unknown>> {
@@ -698,17 +742,46 @@ export function articleSummaryPatchFromMeta(
 export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem): CiteShelfItem {
   const incomingMetadataReady = metadataQualityRecordReady(live.metadataQuality, live.metadataExportAcceptance)
   const currentMetadataReady = metadataQualityRecordReady(item.metadataQuality, item.metadataExportAcceptance)
-  const summary = preferShelfSummaryBundle(item, live)
-  const metadataExportAcceptance = preferMetadataExportAcceptance(
-    item.metadataExportAcceptance,
-    live.metadataExportAcceptance,
+  const repairedFields = new Set(item.metadataChangedFields.map(field => String(field || '').trim().toLowerCase()))
+  const currentHasTrustedRepairBoundary = Boolean(
+    repairedFields.size > 0
+    && ['partial', 'ready', 'repaired'].includes(String(item.metadataRepairStatus || '').trim().toLowerCase()),
   )
-  const metadataQuality = preferMetadataQuality(
-    item.metadataQuality,
-    live.metadataQuality,
-    item.metadataExportAcceptance,
-    live.metadataExportAcceptance,
+  const fieldWasClearedByRepair = (field: string, value: unknown): boolean => (
+    repairedFields.has(field)
+    && (value === null || value === undefined || value === '' || value === 0)
   )
+  const doiWasClearedByRepair = Boolean(
+    (
+      new Set([
+        normalizeDoiLike(item.rawReferenceRejectedDoi),
+        ...item.rawReferenceRejectedDois.map(normalizeDoiLike),
+      ].filter(Boolean)).has(normalizeDoiLike(item.doi || item.doiUrl || live.doi || live.doiUrl))
+    )
+    || (
+      shelfItemMetadataFieldRejected(item, 'doi')
+      && (fieldWasClearedByRepair('doi', item.doi) || fieldWasClearedByRepair('doi_url', item.doiUrl))
+    ),
+  )
+  const summary = fieldWasClearedByRepair('summary_line', item.summaryLine)
+    ? {
+      summaryLine: item.summaryLine,
+      summarySource: item.summarySource,
+      summaryProvider: item.summaryProvider,
+      summaryQuality: item.summaryQuality,
+    }
+    : preferShelfSummaryBundle(item, live)
+  const metadataExportAcceptance = currentHasTrustedRepairBoundary
+    ? item.metadataExportAcceptance
+    : preferMetadataExportAcceptance(item.metadataExportAcceptance, live.metadataExportAcceptance)
+  const metadataQuality = currentHasTrustedRepairBoundary
+    ? item.metadataQuality
+    : preferMetadataQuality(
+      item.metadataQuality,
+      live.metadataQuality,
+      item.metadataExportAcceptance,
+      live.metadataExportAcceptance,
+    )
   const preferIncomingMetadata = incomingMetadataReady && !currentMetadataReady
   const mergedLike = {
     ...item,
@@ -724,18 +797,18 @@ export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem)
     authors: preferRicherField('authors', item.authors, live.authors),
     venue: preferRicherField('venue', item.venue, live.venue),
     year: preferRicherField('year', item.year, live.year),
-    volume: preferExistingText(item.volume, live.volume),
-    issue: preferExistingText(item.issue, live.issue),
-    pages: preferExistingText(item.pages, live.pages),
-    doi: preferExistingText(item.doi, live.doi),
-    doiUrl: preferExistingText(item.doiUrl, live.doiUrl),
-    citationSource: preferExistingText(item.citationSource, live.citationSource),
+    volume: fieldWasClearedByRepair('volume', item.volume) ? item.volume : preferExistingText(item.volume, live.volume),
+    issue: fieldWasClearedByRepair('issue', item.issue) ? item.issue : preferExistingText(item.issue, live.issue),
+    pages: fieldWasClearedByRepair('pages', item.pages) ? item.pages : preferExistingText(item.pages, live.pages),
+    doi: doiWasClearedByRepair ? '' : preferExistingText(item.doi, live.doi),
+    doiUrl: doiWasClearedByRepair ? '' : preferExistingText(item.doiUrl, live.doiUrl),
+    citationSource: doiWasClearedByRepair ? item.citationSource : preferExistingText(item.citationSource, live.citationSource),
     venueKind: preferExistingText(item.venueKind, live.venueKind),
     venueVerifiedBy: preferExistingText(item.venueVerifiedBy, live.venueVerifiedBy),
     openalexVenue: preferExistingText(item.openalexVenue, live.openalexVenue),
-    journalIf: preferExistingText(item.journalIf, live.journalIf),
-    journalQuartile: preferExistingText(item.journalQuartile, live.journalQuartile),
-    journalIfSource: preferExistingText(item.journalIfSource, live.journalIfSource),
+    journalIf: doiWasClearedByRepair ? item.journalIf : preferExistingText(item.journalIf, live.journalIf),
+    journalQuartile: doiWasClearedByRepair ? item.journalQuartile : preferExistingText(item.journalQuartile, live.journalQuartile),
+    journalIfSource: doiWasClearedByRepair ? item.journalIfSource : preferExistingText(item.journalIfSource, live.journalIfSource),
     conferenceTier: preferExistingText(item.conferenceTier, live.conferenceTier),
     conferenceRankSource: preferExistingText(item.conferenceRankSource, live.conferenceRankSource),
     conferenceCcf: preferExistingText(item.conferenceCcf, live.conferenceCcf),
@@ -766,8 +839,8 @@ export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem)
     externalAuthors: preferRicherField('authors', item.externalAuthors, live.externalAuthors),
     externalVenue: preferRicherField('venue', item.externalVenue, live.externalVenue),
     externalYear: preferRicherField('year', item.externalYear, live.externalYear),
-    externalDoi: preferExistingText(item.externalDoi, live.externalDoi),
-    externalDoiUrl: preferExistingText(item.externalDoiUrl, live.externalDoiUrl),
+    externalDoi: doiWasClearedByRepair ? item.externalDoi : preferExistingText(item.externalDoi, live.externalDoi),
+    externalDoiUrl: doiWasClearedByRepair ? item.externalDoiUrl : preferExistingText(item.externalDoiUrl, live.externalDoiUrl),
     answerClaim: preferRicherField('title', item.answerClaim, live.answerClaim),
     headingPath: preferExistingText(item.headingPath, live.headingPath),
     evidenceQuote: preferRicherField('title', item.evidenceQuote, live.evidenceQuote),
@@ -785,7 +858,7 @@ export function mergeShelfItemWithLive(item: CiteShelfItem, live: CiteShelfItem)
     pageStart: preferPositiveNumber(item.pageStart, live.pageStart),
     pageEnd: preferPositiveNumber(item.pageEnd, live.pageEnd),
     score: preferPositiveNumber(item.score, live.score),
-    citationCount: preferPositiveNumber(item.citationCount, live.citationCount),
+    citationCount: doiWasClearedByRepair ? item.citationCount : preferPositiveNumber(item.citationCount, live.citationCount),
     num: preferPositiveNumber(item.num, live.num),
     bibliometricsChecked: Boolean(item.bibliometricsChecked || live.bibliometricsChecked),
   }
@@ -818,16 +891,7 @@ export function snapshotDiffCounts(currentItems: CiteShelfItem[], baselineItems:
 }
 
 export function shelfRepairPayloads(item: CiteShelfItem): Array<Record<string, unknown>> {
-  const basePayload = item as unknown as Record<string, unknown>
-  return [
-    basePayload,
-    {
-      ...basePayload,
-      raw: '',
-      cite_fmt: '',
-      citeFmt: '',
-    },
-  ]
+  return [item as unknown as Record<string, unknown>]
 }
 
 export function shelfRepairMetaFromEntry(entry: ShelfMetadataRepairItem): Record<string, unknown> {

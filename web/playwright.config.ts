@@ -2,7 +2,11 @@ import { defineConfig, devices } from '@playwright/test'
 
 const DEFAULT_PORT = 4173
 const DEFAULT_HOST = '127.0.0.1'
-const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8005'
+// Component-style browser regressions mock their API surface. Point any
+// unhandled request at a closed local port so a developer's running backend can
+// never receive test writes. A true product E2E must opt in via
+// VITE_BACKEND_URL/PW_BASE_URL and run the backend with KB_TEST_ISOLATED=1.
+const DEFAULT_BACKEND_URL = 'http://127.0.0.1:1'
 
 function envTruthy(value: string | undefined) {
   return ['1', 'true', 'yes', 'on'].includes(String(value || '').trim().toLowerCase())

@@ -1,9 +1,10 @@
 export const QUALITY_DIAGNOSTICS_SESSION_KEY = 'kb.internal.showQualityDiagnostics'
 
-const USER_QUALITY_DIAGNOSTICS_ENABLED = import.meta.env.VITE_SHOW_USER_QUALITY_DIAGNOSTICS === '1'
+const VITE_ENV = (typeof import.meta.env === 'object' ? import.meta.env : {}) as Record<string, string | boolean | undefined>
+const USER_QUALITY_DIAGNOSTICS_ENABLED = VITE_ENV.VITE_SHOW_USER_QUALITY_DIAGNOSTICS === '1'
 const INTERNAL_QUALITY_DIAGNOSTICS_BUILD =
-  import.meta.env.VITE_ENABLE_INTERNAL_DEBUG === '1'
-  || import.meta.env.VITE_ENABLE_INTERNAL_ROUTES === '1'
+  VITE_ENV.VITE_ENABLE_INTERNAL_DEBUG === '1'
+  || VITE_ENV.VITE_ENABLE_INTERNAL_ROUTES === '1'
 
 export function qualityDiagnosticsBuildEnabled(): boolean {
   return USER_QUALITY_DIAGNOSTICS_ENABLED || INTERNAL_QUALITY_DIAGNOSTICS_BUILD

@@ -1,10 +1,24 @@
 from __future__ import annotations
 
 import multiprocessing
+import subprocess
+import sys
 import time
 from pathlib import Path
 
 from kb.converter.global_inflight import CrossProcessInflightLimiter
+
+
+def test_coordinator_import_does_not_load_pdf_or_llm_stack():
+    result = subprocess.run([sys.executable, "-c", "import sys; import kb.converter.global_inflight; assert 'kb.converter.pipeline' not in sys.modules; assert 'openai' not in sys.modules"], capture_output=True, text=True, timeout=8)
+    assert result.returncode == 0, result.stderr
+
+
+def test_converter_public_exports_remain_compatible():
+    from kb.converter import PDFConverter, ConvertConfig, LlmConfig, main
+    from kb.converter.pipeline import PDFConverter as DirectConverter
+    assert PDFConverter is DirectConverter
+    assert callable(main) and ConvertConfig is not None and LlmConfig is not None
 
 
 class _FakeClock:

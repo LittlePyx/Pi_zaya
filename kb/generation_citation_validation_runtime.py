@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from kb.inpaper_citation_grounding import parse_ref_num_set
+from kb.citation_marker_context import numeric_marker_is_content
 from kb.paper_guide_contracts import (
     _normalize_paper_guide_support_resolution,
     _normalize_paper_guide_support_slot,
@@ -790,7 +791,7 @@ def _validate_freeform_numeric_citations(
         return text, stats
 
     hit_count = stats["hits_available"]
-    raw_tokens = list(_FREEFORM_NUMERIC_CITE_RE.finditer(text))
+    raw_tokens = [match for match in _FREEFORM_NUMERIC_CITE_RE.finditer(text) if not numeric_marker_is_content(text, match.start())]
     if not raw_tokens:
         return text, stats
 
@@ -829,6 +830,8 @@ def _validate_freeform_numeric_citations(
         return out
 
     def _repl(m: re.Match[str]) -> str:
+        if numeric_marker_is_content(text, m.start()):
+            return m.group(0)
         spec = str(m.group(1) or "").strip()
         nums = _all_nums_in_spec(spec)
         if not nums:

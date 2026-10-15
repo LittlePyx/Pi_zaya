@@ -1008,6 +1008,7 @@ def _merge_same_source_answer_hits(
                     "section_heading_text": str(meta.get("section_heading_text") or "").strip(),
                     "score": float(hit.get("score") or 0.0),
                     "text": body,
+                    "direct_question_evidence": bool(meta.get("direct_question_evidence")),
                 }.items()
                 if value not in ("", 0)
             }

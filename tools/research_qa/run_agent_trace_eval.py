@@ -15,7 +15,10 @@ if str(ROOT) not in sys.path:
 
 from kb.agent.runner import build_agent_trace_for_completed_answer
 from kb.agent.schema import validate_agent_trace
-from kb.agent.source_summary import build_agent_source_summary
+from kb.agent.source_summary import (
+    SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION,
+    build_agent_source_summary,
+)
 from kb.agent.verifier import verify_answer_citations
 from tools.research_qa.validate_research_agent_golden import DEFAULT_DATASET, load_cases, validate_case
 
@@ -429,7 +432,7 @@ def _source_policy_payload_ok(
         schema_version = int(payload.get("schema_version") or 0)
     except Exception:
         schema_version = 0
-    if schema_version != 1:
+    if schema_version < 1 or schema_version > SOURCE_POLICY_PAYLOAD_SCHEMA_VERSION:
         reasons.append("source_policy_payload_schema_version")
     kind = str(payload.get("kind") or "").strip()
     if kind != expected_kind:
@@ -437,7 +440,15 @@ def _source_policy_payload_ok(
     source_blend = str(payload.get("source_blend") or "").strip()
     if expected_blend and source_blend != expected_blend:
         reasons.append("source_policy_payload_source_blend")
-    contract = SOURCE_SUMMARY_POLICY_CONTRACTS.get(expected_kind) or {}
+    contract = dict(SOURCE_SUMMARY_POLICY_CONTRACTS.get(expected_kind) or {})
+    external_source_kind = str(payload.get("external_source_kind") or "").strip().lower()
+    if external_source_kind == "web" and expected_kind in {
+        "local_plus_external",
+        "external_not_kb",
+        "general_api",
+    }:
+        contract["uses_external_model"] = False
+        contract["uses_external_web"] = True
     for key, expected in contract.items():
         actual = payload.get(key)
         if isinstance(expected, bool):

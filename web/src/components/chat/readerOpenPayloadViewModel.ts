@@ -5,6 +5,7 @@ import type {
   ReaderLocateCandidate,
   ReaderOpenPayload,
 } from './reader/readerTypes'
+import type { ReaderDocLocatorResolution } from '../../api/references'
 
 export type ReaderNormalizedLocateCandidate = Required<Pick<
   ReaderLocateCandidate,
@@ -37,6 +38,13 @@ export interface ReaderActiveLocateCandidateViewModel {
   activeHeadingPath: string
   activeHighlightSnippet: string
   expectsEquationBinding: boolean
+}
+
+export interface ReaderValidatedLocateCandidates {
+  alternatives: ReaderNormalizedLocateCandidate[]
+  primaryCandidate: ReaderNormalizedLocateCandidate
+  recovered: boolean
+  validated: boolean
 }
 
 function toTrimmedString(value: unknown): string {
@@ -181,5 +189,55 @@ export function buildReaderActiveLocateCandidate({
     activeHeadingPath,
     activeHighlightSnippet,
     expectsEquationBinding,
+  }
+}
+
+export function applyReaderDocLocatorResolution({
+  alternatives,
+  primaryCandidate,
+  resolution,
+  strictLocate,
+}: {
+  alternatives: ReaderNormalizedLocateCandidate[]
+  primaryCandidate: ReaderNormalizedLocateCandidate
+  resolution: ReaderDocLocatorResolution | null
+  strictLocate: boolean
+}): ReaderValidatedLocateCandidates {
+  if (!resolution) {
+    return { alternatives, primaryCandidate, recovered: false, validated: false }
+  }
+
+  const locator = resolution.ok && resolution.locator && typeof resolution.locator === 'object'
+    ? resolution.locator
+    : null
+  const resolvedPrimary = locator
+    ? normalizeCandidate({
+      ...primaryCandidate,
+      blockId: locator.block_id || primaryCandidate.blockId,
+      anchorId: locator.anchor_id || primaryCandidate.anchorId,
+      anchorKind: locator.anchor_kind || primaryCandidate.anchorKind,
+      headingPath: locator.heading_path || primaryCandidate.headingPath,
+    })
+    : strictLocate
+      ? { ...primaryCandidate, blockId: '', anchorId: '' }
+      : primaryCandidate
+
+  const resolvedAlternatives: ReaderNormalizedLocateCandidate[] = []
+  const seen = new Set<string>()
+  for (const candidate of [resolvedPrimary, ...alternatives.slice(1)]) {
+    if (!hasCandidateSignal(candidate)) continue
+    const key = candidateIdentityKey(candidate)
+    if (seen.has(key)) continue
+    seen.add(key)
+    resolvedAlternatives.push(candidate)
+  }
+  if (resolvedAlternatives.length <= 0 && hasCandidateSignal(resolvedPrimary)) {
+    resolvedAlternatives.push(resolvedPrimary)
+  }
+  return {
+    alternatives: resolvedAlternatives,
+    primaryCandidate: resolvedPrimary,
+    recovered: Boolean(resolution.ok && resolution.changed && locator),
+    validated: true,
   }
 }

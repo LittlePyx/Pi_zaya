@@ -9,6 +9,16 @@ from .types import EvidenceStatus, SourcePolicy
 SourceBlend = Literal["local_grounded", "hybrid_local_external", "external_academic", "general_llm"]
 AnswerMode = Literal["evidence_grounded", "hybrid_local_external", "external_academic_llm", "general_llm"]
 SourceNotice = Literal["none", "hybrid", "external"]
+ExternalSupplementMode = Literal["disabled", "model", "web"]
+
+
+def normalize_external_supplement_mode(value: object) -> ExternalSupplementMode:
+    raw = str(value or "").strip().lower().replace("-", "_")
+    if raw in {"model", "llm", "model_knowledge", "background"}:
+        return "model"
+    if raw in {"web", "web_search", "search", "internet"}:
+        return "web"
+    return "disabled"
 
 
 @dataclass(frozen=True)
@@ -23,6 +33,7 @@ class AnswerSourceDecision:
     retrieval_confidence: str = ""
     reasons: list[str] | None = None
     instruction: str = ""
+    external_supplement_mode: ExternalSupplementMode = "disabled"
 
     def to_evidence_gate(self) -> dict[str, Any]:
         data = asdict(self)
@@ -57,6 +68,7 @@ def decide_answer_source(
     retrieval_reasons: list[str] | None = None,
     academic_question: bool = False,
     local_grounding_requested: bool = False,
+    external_supplement_mode: str = "disabled",
 ) -> AnswerSourceDecision:
     """Choose how to blend local evidence and external model context.
 
@@ -65,6 +77,7 @@ def decide_answer_source(
     """
     hits = max(0, int(hit_count or 0))
     candidates = max(0, int(candidate_hit_count or hits or 0))
+    supplement_mode = normalize_external_supplement_mode(external_supplement_mode)
     confidence_reasons = [str(item or "").strip() for item in list(retrieval_reasons or []) if str(item or "").strip()]
 
     if hits <= 0:
@@ -74,10 +87,11 @@ def decide_answer_source(
             else ["low_retrieval_confidence", "no_usable_local_evidence"]
         )
         confidence = _confidence_level(retrieval_confidence, candidate_hit_count=candidates, fallback="low")
-        if academic_question:
+        if supplement_mode != "disabled":
             reasons = _dedupe_reasons(base_reasons, ["not_based_on_local_knowledge_base"], confidence_reasons)
             if local_grounding_requested and "local_grounding_requested" not in reasons:
                 reasons.append("local_grounding_requested")
+            reasons.append("web_search_requested" if supplement_mode == "web" else "external_model_requested")
             return AnswerSourceDecision(
                 source_blend="external_academic",
                 answer_mode="external_academic_llm",
@@ -89,22 +103,13 @@ def decide_answer_source(
                 retrieval_confidence=confidence,
                 reasons=reasons[:8],
                 instruction=(
-                    "Use an external academic model answer. Clearly state that reliable local indexed evidence was not found; "
+                    "Use external web search only. Clearly state that reliable local indexed evidence was not found; "
+                    "do not use model-only knowledge as a silent fallback."
+                    if supplement_mode == "web"
+                    else "Use external model knowledge only. Clearly state that reliable local indexed evidence was not found; "
                     "do not claim the answer is grounded in the knowledge base."
                 ),
-            )
-        if not local_grounding_requested:
-            return AnswerSourceDecision(
-                source_blend="general_llm",
-                answer_mode="general_llm",
-                source_policy="external_allowed_with_notice",
-                source_notice="none",
-                evidence_status="not_applicable",
-                evidence_hit_count=0,
-                candidate_hit_count=candidates,
-                retrieval_confidence=confidence,
-                reasons=_dedupe_reasons(["general_question_no_indexed_evidence_required"], confidence_reasons),
-                instruction="Answer as a normal LLM response without inventing citations or paper evidence.",
+                external_supplement_mode=supplement_mode,
             )
         return AnswerSourceDecision(
             source_blend="local_grounded",
@@ -117,9 +122,11 @@ def decide_answer_source(
             retrieval_confidence=confidence,
             reasons=_dedupe_reasons(base_reasons, confidence_reasons),
             instruction="Do not infer an answer. Say that indexed evidence is insufficient.",
+            external_supplement_mode="disabled",
         )
 
-    if hits < 2:
+    thin_or_low_confidence = hits < 2 or str(retrieval_confidence or "").strip().lower() in {"low", "none"}
+    if supplement_mode != "disabled" and thin_or_low_confidence:
         return AnswerSourceDecision(
             source_blend="hybrid_local_external",
             answer_mode="hybrid_local_external",
@@ -129,28 +136,21 @@ def decide_answer_source(
             evidence_hit_count=hits,
             candidate_hit_count=candidates,
             retrieval_confidence=_confidence_level(retrieval_confidence, candidate_hit_count=candidates),
-            reasons=_dedupe_reasons(["low_evidence_count", "external_background_allowed"], confidence_reasons),
+            reasons=_dedupe_reasons(
+                [
+                    "low_evidence_count" if hits < 2 else "low_retrieval_confidence",
+                    "web_search_requested" if supplement_mode == "web" else "external_model_requested",
+                ],
+                confidence_reasons,
+            ),
             instruction=(
-                "Use the retrieved snippet as local authority. External academic background may clarify context, "
+                "Use the retrieved snippet as local authority. Web search may fill background gaps, but model-only "
+                "knowledge must not replace a failed web search and paper-specific claims must stay tied to local evidence."
+                if supplement_mode == "web"
+                else "Use the retrieved snippet as local authority. External model knowledge may clarify context, "
                 "but paper-specific claims must stay tied to local evidence."
             ),
-        )
-
-    if academic_question:
-        return AnswerSourceDecision(
-            source_blend="hybrid_local_external",
-            answer_mode="hybrid_local_external",
-            source_policy="local_plus_external_background",
-            source_notice="hybrid",
-            evidence_status="grounded",
-            evidence_hit_count=hits,
-            candidate_hit_count=candidates,
-            retrieval_confidence=_confidence_level(retrieval_confidence, candidate_hit_count=candidates, fallback="high"),
-            reasons=_dedupe_reasons(["external_background_allowed"], confidence_reasons),
-            instruction=(
-                "Prioritize retrieved evidence for paper-specific claims. External background may improve framing, "
-                "but it must not be presented as local knowledge-base evidence."
-            ),
+            external_supplement_mode=supplement_mode,
         )
 
     return AnswerSourceDecision(
@@ -164,6 +164,7 @@ def decide_answer_source(
         retrieval_confidence=_confidence_level(retrieval_confidence, candidate_hit_count=candidates, fallback="high"),
         reasons=_dedupe_reasons(confidence_reasons),
         instruction="Answer only from retrieved evidence and cite supported claims.",
+        external_supplement_mode=supplement_mode,
     )
 
 

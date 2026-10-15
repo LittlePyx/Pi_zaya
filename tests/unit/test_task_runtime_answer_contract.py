@@ -1,6 +1,133 @@
 from __future__ import annotations
 
 from kb import task_runtime
+from kb.answer_contract import _build_answer_contract_system_rules
+
+
+def test_scoped_not_found_answer_resolves_without_deflecting_to_user() -> None:
+    answer = task_runtime._build_scoped_not_found_answer(
+        prompt="这篇论文是否在人体临床样本上完成了验证？",
+        source_name="Single-photon imaging paper",
+        indexed_hit_count=6,
+    )
+
+    assert "未找到能明确回答" in answer
+    assert "已自动核查" in answer
+    assert "检查了 6 个检索命中" in answer
+    assert "建议查阅" not in answer
+    assert "请检查" not in answer
+
+
+def test_direct_evidence_recovery_uses_only_located_source_text() -> None:
+    hits = [
+        {
+            "text": (
+                "## Workflow Step 1 converts the PDF into structured Markdown. "
+                "Step 2 retrieves passages that match the question [9]."
+            ),
+            "meta": {"source_path": "paper.md"},
+        }
+    ]
+    answer = task_runtime._build_direct_evidence_recovery_answer(
+        prompt="文中有哪些关键结论？",
+        answer_hits=hits,
+        citation_plan={"slots": [{"candidate_hits": [1]}]},
+    )
+
+    assert answer.startswith("### 证据")
+    assert "Step 1 converts the PDF" in answer
+    assert "[9]" not in answer
+    assert answer.endswith("[1]")
+
+    trace = task_runtime.build_agent_trace_for_completed_answer(
+        "文中有哪些关键结论？",
+        answer,
+        evidence_hits=hits,
+        answer_mode="evidence_grounded",
+    )
+
+    assert task_runtime._agent_trace_requires_direct_evidence_recovery(trace) is False
+    assert trace["verification"]["evidence_status"] == "grounded"
+
+
+def test_insufficient_evidence_resolution_removes_all_local_evidence_actions() -> None:
+    contracts = task_runtime._strip_paper_guide_evidence_actions(
+        {
+            "primary_evidence": {"sourcePath": "paper.md"},
+            "citation_plan": {"slots": [{"source_path": "paper.md"}]},
+            "support_pack": {"items": [{"source_path": "paper.md"}]},
+            "render_packet": {
+                "answer_markdown": "No explicit evidence found.",
+                "cite_details": [{"num": 1, "sourcePath": "paper.md"}],
+                "reader_open": {"sourcePath": "paper.md"},
+                "locate_target": {"sourcePath": "paper.md"},
+                "primary_evidence": {"sourcePath": "paper.md"},
+            },
+        }
+    )
+
+    assert "primary_evidence" not in contracts
+    assert "citation_plan" not in contracts
+    assert "support_pack" not in contracts
+    packet = contracts["render_packet"]
+    assert packet["cite_details"] == []
+    assert packet["reader_open"] == {}
+    assert packet["locate_target"] == {}
+    assert task_runtime._answer_allows_local_evidence_actions(
+        answer_quality={"minimum_ok": True, "resolution_status": "insufficient_evidence"},
+        answer_mode="evidence_grounded",
+        source_blend="local_grounded",
+    ) is False
+    assert task_runtime._answer_allows_local_evidence_actions(
+        answer_quality={"minimum_ok": True, "has_hits": False},
+        answer_mode="evidence_grounded",
+        source_blend="local_grounded",
+    ) is False
+
+
+def test_multifacet_hit_balancing_keeps_results_out_of_introduction_shadow() -> None:
+    selected = [
+        {
+            "text": "The paper addresses photon-starved imaging and proposes a reconstruction network.",
+            "score": 12.0,
+            "meta": {"block_id": "intro", "heading_path": "Introduction", "source_path": "paper.md"},
+        }
+    ]
+    candidates = [
+        *selected,
+        {
+            "text": "The architecture uses a physics-informed degradation model.",
+            "score": 8.0,
+            "meta": {"block_id": "method", "heading_path": "Methods", "source_path": "paper.md"},
+        },
+        {
+            "text": "Table 1 reports more than 5 dB higher PSNR and 0.2 higher SSIM.",
+            "score": 6.0,
+            "meta": {"block_id": "results", "heading_path": "Results / Table 1", "source_path": "paper.md"},
+        },
+    ]
+
+    balanced = task_runtime._balance_research_facet_hits(
+        selected_hits=selected,
+        candidate_hits=candidates,
+        requested_facets=["problem", "method", "results"],
+        limit=4,
+    )
+
+    assert {str((hit.get("meta") or {}).get("block_id")) for hit in balanced} >= {
+        "intro",
+        "method",
+        "results",
+    }
+    finalized = task_runtime._apply_research_facet_quality(
+        {
+            "answer": "### 研究问题\n问题。\n\n### 核心方法\n方法。",
+            "answer_quality": {"minimum_ok": True},
+        },
+        prompt="说明研究问题、核心方法和关键结果。",
+    )
+    assert finalized["answer_quality"]["minimum_ok"] is False
+    assert finalized["answer_quality"]["missing_facets"] == ["results"]
 
 
 def test_current_paper_retrieval_skips_llm_query_expansion_unless_cross_paper_requested() -> None:
@@ -23,7 +150,7 @@ def test_detect_answer_intent_prefers_explicit_hint():
         "Can you compare method A and method B?",
         answer_mode_hint="writing",
     )
-    assert intent == "writing"
+    assert intent == "reading"
 
 
 def test_provider_failure_grounded_fallback_keeps_refocus_mechanism_terms() -> None:
@@ -46,6 +173,160 @@ def test_provider_failure_grounded_fallback_keeps_refocus_mechanism_terms() -> N
     assert "wave propagation" in out
 
 
+def test_provider_failure_fallback_answers_complete_task_enumeration() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "单个模型处理哪三类任务？",
+        [
+            {
+                "text": (
+                    "We consider three specific tasks: blind Gaussian denoising, "
+                    "single image super-resolution (SISR), and JPEG image deblocking."
+                )
+            }
+        ],
+    )
+    assert "高斯" in out and "超分辨率" in out and "JPEG" in out
+    assert "[1]" in out
+
+
+def test_provider_failure_fallback_requires_complete_architecture_relation() -> None:
+    prompt = "网络保留池化层吗？卷积核大小和深度 d 时的感受野是什么？"
+    complete = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "We set the filter size to 3 × 3 and remove all pooling layers. "
+                    "The receptive field with depth of d should be (2d+1)×(2d+1)."
+                )
+            }
+        ],
+    )
+    assert "池化" in complete and "(2d+1)" in complete and "[1]" in complete
+
+    incomplete = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "We set the filter size to 3 × 3 and remove all pooling layers. "
+                    "The receptive field grows with depth."
+                )
+            }
+        ],
+    )
+    assert "(2d+1)" not in incomplete
+
+
+def test_provider_failure_fallback_requires_same_conditional_expectation() -> None:
+    prompt = "没有干净标签时，为什么能用带噪目标？对条件期望有什么要求？"
+    supported = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "Input-conditioned target distributions may be replaced with arbitrary distributions "
+                    "that have the same conditional expected values. This implies that targets can be "
+                    "corrupted with zero-mean noise without changing what the network learns."
+                )
+            }
+        ],
+    )
+    assert "相同的条件期望" in supported and "干净目标" in supported
+
+    unsupported = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "Input-conditioned target distributions have different conditional expected values "
+                    "and non-zero-mean noise."
+                )
+            }
+        ],
+    )
+    assert "相同的条件期望" not in unsupported
+
+
+def test_provider_failure_fallback_answers_training_pair_requirements() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "只有一张带噪图且没有干净参照时还能训练吗？免除哪两类配对数据？",
+        [
+            {
+                "text": (
+                    "Our N2V scheme does not require noisy image pairs, nor clean target images. "
+                    "It trains directly on the noisy images to be denoised."
+                )
+            }
+        ],
+    )
+    assert "独立带噪图像对" in out and "干净目标" in out and "[1]" in out
+
+
+def test_provider_failure_fallback_answers_both_statistical_assumptions() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "论文对真实信号和噪声分别作了哪两条统计假设？",
+        [
+            {
+                "text": (
+                    "We make two simple statistical assumptions: the signal is not pixel-wise independent, "
+                    "and the noise is conditionally pixel-wise independent given the signal."
+                )
+            }
+        ],
+    )
+    assert "信号不是逐像素独立" in out
+    assert "噪声在像素之间条件独立" in out
+    assert "[1]" in out
+
+
+def test_exact_relation_recovery_requires_complete_dncnn_and_loss_relations() -> None:
+    from kb.source_grounded_fallback import build_exact_relation_grounded_fallback
+
+    dncnn = build_exact_relation_grounded_fallback(
+        "DnCNN \u76f4\u63a5\u9884\u6d4b\u5e72\u51c0\u56fe\u50cf\u5417\uff1f\u7f51\u7edc\u8f93\u51fa\u548c\u53bb\u566a\u56fe\u50cf\u662f\u4ec0\u4e48\u5173\u7cfb\uff1f",
+        [{"text": "The proposed DnCNN is designed to predict the residual image, i.e., the difference between the noisy observation and the latent clean image."}],
+    )
+    assert "\u51cf\u53bb" in dncnn and "[1]" in dncnn
+    assert not build_exact_relation_grounded_fallback(
+        "DnCNN \u76f4\u63a5\u9884\u6d4b\u5e72\u51c0\u56fe\u50cf\u5417\uff1f\u7f51\u7edc\u8f93\u51fa\u548c\u53bb\u566a\u56fe\u50cf\u662f\u4ec0\u4e48\u5173\u7cfb\uff1f",
+        [{"text": "DnCNN predicts an image residual."}],
+    )
+
+    loss = build_exact_relation_grounded_fallback(
+        "\u547d\u9898 1 \u4e2d\uff0c\u81ea\u76d1\u7763\u635f\u5931\u4e0e\u6709\u76d1\u7763\u635f\u5931\u76f8\u5dee\u4ec0\u4e48\u9879\uff1f",
+        [{"text": "The self-supervised loss is the sum of the ordinary supervised loss and the variance of the noise. By minimizing the self-supervised loss, one may find the optimal denoiser."}],
+    )
+    assert "\u566a\u58f0\u65b9\u5dee" in loss and "\u56fa\u5b9a\u5e38\u6570" in loss
+    assert not build_exact_relation_grounded_fallback(
+        "\u547d\u9898 1 \u4e2d\uff0c\u81ea\u76d1\u7763\u635f\u5931\u4e0e\u6709\u76d1\u7763\u635f\u5931\u76f8\u5dee\u4ec0\u4e48\u9879\uff1f",
+        [{"text": "The self-supervised loss includes noise."}],
+    )
+
+
+def test_exact_calibration_recovery_requires_both_named_methods_and_no_negation() -> None:
+    from kb.source_grounded_fallback import build_exact_relation_grounded_fallback
+
+    question = "这个框架只适用于训练神经网络吗？不用干净数据还可以校准哪些传统去噪方法？"
+    complete = (
+        "This allows us to learn denoising functions from single noisy measurements of each object. "
+        "The same approach can also be used to calibrate traditional image denoising methods "
+        "such as median filters and non-local means."
+    )
+    answer = build_exact_relation_grounded_fallback(question, [{"text": complete}])
+    assert "中值滤波" in answer and "非局部均值" in answer and "[1]" in answer
+
+    incomplete_surfaces = (
+        "The same approach can calibrate traditional image denoising methods such as median filters and non-local means.",
+        "The same approach can calibrate traditional image denoising methods.",
+        "The same approach can calibrate traditional image denoising methods such as median filters.",
+        "We learn denoising functions from single noisy measurements. The same approach cannot calibrate traditional image denoising methods such as median filters and non-local means.",
+        "Related work includes median filters and non-local means for image denoising.",
+    )
+    for surface in incomplete_surfaces:
+        assert not build_exact_relation_grounded_fallback(question, [{"text": surface}])
+
+
 def test_detect_answer_intent_by_prompt():
     from kb import task_runtime
 
@@ -54,6 +335,20 @@ def test_detect_answer_intent_by_prompt():
     assert task_runtime._detect_answer_intent("如何设计实验和对照组") == "experiment"
     assert task_runtime._detect_answer_intent("训练报错了，帮我排查") == "troubleshoot"
     assert task_runtime._detect_answer_intent("帮我润色 related work 这一段") == "writing"
+
+
+def test_writing_request_is_redirected_to_traceable_evidence() -> None:
+    rules = _build_answer_contract_system_rules(
+        intent="writing",
+        depth="L2",
+        has_hits=True,
+    )
+    steps = task_runtime._build_default_next_steps(intent="writing", has_hits=True, locale="zh")
+
+    assert "do not draft, rewrite, or polish manuscript prose" in rules
+    assert "directly reusable wording" not in rules
+    assert any("准确的证据位置" in step for step in steps)
+    assert all("重写" not in step and "段间衔接" not in step for step in steps)
 
 
 def test_detect_answer_depth_auto_and_fixed():

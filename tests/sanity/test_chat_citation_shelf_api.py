@@ -119,6 +119,16 @@ def test_chat_citation_shelf_rejects_accidental_empty_overwrite(monkeypatch, tmp
     assert accidental_payload["items"][0]["doi"] == "10.1038/demo"
     assert accidental_payload["revision"] == saved_payload["revision"]
 
+    accidental_open_clear = client.patch(
+        f"/api/chat/citation-shelf?conv_id={conv_b}",
+        json={"items": [], "open": True},
+    )
+    assert accidental_open_clear.status_code == 200
+    accidental_open_payload = accidental_open_clear.json()
+    assert accidental_open_payload["items"][0]["doi"] == "10.1038/demo"
+    assert accidental_open_payload["open"] is True
+    assert accidental_open_payload["revision"] == saved_payload["revision"]
+
     explicit_clear = client.patch(
         f"/api/chat/citation-shelf?conv_id={conv_b}",
         json={"items": [], "open": False, "allow_empty_overwrite": True},

@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_local_semantic_preparation_v1",
+  "status": "frozen_before_product_preparation_implementation",
+  "frozen_at": "2026-09-03",
+  "purpose": "Define an optional, cancellable, resumable, and repairable preparation lifecycle for the accepted E5-small CPU retrieval candidate without exposing an unusable or unsafe Dense mode.",
+  "authorization": {
+    "stage_2_protocol_path": "docs/retrieval_lighter_runtime_stage2_e5_small_protocol_v1.json",
+    "stage_2_protocol_sha256": "84647d00ef87a3aae2f4bce1208491a813c9d08f6e1baff527804a9aa05a013b",
+    "stage_2_report_path": "docs/retrieval_lighter_runtime_stage2_e5_small_v1.json",
+    "stage_2_report_sha256": "9cbccb2413da6ff66725120b529cae0b111adf7fe9947a67cb1e876ee357c73e",
+    "stage_2_result_fingerprint": "18fdba85d35503d2f5f60e38191df412482ec7fc1783341b4354fa0f37848a05",
+    "stage_2_decision": "runtime_candidate_eligible_for_optional_preparation_design"
+  },
+  "candidate": {
+    "candidate_id": "multilingual_e5_small_official_onnx_v1",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "execution_provider": "CPUExecutionProvider",
+    "embedding_dimension": 384,
+    "pooling": "attention_masked_mean_over_last_hidden_state",
+    "normalization": "l2_float32",
+    "query_prefix": "query: ",
+    "passage_prefix": "passage: ",
+    "content_window_tokens": 448,
+    "minimum_content_overlap_tokens": 64,
+    "nominal_content_stride_tokens": 384,
+    "parent_score_collapse": "maximum_window_cosine_then_parent_id",
+    "returned_result_identity": "complete_immutable_parent_chunk"
+  },
+  "artifacts": {
+    "download_requires_explicit_user_action": true,
+    "automatic_query_time_download_allowed": false,
+    "allowed_scheme": "https",
+    "allowed_host": "huggingface.co",
+    "immutable_revision_required_in_url": true,
+    "maximum_total_bytes": 492421554,
+    "shared_model_root": "<data_root>/_local_models/multilingual_e5_small_official_onnx_v1",
+    "partial_download_suffix": ".part",
+    "files": [
+      {
+        "repository_path": "onnx/model.onnx",
+        "local_name": "model.onnx",
+        "bytes": 470268510,
+        "sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665"
+      },
+      {
+        "repository_path": "onnx/config.json",
+        "local_name": "tokenizer/config.json",
+        "bytes": 653,
+        "sha256": "bbb7c1333fc4b3e27fbc9cd5d2070aabcc1d4dfb99917c3633e772f97545a6b6"
+      },
+      {
+        "repository_path": "onnx/sentencepiece.bpe.model",
+        "local_name": "tokenizer/sentencepiece.bpe.model",
+        "bytes": 5069051,
+        "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865"
+      },
+      {
+        "repository_path": "onnx/special_tokens_map.json",
+        "local_name": "tokenizer/special_tokens_map.json",
+        "bytes": 167,
+        "sha256": "d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7"
+      },
+      {
+        "repository_path": "onnx/tokenizer.json",
+        "local_name": "tokenizer/tokenizer.json",
+        "bytes": 17082730,
+        "sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+      },
+      {
+        "repository_path": "onnx/tokenizer_config.json",
+        "local_name": "tokenizer/tokenizer_config.json",
+        "bytes": 443,
+        "sha256": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b"
+      }
+    ],
+    "resume_uses_validated_range_response_only": true,
+    "size_checked_before_hash": true,
+    "sha256_checked_before_atomic_publish": true,
+    "unverified_file_never_becomes_current": true
+  },
+  "runtime_dependencies": {
+    "python_version": "3.10.11",
+    "onnxruntime_version": "1.23.2",
+    "tokenizers_version": "0.21.4",
+    "numpy_version": "2.2.6",
+    "network_install_at_preparation_time_allowed": false,
+    "missing_dependencies_state": "unavailable_in_build",
+    "missing_dependencies_public_action": "update_app",
+    "mode_control_visible_when_missing": false
+  },
+  "library_index": {
+    "root": "<db_dir>/local_semantic_index/e5_small_v1",
+    "shared_with_legacy_qwen_dense_index": false,
+    "schema_version": 1,
+    "vectors_format": "float32_little_endian_l2_row_major",
+    "window_metadata_fields": [
+      "parent_id",
+      "parent_position",
+      "window_ordinal"
+    ],
+    "paper_text_stored_in_index": false,
+    "query_text_stored_in_index": false,
+    "staging_directory_then_atomic_generation_rename": true,
+    "atomic_current_pointer_replace": true,
+    "previous_ready_generation_preserved_until_commit": true,
+    "corpus_change_during_build_publishes_new_index": false,
+    "stale_detection_inputs": [
+      "committed_docs_sha256",
+      "path_independent_corpus_fingerprint",
+      "ordered_parent_chunk_fingerprint",
+      "candidate_identity",
+      "representation_identity"
+    ]
+  },
+  "lifecycle": {
+    "states": [
+      "unavailable_in_build",
+      "not_prepared",
+      "downloading",
+      "verifying",
+      "ready_to_index",
+      "indexing",
+      "cancelling",
+      "interrupted",
+      "stale",
+      "repairable_error",
+      "ready"
+    ],
+    "terminal_usable_state": "ready",
+    "restart_reconciliation": {
+      "downloading": "interrupted",
+      "verifying": "interrupted",
+      "indexing": "interrupted",
+      "cancelling": "interrupted"
+    },
+    "cooperative_cancel_checkpoints": [
+      "each_download_block",
+      "before_each_model_file",
+      "before_each_embedding_batch",
+      "before_generation_commit"
+    ],
+    "cancel_retains_verified_files": true,
+    "cancel_retains_valid_partial_download_for_resume": true,
+    "cancel_preserves_previous_ready_index": true,
+    "single_active_task_per_library": true,
+    "duplicate_prepare_returns_existing_task": true
+  },
+  "public_contract": {
+    "schema_version": 1,
+    "path_or_raw_exception_exposed": false,
+    "fields": [
+      "state",
+      "available",
+      "mode",
+      "reason_id",
+      "action_id",
+      "task_id",
+      "phase",
+      "completed_units",
+      "total_units",
+      "completed_bytes",
+      "total_bytes",
+      "eta_seconds",
+      "document_count",
+      "chunk_count"
+    ],
+    "remediation_by_state": {
+      "unavailable_in_build": "update_app",
+      "not_prepared": "prepare",
+      "downloading": "cancel",
+      "verifying": "cancel",
+      "ready_to_index": "resume",
+      "indexing": "cancel",
+      "cancelling": "wait",
+      "interrupted": "resume",
+      "stale": "rebuild",
+      "repairable_error": "retry",
+      "ready": "none"
+    },
+    "mode_control_visible_only_when_ready": true,
+    "bm25_remains_default": true,
+    "raw_dense_mode_exposed": false,
+    "external_web_or_model_consent_is_separate": true
+  },
+  "promotion_gates": {
+    "contract_validator_and_mutation_tests_pass": true,
+    "artifact_download_resume_cancel_hash_tests_pass": true,
+    "atomic_index_cancel_stale_repair_tests_pass": true,
+    "production_shadow_replay_passes": true,
+    "expanded_judged_failure_slices_pass": true,
+    "portable_windows_runtime_dependency_gate_passes": true,
+    "ordinary_user_surface_allowed_before_all_gates": false
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

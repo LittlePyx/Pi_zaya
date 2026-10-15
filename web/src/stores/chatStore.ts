@@ -4,6 +4,7 @@ import {
   type ChatImageAttachment,
   type ChatUploadItem,
   type Conversation,
+  type ExternalSupplementMode,
   type QueryScope,
   type Message,
   type MessagePage,
@@ -14,7 +15,7 @@ import { api, authFetch, responseError } from '../api/client'
 import { S as zh } from '../i18n/zh'
 import { S as en } from '../i18n/en'
 import { useSettingsStore } from './settingsStore'
-import { basenameFromSourcePath } from '../utils/sourcePath'
+import { basenameFromSourcePath, normalizeSourcePathForMatch } from '../utils/sourcePath'
 import {
   ensureChatStorePerfApi,
   pushConversationOpenPhase,
@@ -1480,8 +1481,10 @@ interface ChatState {
   createPaperGuideConversation: (opts: {
     sourcePath: string
     sourceName?: string
+    sourceReady?: boolean
     title?: string
     projectId?: string | null
+    forceNew?: boolean
   }) => Promise<string>
   renameConversation: (id: string, title: string) => Promise<void>
   deleteConversation: (id: string) => Promise<void>
@@ -1493,7 +1496,7 @@ interface ChatState {
   removePendingImage: (key: string) => void
   dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
-    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean
+    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean; externalSupplementMode?: ExternalSupplementMode; retrievalMode?: 'bm25' | 'hybrid_local'
   }) => Promise<void>
   cancelGeneration: () => void
   clearGeneration: () => void
@@ -1699,6 +1702,37 @@ function findConversationInLists(
     }
   }
   return null
+}
+
+function allSidebarConversations(state: Pick<ChatState, 'rootConversations' | 'projectConversations'>): Conversation[] {
+  return [
+    ...(state.rootConversations || []),
+    ...Object.values(state.projectConversations || {}).flat(),
+  ]
+}
+
+export function findReusablePaperGuideConversation(
+  conversations: Conversation[],
+  sourcePath: string,
+  preferredProjectId?: string | null,
+): Conversation | null {
+  const sourceKey = normalizeSourcePathForMatch(sourcePath)
+  if (!sourceKey) return null
+  const projectKey = String(preferredProjectId || '').trim()
+  const candidates = conversations.filter((conversation) => (
+    conversation.mode === 'paper_guide'
+    && !conversation.archived
+    && normalizeSourcePathForMatch(conversation.bound_source_path) === sourceKey
+  ))
+  candidates.sort((left, right) => {
+    const leftSameProject = String(left.project_id || '').trim() === projectKey ? 1 : 0
+    const rightSameProject = String(right.project_id || '').trim() === projectKey ? 1 : 0
+    if (leftSameProject !== rightSameProject) return rightSameProject - leftSameProject
+    const updatedDelta = finiteNumber(right.updated_at) - finiteNumber(left.updated_at)
+    if (updatedDelta) return updatedDelta
+    return finiteNumber(right.created_at) - finiteNumber(left.created_at)
+  })
+  return candidates[0] || null
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -2102,20 +2136,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (!sourcePath) throw new Error('sourcePath required')
     const locale = useSettingsStore.getState().uiLocale
     const sourceName = String(opts.sourceName || '').trim() || basenameFromSourcePath(sourcePath) || (locale === 'zh' ? zh.default_source_fallback : en.default_source_fallback)
+    const sourceReady = opts.sourceReady ?? true
     const projectId = opts.projectId ?? get().activeProjectId
+    if (!opts.forceNew) {
+      const reusable = findReusablePaperGuideConversation(
+        allSidebarConversations(get()),
+        sourcePath,
+        projectId,
+      )
+      if (reusable) {
+        if (Boolean(reusable.bound_source_ready) !== sourceReady) {
+          try {
+            await chatApi.updateConversationGuide(reusable.id, {
+              mode: 'paper_guide',
+              bound_source_path: sourcePath,
+              bound_source_name: sourceName,
+              bound_source_ready: sourceReady,
+            })
+            await get().loadSidebarData()
+          } catch {
+            // Backward compatible: old backend may not expose /guide.
+          }
+        }
+        await get().selectConversation(reusable.id)
+        return reusable.id
+      }
+    }
     const titleBase = String(opts.title || '').trim() || (locale === 'zh' ? zh.default_guide_title.replace('{name}', sourceName) : en.default_guide_title.replace('{name}', sourceName))
     const { id } = await chatApi.createConversation(titleBase, projectId, {
       mode: 'paper_guide',
       bound_source_path: sourcePath,
       bound_source_name: sourceName,
-      bound_source_ready: true,
+      bound_source_ready: sourceReady,
     })
     try {
       await chatApi.updateConversationGuide(id, {
         mode: 'paper_guide',
         bound_source_path: sourcePath,
         bound_source_name: sourceName,
-        bound_source_ready: true,
+        bound_source_ready: sourceReady,
       })
     } catch {
       // Backward compatible: old backend may not expose /guide.
@@ -2135,7 +2194,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             mode: 'paper_guide',
             bound_source_path: sourcePath,
             bound_source_name: sourceName,
-            bound_source_ready: true,
+            bound_source_ready: sourceReady,
           }
         : state.activeConversation,
     }))
@@ -2169,6 +2228,38 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const beforeDelete = get()
     cancelConversationGeneration(beforeDelete, targetId)
     cancelConversationUploadJobs(beforeDelete, targetId)
+    if (wasActive) {
+      // Clear the deleted conversation before the request yields. Otherwise the
+      // sidebar can select its fallback conversation while the old message list
+      // is still mounted, leaving canceled content under the new conversation.
+      set((cur) => {
+        if (cur.activeConvId !== targetId) return {}
+        const nextCache = { ...(cur.conversationCacheById || {}) }
+        delete nextCache[targetId]
+        return {
+          activeConvId: null,
+          activeConversation: null,
+          rootConversations: cur.rootConversations.filter((conversation) => conversation.id !== targetId),
+          projectConversations: Object.fromEntries(
+            Object.entries(cur.projectConversations).map(([projectId, conversations]) => [
+              projectId,
+              conversations.filter((conversation) => conversation.id !== targetId),
+            ]),
+          ),
+          messages: [],
+          conversationLoading: false,
+          messagesLoadingMore: false,
+          messagesHasMoreBefore: false,
+          oldestLoadedMessageId: null,
+          refs: {},
+          generation: null,
+          sseController: null,
+          uploadItems: [],
+          pendingImages: [],
+          conversationCacheById: nextCache,
+        }
+      })
+    }
     await chatApi.deleteConversation(targetId)
     set((cur) => {
       const nextBindings = { ...(cur.guideBindings || {}) }
@@ -2546,6 +2637,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         max_tokens: opts.maxTokens,
         deep_read: opts.deepRead,
         agent_mode: opts.agentMode || undefined,
+        external_supplement_mode: opts.externalSupplementMode || 'disabled', retrieval_mode: opts.retrievalMode || 'bm25',
         prompt_context: opts.promptContext || undefined,
       })
     } catch (err) {
@@ -2567,6 +2659,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...(opts.promptContext ? { prompt_context: opts.promptContext } : {}),
         ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
         ...(opts.agentMode ? { agent_mode: 'research_agent', agent_mode_requested: true } : {}),
+        ...(opts.agentMode ? { external_supplement_mode: opts.externalSupplementMode || 'disabled' } : {}), retrieval_mode: opts.retrievalMode || 'bm25',
       },
     }
     const startFailureAssistantMessage: Message | null = generationStarted

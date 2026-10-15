@@ -7,8 +7,14 @@ import json
 import math
 import re
 from pathlib import Path
+from kb import citation_shelf_concurrency as shelf_concurrency
 
 from kb.path_safety import clean_file_source_path_input
+from kb.research_note_evidence import (
+    migrate_research_note_source_state_paths,
+    research_note_source_state_dependency_count,
+    research_note_source_state_matches_paths,
+)
 
 DEFAULT_ACTIVE_CONVERSATION_LIMIT = 400
 MAX_CITATION_SHELF_ITEMS = 120
@@ -831,6 +837,7 @@ class ChatStore:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            shelf_concurrency.initialize(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -1485,6 +1492,7 @@ class ChatStore:
             conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
             self._archive_excess_conversations(conn, project_id=None)
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'project' AND scope_id = ?", (project_id,))
+            conn.execute("DELETE FROM citation_shelf_write_receipts WHERE scope = 'project' AND scope_id = ?", (project_id,))
             conn.execute("DELETE FROM research_briefs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM research_evidence_matrices WHERE project_id = ?", (project_id,))
             cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -1648,6 +1656,33 @@ class ChatStore:
             ).fetchone()
         return _research_note_record(row) if row else None
 
+    def list_research_notes_for_source_paths(
+        self,
+        source_paths: list[str] | tuple[str, ...] | None,
+        *,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Return note summaries that may reference recovered library sources."""
+        lim = max(1, min(500, int(limit or 500)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_id, source_conv_id, title,
+                       '' AS content_markdown, source_state_json, tags_json,
+                       pinned, archived, revision, created_at, updated_at
+                FROM research_notes
+                ORDER BY updated_at DESC, created_at DESC
+                """
+            ).fetchall()
+        records: list[dict] = []
+        for row in rows:
+            record = _research_note_record(row, include_content=False)
+            if research_note_source_state_matches_paths(record.get("source_state"), source_paths):
+                records.append(record)
+                if len(records) >= lim:
+                    break
+        return records
+
     def update_research_note(
         self,
         note_id: str,
@@ -1749,6 +1784,152 @@ class ChatStore:
                 }
             )
         return _research_note_record(current), False
+
+    def update_research_note_evidence_state(
+        self,
+        note_id: str,
+        *,
+        expected_revision: int,
+        source_state: dict,
+    ) -> tuple[dict | None, bool]:
+        """CAS-update system-maintained evidence without changing user edit time."""
+        nid = str(note_id or "").strip()
+        if not nid:
+            return None, False
+        clean_source_state = _sanitize_json_state_dict(source_state)
+        source_state_json = self._research_brief_json_text(clean_source_state, fallback={})
+        if len(source_state_json) > MAX_RESEARCH_NOTE_SOURCE_STATE_LEN:
+            return None, False
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            row = conn.execute(
+                "SELECT * FROM research_notes WHERE id = ?",
+                (nid,),
+            ).fetchone()
+            if not row:
+                return None, False
+            current = dict(row)
+            current_revision = max(1, int(current.get("revision") or 1))
+            if int(expected_revision) != current_revision:
+                return _research_note_record(current), True
+            if str(current.get("source_state_json") or "{}") == source_state_json:
+                return _research_note_record(current), False
+            next_revision = current_revision + 1
+            conn.execute(
+                "UPDATE research_notes SET source_state_json = ?, revision = ? WHERE id = ?",
+                (source_state_json, next_revision, nid),
+            )
+            current["source_state_json"] = source_state_json
+            current["revision"] = next_revision
+        return _research_note_record(current), False
+
+    def migrate_research_note_source_paths(
+        self,
+        *,
+        exact_path_migrations: dict[str, str] | None = None,
+        prefix_path_migrations: list[tuple[str, str]] | tuple[tuple[str, str], ...] | None = None,
+        reason: str = "library_source_renamed",
+        migrated_at: float | None = None,
+        update_source_name: bool = True,
+    ) -> dict:
+        """Atomically migrate library paths in all research-note evidence links.
+
+        This is system maintenance: revisions advance for conflict safety while
+        user-authored content and ``updated_at`` remain untouched.
+        """
+        timestamp = float(migrated_at if migrated_at is not None else time.time())
+        updates: list[tuple[str, int, str, int]] = []
+        migrated_links = 0
+        with self._connect() as conn:
+            self._begin_immediate(conn)
+            rows = conn.execute(
+                "SELECT id, source_state_json, revision FROM research_notes ORDER BY created_at ASC"
+            ).fetchall()
+            for row in rows:
+                current = dict(row)
+                source_state = _research_brief_json(current.get("source_state_json") or "{}", default={})
+                next_state, link_count = migrate_research_note_source_state_paths(
+                    source_state,
+                    exact_path_migrations=exact_path_migrations,
+                    prefix_path_migrations=prefix_path_migrations,
+                    reason=reason,
+                    migrated_at=timestamp,
+                    update_source_name=update_source_name,
+                )
+                if link_count <= 0:
+                    continue
+                clean_source_state = _sanitize_json_state_dict(next_state)
+                source_state_json = self._research_brief_json_text(clean_source_state, fallback={})
+                if len(source_state_json) > MAX_RESEARCH_NOTE_SOURCE_STATE_LEN:
+                    raise ValueError("research note source migration exceeds source state limit")
+                current_revision = max(1, int(current.get("revision") or 1))
+                updates.append((source_state_json, current_revision + 1, str(current.get("id") or ""), link_count))
+                migrated_links += link_count
+            for source_state_json, next_revision, note_id, _link_count in updates:
+                conn.execute(
+                    "UPDATE research_notes SET source_state_json = ?, revision = ? WHERE id = ?",
+                    (source_state_json, next_revision, note_id),
+                )
+        return {
+            "ok": True,
+            "notes_scanned": len(rows),
+            "notes_updated": len(updates),
+            "links_updated": migrated_links,
+            "note_ids": [note_id for _json, _revision, note_id, _count in updates],
+        }
+
+    def summarize_research_note_source_dependencies(
+        self,
+        *,
+        exact_source_paths: list[str] | tuple[str, ...] | None = None,
+        prefix_source_paths: list[str] | tuple[str, ...] | None = None,
+        limit: int = 100,
+    ) -> dict:
+        """Describe notes whose traceable source links depend on a library file."""
+        lim = max(1, min(500, int(limit or 100)))
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, project_id, title, source_state_json, archived
+                FROM research_notes
+                ORDER BY archived ASC, updated_at DESC, created_at DESC
+                """
+            ).fetchall()
+        notes: list[dict] = []
+        link_count = 0
+        active_count = 0
+        archived_count = 0
+        for row in rows:
+            current = dict(row)
+            source_state = _research_brief_json(current.get("source_state_json") or "{}", default={})
+            dependent_links = research_note_source_state_dependency_count(
+                source_state,
+                exact_source_paths=exact_source_paths,
+                prefix_source_paths=prefix_source_paths,
+            )
+            if dependent_links <= 0:
+                continue
+            archived = bool(current.get("archived"))
+            link_count += dependent_links
+            active_count += int(not archived)
+            archived_count += int(archived)
+            if len(notes) < lim:
+                notes.append({
+                    "id": str(current.get("id") or ""),
+                    "project_id": str(current.get("project_id") or "") or None,
+                    "title": str(current.get("title") or ""),
+                    "archived": archived,
+                    "link_count": dependent_links,
+                })
+        return {
+            "ok": True,
+            "note_count": active_count + archived_count,
+            "active_note_count": active_count,
+            "archived_note_count": archived_count,
+            "link_count": link_count,
+            "notes": notes,
+            "truncated": active_count + archived_count > len(notes),
+        }
 
     def delete_research_note(self, note_id: str) -> bool:
         nid = str(note_id or "").strip()
@@ -3073,6 +3254,7 @@ class ChatStore:
             conn.execute("DELETE FROM conversation_research_states WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM conversation_sources WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'conversation' AND scope_id = ?", (conv_id,))
+            conn.execute("DELETE FROM citation_shelf_write_receipts WHERE scope = 'conversation' AND scope_id = ?", (conv_id,))
             conn.execute("DELETE FROM message_refs WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM messages WHERE conv_id = ?", (conv_id,))
             cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
@@ -3443,12 +3625,13 @@ class ChatStore:
                 """,
                 (scope_norm, scope_id),
             ).fetchone()
-        return self._hydrate_citation_shelf_row(
-            row,
-            scope=scope_norm,
-            scope_id=scope_id,
-            project_id=resolved_project_id,
-        )
+            guarded = bool(conn.execute(
+                "SELECT 1 FROM citation_shelf_write_receipts WHERE scope=? AND scope_id=? AND mutation_id=''",
+                (scope_norm, scope_id),
+            ).fetchone())
+        return {**self._hydrate_citation_shelf_row(
+            row, scope=scope_norm, scope_id=scope_id, project_id=resolved_project_id,
+        ), "concurrency_guarded": guarded}
 
     def save_citation_shelf(
         self,
@@ -3459,7 +3642,12 @@ class ChatStore:
         project_id: str | None = None,
         scope: str = "project",
         allow_empty_overwrite: bool = False,
+        expected_revision: int | None = None,
+        mutation_id: str = "",
+        mutations: list[dict] | None = None,
     ) -> dict | None:
+        if mutations and (expected_revision is None or not mutation_id):
+            raise shelf_concurrency.CitationShelfConflict("Operations require a revision and mutation ID")
         normalized_items = _normalize_citation_shelf_items(items)
         try:
             items_json = json.dumps(normalized_items, ensure_ascii=False, default=str)
@@ -3487,7 +3675,24 @@ class ChatStore:
                 """,
                 (scope_norm, scope_id),
             ).fetchone()
-            if row and not normalized_items and not open_int and not allow_empty_overwrite:
+            pending_ops = shelf_concurrency.pending_operations(conn, scope_norm, scope_id, mutations) if mutations else []
+            duplicate = bool(mutations and not pending_ops) or shelf_concurrency.check_write(
+                conn, scope_norm, scope_id, int(row["revision"] or 0) if row else 0,
+                expected_revision, "" if mutations else mutation_id,
+            )
+            if duplicate:
+                current = self._hydrate_citation_shelf_row(
+                    row, scope=scope_norm, scope_id=scope_id, project_id=resolved_project_id,
+                )
+                return {**current, "acknowledged_mutation_id": mutation_id, "concurrency_guarded": True}
+            if mutations:
+                normalized_items, opened = shelf_concurrency.apply_operations(
+                    json.loads(row["items_json"] or "[]") if row else [], bool(row["open"]) if row else False,
+                    pending_ops, _normalize_citation_shelf_items,
+                )
+                items_json = json.dumps(normalized_items, ensure_ascii=False, default=str)
+                open_int = int(opened)
+            if row and not normalized_items and not allow_empty_overwrite:
                 try:
                     existing_items = json.loads(row["items_json"] or "[]")
                 except Exception:
@@ -3499,13 +3704,19 @@ class ChatStore:
                         scope_id=scope_id,
                         project_id=resolved_project_id,
                     )
+            if expected_revision is not None:
+                shelf_concurrency.acknowledge(conn, scope_norm, scope_id, mutation_id)
+                for operation in pending_ops:
+                    shelf_concurrency.acknowledge(conn, scope_norm, scope_id, operation["id"])
             if row and str(row["items_json"] or "[]") == items_json and int(row["open"] or 0) == open_int:
-                return self._hydrate_citation_shelf_row(
+                current = self._hydrate_citation_shelf_row(
                     row,
                     scope=scope_norm,
                     scope_id=scope_id,
                     project_id=resolved_project_id,
                 )
+                return {**current, "concurrency_guarded": expected_revision is not None,
+                        **({"acknowledged_mutation_id": mutation_id} if mutation_id else {})}
             created_at = float(row["created_at"] or now) if row else now
             revision = int(row["revision"] or 0) + 1 if row else 1
             conn.execute(
@@ -3527,6 +3738,8 @@ class ChatStore:
             "scope_id": scope_id,
             "project_id": resolved_project_id,
             "items": normalized_items,
+            **({"acknowledged_mutation_id": mutation_id} if mutation_id else {}),
+            "concurrency_guarded": expected_revision is not None,
             "open": bool(open_int),
             "revision": revision,
             "created_at": created_at,
@@ -3651,6 +3864,7 @@ class ChatStore:
             if resolved is None:
                 return None
             scope_norm, scope_id, resolved_project_id = resolved
+            shelf_concurrency.check_write(conn, scope_norm, scope_id, 0, None)
             conn.execute(
                 "DELETE FROM citation_shelves WHERE scope = ? AND scope_id = ?",
                 (scope_norm, scope_id),
@@ -3825,6 +4039,43 @@ class ChatStore:
                 """
             ).fetchone()
         return int(row["answer_count"] or 0) if row else 0
+
+    def count_located_answer_sources(self, located_sources: list[tuple[str, str]]) -> int:
+        from kb.retrieval_source_scope import source_path_key
+
+        count = 0
+        with self._connect() as conn:
+            for cid, source in set(located_sources):
+                rows = conn.execute(
+                    """
+                    SELECT refs.hits_json FROM message_refs AS refs
+                    WHERE refs.conv_id = ? AND EXISTS (
+                        SELECT 1 FROM messages AS answer
+                        WHERE answer.conv_id = refs.conv_id AND answer.role = 'assistant'
+                          AND length(trim(answer.content)) > 0
+                          AND refs.user_msg_id = (
+                            SELECT MAX(question.id) FROM messages AS question
+                            WHERE question.conv_id = answer.conv_id AND question.role = 'user'
+                              AND question.id < answer.id
+                          )
+                    )
+                    """, (cid,),
+                ).fetchall()
+                found = False
+                for row in rows:
+                    try:
+                        hits = json.loads(row["hits_json"] or "[]")
+                    except (ValueError, TypeError):
+                        continue
+                    for hit in hits if isinstance(hits, list) else ():
+                        meta = hit.get("meta") if isinstance(hit, dict) else None
+                        if isinstance(meta, dict) and meta.get("evidence_ready") is not False and source_path_key(meta.get("source_path")) == source_path_key(source):
+                            found = True
+                            break
+                    if found:
+                        break
+                count += int(found)
+        return count
 
     def update_message_content(self, message_id: int, content: str, *, touch_conversation: bool = False) -> bool:
         mid = int(message_id or 0)

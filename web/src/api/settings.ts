@@ -10,6 +10,14 @@ export interface ConnectionProviderStatus {
 export interface SettingsConnectionStatus {
   text: ConnectionProviderStatus
   vision: ConnectionProviderStatus
+  web_search?: {
+    available: boolean
+    enabled: boolean
+    has_api_key: boolean
+    base_url: string
+    model: string
+    reason?: 'ready' | 'disabled' | 'missing_api_key' | 'missing_model' | string
+  }
   auto_route?: boolean
 }
 
@@ -145,6 +153,10 @@ export interface SettingsPatch {
   visionApiKey?: string
   visionBaseUrl?: string
   visionModel?: string
+  webSearchEnabled?: boolean
+  webSearchApiKey?: string
+  webSearchBaseUrl?: string
+  webSearchModel?: string
   autoBackupEnabled?: boolean
   qualityDataSharingEnabled?: boolean
 }
@@ -237,6 +249,10 @@ function toServerPatch(patch: SettingsPatch) {
   if (patch.visionApiKey !== undefined) out.vision_api_key = patch.visionApiKey
   if (patch.visionBaseUrl !== undefined) out.vision_base_url = patch.visionBaseUrl
   if (patch.visionModel !== undefined) out.vision_model = patch.visionModel
+  if (patch.webSearchEnabled !== undefined) out.web_search_enabled = patch.webSearchEnabled
+  if (patch.webSearchApiKey !== undefined) out.web_search_api_key = patch.webSearchApiKey
+  if (patch.webSearchBaseUrl !== undefined) out.web_search_base_url = patch.webSearchBaseUrl
+  if (patch.webSearchModel !== undefined) out.web_search_model = patch.webSearchModel
   if (patch.autoBackupEnabled !== undefined) out.auto_backup_enabled = patch.autoBackupEnabled
   if (patch.qualityDataSharingEnabled !== undefined) out.quality_data_sharing_enabled = patch.qualityDataSharingEnabled
   return out

@@ -1,0 +1,2152 @@
+{
+  "schema_version": 2,
+  "id": "research_qa_library_development_v1_chunk_qrels",
+  "curation_status": "frozen_historical_contract_projection_for_development_only",
+  "description": "Development-only chunk qrels projected from established source-grounded library QA contracts; background library papers are retained as hard negatives. This fixture may be used for fusion tuning and must not be reported as unseen acceptance.",
+  "source_fixture": {
+    "path": "web/src/testing/researchQaData.json",
+    "sha256": "7cb4373e65791544497de8fc9ffa24935a97b9b25d63899777a6b6039bcc7dc5",
+    "sha256_newlines": "normalized_lf",
+    "benchmark_id": ""
+  },
+  "label_policy": {
+    "version": 1,
+    "unit": "indexed_chunk",
+    "candidate_boundary": "registered document; registered source page when available",
+    "selection": "greedy evidence-term coverage independent of retriever ranking; at most three chunks per claim-evidence contract",
+    "grades": {
+      "3": "direct high-coverage evidence",
+      "2": "direct partial evidence"
+    }
+  },
+  "ks": [
+    1,
+    3,
+    5,
+    10,
+    20
+  ],
+  "corpus": {
+    "document_count": 31,
+    "chunk_count": 2251,
+    "fingerprint_algorithm": "sha256(logical_doc_id,chunk_id,text_sha256,page_span)",
+    "fingerprint": "20ad35d505d2936dbd80e90df6199e4b3d51fdf4cf8872a36c9211c5d6c99d9f",
+    "documents": [
+      {
+        "doc_id": "3d-sp-video",
+        "index_doc_id": "a34b2661f87a68d2",
+        "paper_sha256": "",
+        "chunk_count": 31
+      },
+      {
+        "doc_id": "cassi",
+        "index_doc_id": "50f9c165105534b5",
+        "paper_sha256": "",
+        "chunk_count": 57
+      },
+      {
+        "doc_id": "denoising-review",
+        "index_doc_id": "bc9b37581c93be49",
+        "paper_sha256": "",
+        "chunk_count": 61
+      },
+      {
+        "doc_id": "dl-spi-review",
+        "index_doc_id": "5527e0d96aeb608a",
+        "paper_sha256": "",
+        "chunk_count": 82
+      },
+      {
+        "doc_id": "fdm-metamaterials",
+        "index_doc_id": "6b1a3c7c4aa0aaa9",
+        "paper_sha256": "",
+        "chunk_count": 32
+      },
+      {
+        "doc_id": "foveated-spi",
+        "index_doc_id": "aa60f6f8d0cbcaa6",
+        "paper_sha256": "",
+        "chunk_count": 55
+      },
+      {
+        "doc_id": "hsi-fsi",
+        "index_doc_id": "8a29ea79c6633439",
+        "paper_sha256": "",
+        "chunk_count": 149
+      },
+      {
+        "doc_id": "iism",
+        "index_doc_id": "3583e628c41883ee",
+        "paper_sha256": "",
+        "chunk_count": 54
+      },
+      {
+        "doc_id": "perovskite-laser",
+        "index_doc_id": "5b48741ab08dbad8",
+        "paper_sha256": "",
+        "chunk_count": 57
+      },
+      {
+        "doc_id": "pidl-single-photon",
+        "index_doc_id": "f986970932c37441",
+        "paper_sha256": "",
+        "chunk_count": 105
+      },
+      {
+        "doc_id": "piln",
+        "index_doc_id": "aad10fa9972c8a2c",
+        "paper_sha256": "",
+        "chunk_count": 27
+      },
+      {
+        "doc_id": "qclfm",
+        "index_doc_id": "831f8c559642fe39",
+        "paper_sha256": "",
+        "chunk_count": 45
+      },
+      {
+        "doc_id": "rt-spi-supp",
+        "index_doc_id": "3c702d1a300625d2",
+        "paper_sha256": "",
+        "chunk_count": 4
+      },
+      {
+        "doc_id": "s2ism",
+        "index_doc_id": "b10afc967fb55e1b",
+        "paper_sha256": "",
+        "chunk_count": 71
+      },
+      {
+        "doc_id": "scigs",
+        "index_doc_id": "32490abae33df8c9",
+        "paper_sha256": "",
+        "chunk_count": 104
+      },
+      {
+        "doc_id": "scinerf",
+        "index_doc_id": "7f6b9404bccea454",
+        "paper_sha256": "",
+        "chunk_count": 104
+      },
+      {
+        "doc_id": "seq-cs",
+        "index_doc_id": "6117def890d573f9",
+        "paper_sha256": "",
+        "chunk_count": 25
+      },
+      {
+        "doc_id": "simple-baselines",
+        "index_doc_id": "fae405527c4ab80e",
+        "paper_sha256": "",
+        "chunk_count": 142
+      },
+      {
+        "doc_id": "spd-review",
+        "index_doc_id": "ba919188ff49c763",
+        "paper_sha256": "",
+        "chunk_count": 110
+      },
+      {
+        "doc_id": "sph-biological",
+        "index_doc_id": "11b5152564f8b679",
+        "paper_sha256": "",
+        "chunk_count": 73
+      },
+      {
+        "doc_id": "spi-prospects",
+        "index_doc_id": "7846a2dbb8e31f4a",
+        "paper_sha256": "",
+        "chunk_count": 37
+      },
+      {
+        "doc_id": "visual-perception",
+        "index_doc_id": "7c042cc84da037c6",
+        "paper_sha256": "",
+        "chunk_count": 45
+      },
+      {
+        "doc_id": "background:12d3dafe5e149b77",
+        "index_doc_id": "12d3dafe5e149b77",
+        "paper_sha256": "",
+        "chunk_count": 92,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:2a53d946acae115e",
+        "index_doc_id": "2a53d946acae115e",
+        "paper_sha256": "",
+        "chunk_count": 53,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:5de6843c26123e60",
+        "index_doc_id": "5de6843c26123e60",
+        "paper_sha256": "",
+        "chunk_count": 144,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:6e125bbe01292572",
+        "index_doc_id": "6e125bbe01292572",
+        "paper_sha256": "",
+        "chunk_count": 44,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:76f57e5ce4ad3e06",
+        "index_doc_id": "76f57e5ce4ad3e06",
+        "paper_sha256": "",
+        "chunk_count": 103,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:a678b5bb61394454",
+        "index_doc_id": "a678b5bb61394454",
+        "paper_sha256": "",
+        "chunk_count": 115,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:a91f5c2895199749",
+        "index_doc_id": "a91f5c2895199749",
+        "paper_sha256": "",
+        "chunk_count": 100,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:debadd6aaf815c40",
+        "index_doc_id": "debadd6aaf815c40",
+        "paper_sha256": "",
+        "chunk_count": 87,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:f754fd0b565d54d9",
+        "index_doc_id": "f754fd0b565d54d9",
+        "paper_sha256": "",
+        "chunk_count": 43,
+        "role": "background_negative"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "single-photon-pidl",
+      "query": "physics-informed deep learning 在单光子成像里到底帮了什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "",
+      "scope_doc_ids": [
+        "pidl-single-photon",
+        "spd-review"
+      ],
+      "contracts": [
+        {
+          "id": "pidl-physical-noise-role",
+          "doc_id": "pidl-single-photon",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "f986970932c37441:9"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "f986970932c37441:9",
+          "grade": 3,
+          "doc_id": "pidl-single-photon",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "pidl-physical-noise-role"
+          ],
+          "matched_evidence_terms": [
+            "physical noise model",
+            "SPAD"
+          ],
+          "text_sha256": "09d18442cf686e103fd56f41dc6791cf94d0f02c067529d7f0552588e43009e3"
+        }
+      ],
+      "relevance": {
+        "f986970932c37441:9": 3
+      }
+    },
+    {
+      "id": "three-d-video-real-time-mechanism",
+      "query": "这篇 3D single-pixel video 为什么能对动态场景做实时三维重建？它用了几个探测器，速度是多少？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "3d-sp-video"
+      ],
+      "contracts": [
+        {
+          "id": "three-d-video-abstract-result",
+          "doc_id": "3d-sp-video",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "a34b2661f87a68d2:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a34b2661f87a68d2:3",
+          "grade": 3,
+          "doc_id": "3d-sp-video",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "three-d-video-abstract-result"
+          ],
+          "matched_evidence_terms": [
+            "four spatially-separated",
+            "8 frames per second",
+            "64 \\times 64"
+          ],
+          "text_sha256": "a1a16d9a754af7a785a326fa4d1269a5e7e970502dd2f740d53634fdee498faf"
+        }
+      ],
+      "relevance": {
+        "a34b2661f87a68d2:3": 3
+      }
+    },
+    {
+      "id": "sph-throughput-mechanism",
+      "query": "这篇生物组织单像素压缩全息是怎么提高吞吐量的？为什么不再主动做相移？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "sph-biological"
+      ],
+      "contracts": [
+        {
+          "id": "sph-temporal-phase-stepping",
+          "doc_id": "sph-biological",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "11b5152564f8b679:7"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "11b5152564f8b679:7",
+          "grade": 3,
+          "doc_id": "sph-biological",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "sph-temporal-phase-stepping"
+          ],
+          "matched_evidence_terms": [
+            "beat frequency",
+            "phase stepping naturally in time",
+            "heterodyne holography"
+          ],
+          "text_sha256": "a38a632c7c0b94558ad3dc0e7df395ed2a1a3a749cbdb7dcf781feb27b0f3e6a"
+        }
+      ],
+      "relevance": {
+        "11b5152564f8b679:7": 3
+      }
+    },
+    {
+      "id": "spi-prospects-when-use-single-pixel",
+      "query": "什么场景真的值得用单像素相机，而不是普通面阵相机？这篇综述给了哪些代表性应用？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "spi-prospects"
+      ],
+      "contracts": [
+        {
+          "id": "spi-prospects-use-cases",
+          "doc_id": "spi-prospects",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "7846a2dbb8e31f4a:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7846a2dbb8e31f4a:1",
+          "grade": 3,
+          "doc_id": "spi-prospects",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "spi-prospects-use-cases"
+          ],
+          "matched_evidence_terms": [
+            "wavelengths outside the reach of FPA technology",
+            "high frame rates",
+            "three dimensions"
+          ],
+          "text_sha256": "65ee4ac3526e0c0008f505f48206f24901b89aed1be40ebdca52840f609c4975"
+        }
+      ],
+      "relevance": {
+        "7846a2dbb8e31f4a:1": 3
+      }
+    },
+    {
+      "id": "s2ism-three-way-tradeoff",
+      "query": "s2ISM 具体打破了什么三方权衡？为什么普通 ISM 在厚样本里会失败？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "s2ism"
+      ],
+      "contracts": [
+        {
+          "id": "s2ism-abstract-tradeoff",
+          "doc_id": "s2ism",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "b10afc967fb55e1b:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "b10afc967fb55e1b:1",
+          "grade": 3,
+          "doc_id": "s2ism",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "s2ism-abstract-tradeoff"
+          ],
+          "matched_evidence_terms": [
+            "trade-off between spatial resolution and signal-to-noise ratio",
+            "do not provide optical sectioning",
+            "fail with thick samples"
+          ],
+          "text_sha256": "5e972c205605cd483bd48be1a53de5be45e73ec7f61e854f7c5ae07a995cbf49"
+        }
+      ],
+      "relevance": {
+        "b10afc967fb55e1b:1": 3
+      }
+    },
+    {
+      "id": "pidl-real-spad-noise",
+      "query": "为什么只用泊松噪声训练 SPAD 超分辨模型不够？这篇文章把哪些真实噪声放进了物理模型？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "pidl-single-photon"
+      ],
+      "contracts": [
+        {
+          "id": "pidl-multisource-noise",
+          "doc_id": "pidl-single-photon",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "f986970932c37441:6"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "f986970932c37441:6",
+          "grade": 3,
+          "doc_id": "pidl-single-photon",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "pidl-multisource-noise"
+          ],
+          "matched_evidence_terms": [
+            "multi-source physical noise model",
+            "crosstalk",
+            "dark count rate"
+          ],
+          "text_sha256": "646a5178539271e3e7d5e8100f836a359724362e527af5317132400c89b295f8"
+        }
+      ],
+      "relevance": {
+        "f986970932c37441:6": 3
+      }
+    },
+    {
+      "id": "cassi-dual-disperser-design",
+      "query": "CASSI 的双色散结构具体怎么摆？为什么中间要放二值孔径编码？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "figure_architecture"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "cassi"
+      ],
+      "contracts": [
+        {
+          "id": "cassi-abstract-architecture",
+          "doc_id": "cassi",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "50f9c165105534b5:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "50f9c165105534b5:1",
+          "grade": 3,
+          "doc_id": "cassi",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "cassi-abstract-architecture"
+          ],
+          "matched_evidence_terms": [
+            "two dispersive elements",
+            "arranged in opposition",
+            "binary-valued aperture code"
+          ],
+          "text_sha256": "287b66159321d6e1520206a04e47e9cea7511ff7ee0a4f1c54f4268491767711"
+        }
+      ],
+      "relevance": {
+        "50f9c165105534b5:1": 3
+      }
+    },
+    {
+      "id": "fdm-speed-snr-tradeoff",
+      "query": "频分复用单像素成像为什么能更快？它换来的代价是什么，是否需要改变探测器积分时间？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "fdm-metamaterials"
+      ],
+      "contracts": [
+        {
+          "id": "fdm-abstract-tradeoff",
+          "doc_id": "fdm-metamaterials",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "6b1a3c7c4aa0aaa9:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6b1a3c7c4aa0aaa9:1",
+          "grade": 3,
+          "doc_id": "fdm-metamaterials",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "fdm-abstract-tradeoff"
+          ],
+          "matched_evidence_terms": [
+            "parallelize the single-pixel imaging process",
+            "trade-off between signal-to-noise ratio and acquisition speed",
+            "without altering detector integration time"
+          ],
+          "text_sha256": "ab5736ba94b767381e9c5b5f8c5214cab9e443155bf22771f6a82b4f41b5e642"
+        }
+      ],
+      "relevance": {
+        "6b1a3c7c4aa0aaa9:1": 3
+      }
+    },
+    {
+      "id": "denoising-classical-map",
+      "query": "这篇去噪综述怎样划分经典方法？空间域和变换域方法的主线是什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "denoising-review"
+      ],
+      "contracts": [
+        {
+          "id": "denoising-two-families",
+          "doc_id": "denoising-review",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "bc9b37581c93be49:5"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "bc9b37581c93be49:5",
+          "grade": 3,
+          "doc_id": "denoising-review",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "denoising-two-families"
+          ],
+          "matched_evidence_terms": [
+            "spatial domain methods",
+            "transform domain methods"
+          ],
+          "text_sha256": "d5dcf61946ab285a6e93b3216efa2ba5de1a56cc475db18fab5595683ff6ecf1"
+        }
+      ],
+      "relevance": {
+        "bc9b37581c93be49:5": 3
+      }
+    },
+    {
+      "id": "scinerf-physics-in-training",
+      "query": "SCINeRF 不是先解码视频再跑 NeRF 吗？SCI 的物理成像过程到底在哪里进入训练？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "scinerf"
+      ],
+      "contracts": [
+        {
+          "id": "scinerf-physics-training",
+          "doc_id": "scinerf",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "7f6b9404bccea454:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7f6b9404bccea454:1",
+          "grade": 3,
+          "doc_id": "scinerf",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "scinerf-physics-training"
+          ],
+          "matched_evidence_terms": [
+            "physical imaging process of SCI",
+            "part of the training of NeRF"
+          ],
+          "text_sha256": "cfe06827cd99950d242b55803e9292d92e6255cd52809e5da89d2836766f4d3b"
+        }
+      ],
+      "relevance": {
+        "7f6b9404bccea454:1": 3
+      }
+    },
+    {
+      "id": "scigs-explicit-dynamic-scene",
+      "query": "SCIGS 的核心新意是 3DGS 本身吗？它对单张压缩图和动态场景具体声称了什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "scigs"
+      ],
+      "contracts": [
+        {
+          "id": "scigs-explicit-dynamic-claim",
+          "doc_id": "scigs",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "32490abae33df8c9:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "32490abae33df8c9:1",
+          "grade": 3,
+          "doc_id": "scigs",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "scigs-explicit-dynamic-claim"
+          ],
+          "matched_evidence_terms": [
+            "variant of 3DGS",
+            "single compressed image",
+            "dynamic 3D scenes"
+          ],
+          "text_sha256": "0ee0a3638cb1fbc2144029f53e202e1da3c9928026f35568cf7be873d6989a48"
+        }
+      ],
+      "relevance": {
+        "32490abae33df8c9:1": 3
+      }
+    },
+    {
+      "id": "foveated-not-simple-zoom",
+      "query": "动态超采样是不是只对运动区域做局部放大？它和普通 zoom 的关键区别是什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "foveated-spi"
+      ],
+      "contracts": [
+        {
+          "id": "foveated-whole-field-update",
+          "doc_id": "foveated-spi",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "aa60f6f8d0cbcaa6:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "aa60f6f8d0cbcaa6:1",
+          "grade": 3,
+          "doc_id": "foveated-spi",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "foveated-whole-field-update"
+          ],
+          "matched_evidence_terms": [
+            "high-resolution foveal region tracks motion",
+            "entire field of view",
+            "several consecutive frames"
+          ],
+          "text_sha256": "df394c80d32c718ce4bc195682758f8d4a6b93e01d343c93440a6f317b3318c5"
+        }
+      ],
+      "relevance": {
+        "aa60f6f8d0cbcaa6:1": 3
+      }
+    },
+    {
+      "id": "sequential-cs-adaptive-advantage",
+      "query": "Sequential compressed sensing 相比一次性随机测量多利用了什么信息？它主要保证恢复什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "seq-cs"
+      ],
+      "contracts": [
+        {
+          "id": "sequential-cs-abstract-purpose",
+          "doc_id": "seq-cs",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "6117def890d573f9:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6117def890d573f9:1",
+          "grade": 3,
+          "doc_id": "seq-cs",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "sequential-cs-abstract-purpose"
+          ],
+          "matched_evidence_terms": [
+            "sequential adaptive compressed sensing",
+            "signal support recovery",
+            "distilled sensing"
+          ],
+          "text_sha256": "9777eca48fc364ced64f8c667995837daa7477f0e14056a5fc15e288e9110e1b"
+        }
+      ],
+      "relevance": {
+        "6117def890d573f9:1": 3
+      }
+    },
+    {
+      "id": "iism-live-cell-benefit",
+      "query": "iISM 在活细胞里同时改善了什么？120 nm 分辨率是用什么代价换来的？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "iism"
+      ],
+      "contracts": [
+        {
+          "id": "iism-resolution-power-benefit",
+          "doc_id": "iism",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "3583e628c41883ee:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "3583e628c41883ee:1",
+          "grade": 3,
+          "doc_id": "iism",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "iism-resolution-power-benefit"
+          ],
+          "matched_evidence_terms": [
+            "120 nm lateral resolution",
+            "tenfold lower incident illumination power",
+            "reducing photodamage"
+          ],
+          "text_sha256": "c1733f29108f477ad2e9e9bac4ec228ab1e52f95049c333b41818b561b44aeef"
+        }
+      ],
+      "relevance": {
+        "3583e628c41883ee:1": 3
+      }
+    },
+    {
+      "id": "spad-geiger-mechanism",
+      "query": "SPAD 为什么要工作在 Geiger 模式？雪崩之后为什么还需要淬灭电路？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "spd-review"
+      ],
+      "contracts": [
+        {
+          "id": "spad-geiger-quenching",
+          "doc_id": "spd-review",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "ba919188ff49c763:8"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "ba919188ff49c763:8",
+          "grade": 3,
+          "doc_id": "spd-review",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "spad-geiger-quenching"
+          ],
+          "matched_evidence_terms": [
+            "operates in Geiger mode",
+            "reverse bias breakdown voltage",
+            "quenching circuit"
+          ],
+          "text_sha256": "0195946417527457ee0ce0e0d7b491d3e03b1e45c3b83069a26a6437639c0125"
+        }
+      ],
+      "relevance": {
+        "ba919188ff49c763:8": 3
+      }
+    },
+    {
+      "id": "piln-self-supervised-loop",
+      "query": "ILNet 为什么叫 image-loop？part-based 设计具体想解决什么，训练是否依赖成对真值？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "piln"
+      ],
+      "contracts": [
+        {
+          "id": "piln-method-definition",
+          "doc_id": "piln",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "aad10fa9972c8a2c:4"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "aad10fa9972c8a2c:4",
+          "grade": 3,
+          "doc_id": "piln",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "piln-method-definition"
+          ],
+          "matched_evidence_terms": [
+            "self-supervised image-loop neural network",
+            "part-based model",
+            "finer-grained learning"
+          ],
+          "text_sha256": "95adc2fa69affde355d0cc5f3ceda0b20a212f84cdc0d16c843c0af7923f038c"
+        }
+      ],
+      "relevance": {
+        "aad10fa9972c8a2c:4": 3
+      }
+    },
+    {
+      "id": "fdm-vs-3d-video-parallelism",
+      "query": "频分复用单像素成像和 3D single-pixel video 都强调速度：它们分别把什么环节并行化，为什么后者需要多个探测器？请不要把两种加速机制混在一起。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "",
+      "scope_doc_ids": [
+        "fdm-metamaterials",
+        "3d-sp-video"
+      ],
+      "contracts": [
+        {
+          "id": "fdm-parallel-encoding-layer",
+          "doc_id": "fdm-metamaterials",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "6b1a3c7c4aa0aaa9:9"
+          ]
+        },
+        {
+          "id": "three-d-video-parallel-detectors",
+          "doc_id": "3d-sp-video",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "a34b2661f87a68d2:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6b1a3c7c4aa0aaa9:9",
+          "grade": 3,
+          "doc_id": "fdm-metamaterials",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "fdm-parallel-encoding-layer"
+          ],
+          "matched_evidence_terms": [
+            "p frequencies simultaneously",
+            "phase-sensitive detection",
+            "demodulated"
+          ],
+          "text_sha256": "03e7c485d673d0f7ae96963f213debbb6dc568fe3bfbc49afbe6eac7f8a95a75"
+        },
+        {
+          "chunk_id": "a34b2661f87a68d2:3",
+          "grade": 3,
+          "doc_id": "3d-sp-video",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "three-d-video-parallel-detectors"
+          ],
+          "matched_evidence_terms": [
+            "photometric stereo",
+            "four spatially-separated",
+            "8 frames per second"
+          ],
+          "text_sha256": "a1a16d9a754af7a785a326fa4d1269a5e7e970502dd2f740d53634fdee498faf"
+        }
+      ],
+      "relevance": {
+        "6b1a3c7c4aa0aaa9:9": 3,
+        "a34b2661f87a68d2:3": 3
+      }
+    },
+    {
+      "id": "basis-choice-vs-foveated-adaptation",
+      "query": "Hadamard/Fourier 的选择和 foveated dynamic supersampling 是同一层面的采样策略吗？设计系统时，这两类选择分别在决定什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "",
+      "scope_doc_ids": [
+        "hsi-fsi",
+        "foveated-spi"
+      ],
+      "contracts": [
+        {
+          "id": "hsi-fsi-basis-design-layer",
+          "doc_id": "hsi-fsi",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "8a29ea79c6633439:5"
+          ]
+        },
+        {
+          "id": "foveated-spatiotemporal-design-layer",
+          "doc_id": "foveated-spi",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "aa60f6f8d0cbcaa6:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "8a29ea79c6633439:5",
+          "grade": 3,
+          "doc_id": "hsi-fsi",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "hsi-fsi-basis-design-layer"
+          ],
+          "matched_evidence_terms": [
+            "HSI uses Hadamard basis patterns",
+            "FSI uses Fourier basis patterns"
+          ],
+          "text_sha256": "fc04aad22e5695a3878b11fdaa675c107314d9368f3746d0384e837f56022fea"
+        },
+        {
+          "chunk_id": "aa60f6f8d0cbcaa6:1",
+          "grade": 3,
+          "doc_id": "foveated-spi",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "foveated-spatiotemporal-design-layer"
+          ],
+          "matched_evidence_terms": [
+            "high-resolution foveal region tracks motion",
+            "entire field of view"
+          ],
+          "text_sha256": "df394c80d32c718ce4bc195682758f8d4a6b93e01d343c93440a6f317b3318c5"
+        }
+      ],
+      "relevance": {
+        "8a29ea79c6633439:5": 3,
+        "aa60f6f8d0cbcaa6:1": 3
+      }
+    },
+    {
+      "id": "scinerf-forward-model-equation",
+      "query": "SCINeRF 的 SCI 前向成像公式到底表达了什么？请逐项解释压缩图像、虚拟帧、二值掩模和噪声，并说明这个公式为什么能进入 NeRF 的联合优化。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "exact_location",
+        "formula_reasoning",
+        "system_a"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "scinerf"
+      ],
+      "contracts": [
+        {
+          "id": "scinerf-sci-forward-equation",
+          "doc_id": "scinerf",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "7f6b9404bccea454:17"
+          ]
+        },
+        {
+          "id": "scinerf-differentiable-training-link",
+          "doc_id": "scinerf",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "7f6b9404bccea454:17"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7f6b9404bccea454:17",
+          "grade": 3,
+          "doc_id": "scinerf",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "scinerf-differentiable-training-link",
+            "scinerf-sci-forward-equation"
+          ],
+          "matched_evidence_terms": [
+            "captured compressed image",
+            "element-wise multiplication",
+            "measurement noise",
+            "synthesize the compressed image",
+            "differentiable with respect to NeRF and the poses"
+          ],
+          "text_sha256": "279cccf0d736d7d9cde1d3d1d8e81580cd367937998399e5fb3dd747e8bd9769"
+        }
+      ],
+      "relevance": {
+        "7f6b9404bccea454:17": 3
+      }
+    },
+    {
+      "id": "fdm-vs-3d-video-parallelism-en",
+      "query": "Both frequency-division-multiplexed single-pixel imaging and 3D single-pixel video claim speedups. What does each method parallelize, and why does the 3D method need multiple detectors?",
+      "locale": "en",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "cross_paper_synthesis",
+        "en_locale"
+      ],
+      "query_scope": "",
+      "scope_doc_ids": [
+        "fdm-metamaterials",
+        "3d-sp-video"
+      ],
+      "contracts": [
+        {
+          "id": "fdm-parallel-encoding-layer-en",
+          "doc_id": "fdm-metamaterials",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "6b1a3c7c4aa0aaa9:9"
+          ]
+        },
+        {
+          "id": "three-d-video-parallel-detectors-en",
+          "doc_id": "3d-sp-video",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "a34b2661f87a68d2:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6b1a3c7c4aa0aaa9:9",
+          "grade": 3,
+          "doc_id": "fdm-metamaterials",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "fdm-parallel-encoding-layer-en"
+          ],
+          "matched_evidence_terms": [
+            "p frequencies simultaneously",
+            "phase-sensitive detection",
+            "demodulated"
+          ],
+          "text_sha256": "03e7c485d673d0f7ae96963f213debbb6dc568fe3bfbc49afbe6eac7f8a95a75"
+        },
+        {
+          "chunk_id": "a34b2661f87a68d2:3",
+          "grade": 3,
+          "doc_id": "3d-sp-video",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "three-d-video-parallel-detectors-en"
+          ],
+          "matched_evidence_terms": [
+            "photometric stereo",
+            "four spatially-separated",
+            "8 frames per second"
+          ],
+          "text_sha256": "a1a16d9a754af7a785a326fa4d1269a5e7e970502dd2f740d53634fdee498faf"
+        }
+      ],
+      "relevance": {
+        "6b1a3c7c4aa0aaa9:9": 3,
+        "a34b2661f87a68d2:3": 3
+      }
+    },
+    {
+      "id": "qclfm-correlation-resolution",
+      "query": "QCLFM 为什么能同时保住位置和角度分辨率？论文实际报告的景深提升有多大？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "mechanism_explanation"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "qclfm"
+      ],
+      "contracts": [
+        {
+          "id": "qclfm-separate-correlation-channels",
+          "doc_id": "qclfm",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "831f8c559642fe39:13"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "831f8c559642fe39:13",
+          "grade": 3,
+          "doc_id": "qclfm",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "qclfm-separate-correlation-channels"
+          ],
+          "matched_evidence_terms": [
+            "angular/momentum correlation",
+            "position resolution for angular resolution",
+            "measured on separate cameras",
+            "DOF that is between 2–5 times larger"
+          ],
+          "text_sha256": "bd465bb5122f825a9b5294d7919bafe45911238ba148ae3e92e877f426a5f3e8"
+        }
+      ],
+      "relevance": {
+        "831f8c559642fe39:13": 3
+      }
+    },
+    {
+      "id": "scinerf-motion-assumption-en",
+      "query": "What camera-motion assumption does SCINeRF make during one compressed exposure, and what alternatives does the paper suggest for more complex motion?",
+      "locale": "en",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "en_locale",
+        "scope_boundary"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "scinerf"
+      ],
+      "contracts": [
+        {
+          "id": "scinerf-linear-motion-boundary",
+          "doc_id": "scinerf",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "7f6b9404bccea454:18"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7f6b9404bccea454:18",
+          "grade": 3,
+          "doc_id": "scinerf",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "scinerf-linear-motion-boundary"
+          ],
+          "matched_evidence_terms": [
+            "camera trajectory during the imaging process is linear",
+            "linear interpolation",
+            "higher-order spline",
+            "optimize individual poses"
+          ],
+          "text_sha256": "dd7209dfe29d3406f6d58ad15cbbb3339bb98f05e4eeba2e1ac9f573a8db45cf"
+        }
+      ],
+      "relevance": {
+        "7f6b9404bccea454:18": 3
+      }
+    },
+    {
+      "id": "spd-detector-metrics",
+      "query": "评价单光子探测器不能只看探测效率，还必须同时看哪些关键指标？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "system_a"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "spd-review"
+      ],
+      "contracts": [
+        {
+          "id": "spd-four-core-metrics",
+          "doc_id": "spd-review",
+          "source_page": 10,
+          "relevant_chunk_ids": [
+            "ba919188ff49c763:40"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "ba919188ff49c763:40",
+          "grade": 3,
+          "doc_id": "spd-review",
+          "page_start": 10,
+          "page_end": 10,
+          "contract_ids": [
+            "spd-four-core-metrics"
+          ],
+          "matched_evidence_terms": [
+            "detection efficiency",
+            "dark count",
+            "system dead time",
+            "time jitter"
+          ],
+          "text_sha256": "8e6a490fdaa638cb3496a7a50c32e9a39182ea5c8ee7163da3dd842fe06931ed"
+        }
+      ],
+      "relevance": {
+        "ba919188ff49c763:40": 3
+      }
+    },
+    {
+      "id": "scigs-transformation-filter",
+      "query": "SCIGS 的 transformation network 吃进去什么、输出什么？后面的高频滤波器又是在修什么问题？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "new_fact_composition"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "scigs"
+      ],
+      "contracts": [
+        {
+          "id": "scigs-transform-and-filter",
+          "doc_id": "scigs",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "32490abae33df8c9:12"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "32490abae33df8c9:12",
+          "grade": 3,
+          "doc_id": "scigs",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "scigs-transform-and-filter"
+          ],
+          "matched_evidence_terms": [
+            "positions of each 3D Gaussians",
+            "camera pose stamp",
+            "outputs transformation of Gaussians",
+            "high-frequency artifacts"
+          ],
+          "text_sha256": "f802037f8c022614287e3ce3b3bf674a7da371ed62cd8d0479506f6063afcc05"
+        }
+      ],
+      "relevance": {
+        "32490abae33df8c9:12": 3
+      }
+    },
+    {
+      "id": "iism-depth-phase",
+      "query": "iISM 的干涉信号为什么会携带深度信息？相位公式里的 z、n、λ 和 Gouy phase 分别扮演什么角色？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "mechanism_explanation"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "iism"
+      ],
+      "contracts": [
+        {
+          "id": "iism-phase-depth-terms",
+          "doc_id": "iism",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "3583e628c41883ee:10"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "3583e628c41883ee:10",
+          "grade": 3,
+          "doc_id": "iism",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "iism-phase-depth-terms"
+          ],
+          "matched_evidence_terms": [
+            "relative phase between reflected and scattered electric fields",
+            "axial position of the scatterer",
+            "refractive index",
+            "Gouy phase"
+          ],
+          "text_sha256": "13abc1745be45d38ff9bd2091cf238e458f4bd666665cb0a67b8cda176779878"
+        }
+      ],
+      "relevance": {
+        "3583e628c41883ee:10": 3
+      }
+    },
+    {
+      "id": "sph-sampling-ratio",
+      "query": "这篇单像素压缩全息里 sampling ratio 应该怎么选？为什么降采样有时反而更干净，但降到 3.125% 又会坏掉？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "new_fact_composition"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "sph-biological"
+      ],
+      "contracts": [
+        {
+          "id": "sph-sr-noise-resolution-tradeoff",
+          "doc_id": "sph-biological",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "11b5152564f8b679:13"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "11b5152564f8b679:13",
+          "grade": 3,
+          "doc_id": "sph-biological",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "sph-sr-noise-resolution-tradeoff"
+          ],
+          "matched_evidence_terms": [
+            "higher orders is more sensitive to measurement noises",
+            "SR of 25% might be a suitable choice",
+            "SR was further reduced to 3.125%",
+            "spatial resolution is expected to degrade along with the square root of the SR"
+          ],
+          "text_sha256": "a1a8cc84239c414ac569c9d1ff7f3543333bad529eea88995699037814470865"
+        }
+      ],
+      "relevance": {
+        "11b5152564f8b679:13": 3
+      }
+    },
+    {
+      "id": "pidl-cross-camera-transfer",
+      "query": "这套 physics-informed SPAD 增强模型能直接换到另一台相机吗？论文承认的跨设备限制和建议是什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "scope_boundary"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "pidl-single-photon"
+      ],
+      "contracts": [
+        {
+          "id": "pidl-camera-calibration-boundary",
+          "doc_id": "pidl-single-photon",
+          "source_page": 8,
+          "relevant_chunk_ids": [
+            "f986970932c37441:39"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "f986970932c37441:39",
+          "grade": 3,
+          "doc_id": "pidl-single-photon",
+          "page_start": 8,
+          "page_end": 8,
+          "contract_ids": [
+            "pidl-camera-calibration-boundary"
+          ],
+          "matched_evidence_terms": [
+            "calibrated employing a set of collected images acquired using a specific SPAD camera",
+            "even for the same version of cameras",
+            "automatic calibration",
+            "transfer learning technique"
+          ],
+          "text_sha256": "003bc9f590e9df17bfefc8330bbcc25826f6e2fd2183cbf4790d01471f425c13"
+        }
+      ],
+      "relevance": {
+        "f986970932c37441:39": 3
+      }
+    },
+    {
+      "id": "spi-illumination-vs-detection",
+      "query": "单像素相机里的 structured illumination 和 structured detection 到底差在哪一侧？采集速度真正卡在哪里？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "zh_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "spi-prospects"
+      ],
+      "contracts": [
+        {
+          "id": "spi-two-dmd-configurations",
+          "doc_id": "spi-prospects",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "7846a2dbb8e31f4a:8"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7846a2dbb8e31f4a:8",
+          "grade": 3,
+          "doc_id": "spi-prospects",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "spi-two-dmd-configurations"
+          ],
+          "matched_evidence_terms": [
+            "project patterns of light onto a scene",
+            "structured illumination",
+            "structured detection",
+            "modulation rate of the DMD"
+          ],
+          "text_sha256": "9277415880185be4946186c610a7ff31061591cd5d3b4ccc8f08881741eb7708"
+        }
+      ],
+      "relevance": {
+        "7846a2dbb8e31f4a:8": 3
+      }
+    },
+    {
+      "id": "s2ism-array-reassignment",
+      "query": "ISM 为什么把共焦针孔和单点探测器换成阵列？每个阵列像素和整个阵列分别起什么作用，数据最后怎样合成？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "s2ism"
+      ],
+      "contracts": [
+        {
+          "id": "s2ism-array-fusion-chain",
+          "doc_id": "s2ism",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "b10afc967fb55e1b:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "b10afc967fb55e1b:3",
+          "grade": 3,
+          "doc_id": "s2ism",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "s2ism-array-fusion-chain"
+          ],
+          "matched_evidence_terms": [
+            "acts as a small pinhole",
+            "entire array guarantees high light collection efficiency",
+            "confocal-like images",
+            "adaptive pixel reassignment",
+            "multi-image deconvolution"
+          ],
+          "text_sha256": "c725f1e18ca42e5dd2f7da3928a8d0a8049a4385641dba1b66089065d89974e9"
+        }
+      ],
+      "relevance": {
+        "b10afc967fb55e1b:3": 3
+      }
+    },
+    {
+      "id": "perovskite-dual-cavity-threshold",
+      "query": "这篇钙钛矿激光器为什么要做成双腔？两个子单元各自负责什么，最低阈值和耦合效率是多少？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "perovskite-laser"
+      ],
+      "contracts": [
+        {
+          "id": "perovskite-two-cavity-roles",
+          "doc_id": "perovskite-laser",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "5b48741ab08dbad8:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "5b48741ab08dbad8:1",
+          "grade": 3,
+          "doc_id": "perovskite-laser",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "perovskite-two-cavity-roles"
+          ],
+          "matched_evidence_terms": [
+            "low-threshold single-crystal perovskite microcavity",
+            "high-power microcavity perovskite LED",
+            "minimum lasing threshold of 92 A cm",
+            "coupling efficiency of about 82.7%"
+          ],
+          "text_sha256": "48886f3ebb9726dd05880198f2c5fb69530c1d2a3a14e13a6fa16f391b0bc664"
+        }
+      ],
+      "relevance": {
+        "5b48741ab08dbad8:1": 3
+      }
+    },
+    {
+      "id": "cassi-projective-single-shot",
+      "query": "CASSI 为什么一次曝光就能做光谱成像？它实际测到的不是完整数据立方体，那重建依据是什么？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "mechanism_explanation"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "cassi"
+      ],
+      "contracts": [
+        {
+          "id": "cassi-projective-cs-basis",
+          "doc_id": "cassi",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "50f9c165105534b5:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "50f9c165105534b5:1",
+          "grade": 3,
+          "doc_id": "cassi",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "cassi-projective-cs-basis"
+          ],
+          "matched_evidence_terms": [
+            "two dispersive elements",
+            "binary-valued aperture code",
+            "projective measurement in the spectral domain",
+            "compressive sensing frameworks"
+          ],
+          "text_sha256": "287b66159321d6e1520206a04e47e9cea7511ff7ee0a4f1c54f4268491767711"
+        }
+      ],
+      "relevance": {
+        "50f9c165105534b5:1": 3
+      }
+    },
+    {
+      "id": "hsi-fsi-binary-pattern-cost",
+      "query": "Fourier 单像素成像为什么在 DMD 上会慢？把 Fourier 图案二值化以后，速度和空间分辨率之间怎么交换？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "new_fact_composition"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "hsi-fsi"
+      ],
+      "contracts": [
+        {
+          "id": "fsi-binary-speed-resolution-tradeoff",
+          "doc_id": "hsi-fsi",
+          "source_page": 7,
+          "relevant_chunk_ids": [
+            "8a29ea79c6633439:16"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "8a29ea79c6633439:16",
+          "grade": 3,
+          "doc_id": "hsi-fsi",
+          "page_start": 7,
+          "page_end": 7,
+          "contract_ids": [
+            "fsi-binary-speed-resolution-tradeoff"
+          ],
+          "matched_evidence_terms": [
+            "Fourier basis patterns are naturally grayscale",
+            "20,000 binary patterns per second",
+            "250 8-bit",
+            "expense of reduced spatial resolution"
+          ],
+          "text_sha256": "f30fe8658b756c89b112e3fc1931744fa390305156108154dacb735ff433efcc"
+        }
+      ],
+      "relevance": {
+        "8a29ea79c6633439:16": 3
+      }
+    },
+    {
+      "id": "rt-spi-silver-mask",
+      "query": "实时单像素差分系统的旋转掩模为什么最后选银而不是铬？这个材料选择改善了哪一个差分测量条件？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "exact_location"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "rt-spi-supp"
+      ],
+      "contracts": [
+        {
+          "id": "rt-spi-ag-mask-contrast",
+          "doc_id": "rt-spi-supp",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "3c702d1a300625d2:2"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "3c702d1a300625d2:2",
+          "grade": 3,
+          "doc_id": "rt-spi-supp",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "rt-spi-ag-mask-contrast"
+          ],
+          "matched_evidence_terms": [
+            "Ag mask exhibits superior reflectivity",
+            "lower transmissivity",
+            "better contrast for the complementary patterns",
+            "Ag mask was selected"
+          ],
+          "text_sha256": "7b1f1410506c6b6a055ca3292717eb76faea1514acd41a86ee3d377287061ee6"
+        }
+      ],
+      "relevance": {
+        "3c702d1a300625d2:2": 3
+      }
+    },
+    {
+      "id": "visual-perception-local-origin",
+      "query": "这篇信息论视角的知觉论文为什么说用局部原点描述点簇更省信息？什么时候反而不划算？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "exact_location"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "visual-perception"
+      ],
+      "contracts": [
+        {
+          "id": "visual-local-origin-information-saving",
+          "doc_id": "visual-perception",
+          "source_page": 8,
+          "relevant_chunk_ids": [
+            "7c042cc84da037c6:33"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7c042cc84da037c6:33",
+          "grade": 3,
+          "doc_id": "visual-perception",
+          "page_start": 8,
+          "page_end": 8,
+          "contract_ids": [
+            "visual-local-origin-information-saving"
+          ],
+          "matched_evidence_terms": [
+            "with respect to some local origin",
+            "smaller range of alternative coordinates",
+            "amount of information thus saved",
+            "a net saving will result"
+          ],
+          "text_sha256": "1d2399605ee82df1ddaf103b514feff6e91736226d3b11d1b3ae2f5aaae30cc5"
+        }
+      ],
+      "relevance": {
+        "7c042cc84da037c6:33": 3
+      }
+    },
+    {
+      "id": "nafnet-activation-free-en",
+      "query": "In what precise sense is NAFNet activation-free, and what does the paper use instead of conventional nonlinear activation functions?",
+      "locale": "en",
+      "evaluation_focus": "",
+      "coverage_tags": [
+        "en_locale"
+      ],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "simple-baselines"
+      ],
+      "contracts": [
+        {
+          "id": "nafnet-activation-free-definition",
+          "doc_id": "simple-baselines",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "fae405527c4ab80e:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "fae405527c4ab80e:1",
+          "grade": 3,
+          "doc_id": "simple-baselines",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "nafnet-activation-free-definition"
+          ],
+          "matched_evidence_terms": [
+            "nonlinear activation functions",
+            "replaced by multiplication or removed",
+            "Nonlinear Activation Free Network",
+            "NAFNet"
+          ],
+          "text_sha256": "2e57684de71a38f9855ea6ad90e2694e94e0f791835aabd1f6d408651ef6baca"
+        }
+      ],
+      "relevance": {
+        "fae405527c4ab80e:1": 3
+      }
+    },
+    {
+      "id": "sph-heterodyne-sampling-conditions",
+      "query": "SPH 实验里 62.5 kHz 拍频、1.25 Ms/s 采样和 DMD 的 48 μs 图案周期怎样配合？请给出每周期采样点数、每图案拍频周期数，并说明更换拍频仍保持重建质量的两个条件。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "sph-biological"
+      ],
+      "contracts": [
+        {
+          "id": "sph-heterodyne-sampling-bundle",
+          "doc_id": "sph-biological",
+          "source_page": 10,
+          "relevant_chunk_ids": [
+            "11b5152564f8b679:35"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "11b5152564f8b679:35",
+          "grade": 3,
+          "doc_id": "sph-biological",
+          "page_start": 10,
+          "page_end": 10,
+          "contract_ids": [
+            "sph-heterodyne-sampling-bundle"
+          ],
+          "matched_evidence_terms": [
+            "beat frequency of these two beams is 62,500 Hz",
+            "sampling rate of 1.25 Ms/s",
+            "three beating cycles last for each Hadamard pattern",
+            "20 data points were acquired within one cycle",
+            "Nyquist sampling criterion",
+            "integer number of beating cycles"
+          ],
+          "text_sha256": "3877adb32b1defd7e57ab09297f8d85361f1858a6682ff29ce4f695c0cf78a42"
+        }
+      ],
+      "relevance": {
+        "11b5152564f8b679:35": 3
+      }
+    },
+    {
+      "id": "three-d-video-daq-budget",
+      "query": "3D single-pixel video 的 DAQ 总采样率怎样分给四路探测器？在 50 μs 图案显示时间下，每个图案实际得到多少个样本？",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "3d-sp-video"
+      ],
+      "contracts": [
+        {
+          "id": "three-d-video-daq-channel-budget",
+          "doc_id": "3d-sp-video",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "a34b2661f87a68d2:12"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a34b2661f87a68d2:12",
+          "grade": 3,
+          "doc_id": "3d-sp-video",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "three-d-video-daq-channel-budget"
+          ],
+          "matched_evidence_terms": [
+            "maximum acquisition rate of 250 kHz for all channels",
+            "four channels employed",
+            "sampling rate for each channel is set to 62.5 kHz",
+            "each pattern is displayed for 50 μs",
+            "approximately three samples acquired for each pattern"
+          ],
+          "text_sha256": "0a39049b1e6b465f259ac8065b06011b2e0975f9b64449eafa18bac442911676"
+        }
+      ],
+      "relevance": {
+        "a34b2661f87a68d2:12": 3
+      }
+    },
+    {
+      "id": "sequential-cs-two-stage-elimination",
+      "query": "Sequential Compressed Sensing 的两阶段筛除过程分别做什么？请给出第一阶段步数、剩余维度界、第二阶段额外测量数，并说明它相对非自适应 CS 的低 SNR 优势。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "seq-cs"
+      ],
+      "contracts": [
+        {
+          "id": "sequential-cs-two-stage-main-result",
+          "doc_id": "seq-cs",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "6117def890d573f9:6"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6117def890d573f9:6",
+          "grade": 3,
+          "doc_id": "seq-cs",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "sequential-cs-two-stage-main-result"
+          ],
+          "matched_evidence_terms": [
+            "first stage involves",
+            "remove half of the zero components",
+            "all the non-zero components are retained",
+            "n / \\log n + k",
+            "k \\log n additional measurements",
+            "much lower SNRs"
+          ],
+          "text_sha256": "4afce9403f09399f0738a34bfe47f74883248634b68d1ef17aaf1f2b7c59fb99"
+        }
+      ],
+      "relevance": {
+        "6117def890d573f9:6": 3
+      }
+    },
+    {
+      "id": "piln-self-supervised-physical-loop",
+      "query": "ILNet 没有配对真值图像时怎样形成自监督闭环？请按 part-based 特征、I_N(out) 与 I_N(real) 损失、迭代先验三个环节解释，并说明为何能迁移到未知自由空间和水下场景。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "piln"
+      ],
+      "contracts": [
+        {
+          "id": "piln-self-supervised-loop-v3",
+          "doc_id": "piln",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "aad10fa9972c8a2c:9",
+            "aad10fa9972c8a2c:4"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "aad10fa9972c8a2c:4",
+          "grade": 3,
+          "doc_id": "piln",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "piln-self-supervised-loop-v3"
+          ],
+          "matched_evidence_terms": [
+            "divide image features into different parts",
+            "input for the subsequent iterations",
+            "continuous incorporation of prior information"
+          ],
+          "text_sha256": "95adc2fa69affde355d0cc5f3ceda0b20a212f84cdc0d16c843c0af7923f038c"
+        },
+        {
+          "chunk_id": "aad10fa9972c8a2c:9",
+          "grade": 3,
+          "doc_id": "piln",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "piln-self-supervised-loop-v3"
+          ],
+          "matched_evidence_terms": [
+            "divide image features into different parts",
+            "difference between the I_N(out)",
+            "I_N(real) captured by the SPD",
+            "loss function",
+            "input for the subsequent iterations"
+          ],
+          "text_sha256": "1c2606619dd67ac98c008ea69a21d4c1318c5dcc04c9ee49056f07bf06e2bbcf"
+        }
+      ],
+      "relevance": {
+        "aad10fa9972c8a2c:4": 3,
+        "aad10fa9972c8a2c:9": 3
+      }
+    },
+    {
+      "id": "fdm-integration-time-boundary",
+      "query": "FDM 提速是否等价于直接缩短探测器积分时间？请给出二者在 AWG 噪声下的相似处，并明确说明这个等价在哪个探测器边界失效、非 AWG 噪声下 FDM 又为什么更有利。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "current_paper",
+      "scope_doc_ids": [
+        "fdm-metamaterials"
+      ],
+      "contracts": [
+        {
+          "id": "fdm-integration-time-negative-boundary",
+          "doc_id": "fdm-metamaterials",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "6b1a3c7c4aa0aaa9:25"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6b1a3c7c4aa0aaa9:25",
+          "grade": 3,
+          "doc_id": "fdm-metamaterials",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "fdm-integration-time-negative-boundary"
+          ],
+          "matched_evidence_terms": [
+            "additive white Gaussian",
+            "SNR is proportional to the square root of the integration time",
+            "3 dB down point",
+            "without lowering the integration time",
+            "noise is not AWG",
+            "characteristic time for optimal SNR"
+          ],
+          "text_sha256": "0dd879013e84550fcff144885717b46d35932d5680ced5dee5753177c6db797d"
+        }
+      ],
+      "relevance": {
+        "6b1a3c7c4aa0aaa9:25": 3
+      }
+    },
+    {
+      "id": "qclfm-vs-iism-depth-signal",
+      "query": "QCLFM 和 iISM 都含有轴向/深度信息，但物理载体并不相同。请比较：QCLFM 怎样用位置与角度信息做两步数字重聚焦，iISM 的深度又怎样进入干涉相位；不要把计算传播和 Gouy 相位混成一件事。",
+      "locale": "zh",
+      "evaluation_focus": "",
+      "coverage_tags": [],
+      "query_scope": "selected_context",
+      "scope_doc_ids": [
+        "qclfm",
+        "iism"
+      ],
+      "contracts": [
+        {
+          "id": "qclfm-two-step-depth-refocus",
+          "doc_id": "qclfm",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "831f8c559642fe39:8"
+          ]
+        },
+        {
+          "id": "iism-depth-phase-components",
+          "doc_id": "iism",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "3583e628c41883ee:10"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "3583e628c41883ee:10",
+          "grade": 3,
+          "doc_id": "iism",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "iism-depth-phase-components"
+          ],
+          "matched_evidence_terms": [
+            "4\\pi",
+            "axial position of the scatterer",
+            "illumination wavelength",
+            "Gouy phase"
+          ],
+          "text_sha256": "13abc1745be45d38ff9bd2091cf238e458f4bd666665cb0a67b8cda176779878"
+        },
+        {
+          "chunk_id": "831f8c559642fe39:8",
+          "grade": 3,
+          "doc_id": "qclfm",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "qclfm-two-step-depth-refocus"
+          ],
+          "matched_evidence_terms": [
+            "position and angular information of each photon",
+            "ray tracing operation",
+            "reverse this diffraction",
+            "wave propagation of distance -z"
+          ],
+          "text_sha256": "5566df8f449242b9227a017d072308ede5beffa5b2f219203a1eda5b6b42ead6"
+        }
+      ],
+      "relevance": {
+        "3583e628c41883ee:10": 3,
+        "831f8c559642fe39:8": 3
+      }
+    }
+  ]
+}

@@ -1235,9 +1235,6 @@ test('citation shelf reflects actual reader locate result after opening source',
   await page.getByTestId('citation-shelf-export-selected').click()
   const csvDownloadPromise = page.waitForEvent('download')
   await page.getByTestId('citation-shelf-export-main-csv').click()
-  if (await page.getByTestId('citation-shelf-export-preflight').isVisible().catch(() => false)) {
-    await page.getByTestId('citation-shelf-export-preflight-continue').click()
-  }
   const csvDownload = await csvDownloadPromise
   const csvPath = await csvDownload.path()
   expect(csvPath, 'CSV export should produce a downloadable file').not.toBeNull()
@@ -1251,6 +1248,242 @@ test('citation shelf reflects actual reader locate result after opening source',
     expect(csv).not.toContain('library_match_method')
     expect(csv).not.toContain('summary_quality_score')
   }
+})
+
+test('citation shelf recovers and persists a stale source locator without user repair', async ({ page }) => {
+  await mockReaderDoc(page)
+  const patchPayloads = await mockProjectCitationShelf(page, [{
+    key: 'stale-source-locator',
+    main: 'Fixture Paper / 2. Method',
+    num: 1,
+    anchor: 'stale-source-locator',
+    sourceName: READER_REGRESSION_SOURCE_NAME,
+    sourcePath: READER_REGRESSION_SOURCE_PATH,
+    raw: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    citeFmt: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    isInpaper: false,
+    citationRoute: 'system_a',
+    title: 'Fixture Paper / 2. Method',
+    headingPath: 'Fixture Paper / 2. Method',
+    evidenceQuote: 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    evidenceSource: 'retrieval_hit',
+    blockId: 'p-method-stale',
+    anchorId: 'a-p-method-stale',
+    anchorKind: 'paragraph',
+    bibliometricsChecked: true,
+    metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+    metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+    tags: [],
+    note: '',
+  }])
+  let sourceRepairCalls = 0
+  await page.route('**/api/library/quality/repair', async (route) => {
+    sourceRepairCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, requested: 1, repaired: 0, items: [] }),
+    })
+  })
+
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  const item = page.getByTestId('citation-shelf-item')
+  await expect(item).toHaveCount(1)
+  await item.getByTestId('citation-shelf-open-source').click()
+
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return {
+      locateMode: payload.locateMode,
+      blockId: payload.blockId || '',
+      strictLocate: payload.strictLocate,
+    }
+  }, { timeout: 15_000 }).toEqual({
+    locateMode: 'heuristic',
+    blockId: '',
+    strictLocate: false,
+  })
+  await expect(page.locator('.kb-reader-content mark')).toContainText(
+    'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.',
+    { timeout: 15_000 },
+  )
+  await expect.poll(() => patchPayloads.some((payload) => (
+    Array.isArray(payload.items)
+    && payload.items.some((entry) => {
+      const record = entry as Record<string, unknown>
+      return record.key === 'stale-source-locator'
+        && record.blockId === 'p-method-1'
+        && record.anchorId === 'a-p-method-1'
+    })
+  )), { timeout: 15_000 }).toBe(true)
+  expect(sourceRepairCalls).toBe(0)
+  await expect(item.getByTestId('citation-shelf-open-source')).toHaveAttribute(
+    'title',
+    /Open source|Open full text|打开原文|打开全文/,
+  )
+
+  await item.getByTestId('citation-shelf-open-source').click()
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return {
+      locateMode: payload.locateMode || '',
+      blockId: payload.blockId,
+      anchorId: payload.anchorId,
+      strictLocate: payload.strictLocate,
+    }
+  }).toEqual({
+    locateMode: '',
+    blockId: 'p-method-1',
+    anchorId: 'a-p-method-1',
+    strictLocate: true,
+  })
+})
+
+test('citation shelf batch-recovers same-paper locators before opening and keeps them after reload', async ({ page }) => {
+  await mockReaderDoc(page)
+  const methodQuote = 'Given a set of input multi-view images, NeRF transfers the pixels of the input images into rays.'
+  const conclusionQuote = 'Our method achieves stable reconstruction from a single snapshot.'
+  const initialItems = [
+    {
+      key: 'batch-stale-method',
+      main: 'Fixture Paper / 2. Method',
+      num: 1,
+      anchor: 'batch-stale-method',
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      raw: methodQuote,
+      citeFmt: methodQuote,
+      isInpaper: false,
+      citationRoute: 'system_a',
+      title: 'Fixture Paper / 2. Method',
+      headingPath: 'Fixture Paper / 2. Method',
+      evidenceQuote: methodQuote,
+      evidenceSource: 'retrieval_hit',
+      blockId: 'stale-method-block',
+      anchorId: 'stale-method-anchor',
+      anchorKind: 'paragraph',
+      bibliometricsChecked: true,
+      metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+      metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+      tags: [],
+      note: '',
+    },
+    {
+      key: 'batch-stale-conclusion',
+      main: 'Fixture Paper / 3. Conclusion',
+      num: 2,
+      anchor: 'batch-stale-conclusion',
+      sourceName: READER_REGRESSION_SOURCE_NAME,
+      sourcePath: READER_REGRESSION_SOURCE_PATH,
+      raw: conclusionQuote,
+      citeFmt: conclusionQuote,
+      isInpaper: false,
+      citationRoute: 'system_a',
+      title: 'Fixture Paper / 3. Conclusion',
+      headingPath: 'Fixture Paper / 3. Conclusion',
+      evidenceQuote: conclusionQuote,
+      evidenceSource: 'retrieval_hit',
+      blockId: 'stale-conclusion-block',
+      anchorId: 'stale-conclusion-anchor',
+      anchorKind: 'paragraph',
+      bibliometricsChecked: true,
+      metadataQuality: { ok: true, status: 'ready', score: 100, missing_fields: [], issues: [] },
+      metadataExportAcceptance: { export_ready: true, missing_fields: [], issue_codes: [] },
+      tags: [],
+      note: '',
+    },
+  ]
+  const patchPayloads = await mockProjectCitationShelf(page, initialItems)
+  const maintenancePayloads: Array<{ items?: Array<Record<string, unknown>> }> = []
+  await page.route('**/api/references/shelf/reader-locators/maintain', async (route) => {
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    maintenancePayloads.push(payload)
+    const requested = Array.isArray(payload.items) ? payload.items : []
+    const locatorByKey: Record<string, Record<string, unknown>> = {
+      'batch-stale-method': {
+        block_id: 'p-method-1',
+        anchor_id: 'a-p-method-1',
+        anchor_kind: 'paragraph',
+        heading_path: 'Fixture Paper / 2. Method',
+        page_start: 2,
+        page_end: 2,
+      },
+      'batch-stale-conclusion': {
+        block_id: 'p-conclusion-1',
+        anchor_id: 'a-p-conclusion-1',
+        anchor_kind: 'paragraph',
+        heading_path: 'Fixture Paper / 3. Conclusion',
+        page_start: 3,
+        page_end: 3,
+      },
+    }
+    const results = requested.map((item) => {
+      const key = String(item.key || '')
+      const locator = locatorByKey[key] || {}
+      const changed = String(item.block_id || '') !== String(locator.block_id || '')
+      return {
+        key,
+        ok: true,
+        changed,
+        status: changed ? 'recovered' : 'ready',
+        reason: changed ? 'unique_evidence_quote' : 'identity_valid',
+        source_path: item.source_path,
+        source_relocated: false,
+        locator,
+      }
+    })
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: requested.length,
+        ready: requested.length,
+        changed: results.filter((item) => item.changed).length,
+        unresolved: 0,
+        model_calls: 0,
+        items: results,
+      }),
+    })
+  })
+
+  const path = '/__message_list_test__?scenario=system-a-citation-popover&reader=1'
+  await openMessageListRegressionPage(page, path)
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(2)
+  await expect.poll(() => maintenancePayloads.some((payload) => payload.items?.length === 2)).toBe(true)
+  await expect.poll(() => patchPayloads.some((payload) => {
+    if (!Array.isArray(payload.items) || payload.items.length !== 2) return false
+    const byKey = new Map(payload.items.map((entry) => {
+      const record = entry as Record<string, unknown>
+      return [String(record.key || ''), record]
+    }))
+    return byKey.get('batch-stale-method')?.blockId === 'p-method-1'
+      && byKey.get('batch-stale-conclusion')?.blockId === 'p-conclusion-1'
+  }), { timeout: 15_000 }).toBe(true)
+
+  await page.reload()
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover', {
+    timeout: INTERNAL_ROUTE_READY_TIMEOUT_MS,
+  })
+  await expect(page.getByTestId('citation-shelf-item')).toHaveCount(2)
+  await page.getByTestId('citation-shelf-open-source').nth(1).click()
+  await expect.poll(async () => {
+    const raw = await page.getByTestId('message-list-open-payload').textContent()
+    const payload = JSON.parse(raw || '{}')
+    return {
+      blockId: payload.blockId,
+      anchorId: payload.anchorId,
+      strictLocate: payload.strictLocate,
+      locateMode: payload.locateMode || '',
+    }
+  }).toEqual({
+    blockId: 'p-conclusion-1',
+    anchorId: 'a-p-conclusion-1',
+    strictLocate: true,
+    locateMode: '',
+  })
 })
 
 test('citation shelf does not call source quality maintenance APIs for ordinary users', async ({ page }) => {
@@ -1302,6 +1535,37 @@ test('citation shelf does not call source quality maintenance APIs for ordinary 
   await openShelfOrganizeTools(page)
   await expandFocusedShelfDetails(page)
   await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
+})
+
+test('citation shelf automatically repairs an unreadable source for ordinary users', async ({ page }) => {
+  let sourceRepairCalls = 0
+  await page.route('**/api/library/quality/repair', async (route) => {
+    sourceRepairCalls += 1
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        requested: 1,
+        repaired: 0,
+        needs_reindex: false,
+        items: [],
+      }),
+    })
+  })
+
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=system-a-citation-popover&reader=1')
+  const citeChip = page.locator('.kb-cite-chip').first()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').last().click()
+  const openSource = page.getByTestId('citation-shelf-open-source')
+  await openSource.click()
+
+  await expect.poll(() => sourceRepairCalls, { timeout: 15_000 }).toBe(1)
+  await expect(page.getByTestId('citation-shelf-source-open-quality')).toHaveCount(0)
+  await expect(openSource).toHaveAttribute('title', /Open source|打开原文/)
 })
 
 test('citation shelf advances source repair run and refreshes repaired locate state', async ({ page }) => {
@@ -1662,7 +1926,9 @@ test('citation shelf exposes retry when abstract providers fail transiently', as
 test('citation popover upgrades to waited LLM polish when it is ready', async ({ page }) => {
   await mockReaderDoc(page)
   let observedWaitSeconds = 0
+  let observedPolishCalls = 0
   await page.route('**/api/references/citation-card-polish', async (route) => {
+    observedPolishCalls += 1
     const payload = route.request().postDataJSON() as { wait_s?: number } | undefined
     observedWaitSeconds = Number(payload?.wait_s || 0)
     await route.fulfill({
@@ -1707,11 +1973,14 @@ test('citation popover upgrades to waited LLM polish when it is ready', async ({
 
   const citeChip = page.locator('.kb-cite-chip').first()
   await expect(citeChip).toBeVisible()
+  await page.waitForTimeout(350)
+  expect(observedPolishCalls).toBe(0)
   await citeChip.click()
 
   await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM section')
   await expect(page.getByTestId('citation-popover-system-a-takeaway')).toContainText('LLM polished')
   await expect(page.getByTestId('citation-popover-system-a-evidence')).toContainText('Given a set of input multi-view images')
+  expect(observedPolishCalls).toBe(1)
   expect(observedWaitSeconds).toBeGreaterThan(0)
 })
 
@@ -1840,14 +2109,11 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   await page.getByTestId('citation-shelf-add-visible').click()
   await expect(page.getByTestId('citation-shelf-batch-count')).toContainText('1')
   await page.getByTestId('citation-shelf-export-selected').click()
-  await page.getByTestId('citation-shelf-export-main-bib').click()
-  await expect(page.getByTestId('citation-shelf-export-preflight')).toBeVisible()
-
   const exportRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
   const bibDownloadPromise = page.waitForEvent('download')
-  await page.getByTestId('citation-shelf-export-preflight-continue').click()
+  await page.getByTestId('citation-shelf-export-main-bib').click()
   const exportRepairPayload = (await exportRepairRequest).postDataJSON() as { items?: Array<Record<string, unknown>> }
-  expect(exportRepairPayload.items?.length || 0).toBeGreaterThan(0)
+  expect(exportRepairPayload.items).toHaveLength(1)
   const bibDownload = await bibDownloadPromise
   const bibPath = await bibDownload.path()
   expect(bibPath, 'BibTeX export should produce a downloadable file').not.toBeNull()
@@ -1861,6 +2127,65 @@ test('citation shelf export auto-completes metadata before download', async ({ p
   await expandFocusedShelfDetails(page)
   await expect(shelf.locator('.kb-shelf-doi-link')).toContainText('10.1109/TASSP.1988.1164940')
   await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
+})
+
+test('citation shelf export omits rejected metadata when automatic repair is unavailable', async ({ page }) => {
+  await mockReaderDoc(page)
+  let repairCalls = 0
+  await page.route('**/api/references/shelf/metadata/repair', async (route) => {
+    repairCalls += 1
+    const payload = route.request().postDataJSON() as { items?: Array<Record<string, unknown>> }
+    const items = Array.isArray(payload.items) ? payload.items : []
+    if (repairCalls === 1) {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify(shelfMetadataRepairFixture(items, false)),
+      })
+      return
+    }
+    await route.fulfill({
+      status: 503,
+      contentType: 'application/json',
+      body: JSON.stringify({ detail: 'temporary repair outage' }),
+    })
+  })
+
+  await openMessageListRegressionPage(page, '/__message_list_test__?scenario=weak-system-b-popover')
+  const citeChip = page.locator('.kb-cite-chip-sysb').first()
+  await expect(citeChip).toBeVisible()
+  await citeChip.click()
+  const popover = page.locator('.kb-cite-pop')
+  await expect(popover).toBeVisible()
+
+  const initialRepairRequest = page.waitForRequest('**/api/references/shelf/metadata/repair')
+  await popover.locator('.kb-cite-pop-add').click()
+  await popover.locator('.kb-cite-pop-open-shelf').nth(2).click()
+  await initialRepairRequest
+
+  await expect(page.getByTestId('citation-shelf')).toHaveClass(/translate-x-0/)
+  await page.locator('.kb-shelf-advanced-toggle').click()
+  await page.getByTestId('citation-shelf-add-visible').click()
+  await page.getByTestId('citation-shelf-export-selected').click()
+
+  const failedRepairResponse = page.waitForResponse('**/api/references/shelf/metadata/repair')
+  const bibDownloadPromise = page.waitForEvent('download')
+  await page.getByTestId('citation-shelf-export-main-bib').click()
+  expect((await failedRepairResponse).status()).toBe(503)
+  const bibDownload = await bibDownloadPromise
+  const bibPath = await bibDownload.path()
+  expect(bibPath, 'BibTeX export should continue with safe fields').not.toBeNull()
+  if (bibPath) {
+    const bib = await readFile(bibPath, 'utf8')
+    expect(bib).toContain('file={NatPhoton-2025-Structured detection for simultaneous super-resolution and optical sectioning in laser scanning microscopy.pdf}')
+    expect(bib).not.toContain('10.1117/12.7976703')
+    expect(bib).not.toContain('author={')
+    expect(bib).not.toContain('journal={')
+    expect(bib).not.toContain('volume={')
+    expect(bib).not.toMatch(/pending|failed|retryable|待核验|核验失败/i)
+  }
+  await expect(page.getByTestId('citation-shelf-export-preflight')).toHaveCount(0)
+  await expect(page.locator('.ant-message')).not.toContainText(/自动补全暂时失败|auto-complete is temporarily unavailable/i)
 })
 
 test('citation shelf copy auto-completes metadata before writing clipboard citations', async ({ page }) => {
@@ -2161,7 +2486,7 @@ test('citation shelf consumes metadata repair quality and clears review chips', 
     expect(md).toContain('## 1. The missing cone problem and low-pass distortion in optical serial sectioning microscopy')
     expect(md).toContain('DOI: 10.1109/tassp.1988.1164940')
   }
-  expect(repairRequestCount).toBe(repairCountAfterAutoFill)
+  expect(repairRequestCount).toBe(repairCountAfterAutoFill + 4)
 })
 
 test('old repeated system A citations use clicked answer line and clean markdown source', async ({ page }) => {
@@ -2292,15 +2617,17 @@ test('guide refs remain renderable when only the bound source was filtered out',
   await expect(page.locator('.kb-prov-locate-chip')).toHaveCount(0)
 })
 
-test('refs render after the latest user message while assistant is still streaming', async ({ page }) => {
+test('refs show progress without provisional cards while assistant is still streaming', async ({ page }) => {
   await mockReaderDoc(page)
   await openMessageListRegressionPage(page, '/__message_list_test__?scenario=live-user-pending-refs')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('live-user-pending-refs')
   await expect(page.locator('.kb-refs-panel')).toBeVisible()
   await page.locator('.kb-refs-panel .ant-collapse-header').click()
-  await expect(page.getByTestId('refs-panel-pending-note')).toBeVisible()
-  await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper')
+  await expect(page.getByTestId('refs-panel-pending-progress')).toBeVisible()
+  await expect(page.getByTestId('refs-panel-pending-progress')).toContainText('系统正在完成来源定位与证据绑定')
+  await expect(page.locator('.kb-ref-title')).toHaveCount(0)
+  await expect(page.locator('.kb-ref-action')).toHaveCount(0)
   await expect(page.locator('.kb-ref-score')).toHaveCount(0)
 })
 

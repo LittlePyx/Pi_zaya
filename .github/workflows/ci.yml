@@ -43,6 +43,9 @@ jobs:
         working-directory: web
         run: npm ci
 
+      - name: Setup Python for real-API shelf browser regressions
+        uses: ./.github/actions/setup-backend-python
+
       - name: Lint frontend
         working-directory: web
         run: npm run lint
@@ -131,13 +134,107 @@ jobs:
         uses: ./.github/actions/setup-backend-python
 
       - name: Check backend syntax and undefined names
-        run: python -m ruff check . --output-format=github
+        run: |
+          python -m ruff check . --output-format=github
+          python tools/check_architecture_budgets.py
 
       - name: Check visible Research Agent answer contract
         run: python -m pytest tests/unit/test_agent_answer_runtime_e2e.py -q
 
       - name: Check research QA regression fixture
         run: python tools/research_qa/run_research_qa_eval.py --dry-run
+
+      - name: Check candidate retrieval regression fixture
+        run: |
+          python tools/retrieval_eval/run_retrieval_eval.py --dry-run --fail-on-quality
+          python tools/retrieval_eval/run_research_qa_baseline.py --validate-only
+          python tools/retrieval_eval/run_dense_research_qa_benchmark.py --validate-only
+          python tools/retrieval_eval/run_research_qa_baseline.py --fixture docs/retrieval_eval_development_v1.json --baseline docs/retrieval_bm25_baseline_development_v1.json --validate-only
+          python tools/retrieval_eval/run_cross_encoder_research_qa_benchmark.py --validate-only
+          python tools/retrieval_eval/validate_semantic_paraphrase_fixture.py
+          python tools/retrieval_eval/validate_semantic_retrieval_report.py
+          python tools/retrieval_eval/validate_semantic_representation_report.py
+          python tools/retrieval_eval/validate_parent_collapsed_multivector_candidate.py
+          python tools/retrieval_eval/run_parent_collapsed_multivector_benchmark.py --validate-only
+          python tools/retrieval_eval/validate_e5_large_instruct_candidate.py
+          python tools/retrieval_eval/run_e5_large_instruct_benchmark.py --validate-only
+          python tools/retrieval_eval/validate_candidate_comparison_protocol.py
+          python tools/retrieval_eval/validate_candidate_batch.py
+          python tools/retrieval_eval/run_candidate_screening.py --candidate-id granite_embedding_278m_multilingual_v1 --validate-only
+          python tools/retrieval_eval/run_candidate_screening.py --candidate-id qwen3_embedding_0_6b_v1 --validate-only
+          python tools/retrieval_eval/run_candidate_screening.py --nominate --validate-only
+          python tools/retrieval_eval/validate_qwen_fusion_protocol_v2.py
+          python tools/retrieval_eval/validate_qwen_fusion_tuning_v2_invalidation.py
+          python tools/retrieval_eval/validate_user_journey_expansion_protocol.py
+          python tools/retrieval_eval/validate_user_journey_authoring_manifest.py
+          python tools/retrieval_eval/build_user_journey_expansion_fixture.py --db-root db --check
+          python tools/retrieval_eval/validate_user_journey_expansion_fixture.py
+          python tools/retrieval_eval/validate_user_journey_bm25_baseline.py
+          python tools/retrieval_eval/build_user_journey_bm25_outcome.py --check
+          python tools/retrieval_eval/validate_user_journey_qwen_dense_protocol.py
+          python tools/retrieval_eval/run_user_journey_qwen_dense_diagnostic.py --validate-only
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_protocol.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_invalidation.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_protocol.py
+          python tools/retrieval_eval/run_user_journey_fusion_v3_selection.py --validate-only
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_semantic_protocol.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_semantic_invalidation.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_semantic_protocol_v2.py
+          python tools/retrieval_eval/run_user_journey_fusion_v3_1_semantic_acceptance.py --validate-only
+          python tools/retrieval_eval/validate_product_shadow_protocol.py
+          python tools/retrieval_eval/run_product_shadow_operational_replay.py --validate-only
+          python tools/retrieval_eval/validate_product_shadow_vectorized_protocol.py
+          python tools/retrieval_eval/validate_product_opt_in_contract.py
+          python tools/retrieval_eval/validate_cpu_query_compatibility_protocol.py
+          python tools/retrieval_eval/run_cpu_query_compatibility.py --validate-only
+          python tools/retrieval_eval/validate_cpu_full_index_feasibility_protocol.py
+          python tools/retrieval_eval/run_cpu_full_index_feasibility.py --validate-only
+          python tools/retrieval_eval/validate_cpu_padding_diagnostic_protocol.py
+          python tools/retrieval_eval/analyze_cpu_padding.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_screen_protocol.py
+          python tools/retrieval_eval/validate_lighter_runtime_stage0.py
+          python tools/retrieval_eval/validate_lighter_runtime_stage0_e5_small.py
+          python tools/retrieval_eval/validate_e5_small_window_census_protocol.py
+          python tools/retrieval_eval/analyze_e5_small_window_census.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_stage1_e5_small_protocol.py
+          python tools/retrieval_eval/run_lighter_runtime_stage1_e5_small.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_stage2_e5_small_protocol.py
+          python tools/retrieval_eval/run_lighter_runtime_stage2_e5_small.py --validate-only
+          python tools/retrieval_eval/validate_local_semantic_preparation_protocol.py
+          python tools/retrieval_eval/validate_product_e5_selector_shadow_protocol.py
+          python tools/retrieval_eval/validate_product_e5_selector_shadow_report.py
+          python tools/retrieval_eval/validate_product_e5_user_journey_protocol.py
+          python tools/retrieval_eval/validate_product_e5_user_journey_report.py
+          python tools/retrieval_eval/validate_scoped_fresh_authoring_protocol.py
+          python tools/retrieval_eval/validate_scoped_fresh_cases.py
+          python tools/retrieval_eval/validate_scoped_fresh_e5_protocol.py
+          python tools/retrieval_eval/validate_scoped_fresh_e5_report.py
+          python tools/retrieval_eval/validate_portable_optional_e5_protocol.py
+          python tools/retrieval_eval/validate_portable_optional_e5_report.py
+          python tools/retrieval_eval/validate_portable_e5_product_startup_protocol.py
+          python tools/retrieval_eval/validate_portable_e5_product_startup_report.py
+          python tools/retrieval_eval/validate_portable_e5_architecture_startup_protocol.py
+          python tools/retrieval_eval/validate_portable_e5_architecture_startup_report.py
+          python tools/retrieval_eval/validate_local_semantic_component_lifecycle_contract.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_protocol.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_report.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_protocol_v2.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_report_v2.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_protocol_v3.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_report_v3.py
+          python tools/retrieval_eval/run_product_e5_runtime_parity.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_stress_manifest.py
+          python tools/retrieval_eval/validate_lighter_runtime_pointer_invalidation.py
+          python tools/retrieval_eval/validate_lighter_runtime_stage1_protocol.py
+          python tools/retrieval_eval/run_lighter_runtime_stage1.py --validate-only
+          python tools/retrieval_eval/run_product_shadow_vectorized_replay.py --validate-only
+          python tools/research_qa/validate_claim_entailment_fixture.py
+          python tools/research_qa/validate_claim_nli_candidate.py
+          python tools/research_qa/run_claim_nli_benchmark.py --validate-only
+          python tools/research_qa/run_claim_verifier_baseline.py --validate-only
+          python tools/research_qa/build_claim_shadow_report.py --validate-only
+          python tools/research_qa/build_quality_outcome_report.py --validate-only
+          python tools/observability/validate_local_observability_contract.py
 
       - name: Check historical version A/B contract
         run: python tools/version_ab/run_version_ab_eval.py --dry-run

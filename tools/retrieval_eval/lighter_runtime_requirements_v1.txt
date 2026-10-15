@@ -1,0 +1,26 @@
+# Isolated Windows x64 evaluation lock for retrieval_lighter_runtime_screen_v1.
+# This is not part of requirements.txt or requirements-release.txt.
+certifi==2026.7.22
+charset-normalizer==3.5.1
+colorama==0.4.6
+coloredlogs==15.0.1
+filelock==3.32.5
+flatbuffers==25.12.19
+fsspec==2026.7.0
+huggingface_hub==0.36.2
+humanfriendly==10.0
+idna==3.19
+mpmath==1.3.0
+numpy==2.2.6
+onnx==1.18.0
+onnxruntime==1.23.2
+packaging==26.3
+protobuf==7.36.1
+pyreadline3==3.5.6
+PyYAML==6.0.3
+requests==2.34.2
+sympy==1.14.0
+tokenizers==0.21.4
+tqdm==4.70.0
+typing_extensions==4.16.0
+urllib3==2.7.0

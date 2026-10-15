@@ -19,6 +19,7 @@ import {
   type ReaderResearchNoteCapture,
   type ReaderResearchNoteCaptureKind,
 } from './readerResearchNoteCapture'
+import { researchNoteSourceLinkWithContext } from './researchNoteEvidenceContext'
 
 const NEW_NOTE = '__new__'
 
@@ -191,10 +192,18 @@ export function ReaderResearchNoteCaptureModal({
       location: S.reader_note_location || '原文位置',
       comment: S.reader_note_comment_heading || '我的批注',
     })
-    const sourceLink = readerCaptureSourceLink(capture, conversationId)
+    let sourceLink = readerCaptureSourceLink(capture, conversationId)
+    let contextSnapshotReady = false
     setSaving(true)
     setSaveError('')
     try {
+      try {
+        const context = await chatApi.reviewResearchNoteEvidence(sourceLink)
+        sourceLink = researchNoteSourceLinkWithContext(sourceLink, context)
+        contextSnapshotReady = Boolean(sourceLink.evidence_context_snapshot)
+      } catch {
+        // The excerpt remains saveable when its converted source is temporarily unavailable.
+      }
       let record: ResearchNoteRecord
       if (targetId === NEW_NOTE) {
         record = await chatApi.createResearchNote({
@@ -231,6 +240,9 @@ export function ReaderResearchNoteCaptureModal({
       }
       notifyResearchNotesChanged(record)
       message.success(S.reader_note_saved || '已加入研究笔记')
+      if (!contextSnapshotReady) {
+        message.warning(S.reader_note_context_snapshot_pending || '摘录已保存；当前无法建立原文语境基线，后续核查时会明确提示。')
+      }
       onClose()
     } catch (error) {
       const detail = error instanceof Error ? error.message : S.research_notes_save_failed
@@ -255,7 +267,7 @@ export function ReaderResearchNoteCaptureModal({
       cancelText={S.confirm_cancel}
       okButtonProps={{ disabled: !capture || loading, loading: saving, 'data-testid': 'reader-note-save' }}
       cancelButtonProps={{ disabled: saving }}
-      maskClosable={!saving}
+      mask={{ closable: !saving }}
       keyboard={!saving}
       onOk={() => { void save() }}
       onCancel={onClose}

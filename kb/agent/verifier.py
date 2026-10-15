@@ -4,14 +4,13 @@ from dataclasses import dataclass
 import re
 from typing import Any
 
+from .citation_structure import has_citation_marker, inspect_citation_structure
 from .types import AgentVerification, EvidenceStatus
 
 
-_CITATION_RE = re.compile(r"(?:\[[0-9][0-9,\-\s]*\]|\[\[CITE:[^\]]+\]\])")
-_NUMERIC_CITATION_RE = re.compile(r"(?<!\[)\[(\d+(?:\s*(?:,|-)\s*\d+)*)\](?!\])")
 _SENTENCE_SPLIT_RE = re.compile(
     r"(?<!Fig\.)(?<!Figs\.)(?<!Eq\.)(?<!Eqs\.)(?<!Sec\.)(?<!Secs\.)(?<!Tab\.)(?<!Tabs\.)"
-    r"(?<!e\.g\.)(?<!i\.e\.)(?<!et al\.)(?<=[.!?\u3002\uff01\uff1f])\s+|\n+"
+    r"(?<!e\.g\.)(?<!i\.e\.)(?<!et al\.)(?<!\d\.)(?<=[.!?\u3002\uff01\uff1f])\s+|\n+"
 )
 _BULLET_PREFIX_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
 _TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{3,}|[\u4e00-\u9fff]{2,}")
@@ -52,7 +51,14 @@ _PROCEDURAL_NEXT_STEP_RE = re.compile(
     r"^(?:next\s+steps?|follow[- ]?up)\s*[:\uff1a]\s*"
     r"(?:inspect|read|check|open|review|verify|compare|look\s+at)\b"
     r"|^(?:\u4e0b\u4e00\u6b65|\u540e\u7eed)\s*[:\uff1a]\s*"
-    r"(?:\u67e5\u770b|\u68c0\u67e5|\u9605\u8bfb|\u6838\u5bf9|\u6253\u5f00|\u6bd4\u8f83|\u9a8c\u8bc1)",
+    r"(?:\u67e5\u770b|\u68c0\u67e5|\u9605\u8bfb|\u6838\u5bf9|\u6253\u5f00|\u6bd4\u8f83|\u9a8c\u8bc1)"
+    r"|^(?:if\s+you\s+(?:need|want)|to\s+(?:compare|inspect|verify)).{0,120}"
+    r"(?:consider|provide|expand|search|open|inspect|compare|verify)"
+    r"|^(?:\u82e5\u9700|\u5982\u9700|\u5982\u679c\u9700\u8981).{0,120}"
+    r"(?:\u5efa\u8bae|\u53ef\u4ee5|\u53ef).{0,80}"
+    r"(?:\u6269\u5927|\u63d0\u4f9b|\u68c0\u7d22|\u67e5\u770b|\u6253\u5f00|\u6bd4\u8f83|\u6838\u5bf9|\u9a8c\u8bc1)"
+    r"|^\u5efa\u8bae.{0,80}(?:\u6587\u6863|\u539f\u6587|\u8bba\u6587|\u6587\u732e\u5e93).{0,60}"
+    r"(?:\u5b9a\u4f4d|\u67e5\u770b|\u6253\u5f00|\u68c0\u7d22|\u6838\u5bf9)",
     flags=re.IGNORECASE,
 )
 _NONCLAIM_HEADING_RE = re.compile(
@@ -111,7 +117,7 @@ def _hybrid_external_allowed(answer: str, *, answer_mode: str = "") -> bool:
 
 
 def _looks_like_external_background(claim: str, *, hybrid_external_allowed: bool) -> bool:
-    if not hybrid_external_allowed or _CITATION_RE.search(claim):
+    if not hybrid_external_allowed or has_citation_marker(claim):
         return False
     text = str(claim or "").strip()
     return bool(_EXTERNAL_BACKGROUND_PREFIX_RE.search(text) or _GENERAL_BACKGROUND_RE.search(text))
@@ -161,37 +167,6 @@ def _source_summary(hit: dict[str, Any], *, overlap_terms: int) -> dict[str, Any
         "overlap_terms": int(overlap_terms),
         "evidence_preview": str(hit.get("text") or "").strip()[:220],
     }
-
-
-def _citation_numbers(claim: str, *, limit: int = 24) -> list[int]:
-    numbers: list[int] = []
-    seen: set[int] = set()
-    for match in _NUMERIC_CITATION_RE.finditer(str(claim or "")):
-        for part in re.split(r"\s*,\s*", match.group(1)):
-            raw = part.strip()
-            if "-" in raw:
-                start_raw, end_raw = [item.strip() for item in raw.split("-", 1)]
-                try:
-                    start = int(start_raw)
-                    end = int(end_raw)
-                except ValueError:
-                    continue
-                if start <= 0 or end < start or end - start >= limit:
-                    continue
-                candidates = range(start, end + 1)
-            else:
-                try:
-                    candidates = (int(raw),)
-                except ValueError:
-                    continue
-            for number in candidates:
-                if number <= 0 or number in seen:
-                    continue
-                seen.add(number)
-                numbers.append(number)
-                if len(numbers) >= limit:
-                    return numbers
-    return numbers
 
 
 def _matched_cited_evidence_sources(
@@ -272,8 +247,6 @@ def assess_evidence_status(
 
     if unsupported > 0:
         reasons.append("unsupported_claims")
-    if hit_count < 2:
-        reasons.append("low_evidence_count")
     if total <= 0:
         return "needs_review", reasons
     if reasons:
@@ -319,10 +292,11 @@ def verify_answer_citations(
             )
             continue
         local_claim_index += 1
-        citation_present = bool(_CITATION_RE.search(claim))
-        citation_numbers = _citation_numbers(claim)
-        bound_citation_numbers = [number for number in citation_numbers if number <= len(hits)]
-        unresolved_citation_numbers = [number for number in citation_numbers if number > len(hits)]
+        structure = inspect_citation_structure(claim, evidence_hit_count=len(hits))
+        citation_present = structure.citation_present
+        citation_numbers = structure.citation_numbers
+        bound_citation_numbers = structure.bound_citation_numbers
+        unresolved_citation_numbers = structure.unresolved_citation_numbers
         matched_sources = _matched_cited_evidence_sources(claim, hits, bound_citation_numbers) if hits else []
         matched_evidence_count = len(matched_sources)
         overlap = matched_evidence_count > 0
@@ -332,18 +306,14 @@ def verify_answer_citations(
             and not unresolved_citation_numbers
             and matched_evidence_count > 0
         )
-        if not citation_present:
-            citation_binding = "none"
-        elif not citation_numbers:
-            citation_binding = "unbound"
-        elif unresolved_citation_numbers and matched_evidence_count > 0:
-            citation_binding = "partial"
-        elif unresolved_citation_numbers:
-            citation_binding = "unresolved"
-        elif matched_evidence_count > 0:
+        if structure.binding == "bound" and matched_evidence_count > 0:
             citation_binding = "bound"
-        else:
+        elif structure.binding == "bound":
             citation_binding = "mismatch"
+        elif structure.binding == "partial" and matched_evidence_count <= 0:
+            citation_binding = "unresolved"
+        else:
+            citation_binding = structure.binding
         unsupported_reason = "" if is_supported else _unsupported_reason(
             citation_present=citation_present,
             citation_numbers=citation_numbers,
@@ -368,6 +338,7 @@ def verify_answer_citations(
                 "bound_citation_numbers": bound_citation_numbers,
                 "unresolved_citation_numbers": unresolved_citation_numbers,
                 "citation_binding": citation_binding,
+                "citation_structure": structure.to_dict(),
                 "has_evidence_overlap": overlap,
                 "matched_evidence_count": matched_evidence_count,
                 "matched_sources": matched_sources,

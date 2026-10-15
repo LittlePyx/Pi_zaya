@@ -38,6 +38,31 @@ from tools.research_qa.run_research_qa_eval import (
 )
 
 
+@pytest.mark.parametrize("retrieval_mode", [None, "bm25", "hybrid_local"])
+def test_selected_context_case_sends_product_basket_contract(monkeypatch, retrieval_mode):
+    fixture = load_fixture()
+    case = next(case for case in fixture.cases if case["id"] == "fdm-vs-3d-video-parallelism-en")
+    case = {**case, "queryScope": "selected_context"}
+    requests = []
+
+    def capture(_url, path, body, **_kwargs):
+        requests.append((path, body))
+        return {"id": "wire-contract"} if path == "/api/conversations" else {}
+
+    monkeypatch.setattr(eval_mod, "_post_json", capture)
+    with pytest.raises(RuntimeError, match="no session_id"):
+        eval_mod.run_case(base_url="http://unused", fixture=fixture, case=case,
+                          timeout_s=1, top_k=6, max_tokens=100, retrieval_mode=retrieval_mode)
+    body = requests[-1][1]
+    assert body["query_scope"] == "basket"
+    assert body.get("retrieval_mode") == retrieval_mode
+    assert ("retrieval_mode" in body) == bool(retrieval_mode)
+    items = body["prompt_context"]["items"]
+    assert len(items) == 2
+    assert {item["libraryMatchPath"] for item in items} == set(body["preferred_sources"])
+    assert all(item["kind"] == "reference" and item["libraryMatchStatus"] == "matched" for item in items)
+
+
 def test_terminal_message_render_refresh_detects_full_refs_race() -> None:
     expected = {
         "requiredCitationDocIds": ["gemma3"],
@@ -211,7 +236,7 @@ def test_retrieval_coverage_reports_required_document_ranks(monkeypatch, tmp_pat
     )
     monkeypatch.setattr(
         eval_mod,
-        "_search_hits_with_fallback",
+        "search_hits_with_fallback",
         lambda *_args, **_kwargs: ([{"id": "hit"}], [1.0], _args[0], False, [_args[0]]),
     )
     monkeypatch.setattr(
@@ -259,7 +284,7 @@ def test_retrieval_coverage_supports_separate_index_and_source_roots(monkeypatch
     )
     monkeypatch.setattr(
         eval_mod,
-        "_search_hits_with_fallback",
+        "search_hits_with_fallback",
         lambda *_args, **_kwargs: ([{"id": "hit"}], [1.0], _args[0], False, [_args[0]]),
     )
     monkeypatch.setattr(

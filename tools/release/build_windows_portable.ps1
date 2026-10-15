@@ -7,6 +7,8 @@ param(
     [switch]$KeepStage,
     [switch]$AllowDirty,
     [switch]$AllowMissingLicense,
+    [string]$LocalSemanticComponentManifestPath = "",
+    [string]$LocalSemanticComponentArchivePath = "",
     [string]$SigningThumbprint = $env:PI_ZAYA_SIGNING_THUMBPRINT,
     [string]$SignToolPath = "",
     [string]$TimestampUrl = "http://timestamp.digicert.com",
@@ -203,6 +205,48 @@ function Build-WindowsLauncher([string]$DestinationExe, [string]$DestinationIcon
 
 Copy-RuntimeTree (Join-Path $repoRoot "api") (Join-Path $stageRoot "api")
 Copy-RuntimeTree (Join-Path $repoRoot "kb") (Join-Path $stageRoot "kb")
+$localSemanticComponentManifestIncluded = $false
+$localSemanticComponentArchiveIncluded = $false
+if ($LocalSemanticComponentArchivePath -and -not $LocalSemanticComponentManifestPath) {
+    throw "A bundled local semantic archive requires its verified manifest."
+}
+if (-not [string]::IsNullOrWhiteSpace($LocalSemanticComponentManifestPath)) {
+    $componentManifestSource = [IO.Path]::GetFullPath($LocalSemanticComponentManifestPath)
+    if (-not (Test-Path -LiteralPath $componentManifestSource -PathType Leaf)) {
+        throw "Local semantic component manifest is missing: $componentManifestSource"
+    }
+    $componentManifest = Get-Content -LiteralPath $componentManifestSource -Raw | ConvertFrom-Json
+    if (
+        [int]$componentManifest.schema_version -ne 1 -or
+        [string]$componentManifest.component_id -ne "pizaya_local_semantic_e5_small_windows_x64_v1" -or
+        [string]$componentManifest.release_id -ne "v$version" -or
+        [string]$componentManifest.archive_name -ne "Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip" -or
+        [string]$componentManifest.candidate_id -ne "multilingual_e5_small_official_onnx_v1" -or
+        [bool]$componentManifest.contains_user_library_data -or
+        [bool]$componentManifest.product_enabled_by_installation
+    ) {
+        throw "Local semantic component manifest does not match this release."
+    }
+    Copy-Item -LiteralPath $componentManifestSource -Destination (Join-Path $stageRoot "kb\local_semantic_component_manifest.json")
+    $localSemanticComponentManifestIncluded = $true
+    if ($LocalSemanticComponentArchivePath) {
+        $componentArchiveSource = [IO.Path]::GetFullPath($LocalSemanticComponentArchivePath)
+        if (-not (Test-Path -LiteralPath $componentArchiveSource -PathType Leaf)) {
+            throw "Bundled local semantic archive is missing."
+        }
+        if ((Get-Item -LiteralPath $componentArchiveSource).Length -ne [long]$componentManifest.archive_bytes -or
+            (Get-FileHash -LiteralPath $componentArchiveSource -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$componentManifest.archive_sha256) {
+            throw "Bundled local semantic archive does not match its manifest."
+        }
+        $componentArchiveTarget = Join-Path $stageRoot "components\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip"
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $componentArchiveTarget) | Out-Null
+        Copy-Item -LiteralPath $componentArchiveSource -Destination $componentArchiveTarget
+        if ((Get-FileHash -LiteralPath $componentArchiveTarget -Algorithm SHA256).Hash.ToLowerInvariant() -ne [string]$componentManifest.archive_sha256) {
+            throw "Bundled local semantic archive changed while copying."
+        }
+        $localSemanticComponentArchiveIncluded = $true
+    }
+}
 # The React product still shares framework-neutral citation/Markdown helpers
 # from ui/. The removed Streamlit entrypoint is not packaged or launched.
 Copy-RuntimeTree (Join-Path $repoRoot "ui") (Join-Path $stageRoot "ui")
@@ -310,6 +354,8 @@ $manifest = [ordered]@{
     built_at = $builtAt
     license = if (Test-Path -LiteralPath $licensePath) { "MIT" } else { "" }
     license_status = if (Test-Path -LiteralPath $licensePath) { "included" } else { "missing-release-blocked" }
+    local_semantic_component_manifest_included = [bool]$localSemanticComponentManifestIncluded
+    local_semantic_component_archive_included = [bool]$localSemanticComponentArchiveIncluded
 }
 $manifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stageRoot "release-manifest.json") -Encoding UTF8
 
@@ -337,6 +383,8 @@ $artifactManifest = [ordered]@{
     launcher_signature_status = [string]$launcherSignature.Status
     launcher_certificate_thumbprint = [string]$launcherSignature.Thumbprint
     launcher_timestamped = [bool]$launcherSignature.Timestamped
+    local_semantic_component_manifest_included = [bool]$localSemanticComponentManifestIncluded
+    local_semantic_component_archive_included = [bool]$localSemanticComponentArchiveIncluded
 }
 $artifactManifestPath = Join-Path $outputRoot "$packageName.manifest.json"
 $artifactManifest | ConvertTo-Json | Set-Content -LiteralPath $artifactManifestPath -Encoding UTF8
