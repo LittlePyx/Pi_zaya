@@ -315,3 +315,29 @@ r15e 相关回归215通过；完整后端5748通过、43跳过；浏览器核心
 审计和PDF审计分别为 `stage-source-manifest-r15e.json`、`frozen-24-r15e-report.json`、
 `frozen-24-r15e-summary.json`、`binding-audit-r15e.json` 和 `pdf-audit-r15e/`。本轮仍是本地
 开发验证，不是发行包验收；未调整融合参数或新增 reranker。
+
+## 2026-10-15 合并前来源身份审阅（r16-r17）
+
+审阅先复现了同一问题：计划仍指向 Noise2Noise 的旧编号1，而实际编号1已经是 Noise2Self
+或另一目录中的同名 Noise2Noise 文件，窄补全仍追加带编号1的句子。现在用完整来源路径
+匹配回答候选，找不到对应来源就拒绝补全；实际顺序改变时重新计算编号。显式空候选也拒绝
+补全。文件名中的方法身份和完整路径核对分别处理，父目录名不能把其他论文改认成该方法。
+新增错误来源、同名不同目录、顺序变化、空候选和父目录误命名负例；复现记录为
+`source-identity-review-reproduction.json`，扩展负例失败记录为`source-identity-review-red.txt`。
+
+同时发现 scoped-fresh qrel 校验在本地语料部分缺失时会整体回退到公开投影，掩盖本地缺口。
+现在只允许所需语料全部不存在时回退，部分存在、部分缺失仍明确失败；负例覆盖这一条件。
+冻结题目、期望词组、关系支撑门槛与检索融合配置均未改变。
+
+r16是完整路径修复的中间版本，后续扩展了父目录不能改变论文身份的保护。r16两模式自动
+合同、答案词组和卡片文案/语言均24/24；直接来源、阅读器与原PDF各48/48，未绑定引用号0，
+共75张本地卡片。r16原源码保存在`r16-source-overlay/`，测试副本全程匹配其299文件清单。
+
+最终源码使用新轮次`citation-binding-r17`，同步后固定299个api/kb文件；原题集SHA256仍为
+`a4b01a3731fb3450f95bf764d20751823b504c5df5681d362cc1b39ca49b107b`。
+结果分别保留在`stage-source-manifest-r17.json`、`frozen-24-r17-report.json`、
+`frozen-24-r17-summary.json`、`binding-audit-r17.json`及`pdf-audit-r17/`，不覆盖r16或旧轮次。
+原始路径均相对于`test_results/citation_binding_20261014/`；实机失败也按原标准保留。
+
+最终源码完整后端5754通过、43跳过；定向94通过；干净Git检出89条冻结质量命令、Ruff、
+diff check及架构预算通过。物理定位不代替充分支撑，Noise2Self现有转换命题的残缺条件仍未恢复。
