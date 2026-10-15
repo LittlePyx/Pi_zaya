@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any
+from kb.n2n_target_condition import complete_target_condition
 
 
 def _text(value: object) -> str:
@@ -200,14 +201,15 @@ def complete_n2n_corruption_model_boundary(
     ):
         return text
     if not (
-        re.search(r"does not require|no .{0,24}explicit model|avoid\w* .{0,40}explicit", text, re.I)
+        re.search(r"does not require|no .{0,24}explicit (?:corruption )?model|avoid\w* .{0,40}explicit", text, re.I)
         and re.search(r"statistical summary|appropriate statistics", text, re.I)
     ):
         return text
-    if re.search(r"\b(?:expectation|mean)\b", text, re.I):
-        return text
     hits = [hit for hit in list(answer_hits or []) if isinstance(hit, Mapping)]
     if answer_hits is not None and not hits:
+        return text
+    text = complete_target_condition(text, dict(citation_plan), hits)
+    if re.search(r"\b(?:expectation|mean)\b", text, re.I):
         return text
     relation = _n2n_corruption_summary_slot(citation_plan, hits)
     if relation is None:

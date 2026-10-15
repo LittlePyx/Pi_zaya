@@ -6710,7 +6710,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         requested_facets=requested_research_facets,
                         limit=answer_passage_limit,
                     )
-                answer_hits = prioritize_direct_question_hits(answer_hits, list(hits_raw or []), limit=answer_passage_limit)
+                answer_hits = prioritize_direct_question_hits(answer_hits, list(hits_raw or []), limit=answer_passage_limit, prompt=prompt)
                 answer_hits = _selection_merge_same_source_answer_hits(answer_hits)
                 answer_hit_limit = min(answer_hit_limit, max(1, len(answer_hits)))
         else:

@@ -32,6 +32,16 @@ import type { ReaderLocateResult } from '../../src/components/chat/reader/reader
 import { prepareRefsPanelHits } from '../../src/components/refs/refsPanelDisplay'
 import { selectLocalizedRefCardText } from '../../src/components/refs/refCardCopy'
 
+test('reader source literals keep conditional bars and math delimiters', () => {
+  const literal = String.raw`input-conditioned p(y | x), ||x|| and $L_2$ retain \mathcal{J}.`
+  const detail = normalizeCiteDetail({
+    anchor: 'source-math', source_path: 'paper.en.md',
+    evidence_quote: literal, reader_evidence_quote: literal,
+  })
+  expect(detail?.readerEvidenceQuote).toBe(literal)
+  expect(detail?.evidenceQuote).not.toContain('|')
+})
+
 function shelfItem(meta: Record<string, unknown>): CiteShelfItem {
   const detail = normalizeCiteDetail({
     anchor: 'ref-1',

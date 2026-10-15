@@ -105,9 +105,16 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
                                if _supports(local_claim, str(slot.get("evidence_quote") or ""),
                                             str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""))]
             if supported_slots:
-                if all(slot.get("passage_bound_claims") for slot in supported_slots) and len(supported_slots) == 1:
+                unique_secondary = (
+                    len(supported_slots) == 1 and supported_slots[0] is not source_slots[0]
+                    and bool(_verified_passage(
+                        {**supported_slots[0], "text": supported_slots[0].get("evidence_quote")},
+                        str(supported_slots[0].get("source_path") or ""),
+                    ))
+                )
+                if len(supported_slots) == 1 and (unique_secondary or supported_slots[0].get("passage_bound_claims")):
                     slot = supported_slots[0]
-                    claims = list(slot["passage_bound_claims"])
+                    claims = list(slot.get("passage_bound_claims") or [])
                     if local_claim not in claims:
                         slot["passage_bound_claims"] = [*claims, local_claim]
                         added = True
