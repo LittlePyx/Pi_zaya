@@ -15,6 +15,15 @@ VARIANCE = (
 CLAIM = "有限数据下，估计量的方差 = 目标中噪声的平均方差 ÷ 训练样本数。"
 EQUATION = r"\mathbb{E}\|f(x)-x\|^2=\mathbb{E}\|f(x)-y\|^2+\mathbb{E}\|x-y\|^2."
 SOURCE_EQUATION = "$$\nE ∥ f(x) - x ∥ 2 = E ∥ f(x) - y ∥ 2 + E ∥ x - y ∥ 2 .\n$$"
+CONDITIONS = (
+    "Proposition 1. Suppose x is an unbiased estimator of y, i.e. E[x|y]=y, "
+    "and the noise in each subset J is independent from the noise in its "
+    "complement Jc, conditional on y. Let f be J-invariant."
+)
+CONDITION_CLAIM = (
+    "Unbiasedness means E[x|y]=y, and noise in each subset is independent "
+    "of its complement conditional on y."
+)
 
 
 def hit(text, name="Theory"):
@@ -116,6 +125,80 @@ def test_changed_equation_is_not_preserved_by_word_overlap(equation):
         allowed_citation_numbers={1}, drop_unsupported_unplanned_claims=True,
         drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True)
     assert equation not in answer
+
+
+@pytest.mark.parametrize("punctuation", [",", ";", "，", "；"])
+def test_source_equation_sentence_punctuation_survives_audit(punctuation):
+    equation = EQUATION.rstrip(".") + punctuation
+    answer, _ = audit_and_repair_claim_evidence(
+        "$$\n" + equation + "\n$$", [hit(SOURCE_EQUATION)],
+        allowed_citation_numbers={1}, drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True,
+    )
+    assert equation in answer and "Source equation [1]" in answer
+
+
+@pytest.mark.parametrize("equation", [
+    EQUATION.replace("+", "-").rstrip(".") + ",",
+    EQUATION.replace("^2", "^3", 1).rstrip(".") + ",",
+    EQUATION.replace("f(x)-y", "f(y)-x").rstrip(".") + ",",
+])
+def test_sentence_punctuation_cannot_protect_changed_equation(equation):
+    answer, _ = audit_and_repair_claim_evidence(
+        "$$\n" + equation + "\n$$", [hit(SOURCE_EQUATION)],
+        allowed_citation_numbers={1}, drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True,
+    )
+    assert equation not in answer
+
+
+def test_equation_requires_selected_evidence_and_allowed_citation():
+    equation = EQUATION.rstrip(".") + ","
+    for hits, allowed in [([hit("This source contains no equation.")], {1}),
+                          ([hit(SOURCE_EQUATION), hit("Other source.")], {2})]:
+        answer, _ = audit_and_repair_claim_evidence(
+            "$$\n" + equation + "\n$$", hits,
+            allowed_citation_numbers=allowed, drop_unsupported_unplanned_claims=True,
+            drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True,
+        )
+        assert equation not in answer
+
+
+def test_equation_number_is_presentation_but_its_operands_are_not():
+    from kb.theory_evidence import protect_source_equations
+
+    source = SOURCE_EQUATION.replace(".\n$$", r". \tag{2}" + "\n$$")
+    answer = "$$\n" + EQUATION.rstrip(".") + ",\n$$"
+    protected, replacements = protect_source_equations(answer, [hit(source)])
+    assert replacements and "source_equation_0" in protected
+    assert not protect_source_equations(answer.replace("+", "-"), [hit(source)])[1]
+
+
+def test_complete_measurement_conditions_keep_source_direction():
+    assert _support_score(CONDITION_CLAIM, CONDITIONS) >= 5
+    assert not binding(CONDITION_CLAIM, CONDITIONS, "Noise2Self")["suppress_link"]
+
+
+@pytest.mark.parametrize("claim", [
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[y|x]=x"),
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[x|y]=2y"),
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[x|y]=y+1"),
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[x|y]=y/2"),
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[x|y]=y^2"),
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[x|y]=y+z"),
+    CONDITION_CLAIM.replace("E[x|y]=y", "E[x]=E[y]"),
+    CONDITION_CLAIM.replace("conditional on y", "unconditionally"),
+])
+def test_word_overlap_cannot_validate_changed_measurement_conditions(claim):
+    assert _support_score(claim, CONDITIONS) == 0
+    assert binding(claim, CONDITIONS, "Noise2Self")["suppress_link"]
+
+
+def test_incomplete_source_cannot_supply_missing_formal_condition():
+    partial = CONDITIONS.replace("E[x|y]=y, and the noise in each subset J is indepen", "")
+    assert _support_score(CONDITION_CLAIM, partial) == 0
+    assert binding(CONDITION_CLAIM, partial, "Noise2Self")["suppress_link"]
+    assert binding("Noise2Self: " + CONDITION_CLAIM, CONDITIONS, "Noise2Void")["suppress_link"]
 
 
 def test_dncnn_architecture_relation_requires_exact_formula_and_pooling_fact():

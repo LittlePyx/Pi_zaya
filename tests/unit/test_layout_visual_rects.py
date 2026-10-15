@@ -571,3 +571,22 @@ def test_sort_blocks_reading_order_keeps_upper_right_abstract_before_lower_two_c
         intro_left.text,
         intro_right.text,
     ]
+
+
+def test_column_gutter_uses_body_blocks_despite_centered_figure_and_short_equations():
+    def block(rect, text):
+        return TextBlock(bbox=rect, text=text, max_font_size=10, is_bold=False)
+
+    figure = block((217, 70, 337, 130), "![Figure](./assets/figure.png)")
+    caption = block((55, 165, 542, 220), "Figure 1. Partition of measurement dimensions.")
+    left = block((55, 270, 291, 365), "Definition. A partition of the dimensions. " * 3)
+    condition = block((55, 452, 291, 507), "Proposition 1. Unbiasedness and conditional independence. " * 2)
+    right = block((307, 424, 543, 507), "We approximate the optimal denoiser. " * 4)
+    later = block((307, 573, 543, 669), "Related work on signal and noise assumptions. " * 4)
+    formula = block((123, 387, 222, 409), "L(f) = E||f(x)-x||^2")
+    number = block((278, 390, 289, 402), "(1)")
+    out = sort_blocks_reading_order(
+        [later, formula, figure, right, condition, caption, number, left], page_width=612)
+    assert out.index(condition) < out.index(right)
+    assert out.index(left) < out.index(formula) < out.index(condition)
+    assert out.index(caption) < out.index(left)

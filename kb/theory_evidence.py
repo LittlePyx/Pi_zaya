@@ -161,15 +161,50 @@ def signal_noise_assumptions_covered(claim: str, evidence: str) -> bool:
     return True
 
 
+def measurement_conditions_covered(claim: str, evidence: str) -> bool:
+    """Check explicit x/y unbiasedness conditions without filling source gaps.
+
+    This is a literal relation guard, not an algebra solver. In particular,
+    unconditional expectations cannot stand in for the conditional condition.
+    """
+    if re.search(r"unbiased|无偏", claim, re.I):
+        expectation = r"E\s*\[\s*[xy]\s*(?:\|\s*[xy]\s*)?\]"
+        relation = re.compile(
+            expectation + r"\s*=\s*(?:" + expectation
+            + r"|[+-]?\d*\s*[xy](?:\s*[-+*/^]\s*(?:\d+|[xy]|\{[^}]+\}))*)"
+        )
+
+        def equations(text: str) -> set[str] | None:
+            text = re.sub(r"\\(?:mathbb|mathrm)\s*\{E\}", "E", text)
+            text = text.replace(r"\mid", "|")
+            matches = list(relation.finditer(text))
+            starts = list(re.finditer(expectation + r"\s*=", text))
+            if len(starts) != len(matches) or any(
+                re.match(r"\s*[-+*/^=]", text[m.end():]) for m in matches
+            ):
+                return None
+            return {re.sub(r"\s+", "", m[0]) for m in matches}
+
+        claim_equations, source_equations = equations(claim), equations(evidence)
+        if claim_equations is None or not claim_equations.issubset(source_equations or set()):
+            return False
+    if re.search(r"noise|噪声", claim, re.I) and re.search(
+        r"unconditional(?:ly)?|无条件.{0,8}独立", claim, re.I
+    ):
+        return bool(re.search(r"unconditional(?:ly)?|无条件.{0,8}独立", evidence, re.I))
+    return True
+
+
 def normalized_equation(text: str) -> str:
     """Normalize presentation only; preserve operands, signs and exponents."""
     text = re.sub(r"\\(?:mathbb|mathrm)\s*\{E\}", "E", text)
     text = text.replace(r"\Vert", "∥").replace(r"\|", "∥").replace("||", "∥")
     text = re.sub(r"\\(?:left|right|,|;|!)", "", text)
+    text = re.sub(r"\\tag\{\d+\}\s*$", "", text.strip())
     text = re.sub(r"\^\{(\d+)\}", r"^\1", text)
     # The converter emits Unicode norm followed by a plain superscript digit.
     text = re.sub(r"∥\s*\^?\s*(\d+)", r"∥^\1", text)
-    return re.sub(r"\s+", "", text).strip("$ .。")
+    return re.sub(r"\s+", "", text).strip("$ .。,，;；")
 
 
 def normalize_supported_variance_relation(

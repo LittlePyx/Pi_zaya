@@ -12,6 +12,15 @@ def looks_like_mixed_math_prose_line(text: str) -> bool:
 
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     words = re.findall(r"\b[A-Za-z]{2,}\b", value)
+    # Definitions often wrap after a set or domain expression. Those lines
+    # remain prose even though they contain too few words for the longer
+    # conditional-sentence rule below.
+    if len(words) >= 4 and re.search(r"\b(?:is|are|let|suppose|does|has)\b", value, re.I):
+        return True
+    if len(words) >= 3 and re.search(r"\band let\b", value, re.I):
+        return True
+    if re.match(r"^(?:Proposition|Theorem|Lemma|Corollary|Definition)\b", value, re.I) and len(words) >= 3:
+        return True
     equation_anchors = re.findall(r"=|∈|≤|≥|\\(?:sum|int|frac|sqrt)\b", value)
     return bool(
         len(words) >= 8

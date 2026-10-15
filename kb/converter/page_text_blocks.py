@@ -346,7 +346,10 @@ def extract_text_blocks(
             # Determine math/codelike. Prefer line-level hint to avoid misclassifying prose lines.
             if not is_caption:
                 group_line_texts = [x for _, x in group_lines]
-                is_math = bool(group_is_math_hint) or _looks_like_math_block(group_line_texts)
+                is_math = bool(group_is_math_hint) or (
+                    not looks_like_mixed_math_prose_line(full_text_space)
+                    and _looks_like_math_block(group_line_texts)
+                )
                 if not is_math:
                     is_code = _looks_like_code_block(group_line_texts)
             # Preserve line breaks for math blocks for better repair/rendering.

@@ -422,6 +422,25 @@ def _detect_column_split_x(blocks: list, page_width: float) -> Optional[float]:
     if not blocks:
         return None
 
+    def _is_substantial_column_block(block) -> bool:
+        try:
+            x0, y0, x1, y1 = [float(v) for v in block.bbox]
+        except Exception:
+            return False
+        width = max(0.0, x1 - x0)
+        height = max(0.0, y1 - y0)
+        if width < page_width * 0.18 or width >= page_width * 0.62:
+            return False
+        if height < 36.0:
+            return False
+        try:
+            txt = str(getattr(block, "text", "") or "")
+        except Exception:
+            txt = ""
+        if txt and len(re.sub(r"\s+", " ", txt).strip()) < 40:
+            return False
+        return True
+
     # Assuming blocks have .bbox
     candidates = [
         (float(b.bbox[0]) + float(b.bbox[2])) / 2.0
@@ -430,6 +449,21 @@ def _detect_column_split_x(blocks: list, page_width: float) -> Optional[float]:
     ]
     if len(candidates) < 2:
         return None
+    # Body paragraphs provide a steadier gutter than centered formulas,
+    # equation numbers and figure labels. Use them only when both columns
+    # have substantial evidence; retain the sparse-layout fallback below.
+    body_centers = sorted(
+        (float(b.bbox[0]) + float(b.bbox[2])) / 2.0
+        for b in blocks if _is_substantial_column_block(b)
+    )
+    if len(body_centers) >= 4:
+        gaps = [(body_centers[i + 1] - body_centers[i], i)
+                for i in range(1, len(body_centers) - 2)]
+        gap, index = max(gaps, default=(0.0, 0))
+        if gap >= page_width * 0.16:
+            mid = (body_centers[index] + body_centers[index + 1]) / 2.0
+            if page_width * 0.22 <= mid <= page_width * 0.78:
+                return float(mid)
     centers = sorted(candidates)
 
     best_gap = 0.0
@@ -453,25 +487,6 @@ def _detect_column_split_x(blocks: list, page_width: float) -> Optional[float]:
     right_n = len(centers) - left_n
     if left_n < 1 or right_n < 1:
         return None
-
-    def _is_substantial_column_block(block) -> bool:
-        try:
-            x0, y0, x1, y1 = [float(v) for v in block.bbox]
-        except Exception:
-            return False
-        width = max(0.0, x1 - x0)
-        height = max(0.0, y1 - y0)
-        if width < page_width * 0.18 or width >= page_width * 0.62:
-            return False
-        if height < 36.0:
-            return False
-        try:
-            txt = str(getattr(block, "text", "") or "")
-        except Exception:
-            txt = ""
-        if txt and len(re.sub(r"\s+", " ", txt).strip()) < 40:
-            return False
-        return True
 
     substantial_left = 0
     substantial_right = 0

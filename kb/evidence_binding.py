@@ -199,6 +199,7 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
     evidence_text = re.sub(r"\s+", " ", str(evidence or "")).strip()
     from kb.theory_evidence import (
         architecture_relation_covered,
+        measurement_conditions_covered,
         noisy_target_relation_covered,
         restoration_task_enumeration_covered,
         signal_noise_assumptions_covered,
@@ -208,6 +209,7 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
 
     return (
         variance_relation_covered(claim_text, evidence_text)
+        and measurement_conditions_covered(claim_text, evidence_text)
         and architecture_relation_covered(claim_text, evidence_text)
         and noisy_target_relation_covered(claim_text, evidence_text)
         and restoration_task_enumeration_covered(claim_text, evidence_text)
