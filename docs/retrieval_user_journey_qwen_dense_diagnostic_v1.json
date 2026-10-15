@@ -1,0 +1,1983 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_user_journey_qwen_dense_diagnostic_v1",
+  "measured_at": "2026-09-02T20:04:46.723820+00:00",
+  "protocol_sha256": "8c375ea0ee9a5c5d0fd419b5c992cc65575af25e772618d718420a484c5bd467",
+  "fixture_sha256": "6463cf63ba1853fc8704eead89de0ee36061481613621b1fa72ea4b7fe5429ca",
+  "baseline_sha256": "28748a9d590a637dcd8e2847f2ba9efc437b069ee4769feb95f3821986576fca",
+  "calibration_case_ids": [
+    "journey-cassi-vs-fourier-measurement-encoding",
+    "journey-compensation-combined-degradation-boundary",
+    "journey-dualscale-large-image-mechanism",
+    "journey-dualscale-resolution-results",
+    "journey-fashionmnist-mnist-boundary",
+    "journey-hyperspectral-prior-transfer-boundary",
+    "journey-kuzushiji-modern-ocr-boundary",
+    "journey-nafnet-vs-classical-denoising-evidence",
+    "journey-piln-vs-pidl-supervision",
+    "journey-primal-dual-operator-exchange",
+    "journey-realtime-spi-frame-input",
+    "journey-s2ism-vs-iism-information-source"
+  ],
+  "frozen_representation": {
+    "candidate_id": "qwen3_embedding_0_6b_v1",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "model_safetensors_sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "dimension": 1024,
+    "pooling": "last_token",
+    "padding_side": "left",
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+    "passage_prefix": "",
+    "max_length": 8192,
+    "batch_size": 1,
+    "allow_download": false,
+    "trust_remote_code": false,
+    "parent_chunks_unchanged": true,
+    "query_translation_or_expansion": false
+  },
+  "runtime": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "device": "cuda",
+    "dtype": "float16",
+    "allow_download": false,
+    "trust_remote_code": false
+  },
+  "index": {
+    "relative_path": "test_results/retrieval_candidate_screening_v1/qwen3_embedding_0_6b_v1/index_v1",
+    "build_id": "eaf61f67c2974f519e9ea6ce23f5ccbe",
+    "corpus_fingerprint": "7e3261179b44da0e2baa430ea14243ef6885a49ee73d3e921b48bfc57f35bdf5",
+    "document_count": 31,
+    "chunk_count": 2251,
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "size_bytes": 9801699,
+    "rebuild_allowed": false,
+    "rebuilt": false
+  },
+  "query_embedding_cache": {
+    "enabled": true,
+    "unique_query_count": 12,
+    "shared_across_scoped_and_full_library": true
+  },
+  "channels": {
+    "bm25_product_queries_frozen_control": {
+      "channel": "bm25_product_queries_frozen_control",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.277244,
+            "recall@5": 0.194444,
+            "recall@10": 0.222222,
+            "recall@20": 0.333333,
+            "ndcg@10": 0.16104,
+            "contract_recall@10": 0.25,
+            "contract_recall@20": 0.375,
+            "wrong_source_rate@5": 0.0
+          },
+          "ks": [
+            5,
+            10,
+            20
+          ],
+          "cases": [
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 0.5,
+                "ndcg@10": 0.168676,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 0.5,
+                "ndcg@10": 0.337352,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 1.0,
+                "ndcg@10": 0.386853,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "recall@20": 0.666667,
+                "ndcg@10": 0.233402,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "first_relevant_rank": 13,
+              "metrics": {
+                "mrr": 0.076923,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.5,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "first_relevant_rank": 6,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 0.333333,
+                "recall@20": 0.333333,
+                "ndcg@10": 0.193044,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.178513,
+            "recall@5": 0.152778,
+            "recall@10": 0.152778,
+            "recall@20": 0.236111,
+            "ndcg@10": 0.118022,
+            "contract_recall@10": 0.166667,
+            "contract_recall@20": 0.25,
+            "wrong_source_rate@5": 0.383333
+          },
+          "ks": [
+            5,
+            10,
+            20
+          ],
+          "cases": [
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 0.5,
+                "ndcg@10": 0.14529,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.6
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 1.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 1.0,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 1.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 1.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 1.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "first_relevant_rank": 17,
+              "metrics": {
+                "mrr": 0.058824,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "recall@20": 0.5,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "recall@20": 0.5,
+                "ndcg@10": 0.386853,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "recall@20": 0.333333,
+                "ndcg@10": 0.270971,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5,
+                "wrong_source_rate@5": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "qwen_dense_single_vector": {
+      "channel": "qwen_dense_single_vector",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "label_count": 23,
+          "zero_hit_cases": 0,
+          "translated_cases": 0,
+          "metrics": {
+            "contract_recall@10": 0.25,
+            "contract_recall@20": 0.375,
+            "contract_recall@5": 0.166667,
+            "mrr": 0.173016,
+            "ndcg@10": 0.144273,
+            "ndcg@20": 0.180796,
+            "ndcg@5": 0.121093,
+            "recall@10": 0.222222,
+            "recall@20": 0.319444,
+            "recall@5": 0.152778,
+            "wrong_source_rate@10": 0.0,
+            "wrong_source_rate@20": 0.0,
+            "wrong_source_rate@5": 0.0
+          },
+          "latency_ms": {
+            "p50": 57.979,
+            "p95": 189.784,
+            "max": 334.258
+          },
+          "ks": [
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.375,
+                  "contract_recall@5": 0.125,
+                  "mrr": 0.108333,
+                  "ndcg@10": 0.101023,
+                  "ndcg@20": 0.147348,
+                  "ndcg@5": 0.076644,
+                  "recall@10": 0.25,
+                  "recall@20": 0.375,
+                  "recall@5": 0.125,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "zh": {
+                "case_count": 8,
+                "metrics": {
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.375,
+                  "contract_recall@5": 0.1875,
+                  "mrr": 0.205357,
+                  "ndcg@10": 0.165898,
+                  "ndcg@20": 0.19752,
+                  "ndcg@5": 0.143317,
+                  "recall@10": 0.208333,
+                  "recall@20": 0.291667,
+                  "recall@5": 0.166667,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "evaluation_focus": {
+              "cross_paper_evidence_comparison": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.125,
+                  "contract_recall@20": 0.25,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.035714,
+                  "ndcg@10": 0.045162,
+                  "ndcg@20": 0.077056,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.083333,
+                  "recall@20": 0.166667,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "experimental_configuration_or_metric": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "single_paper_boundary_or_limitation": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.625,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.458333,
+                  "ndcg@10": 0.363279,
+                  "ndcg@20": 0.394627,
+                  "ndcg@5": 0.363279,
+                  "recall@10": 0.458333,
+                  "recall@20": 0.541667,
+                  "recall@5": 0.458333,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@10": 0.166667,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.033333,
+                  "ndcg@10": 0.032506,
+                  "ndcg@20": 0.094273,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.166667,
+                  "recall@20": 0.333333,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "query_scope": {
+              "compare physical measurement encoding across two library papers": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "compare source-backed supervision mechanisms without generating a review narrative": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "compare the distinct measured information used by two microscopy methods": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.142857,
+                  "ndcg@10": 0.180647,
+                  "ndcg@20": 0.308225,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.666667,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "compare traceable mechanism evidence for explicit-prior and learned denoising": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "find how measurement physics participates in learned primal-dual updates": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.1,
+                  "ndcg@10": 0.097517,
+                  "ndcg@20": 0.28282,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 1.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "find the domain-shift boundary for historical Japanese recognition": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.333333,
+                  "ndcg@10": 0.306574,
+                  "ndcg@20": 0.306574,
+                  "ndcg@5": 0.306574,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "find the per-frame neural reconstruction mechanism": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate large-image evaluation settings and quantitative resource or quality results": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate the dual-scale information-flow mechanism": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate the prior single-factor boundary and the new blind combined-degradation scope": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@10": 0.14654,
+                  "ndcg@20": 0.271934,
+                  "ndcg@5": 0.14654,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.666667,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate the representation and hardware-validation boundary for transferring natural-image networks to HSI": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate the stated limitations of MNIST and intended benchmark boundary": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_evidence_comparison": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.125,
+                  "contract_recall@20": 0.25,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.035714,
+                  "ndcg@10": 0.045162,
+                  "ndcg@20": 0.077056,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.083333,
+                  "recall@20": 0.166667,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "experimental_configuration_or_metric": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "single_paper_boundary_or_limitation": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.625,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.458333,
+                  "ndcg@10": 0.363279,
+                  "ndcg@20": 0.394627,
+                  "ndcg@5": 0.363279,
+                  "recall@10": 0.458333,
+                  "recall@20": 0.541667,
+                  "recall@5": 0.458333,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@10": 0.166667,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.033333,
+                  "ndcg@10": 0.032506,
+                  "ndcg@20": 0.094273,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.166667,
+                  "recall@20": 0.333333,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "user_journey_expansion": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.375,
+                  "contract_recall@5": 0.166667,
+                  "mrr": 0.173016,
+                  "ndcg@10": 0.144273,
+                  "ndcg@20": 0.180796,
+                  "ndcg@5": 0.121093,
+                  "recall@10": 0.222222,
+                  "recall@20": 0.319444,
+                  "recall@5": 0.152778,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "locale": "en",
+              "evaluation_focus": "single_paper_mechanism",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 10,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.097517,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_mechanism",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "locale": "en",
+              "evaluation_focus": "single_paper_mechanism",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "locale": "en",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.306574,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 3,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.14654,
+                "recall@20": 0.666667,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "locale": "zh",
+              "evaluation_focus": "experimental_configuration_or_metric",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "experimental_configuration_or_metric"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "locale": "zh",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "locale": "en",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "locale": "zh",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "locale": "zh",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": 7,
+              "label_count": 3,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.180647,
+                "recall@20": 0.666667,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "label_count": 23,
+          "zero_hit_cases": 0,
+          "translated_cases": 0,
+          "metrics": {
+            "contract_recall@10": 0.25,
+            "contract_recall@20": 0.333333,
+            "contract_recall@5": 0.166667,
+            "mrr": 0.173016,
+            "ndcg@10": 0.144273,
+            "ndcg@20": 0.170347,
+            "ndcg@5": 0.121093,
+            "recall@10": 0.222222,
+            "recall@20": 0.291667,
+            "recall@5": 0.152778,
+            "wrong_source_rate@10": 0.2,
+            "wrong_source_rate@20": 0.195833,
+            "wrong_source_rate@5": 0.216667
+          },
+          "latency_ms": {
+            "p50": 151.089,
+            "p95": 174.535,
+            "max": 176.147
+          },
+          "ks": [
+            5,
+            10,
+            20
+          ],
+          "groups": {
+            "locale": {
+              "en": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.375,
+                  "contract_recall@5": 0.125,
+                  "mrr": 0.108333,
+                  "ndcg@10": 0.101023,
+                  "ndcg@20": 0.147348,
+                  "ndcg@5": 0.076644,
+                  "recall@10": 0.25,
+                  "recall@20": 0.375,
+                  "recall@5": 0.125,
+                  "wrong_source_rate@10": 0.025,
+                  "wrong_source_rate@20": 0.0875,
+                  "wrong_source_rate@5": 0.05
+                }
+              },
+              "zh": {
+                "case_count": 8,
+                "metrics": {
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.3125,
+                  "contract_recall@5": 0.1875,
+                  "mrr": 0.205357,
+                  "ndcg@10": 0.165898,
+                  "ndcg@20": 0.181846,
+                  "ndcg@5": 0.143317,
+                  "recall@10": 0.208333,
+                  "recall@20": 0.25,
+                  "recall@5": 0.166667,
+                  "wrong_source_rate@10": 0.2875,
+                  "wrong_source_rate@20": 0.25,
+                  "wrong_source_rate@5": 0.3
+                }
+              }
+            },
+            "evaluation_focus": {
+              "cross_paper_evidence_comparison": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.125,
+                  "contract_recall@20": 0.25,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.035714,
+                  "ndcg@10": 0.045162,
+                  "ndcg@20": 0.077056,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.083333,
+                  "recall@20": 0.166667,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.1,
+                  "wrong_source_rate@20": 0.0625,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "experimental_configuration_or_metric": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.7,
+                  "wrong_source_rate@20": 0.65,
+                  "wrong_source_rate@5": 0.6
+                }
+              },
+              "single_paper_boundary_or_limitation": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.458333,
+                  "ndcg@10": 0.363279,
+                  "ndcg@20": 0.363279,
+                  "ndcg@5": 0.363279,
+                  "recall@10": 0.458333,
+                  "recall@20": 0.458333,
+                  "recall@5": 0.458333,
+                  "wrong_source_rate@10": 0.175,
+                  "wrong_source_rate@20": 0.2125,
+                  "wrong_source_rate@5": 0.1
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@10": 0.166667,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.033333,
+                  "ndcg@10": 0.032506,
+                  "ndcg@20": 0.094273,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.166667,
+                  "recall@20": 0.333333,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.2,
+                  "wrong_source_rate@5": 0.266667
+                }
+              }
+            },
+            "query_scope": {
+              "compare physical measurement encoding across two library papers": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.3,
+                  "wrong_source_rate@20": 0.15,
+                  "wrong_source_rate@5": 0.6
+                }
+              },
+              "compare source-backed supervision mechanisms without generating a review narrative": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.1,
+                  "wrong_source_rate@20": 0.1,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "compare the distinct measured information used by two microscopy methods": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.142857,
+                  "ndcg@10": 0.180647,
+                  "ndcg@20": 0.308225,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.666667,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "compare traceable mechanism evidence for explicit-prior and learned denoising": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "find how measurement physics participates in learned primal-dual updates": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.1,
+                  "ndcg@10": 0.097517,
+                  "ndcg@20": 0.28282,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.5,
+                  "recall@20": 1.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "find the domain-shift boundary for historical Japanese recognition": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.333333,
+                  "ndcg@10": 0.306574,
+                  "ndcg@20": 0.306574,
+                  "ndcg@5": 0.306574,
+                  "recall@10": 0.5,
+                  "recall@20": 0.5,
+                  "recall@5": 0.5,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.0,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "find the per-frame neural reconstruction mechanism": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.0,
+                  "wrong_source_rate@20": 0.25,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate large-image evaluation settings and quantitative resource or quality results": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.7,
+                  "wrong_source_rate@20": 0.65,
+                  "wrong_source_rate@5": 0.6
+                }
+              },
+              "locate the dual-scale information-flow mechanism": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.6,
+                  "wrong_source_rate@20": 0.35,
+                  "wrong_source_rate@5": 0.8
+                }
+              },
+              "locate the prior single-factor boundary and the new blind combined-degradation scope": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.5,
+                  "ndcg@10": 0.14654,
+                  "ndcg@20": 0.14654,
+                  "ndcg@5": 0.14654,
+                  "recall@10": 0.333333,
+                  "recall@20": 0.333333,
+                  "recall@5": 0.333333,
+                  "wrong_source_rate@10": 0.1,
+                  "wrong_source_rate@20": 0.25,
+                  "wrong_source_rate@5": 0.0
+                }
+              },
+              "locate the representation and hardware-validation boundary for transferring natural-image networks to HSI": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 1.0,
+                  "contract_recall@20": 1.0,
+                  "contract_recall@5": 1.0,
+                  "mrr": 1.0,
+                  "ndcg@10": 1.0,
+                  "ndcg@20": 1.0,
+                  "ndcg@5": 1.0,
+                  "recall@10": 1.0,
+                  "recall@20": 1.0,
+                  "recall@5": 1.0,
+                  "wrong_source_rate@10": 0.5,
+                  "wrong_source_rate@20": 0.55,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "locate the stated limitations of MNIST and intended benchmark boundary": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.1,
+                  "wrong_source_rate@20": 0.05,
+                  "wrong_source_rate@5": 0.2
+                }
+              }
+            },
+            "coverage": {
+              "cross_paper_evidence_comparison": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.125,
+                  "contract_recall@20": 0.25,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.035714,
+                  "ndcg@10": 0.045162,
+                  "ndcg@20": 0.077056,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.083333,
+                  "recall@20": 0.166667,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.1,
+                  "wrong_source_rate@20": 0.0625,
+                  "wrong_source_rate@5": 0.2
+                }
+              },
+              "experimental_configuration_or_metric": {
+                "case_count": 1,
+                "metrics": {
+                  "contract_recall@10": 0.0,
+                  "contract_recall@20": 0.0,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.0,
+                  "ndcg@10": 0.0,
+                  "ndcg@20": 0.0,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.0,
+                  "recall@20": 0.0,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.7,
+                  "wrong_source_rate@20": 0.65,
+                  "wrong_source_rate@5": 0.6
+                }
+              },
+              "single_paper_boundary_or_limitation": {
+                "case_count": 4,
+                "metrics": {
+                  "contract_recall@10": 0.5,
+                  "contract_recall@20": 0.5,
+                  "contract_recall@5": 0.5,
+                  "mrr": 0.458333,
+                  "ndcg@10": 0.363279,
+                  "ndcg@20": 0.363279,
+                  "ndcg@5": 0.363279,
+                  "recall@10": 0.458333,
+                  "recall@20": 0.458333,
+                  "recall@5": 0.458333,
+                  "wrong_source_rate@10": 0.175,
+                  "wrong_source_rate@20": 0.2125,
+                  "wrong_source_rate@5": 0.1
+                }
+              },
+              "single_paper_mechanism": {
+                "case_count": 3,
+                "metrics": {
+                  "contract_recall@10": 0.166667,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@5": 0.0,
+                  "mrr": 0.033333,
+                  "ndcg@10": 0.032506,
+                  "ndcg@20": 0.094273,
+                  "ndcg@5": 0.0,
+                  "recall@10": 0.166667,
+                  "recall@20": 0.333333,
+                  "recall@5": 0.0,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.2,
+                  "wrong_source_rate@5": 0.266667
+                }
+              },
+              "user_journey_expansion": {
+                "case_count": 12,
+                "metrics": {
+                  "contract_recall@10": 0.25,
+                  "contract_recall@20": 0.333333,
+                  "contract_recall@5": 0.166667,
+                  "mrr": 0.173016,
+                  "ndcg@10": 0.144273,
+                  "ndcg@20": 0.170347,
+                  "ndcg@5": 0.121093,
+                  "recall@10": 0.222222,
+                  "recall@20": 0.291667,
+                  "recall@5": 0.152778,
+                  "wrong_source_rate@10": 0.2,
+                  "wrong_source_rate@20": 0.195833,
+                  "wrong_source_rate@5": 0.216667
+                }
+              }
+            }
+          },
+          "cases": [
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "locale": "en",
+              "evaluation_focus": "single_paper_mechanism",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": 10,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.097517,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_mechanism",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "locale": "en",
+              "evaluation_focus": "single_paper_mechanism",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_mechanism"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 1,
+              "contract_count": 1,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "locale": "en",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": 3,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.306574,
+                "recall@20": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": 2,
+              "label_count": 3,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.14654,
+                "recall@20": 0.333333,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 0.5
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "locale": "zh",
+              "evaluation_focus": "single_paper_boundary_or_limitation",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "single_paper_boundary_or_limitation"
+              ],
+              "first_relevant_rank": 1,
+              "label_count": 1,
+              "contract_count": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 1.0,
+                "recall@20": 1.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 1.0,
+                "contract_recall@20": 1.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "locale": "zh",
+              "evaluation_focus": "experimental_configuration_or_metric",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "experimental_configuration_or_metric"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.6,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "locale": "zh",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "locale": "en",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "locale": "zh",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": null,
+              "label_count": 2,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "recall@20": 0.0,
+                "wrong_source_rate@5": 0.6,
+                "contract_recall@10": 0.0,
+                "contract_recall@20": 0.0
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "locale": "zh",
+              "evaluation_focus": "cross_paper_evidence_comparison",
+              "coverage_tags": [
+                "user_journey_expansion",
+                "cross_paper_evidence_comparison"
+              ],
+              "first_relevant_rank": 7,
+              "label_count": 3,
+              "contract_count": 2,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.180647,
+                "recall@20": 0.666667,
+                "wrong_source_rate@5": 0.0,
+                "contract_recall@10": 0.5,
+                "contract_recall@20": 1.0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "analysis": {
+    "comparison_depth": 10,
+    "modes": {
+      "scoped": {
+        "recall@10_gain_vs_product": 0.0,
+        "classes_at_10": {
+          "both_hit": [
+            "journey-primal-dual-operator-exchange",
+            "journey-kuzushiji-modern-ocr-boundary",
+            "journey-compensation-combined-degradation-boundary",
+            "journey-s2ism-vs-iism-information-source"
+          ],
+          "bm25_only": [
+            "journey-realtime-spi-frame-input",
+            "journey-cassi-vs-fourier-measurement-encoding"
+          ],
+          "dense_only": [
+            "journey-hyperspectral-prior-transfer-boundary"
+          ],
+          "neither": [
+            "journey-dualscale-large-image-mechanism",
+            "journey-fashionmnist-mnist-boundary",
+            "journey-dualscale-resolution-results",
+            "journey-nafnet-vs-classical-denoising-evidence",
+            "journey-piln-vs-pidl-supervision"
+          ]
+        },
+        "class_counts_at_10": {
+          "both_hit": 4,
+          "bm25_only": 2,
+          "dense_only": 1,
+          "neither": 5
+        },
+        "dense_first_relevant_rank_buckets": {
+          "miss_top20": 7,
+          "rank_1": 1,
+          "ranks_2_5": 2,
+          "ranks_6_10": 2
+        }
+      },
+      "full_library": {
+        "recall@10_gain_vs_product": 0.069444,
+        "classes_at_10": {
+          "both_hit": [
+            "journey-primal-dual-operator-exchange",
+            "journey-kuzushiji-modern-ocr-boundary",
+            "journey-s2ism-vs-iism-information-source"
+          ],
+          "bm25_only": [
+            "journey-cassi-vs-fourier-measurement-encoding"
+          ],
+          "dense_only": [
+            "journey-compensation-combined-degradation-boundary",
+            "journey-hyperspectral-prior-transfer-boundary"
+          ],
+          "neither": [
+            "journey-dualscale-large-image-mechanism",
+            "journey-realtime-spi-frame-input",
+            "journey-fashionmnist-mnist-boundary",
+            "journey-dualscale-resolution-results",
+            "journey-nafnet-vs-classical-denoising-evidence",
+            "journey-piln-vs-pidl-supervision"
+          ]
+        },
+        "class_counts_at_10": {
+          "both_hit": 3,
+          "bm25_only": 1,
+          "dense_only": 2,
+          "neither": 6
+        },
+        "dense_first_relevant_rank_buckets": {
+          "miss_top20": 7,
+          "rank_1": 1,
+          "ranks_2_5": 2,
+          "ranks_6_10": 2
+        }
+      }
+    },
+    "fusion_v3_design_condition": {
+      "dense_only_minimum_passes": true,
+      "strict_recall_gain_passes": true,
+      "passes_all": true,
+      "product_eligibility": false
+    }
+  },
+  "result_fingerprint": "bb67c5f33daf4ce17d5f9d92d8237be41453d435fd367ff51a90a81f70985cb6",
+  "holdout_accessed": false,
+  "fusion_or_reranker_executed": false,
+  "product_enabled": false
+}

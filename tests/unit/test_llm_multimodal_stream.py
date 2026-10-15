@@ -269,6 +269,35 @@ def test_chat_stream_routes_share_one_first_visible_deadline(monkeypatch):
     assert len(secondary.calls) == 1
 
 
+def test_queued_first_piece_cannot_cross_shared_deadline(monkeypatch):
+    import queue
+    from types import SimpleNamespace
+    import pytest
+    import kb.llm as llm_module
+
+    clock = {"now": 1000.0}
+    real_queue = queue.Queue
+
+    class LateDeliveryQueue(real_queue):
+        def get(self, **kwargs):
+            event = super().get(**kwargs)
+            clock["now"] = 1002.0
+            return event
+
+    monkeypatch.setattr(llm_module, "time", SimpleNamespace(monotonic=lambda: clock["now"]))
+    monkeypatch.setattr(llm_module.queue, "Queue", LateDeliveryQueue)
+    ds = DeepSeekChat.__new__(DeepSeekChat)
+    ds._settings = _FakeSettings()
+    monkeypatch.setattr(ds, "_first_visible_token_timeout_s", lambda: 10.0)
+    monkeypatch.setattr(ds, "_stream_total_timeout_s", lambda: 100.0)
+    with pytest.raises(TimeoutError, match="first visible token across provider routes"):
+        list(ds._stream_route_with_visible_deadlines(
+            client=_FakeClient(_FakeCompletions(pieces=["late output"])), route_kind="text",
+            model="test", messages=[], temperature=0.2, max_tokens=10,
+            request_timeout_s=10, deadline=1100.0, first_visible_deadline=1001.0,
+        ))
+
+
 def test_chat_supports_bounded_single_attempt_retry() -> None:
     class _ResponseCompletions:
         def __init__(self) -> None:

@@ -130,6 +130,7 @@ def _contract_labels(
     chunks: Sequence[Mapping[str, Any]],
     *,
     max_chunks: int = 3,
+    allow_missing_source_page: bool = False,
 ) -> list[dict[str, Any]]:
     contract_id = str(contract.get("id") or "").strip()
     doc_id = str(contract.get("docId") or "").strip()
@@ -139,13 +140,18 @@ def _contract_labels(
         source_page = 0
     terms = [str(item or "").strip() for item in list(contract.get("evidenceTerms") or [])]
     terms = [item for item in terms if item]
-    if not contract_id or not doc_id or source_page <= 0 or not terms:
+    if (
+        not contract_id
+        or not doc_id
+        or (source_page <= 0 and not allow_missing_source_page)
+        or not terms
+    ):
         raise ValueError(f"invalid claim-evidence contract: {contract_id or '<missing-id>'}")
 
     candidates: list[dict[str, Any]] = []
     for chunk in chunks:
         page_start, page_end = _page_span(chunk)
-        if not (page_start <= source_page <= page_end):
+        if source_page > 0 and not (page_start <= source_page <= page_end):
             continue
         text = str(chunk.get("text") or "")
         matched_indexes: set[int] = set()
@@ -232,6 +238,13 @@ def project_research_qa_qrels(
     *,
     source_fixture_path: str,
     source_fixture_sha256: str,
+    allow_unmapped_chunks: bool = False,
+    skip_cases_without_contracts: bool = False,
+    fixture_id: str = "research_qa_unseen_corpus_v2_chunk_qrels",
+    curation_status: str = "frozen_pre_registered_contract_projection",
+    description: str | None = None,
+    allow_missing_source_page: bool = False,
+    source_grounded_only: bool = False,
 ) -> dict[str, Any]:
     docs = [dict(item) for item in list(source_payload.get("docs") or []) if isinstance(item, Mapping)]
     cases = [dict(item) for item in list(source_payload.get("cases") or []) if isinstance(item, Mapping)]
@@ -255,8 +268,19 @@ def project_research_qa_qrels(
     if missing_docs:
         raise ValueError(f"indexed corpus is missing fixture documents: {', '.join(missing_docs)}")
     unmapped = [str(item.get("id") or "") for item in chunks if str(item.get("id") or "") not in chunk_to_doc]
-    if unmapped:
+    if unmapped and not allow_unmapped_chunks:
         raise ValueError(f"indexed corpus has {len(unmapped)} chunks outside the frozen fixture")
+
+    background_chunks: dict[str, list[dict[str, Any]]] = {}
+    if allow_unmapped_chunks:
+        for raw_chunk in chunks:
+            chunk_id = str(raw_chunk.get("id") or "").strip()
+            if not chunk_id or chunk_id in chunk_to_doc:
+                continue
+            index_doc_id = chunk_id.split(":", 1)[0]
+            logical_doc_id = f"background:{index_doc_id}"
+            chunk_to_doc[chunk_id] = logical_doc_id
+            background_chunks.setdefault(logical_doc_id, []).append(dict(raw_chunk))
 
     index_doc_ids: dict[str, str] = {}
     for logical_doc_id, doc_chunks in chunks_by_doc.items():
@@ -267,6 +291,8 @@ def project_research_qa_qrels(
 
     projected_cases: list[dict[str, Any]] = []
     for case in cases:
+        if source_grounded_only and case.get("sourceGrounded") is not True:
+            continue
         case_id = str(case.get("id") or "").strip()
         question = str(case.get("question") or "").strip()
         expected = case.get("expected") if isinstance(case.get("expected"), Mapping) else {}
@@ -275,13 +301,19 @@ def project_research_qa_qrels(
             for item in list(expected.get("claimEvidenceContracts") or [])
             if isinstance(item, Mapping)
         ]
+        if not contracts and skip_cases_without_contracts:
+            continue
         if not case_id or not question or not contracts:
             raise ValueError(f"source case lacks a retrieval contract: {case_id or '<missing-id>'}")
         labels_by_id: dict[str, dict[str, Any]] = {}
         contract_qrels: list[dict[str, Any]] = []
         for contract in contracts:
             doc_id = str(contract.get("docId") or "").strip()
-            contract_labels = _contract_labels(contract, chunks_by_doc.get(doc_id, []))
+            contract_labels = _contract_labels(
+                contract,
+                chunks_by_doc.get(doc_id, []),
+                allow_missing_source_page=allow_missing_source_page,
+            )
             contract_qrels.append(
                 {
                     "id": str(contract.get("id") or ""),
@@ -319,11 +351,32 @@ def project_research_qa_qrels(
             }
         )
 
+    corpus_documents = [
+        {
+            "doc_id": doc_id,
+            "index_doc_id": index_doc_ids[doc_id],
+            "paper_sha256": corpus_papers.get(doc_id, ""),
+            "chunk_count": len(chunks_by_doc[doc_id]),
+        }
+        for doc_id in sorted(chunks_by_doc)
+    ]
+    for logical_doc_id, doc_chunks in sorted(background_chunks.items()):
+        corpus_documents.append(
+            {
+                "doc_id": logical_doc_id,
+                "index_doc_id": logical_doc_id.split(":", 1)[1],
+                "paper_sha256": "",
+                "chunk_count": len(doc_chunks),
+                "role": "background_negative",
+            }
+        )
+
     return {
         "schema_version": RESEARCH_QA_QRELS_SCHEMA_VERSION,
-        "id": "research_qa_unseen_corpus_v2_chunk_qrels",
-        "curation_status": "frozen_pre_registered_contract_projection",
-        "description": (
+        "id": fixture_id,
+        "curation_status": curation_status,
+        "description": description
+        or (
             "Chunk-level retrieval qrels mechanically projected from the pre-registered "
             "Research QA v2 source/page/evidence contracts before embedding model selection."
         ),
@@ -336,7 +389,11 @@ def project_research_qa_qrels(
         "label_policy": {
             "version": LABEL_POLICY_VERSION,
             "unit": "indexed_chunk",
-            "candidate_boundary": "registered document and source page",
+            "candidate_boundary": (
+                "registered document; registered source page when available"
+                if allow_missing_source_page
+                else "registered document and source page"
+            ),
             "selection": (
                 "greedy evidence-term coverage independent of retriever ranking; "
                 "at most three chunks per claim-evidence contract"
@@ -345,19 +402,11 @@ def project_research_qa_qrels(
         },
         "ks": [1, 3, 5, 10, 20],
         "corpus": {
-            "document_count": len(chunks_by_doc),
+            "document_count": len(corpus_documents),
             "chunk_count": len(chunks),
             "fingerprint_algorithm": "sha256(logical_doc_id,chunk_id,text_sha256,page_span)",
             "fingerprint": corpus_fingerprint(chunks, chunk_to_doc),
-            "documents": [
-                {
-                    "doc_id": doc_id,
-                    "index_doc_id": index_doc_ids[doc_id],
-                    "paper_sha256": corpus_papers.get(doc_id, ""),
-                    "chunk_count": len(chunks_by_doc[doc_id]),
-                }
-                for doc_id in sorted(chunks_by_doc)
-            ],
+            "documents": corpus_documents,
         },
         "cases": projected_cases,
     }

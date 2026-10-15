@@ -7,6 +7,10 @@ import {
   labelForSourceNoticeText,
 } from './answerSourceNoticeViewModel'
 import { buildAssistantMessageNoticeViewModel } from './assistantMessageNoticeViewModel'
+import {
+  hasAutomaticLocalSemanticFallback,
+  messageHasAutomaticLocalSemanticFallback,
+} from './localRetrievalOutcome'
 
 const { Text } = Typography
 
@@ -32,12 +36,14 @@ export function AssistantSourceNotice({
   labelText,
   titleText,
   onClick,
+  testId = 'assistant-source-notice',
 }: {
   noticeText: string
   S: Record<string, string>
   labelText?: string
   titleText?: string
   onClick?: () => void
+  testId?: string
 }) {
   if (!noticeText) return null
   const className = `kb-assistant-source-notice${onClick ? ' is-clickable' : ''}`
@@ -54,16 +60,35 @@ export function AssistantSourceNotice({
         className={className}
         title={titleText || noticeText}
         onClick={onClick}
-        data-testid="assistant-source-notice"
+        data-testid={testId}
       >
         {content}
       </button>
     )
   }
   return (
-    <div className={className} title={titleText || noticeText} data-testid="assistant-source-notice">
+    <div className={className} title={titleText || noticeText} data-testid={testId}>
       {content}
     </div>
+  )
+}
+
+export function AssistantRetrievalFallbackNotice({
+  trace,
+  S,
+}: {
+  trace: unknown
+  S: Record<string, string>
+}) {
+  if (!hasAutomaticLocalSemanticFallback(trace)) return null
+  return (
+    <AssistantSourceNotice
+      noticeText={S.chat_retrieval_auto_fallback_tip}
+      titleText={S.chat_retrieval_auto_fallback_tip}
+      labelText={S.chat_retrieval_auto_fallback}
+      testId="assistant-retrieval-fallback"
+      S={S}
+    />
   )
 }
 
@@ -113,8 +138,9 @@ export function AssistantMessageNotices({
     S,
   })
   const sourceNoticeViewModel = viewModel.sourceNoticeViewModel
+  const showRetrievalFallback = messageHasAutomaticLocalSemanticFallback(message)
 
-  if (!viewModel.hasVisibleNotice) return null
+  if (!viewModel.hasVisibleNotice && !showRetrievalFallback) return null
 
   return (
     <>
@@ -128,6 +154,9 @@ export function AssistantMessageNotices({
         />
       ) : viewModel.legacySourceNoticeText ? (
         <AssistantSourceNotice noticeText={viewModel.legacySourceNoticeText} S={S} />
+      ) : null}
+      {showRetrievalFallback ? (
+        <AssistantRetrievalFallbackNotice trace={message.meta?.research_trace} S={S} />
       ) : null}
       {viewModel.plainNoticeText ? (
         <div className="mb-4 rounded-2xl border border-[var(--border)] bg-black/[0.03] px-4 py-3 text-sm text-black/70 dark:bg-white/[0.04] dark:text-white/70">

@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_e5_small_window_census_v1",
+  "status": "frozen_before_tokenizer_load",
+  "frozen_at": "2026-09-03",
+  "purpose": "Count the exact evidence-preserving E5-small window workload before any model inference or Stage-1 runtime measurement.",
+  "authorization": {
+    "umbrella_protocol_path": "docs/retrieval_lighter_runtime_screen_protocol_v1.json",
+    "umbrella_protocol_sha256": "dffc76974fcdd1d288e5bc5e16f5590e4d09e140f26a7591b269f396a5817dea",
+    "qwen_stage_1_report_path": "docs/retrieval_lighter_runtime_stage1_qwen_v1.json",
+    "qwen_stage_1_report_sha256": "d19e9576d0e2b272b27d155d76d7840c95d64374dd5af8f0a4f6df7400e0c9bb",
+    "qwen_decision": "rejected_stage_1",
+    "stage_0_report_path": "docs/retrieval_lighter_runtime_stage0_e5_small_v1.json",
+    "stage_0_report_sha256": "5d901b01af8201004adde29119321b60fb82a781b54e93688b22f25d3fde963d",
+    "stage_0_decision": "passed_stage_0",
+    "stress_manifest_path": "docs/retrieval_lighter_runtime_stress_manifest_v1.json",
+    "stress_manifest_sha256": "1e697579abcdf241d943d9caffa160ed78a301d713ad7ab48e40ef02640fbd12"
+  },
+  "source_corpus": {
+    "runtime_db_argument_required": true,
+    "tree_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "document_count": 10,
+    "parent_chunk_count": 1673,
+    "writes_allowed": false
+  },
+  "tokenizer": {
+    "model_id": "intfloat/multilingual-e5-small",
+    "revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "tokenizer_json_bytes": 17082730,
+    "tokenizer_json_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+    "padding_side": "right",
+    "maximum_model_tokens": 512,
+    "bos_token_id": 0,
+    "pad_token_id": 1,
+    "eos_token_id": 2,
+    "local_files_only": true
+  },
+  "representation": {
+    "query_prefix": "query: ",
+    "passage_prefix": "passage: ",
+    "content_window_tokens": 448,
+    "minimum_content_overlap_tokens": 64,
+    "nominal_content_stride_tokens": 384,
+    "window_algorithm": "start_at_zero_then_min(previous_start_plus_stride,total_content_tokens_minus_window_tokens)_until_tail_covered",
+    "prefix_tokens_repeated_per_window": true,
+    "special_tokens_per_window": 2,
+    "content_token_ids_are_never_decode_reencoded": true,
+    "full_parent_content_coverage_required": true,
+    "silent_tail_loss_allowed": false,
+    "parent_score_collapse": "maximum_window_cosine_then_parent_id",
+    "returned_result_identity": "complete_immutable_parent_chunk",
+    "child_window_text_returned": false
+  },
+  "measurement": {
+    "tokenize_all_parent_chunks": true,
+    "tokenize_all_12_semantic_queries": true,
+    "count_64_stress_parent_windows": true,
+    "model_load_allowed": false,
+    "onnx_session_allowed": false,
+    "model_inference_allowed": false,
+    "vectors_allowed": false,
+    "paper_text_retained_in_report": false,
+    "query_text_retained_in_report": false,
+    "report_path": "docs/retrieval_e5_small_window_census_v1.json"
+  },
+  "gates": {
+    "maximum_input_tokens_per_window": 512,
+    "maximum_truncated_parent_count": 0,
+    "maximum_uncovered_content_token_count": 0,
+    "maximum_truncated_query_count": 0,
+    "maximum_window_count_multiplier": 2.0,
+    "maximum_projected_index_bytes": 10000000,
+    "embedding_dimension": 384,
+    "float_bytes": 4,
+    "all_required": true,
+    "pass_decision": "window_census_passed_freeze_stage_1",
+    "reject_decision": "e5_small_rejected_before_inference"
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

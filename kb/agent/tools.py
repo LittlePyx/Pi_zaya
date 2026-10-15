@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +11,9 @@ from kb.inpaper_citation_grounding import extract_candidate_ref_nums_from_hits, 
 from kb.llm import DeepSeekChat
 from kb.rag import build_messages
 from kb.reference_index import load_reference_index, resolve_reference_entry
-from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
+from kb.product_query_policy import search_hits_with_fallback
+from kb.retrieval_engine import _group_hits_by_doc_for_refs
+from kb.retrieval_observability import record_retrieval_observation
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
 from kb.web_sources import verify_web_citations
@@ -482,7 +485,7 @@ def _balanced_scoped_hits(
     return balanced
 
 
-def retrieve_evidence(
+def _retrieve_evidence_impl(
     query: str,
     *,
     db_dir: str | Path,
@@ -503,7 +506,7 @@ def retrieve_evidence(
             )
         ]
     retriever = BM25Retriever(chunks)
-    hits, scores, used_query, used_translation, query_variants = _search_hits_with_fallback(
+    hits, scores, used_query, used_translation, query_variants = search_hits_with_fallback(
         query,
         retriever,
         max(1, min(20, int(top_k or 6))),
@@ -532,6 +535,51 @@ def retrieve_evidence(
         "requested_source_count": len(requested_paths),
         "observation": f"Retrieved {len(hits)} evidence snippet(s).",
     }
+
+
+def retrieve_evidence(
+    query: str,
+    *,
+    db_dir: str | Path,
+    settings: Any = None,
+    top_k: int = 6,
+    source_paths: list[str] | None = None,
+) -> dict[str, Any]:
+    started_at = time.perf_counter()
+    scope = "selected_sources" if source_paths else "full_library"
+    try:
+        result = _retrieve_evidence_impl(
+            query,
+            db_dir=db_dir,
+            settings=settings,
+            top_k=top_k,
+            source_paths=source_paths,
+        )
+    except Exception:
+        record_retrieval_observation(
+            started_at=started_at,
+            channel="agent_bm25",
+            source_scope=scope,
+            fallback_reason="retrieval_error",
+            status="error",
+        )
+        raise
+    variants = list(result.get("query_variants") or [])
+    fallback_reason = None
+    if bool(result.get("used_translation")):
+        fallback_reason = "query_translation"
+    elif len(variants) > 1:
+        fallback_reason = "query_expansion"
+    record_retrieval_observation(
+        started_at=started_at,
+        channel="agent_bm25",
+        source_scope=scope,
+        hit_count=len(list(result.get("hits") or [])),
+        query_variant_count=len(variants),
+        translation_used=bool(result.get("used_translation")),
+        fallback_reason=fallback_reason,
+    )
+    return result
 
 
 def retrieve_references(

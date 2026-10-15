@@ -1955,6 +1955,16 @@ def attach_ref_card_polish_contract(
         # public fields remain complementary instead of persisting duplicate
         # copy into the state cache.
         ui = _repair_ref_card_copy_locale(ui)
+    from api.source_relation_copy import source_relation_copy
+
+    primary = _as_dict(ui.get("primary_evidence"))
+    relation_copy = source_relation_copy(_first_text(primary, ("snippet", "quote", "text", "evidence_quote")))
+    if _ref_card_locale(ui) == "zh" and relation_copy:
+        summary, why = relation_copy
+        if len(_text(ui.get("summary_line"))) < 12:
+            ui.update(summary_line=summary, summary_generation="deterministic_grounded")
+        if len(_text(ui.get("why_line"))) < 12 or looks_generic_ref_why_line(_text(ui.get("why_line"))) or looks_templated_ref_why_line(_text(ui.get("why_line"))):
+            ui.update(why_line=why, why_generation="deterministic_grounded")
     ui = _align_summary_surface_to_render_locale(ui)
     ui.update(
         ref_card_polish_status(

@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "report_kind": "qwen_fusion_tuning_v2_invalidation_v1",
+  "status": "invalid_protocol_execution",
+  "protocol_path": "docs/retrieval_qwen_fusion_protocol_v2.json",
+  "protocol_sha256": "14c049862798680634784d6f36168c78813bfe36e53f7326845378ea7dfc201c",
+  "invalid_report_path": "docs/retrieval_qwen_fusion_tuning_v2.json",
+  "invalid_report_sha256": "e37c8893c2d3ae94d0138580936d9b8f23100cfc9ac838c1a1f9485d63c65a83",
+  "invalid_report_result_fingerprint": "34436b0f783ec5025d62b5516432c15f4147707bd4eb85e88776b31f84264bc8",
+  "report_preserved_unmodified": true,
+  "detected_contract_mismatch": {
+    "frozen_retriever_top_k": 10,
+    "evaluation_fixture_max_k": 20,
+    "actual_retriever_request_top_k": 20,
+    "frozen_candidate_multiplier": 4,
+    "expected_dense_candidate_depth": 40,
+    "actual_dense_candidate_depth": 80,
+    "quota_1_expected_dense_tail_position": 10,
+    "quota_1_actual_first_dense_tail_position": 11,
+    "quota_2_expected_dense_tail_positions": [
+      9,
+      10
+    ],
+    "quota_2_actual_dense_tail_positions": [
+      11,
+      12
+    ],
+    "cause": "The benchmark passed its Recall@20 maximum K directly to fusion instead of adapting the frozen top-10 fusion layout before evaluating deeper diagnostic ranks."
+  },
+  "observed_diagnostic_only": {
+    "reported_nominee_candidate_id": "ungated_rrf_2_1_k20_v2",
+    "ungated_rrf_recall_at_10_gain_scoped": 0.0,
+    "ungated_rrf_recall_at_10_gain_full_library": 0.051724,
+    "protected_tail_quota_1_strict_recall_gain": false,
+    "protected_tail_quota_2_strict_recall_gain": false
+  },
+  "effective_decision": {
+    "nominee_candidate_id": "",
+    "confirmation_allowed": false,
+    "confirmation_accessed": false,
+    "frozen_acceptance_accessed": false,
+    "remeasurement_allowed_under_v2": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "next_action": "expand_real_user_evaluation_evidence_before_any_fusion_v3"
+  }
+}

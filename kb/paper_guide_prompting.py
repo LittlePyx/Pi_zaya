@@ -265,7 +265,7 @@ _PAPER_GUIDE_BROAD_OVERVIEW_HINT_RE = re.compile(
 )
 _PAPER_GUIDE_FIGURE_PROMPT_RE = re.compile(
     r"(\bfig(?:ure)?\b|\bpanel\b|\bcaption\b|\blegend\b|\bwalk me through\b.*\bfig(?:ure)?\b|"
-    r"图\s*\d+|图注|配图|面板|讲解.*图|解释.*图)",
+    r"图\s*\d+|图注|配图|面板|(?:讲解|解释).*图(?!像|形|片))",
     flags=re.IGNORECASE,
 )
 _PAPER_GUIDE_REF_SECTION_RE = re.compile(
@@ -341,7 +341,7 @@ def _paper_guide_requested_section_targets(prompt: str) -> list[str]:
         _add("future_work")
     if re.search(r"(?i)\bconclusions?(?:\s+section)?\b", q_low):
         _add("conclusion")
-    if re.search(r"(?i)\b(?:materials?\s+and\s+methods?|methods?|methodology)\b", q_low):
+    if re.search(r"(?i)\b(?:materials?\s+and\s+methods?|methodology)\b|\bmethods?\s+section\b|\b(?:from|in|within)\s+(?:the\s+)?methods?\b|方法(?:章节|部分)", q) or re.search(r"\b(?:Methods|METHODS)\b", q):
         _add("methods")
     if re.search(r"(?i)\bresults?(?:\s+section)?\b", q_low):
         _add("results")
@@ -541,7 +541,13 @@ def _paper_guide_prompt_family(prompt: str, *, intent: str = "") -> str:
     )
     # A comparison that also asks for formulas is still primarily a
     # comparison; otherwise one formula can eclipse the other requested side.
-    if equation_request and comparison_request:
+    explicit_equation_comparison = bool(
+        intent == "compare" or re.search(
+            r"(?i)\b(?:compar\w*|versus|vs\.?|trade[ -]?off)\b|对比|比较|区别|差别|差异|不同|取舍|优势|代价|怎么选|如何选|该选|选哪个|更适合",
+            q,
+        )
+    )
+    if equation_request and comparison_request and explicit_equation_comparison:
         return "compare"
     if equation_request:
         return "equation"

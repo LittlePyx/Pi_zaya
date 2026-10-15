@@ -1,0 +1,133 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_lighter_runtime_stage1_qwen_v1",
+  "status": "frozen_before_tokenizer_load_or_first_onnx_session_run",
+  "frozen_at": "2026-09-03",
+  "purpose": "Bound one official Qwen AVX2 quint8 ONNX semantic-compatibility and stress-runtime measurement before any full index build.",
+  "authorization": {
+    "umbrella_protocol_path": "docs/retrieval_lighter_runtime_screen_protocol_v1.json",
+    "umbrella_protocol_sha256": "dffc76974fcdd1d288e5bc5e16f5590e4d09e140f26a7591b269f396a5817dea",
+    "pointer_invalidation_path": "docs/retrieval_lighter_runtime_stage1_pointer_invalidation_v1.json",
+    "pointer_invalidation_sha256": "277ffe5f46d499df0c6b8cc895284dcb708814751549ec11a0b5f2005865583a",
+    "stage_0_report_path": "docs/retrieval_lighter_runtime_stage0_qwen_v1.json",
+    "stage_0_report_sha256": "1c7b2eed6469e002b229337ce5e90bd4770f202818002b4c3192bf8488f75fb9",
+    "stage_0_decision": "passed_stage_0",
+    "stress_manifest_path": "docs/retrieval_lighter_runtime_stress_manifest_v1.json",
+    "stress_manifest_sha256": "1e697579abcdf241d943d9caffa160ed78a301d713ad7ab48e40ef02640fbd12"
+  },
+  "candidate": {
+    "candidate_id": "qwen3_embedding_0_6b_official_quint8_avx2_onnx_v1",
+    "artifact_relative_path": "test_results/retrieval_lighter_runtime_v1/artifacts/qwen3_embedding_0_6b_official_quint8_avx2_onnx_v1/model_quint8_avx2.onnx",
+    "artifact_bytes": 600127788,
+    "artifact_sha256": "a7eda29cc374b01ae75eb1af1ab65c3c61a64c43f39f16e08c6e37c075dcbf4d",
+    "onnx_output": "sentence_embedding",
+    "dimension": 1024,
+    "normalization": "l2",
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+    "passage_prefix": ""
+  },
+  "tokenizer": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "tokenizer_json_bytes": 11423705,
+    "tokenizer_json_sha256": "def76fb086971c7867b829c23a26261e38d9d74e02139253b38aeb9df8b4b50a",
+    "tokenizer_config_bytes": 9706,
+    "tokenizer_config_sha256": "253153d0738ceb4c668d2eff957714dd2bea0b56de772a9fdccd96cbf517e6a0",
+    "local_files_only": true,
+    "add_special_tokens": true,
+    "padding_side": "left",
+    "padding_token": "<|endoftext|>",
+    "padding_token_id": 151643,
+    "maximum_length": 8192
+  },
+  "runtime": {
+    "python_executable_relative_path": "test_results/retrieval_lighter_runtime_v1/.venv/Scripts/python.exe",
+    "python_version": "3.10.11",
+    "requirements_path": "tools/retrieval_eval/lighter_runtime_requirements_v1.txt",
+    "requirements_sha256": "bb01652dbbd4e734cf639ac2b57b834f1b9a7fb86fc87924e0166b8114eb0fb9",
+    "onnxruntime_version": "1.23.2",
+    "tokenizers_version": "0.21.4",
+    "execution_provider": "CPUExecutionProvider",
+    "intra_op_threads": 8,
+    "inter_op_threads": 1,
+    "graph_optimization_level": "ORT_ENABLE_ALL",
+    "torch_allowed": false,
+    "transformers_allowed": false,
+    "user_site_allowed": false
+  },
+  "source_corpus": {
+    "runtime_db_argument_required": true,
+    "tree_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "document_count": 10,
+    "chunk_count": 1673,
+    "total_effective_qwen_tokens_from_parent_diagnostic": 489070,
+    "writes_allowed": false
+  },
+  "read_only_parent_index": {
+    "relative_path": "test_results/retrieval_cpu_full_index_feasibility_v1/index_v1",
+    "tree_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50",
+    "build_id": "7138dcaa15c242bd88bc14042166e879",
+    "manifest_sha256": "8e08be9994e1d48941b92d4fca862ade7f5da374096e39a3c78b9f43b5052cb2",
+    "vectors_sha256": "bd037e035ab993126887a951f1d0aa63780e554dbfcdc85efb2f8f457874bc2e",
+    "vector_bytes": 6852608,
+    "writes_allowed": false
+  },
+  "measurement": {
+    "unique_semantic_query_count": 12,
+    "public_warmup_text": "Pi_zaya local evidence retrieval warmup.",
+    "timed_query_batch_size": 1,
+    "stress_document_count": 64,
+    "tokenize_entire_corpus_for_projection": true,
+    "embed_only_stress_manifest_documents": true,
+    "maximum_batch_size": 8,
+    "maximum_padded_tokens_per_batch": 4096,
+    "oversize_singletons": true,
+    "projection_method": "stress_embedding_ms_times_full_corpus_attention_work_proxy_over_stress_attention_work_proxy",
+    "document_vector_parity": {
+      "minimum_mean_cosine": 0.98,
+      "minimum_worst_cosine": 0.95
+    }
+  },
+  "quality": {
+    "fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "accepted_parent_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_acceptance_v2.json",
+    "accepted_parent_sha256": "13e2d5dc30afcdc3f174c4ef139b30513d3072bb9f025cc0932f85fe66354ca8",
+    "accepted_parent_result_fingerprint": "a3c81c2805cd887011219b68a33e6bbf3ed8688f5209b8483263e1a41ce2847a",
+    "minimum_recall_at_10_gain_each_mode": 0.15,
+    "preserve_product_recall_at_5_each_mode": true,
+    "preserve_product_wrong_source_at_5_each_mode": true,
+    "no_regression_vs_accepted_parent_metrics": [
+      "recall@5",
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "all_required": true
+  },
+  "operational_gates": {
+    "maximum_subprocess_wall_clock_seconds": 600,
+    "maximum_provider_load_ms": 30000.0,
+    "maximum_warm_query_p95_ms": 1000.0,
+    "maximum_peak_process_rss_mib": 4096.0,
+    "maximum_projected_full_build_ms": 600000.0,
+    "minimum_projected_throughput_chunks_per_second": 2.75,
+    "maximum_truncated_query_count": 0,
+    "maximum_truncated_stress_document_count": 0,
+    "require_artifact_unchanged": true,
+    "require_parent_index_unchanged": true,
+    "require_source_corpus_unchanged": true,
+    "all_required": true
+  },
+  "execution": {
+    "maximum_runs": 1,
+    "attempt_receipt_path": "test_results/retrieval_lighter_runtime_v1/stage1_qwen_attempt_v1.json",
+    "worker_result_path": "test_results/retrieval_lighter_runtime_v1/stage1_qwen_worker_v1.json",
+    "report_path": "docs/retrieval_lighter_runtime_stage1_qwen_v1.json",
+    "raw_report_persist_before_validation": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "pass_decision": "passed_stage_1_authorize_single_full_build",
+    "reject_decision": "rejected_stage_1"
+  }
+}

@@ -15,6 +15,14 @@ def _hit_identity(hit: dict) -> str:
     )
 
 
+def _source_identity(hit: dict) -> str:
+    identity = _hit_identity(hit)
+    if identity and not identity.startswith("text:"):
+        return identity.split(":", 1)[0]
+    meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
+    return str(meta.get("source_path") or meta.get("doc_id") or identity)
+
+
 class HybridCandidateRetriever:
     """Fuse sparse and dense local candidates while keeping sparse fail-safe."""
 
@@ -27,6 +35,8 @@ class HybridCandidateRetriever:
         dense_weight: float = 1.0,
         rrf_k: float = 20.0,
         candidate_multiplier: int = 4,
+        protected_sparse_prefix: int = 0,
+        dense_source_gate_depth: int = 0,
     ) -> None:
         if sparse_weight <= 0.0 or dense_weight <= 0.0:
             raise ValueError("retrieval channel weights must be positive")
@@ -38,6 +48,8 @@ class HybridCandidateRetriever:
         self._dense_weight = float(dense_weight)
         self._rrf_k = float(rrf_k)
         self._candidate_multiplier = max(1, int(candidate_multiplier))
+        self._protected_sparse_prefix = max(0, int(protected_sparse_prefix))
+        self._dense_source_gate_depth = max(0, int(dense_source_gate_depth))
 
     @property
     def is_empty(self) -> bool:
@@ -53,6 +65,21 @@ class HybridCandidateRetriever:
             # Dense retrieval is optional. Provider/index failures must never
             # take down the established local BM25 path.
             return [copy.deepcopy(hit) for hit in sparse_hits[:limit]]
+
+        if self._dense_source_gate_depth:
+            allowed_sources = {
+                _source_identity(hit)
+                for hit in sparse_hits[: self._dense_source_gate_depth]
+            }
+            dense_hits = [
+                hit for hit in dense_hits if _source_identity(hit) in allowed_sources
+            ]
+
+        protected = [
+            copy.deepcopy(hit)
+            for hit in sparse_hits[: min(limit, self._protected_sparse_prefix)]
+        ]
+        protected_ids = {_hit_identity(hit) for hit in protected}
 
         hit_map: dict[str, dict] = {}
         raw_scores: dict[str, dict[str, float]] = {}
@@ -88,7 +115,9 @@ class HybridCandidateRetriever:
             reverse=True,
         )
         fused_hits: list[dict] = []
-        for identity in ordered[:limit]:
+        for identity in ordered[: limit + len(protected)]:
+            if identity in protected_ids:
+                continue
             hit = hit_map[identity]
             scores = raw_scores.get(identity, {})
             hit["score"] = float(fused_scores.get(identity, 0.0))
@@ -98,4 +127,6 @@ class HybridCandidateRetriever:
                 hit["_dense_score"] = scores["dense"]
             hit["_retrieval_channels"] = sorted(channels.get(identity, set()))
             fused_hits.append(hit)
-        return fused_hits
+            if len(fused_hits) >= limit - len(protected):
+                break
+        return protected + fused_hits

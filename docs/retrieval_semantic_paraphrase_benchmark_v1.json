@@ -1,0 +1,158 @@
+{
+  "schema_version": 1,
+  "report_kind": "semantic_paraphrase_retrieval_benchmark",
+  "fixture": {
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "id": "research_qa_semantic_paraphrase_v1",
+    "case_count": 12,
+    "case_ids": [
+      "semantic-mamba-selective-state-zh",
+      "semantic-kan-edge-functions-zh",
+      "semantic-bitnet-ternary-efficiency-zh",
+      "semantic-sam2-streaming-memory-en",
+      "semantic-medsam-box-architecture-en",
+      "semantic-modernbert-attention-en",
+      "semantic-deepseek-r1-zero-boundary-en",
+      "semantic-gemma3-vision-tokens-en",
+      "semantic-timesfm-probability-zh",
+      "semantic-bindgpt-three-roles-zh",
+      "semantic-long-context-synthesis-zh",
+      "semantic-segmentation-transfer-en"
+    ]
+  },
+  "corpus": {
+    "document_count": 10,
+    "chunk_count": 1673,
+    "fingerprint": "d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516"
+  },
+  "raw_measurements": {
+    "bm25_sha256": "dbd3c331e2343d2fe90d223e5798062b4cdb2c6e4c51ea7bbeee6abae5d92a94",
+    "dense_sha256": "2e64b866f396cc3543812ce8a927e2d34795765deee75067b88563232d6a90b6",
+    "committed_compaction": "aggregate metrics and decision evidence only; ranked chunk lists remain local test artifacts"
+  },
+  "candidate": {
+    "model_id": "intfloat/multilingual-e5-base",
+    "revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+    "provider_identity": "b6f461d0da1959a877bc465919b54dd2121149e360a8c2c973ddfcda1e0ae99b",
+    "trust_remote_code": false,
+    "allow_download": false,
+    "product_enabled": false,
+    "index": {
+      "build_id": "d686826ca97c4196a5b3b763b2d9e235",
+      "chunk_count": 1673,
+      "reused_chunk_count": 1673,
+      "no_op": true,
+      "size_bytes": 5564052
+    }
+  },
+  "channels": {
+    "product_bm25": {
+      "scoped": {
+        "recall@5": 0.25,
+        "recall@10": 0.375,
+        "recall@20": 0.416667,
+        "mrr": 0.116997,
+        "ndcg@10": 0.171936,
+        "wrong_source_rate@5": 0.0,
+        "latency_p50_ms": 12.749
+      },
+      "full_library": {
+        "recall@5": 0.166667,
+        "recall@10": 0.291667,
+        "recall@20": 0.416667,
+        "mrr": 0.192217,
+        "ndcg@10": 0.187177,
+        "wrong_source_rate@5": 0.183333,
+        "latency_p50_ms": 47.24
+      }
+    },
+    "raw_dense": {
+      "scoped": {
+        "recall@5": 0.333333,
+        "recall@10": 0.5,
+        "recall@20": 0.583333,
+        "mrr": 0.440509,
+        "ndcg@10": 0.418066,
+        "wrong_source_rate@5": 0.0,
+        "latency_p50_ms": 25.005
+      },
+      "full_library": {
+        "recall@5": 0.333333,
+        "recall@10": 0.5,
+        "recall@20": 0.5,
+        "mrr": 0.394676,
+        "ndcg@10": 0.387311,
+        "wrong_source_rate@5": 0.1,
+        "latency_p50_ms": 104.489
+      }
+    },
+    "safe_rrf": {
+      "configuration": {
+        "sparse_weight": 2.0,
+        "dense_weight": 1.0,
+        "rrf_k": 20.0,
+        "protected_product_bm25_prefix": 5,
+        "dense_source_gate_depth": 5
+      },
+      "scoped": {
+        "recall@5": 0.25,
+        "recall@10": 0.375,
+        "recall@20": 0.583333,
+        "mrr": 0.13244,
+        "ndcg@10": 0.175797,
+        "wrong_source_rate@5": 0.0,
+        "latency_p50_ms": 61.641
+      },
+      "full_library": {
+        "recall@5": 0.166667,
+        "recall@10": 0.375,
+        "recall@20": 0.458333,
+        "mrr": 0.207672,
+        "ndcg@10": 0.216124,
+        "wrong_source_rate@5": 0.183333,
+        "latency_p50_ms": 181.593
+      }
+    }
+  },
+  "acceptance": {
+    "metric": "recall@10",
+    "minimum_gain": 0.15,
+    "required_modes": ["scoped", "full_library"],
+    "raw_dense_gain": {
+      "scoped": 0.125,
+      "full_library": 0.208333,
+      "passes_all_required_modes": false
+    },
+    "safe_rrf_gain": {
+      "scoped": 0.0,
+      "full_library": 0.083333,
+      "passes_all_required_modes": false
+    },
+    "safe_rrf_preserves_product_recall_at_5": true,
+    "safe_rrf_preserves_product_wrong_source_at_5": true
+  },
+  "failure_analysis": {
+    "missed_by_product_bm25_and_raw_dense_at_10_in_both_modes": [
+      "semantic-mamba-selective-state-zh",
+      "semantic-kan-edge-functions-zh",
+      "semantic-timesfm-probability-zh"
+    ],
+    "raw_dense_rescues_at_10": [
+      "semantic-bitnet-ternary-efficiency-zh",
+      "semantic-sam2-streaming-memory-en",
+      "semantic-medsam-box-architecture-en",
+      "semantic-modernbert-attention-en"
+    ],
+    "raw_dense_regressions_at_10": [
+      "semantic-gemma3-vision-tokens-en",
+      "semantic-long-context-synthesis-zh"
+    ],
+    "interpretation": "Raw Dense demonstrates semantic value, but the source-safe fusion does not retain enough of that gain. These failures are diagnostic inputs for locator-preserving subchunk analysis, not permission to tune fusion on the frozen acceptance slice."
+  },
+  "decision": {
+    "status": "rejected_for_product_promotion",
+    "reason": "The frozen safe-RRF candidate misses the 15-point Recall@10 gain in both required modes; raw Dense also misses the scoped threshold.",
+    "next_action": "Analyze relevant-chunk truncation and evidence-preserving subchunk pooling on the frozen failure IDs before considering a new candidate on a separate development slice."
+  }
+}

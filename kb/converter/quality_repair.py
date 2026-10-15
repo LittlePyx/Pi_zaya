@@ -258,7 +258,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 15
+CONVERSION_QUALITY_RULES_VERSION = 16
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 
 
@@ -1651,7 +1651,7 @@ def _demote_source_proven_nonheading_numbered_headings(
                 shared = min(len(source_key), len(title_key))
                 if shared < 5:
                     continue
-                if not (source_key.startswith(title_key[:shared]) or title_key.startswith(source_key[:shared])):
+                if not (source_key.startswith(title_key[:shared]) or title_key.startswith(source_key[:shared]) or source_key.endswith(title_key)):
                     continue
                 best = max(best, max((float(span.get("size") or 0.0) for span in spans), default=0.0))
         return best
@@ -3368,7 +3368,7 @@ def _plausible_reference_citation_indices(body: str) -> set[int]:
     cited: set[int] = set()
     for spec, start, _end, _style in iter_inpaper_numeric_citations(body):
         prefix = str(body or "")[max(0, int(start) - 96):int(start)]
-        if _NON_CITATION_NUMERIC_ARRAY_CONTEXT_RE.search(prefix):
+        if _NON_CITATION_NUMERIC_ARRAY_CONTEXT_RE.search(prefix) or re.search(r"(?:\\in|∈|range\s+of)\s*$", prefix, re.I):
             continue
         cited.update(parse_ref_num_set(spec, max_items=256))
     return cited

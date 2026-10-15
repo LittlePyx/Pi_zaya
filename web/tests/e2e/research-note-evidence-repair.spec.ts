@@ -4,6 +4,7 @@ import {
   researchNoteEvidenceMaintenanceDue,
   researchNoteEvidenceMaintenanceTracked,
   researchNoteEvidenceNextRetryAt,
+  researchNoteEvidenceResolutionMode,
   researchNoteEvidenceReviewIssues,
   researchNoteEvidenceReviewSummary,
   researchNoteEvidenceSystemRetryRequired,
@@ -73,6 +74,13 @@ test('research note evidence review summary counts only unresolved saved checks'
   expect(researchNoteEvidenceSystemRetryRequired(sourceState)).toBe(true)
   expect(researchNoteEvidenceMaintenanceTracked(sourceState)).toBe(true)
   expect(researchNoteEvidenceMaintenanceDue(sourceState, 100)).toBe(true)
+  expect(researchNoteEvidenceResolutionMode(sourceState.links[0])).toBe('user_decision')
+  expect(researchNoteEvidenceResolutionMode(sourceState.links[1])).toBe('system_auto')
+  expect(researchNoteEvidenceResolutionMode({
+    kind: 'source',
+    source_path: 'db/paper/future.md',
+    evidence_baseline_check: { status: 'failed', reason: 'future_internal_failure' },
+  })).toBe('system_auto')
 
   const scheduledRetryState = {
     links: [{
@@ -111,6 +119,7 @@ test('research note evidence review summary counts only unresolved saved checks'
   expect(researchNoteEvidenceMaintenanceDue(terminalSourceState, 10_000)).toBe(false)
   expect(researchNoteEvidenceNextRetryAt(terminalSourceState)).toBeNull()
   expect(researchNoteEvidenceReviewIssues(terminalSourceState)).toEqual([])
+  expect(researchNoteEvidenceResolutionMode(terminalSourceState.links[0])).toBe('source_boundary')
 
   const legacyContextDecisionState = {
     links: [{

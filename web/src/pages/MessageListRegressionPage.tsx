@@ -1722,6 +1722,21 @@ const agentAnswerContractSourcePrecedenceMessages: Message[] = [
   },
 ]
 
+const assistantActionRetryMessages: Message[] = [
+  {
+    id: 9601,
+    role: 'user',
+    content: 'Find the local evidence again.',
+    created_at: Date.now(),
+  },
+  {
+    id: 9602,
+    role: 'assistant',
+    content: 'Answer stream failed. Please retry.',
+    created_at: Date.now(),
+  },
+]
+
 const agentTraceExternalNoticeMessages: Message[] = [
   {
     id: 9501,
@@ -2000,6 +2015,9 @@ type RegressionScenario =
   | 'agent-web-source'
   | 'agent-trace-hybrid-notice'
   | 'agent-trace-streaming-clean'
+  | 'assistant-streaming-empty'
+  | 'assistant-streaming-summary'
+  | 'assistant-action-retry'
 
 export default function MessageListRegressionPage() {
   const scenarioParam = (() => {
@@ -2040,6 +2058,9 @@ export default function MessageListRegressionPage() {
     if (scenarioParam === 'agent-web-source') return 'agent-web-source'
     if (scenarioParam === 'agent-trace-hybrid-notice') return 'agent-trace-hybrid-notice'
     if (scenarioParam === 'agent-trace-streaming-clean') return 'agent-trace-streaming-clean'
+    if (scenarioParam === 'assistant-streaming-empty') return 'assistant-streaming-empty'
+    if (scenarioParam === 'assistant-streaming-summary') return 'assistant-streaming-summary'
+    if (scenarioParam === 'assistant-action-retry') return 'assistant-action-retry'
     return 'structured-primary-rerank'
   })()
   const regressionMessages: Message[] = (() => {
@@ -2075,7 +2096,12 @@ export default function MessageListRegressionPage() {
     if (scenario === 'agent-trace-external-notice') return agentTraceExternalNoticeMessages
     if (scenario === 'agent-web-source') return agentWebSourceMessages
     if (scenario === 'agent-trace-hybrid-notice') return agentTraceHybridNoticeMessages
-    if (scenario === 'agent-trace-streaming-clean') return []
+    if (scenario === 'assistant-action-retry') return assistantActionRetryMessages
+    if (
+      scenario === 'agent-trace-streaming-clean'
+      || scenario === 'assistant-streaming-empty'
+      || scenario === 'assistant-streaming-summary'
+    ) return []
     return structuredPrimaryRerankMessages
   })()
   const regressionRefs: Record<string, unknown> = (() => {
@@ -2094,10 +2120,45 @@ export default function MessageListRegressionPage() {
   const regressionGuideSourceName = scenario === 'normal-multi-doc-ambiguous-inline-locate' || scenario === 'citation-hover-race'
     ? ''
     : READER_REGRESSION_SOURCE_NAME
-  const regressionGenerationPartial = scenario === 'agent-trace-streaming-clean'
-    ? agentTraceStreamingPartial
+  const regressionActionRetryBusy = scenario === 'assistant-action-retry'
+    && typeof window !== 'undefined'
+    && new URLSearchParams(window.location.search).get('busy') === '1'
+  const regressionGenerationPartial = (() => {
+    if (scenario === 'agent-trace-streaming-clean') return agentTraceStreamingPartial
+    if (scenario === 'assistant-streaming-empty') return ''
+    if (scenario === 'assistant-streaming-summary') return 'Streaming local evidence answer.'
+    if (regressionActionRetryBusy) return ''
+    return undefined
+  })()
+  const regressionGenerationStage = scenario === 'assistant-streaming-empty'
+    ? 'answering'
+    : undefined
+  const regressionGenerationTrace = scenario === 'assistant-streaming-summary'
+    ? {
+        retrieval: {
+          local_retrieval: {
+            requested_mode: 'hybrid_local',
+            used_mode: 'bm25',
+            fallback_reason_id: 'dense_query_failed',
+          },
+        },
+      }
+    : undefined
+  const regressionGenerationAnswerContract = scenario === 'assistant-streaming-summary'
+    ? {
+        source_summary: {
+          source_policy_payload: {
+            kind: 'local_kb',
+            badge: {
+              should_show: true,
+              detail: 'Streaming evidence is from the local library.',
+            },
+          },
+        },
+      }
     : undefined
   const [payload, setPayload] = useState<ReaderOpenPayload | null>(null)
+  const [retriedPrompt, setRetriedPrompt] = useState('')
   const readerOpenRef = useRef(false)
   const readerPayloadRef = useRef<ReaderOpenPayload | null>(null)
   const openReaderDock = useCallback((nextPayload: ReaderOpenPayload) => {
@@ -2141,7 +2202,16 @@ export default function MessageListRegressionPage() {
   const regressionShelfProjectSwitchId = typeof window !== 'undefined'
     ? (new URLSearchParams(window.location.search).get('switchProject') || '')
     : ''
+  const regressionResearchNotesEnabled = typeof window !== 'undefined'
+    ? new URLSearchParams(window.location.search).get('notes') === '1'
+    : false
   const [regressionShelfProjectId, setRegressionShelfProjectId] = useState(regressionShelfProjectInitialId)
+  const [regressionShelfMounted, setRegressionShelfMounted] = useState(true)
+  const [regressionResearchNotesCount, setRegressionResearchNotesCount] = useState(0)
+  const [regressionResearchNotesPortalTarget, setRegressionResearchNotesPortalTarget] = useState<HTMLDivElement | null>(null)
+  const handleRegressionResearchNotesStateChange = useCallback((state: { count: number }) => {
+    setRegressionResearchNotesCount(state.count)
+  }, [])
   const dispatchReaderSelectionShelfFixture = useCallback(() => {
     window.dispatchEvent(new CustomEvent('kb:reader-selection-shelf', {
       detail: {
@@ -2178,19 +2248,34 @@ export default function MessageListRegressionPage() {
             <button
               type="button"
               className="ml-2 mt-3 rounded border border-[var(--border)] px-3 py-1 text-xs text-black/60 dark:text-white/60"
-              onClick={() => setRegressionShelfProjectId(regressionShelfProjectSwitchId)}
+              onClick={() => setRegressionShelfProjectId((current) => current === regressionShelfProjectInitialId
+                ? regressionShelfProjectSwitchId : regressionShelfProjectInitialId)}
               data-testid="message-list-switch-project-scope"
             >
               Switch project scope
             </button>
           ) : null}
+          {regressionShelfProjectSwitchId ? (
+            <button type="button" onClick={() => setRegressionShelfMounted((current) => !current)} data-testid="message-list-toggle-mount">
+              Toggle message list mount
+            </button>
+          ) : null}
           <div className="mt-2 text-[11px] text-black/40 dark:text-white/40" data-testid="message-list-current-project">
             {regressionShelfProjectId}
           </div>
+          {regressionResearchNotesEnabled ? (
+            <div className="mt-2" data-testid="message-list-research-notes-count">
+              {regressionResearchNotesCount}
+            </div>
+          ) : null}
         </div>
 
+        {regressionResearchNotesEnabled ? (
+          <div ref={setRegressionResearchNotesPortalTarget} data-testid="message-list-research-notes-portal" />
+        ) : null}
+
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
-          <MessageList
+          {regressionShelfMounted ? <MessageList
             activeConvId={activeRegressionConversationId}
             shelfProjectId={regressionShelfProjectId}
             messages={regressionMessages}
@@ -2201,8 +2286,24 @@ export default function MessageListRegressionPage() {
             paperGuideSourcePath={regressionGuideSourcePath}
             paperGuideSourceName={regressionGuideSourceName}
             generationPartial={regressionGenerationPartial}
-          />
+            generationStage={regressionGenerationStage}
+            generationTrace={regressionGenerationTrace}
+            generationAnswerContract={regressionGenerationAnswerContract}
+            onRetryMessage={scenario === 'assistant-action-retry' ? setRetriedPrompt : undefined}
+            researchNotesPortalTarget={regressionResearchNotesPortalTarget}
+            researchNotesVisible={regressionResearchNotesEnabled}
+            onResearchNotesStateChange={handleRegressionResearchNotesStateChange}
+          /> : null}
         </div>
+
+        {scenario === 'assistant-action-retry' ? (
+          <div
+            className="rounded-2xl border border-[var(--border)] bg-white/60 px-3 py-3 text-xs text-black/70 dark:bg-black/20 dark:text-white/70"
+            data-testid="assistant-action-retry-prompt"
+          >
+            {retriedPrompt || '(empty)'}
+          </div>
+        ) : null}
 
         <div className="rounded-3xl border border-[var(--border)] bg-[var(--panel)] p-4">
           <div className="mb-2 text-xs font-semibold uppercase tracking-[0.18em] text-black/40 dark:text-white/40">

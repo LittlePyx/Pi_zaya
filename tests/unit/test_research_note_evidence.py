@@ -12,6 +12,7 @@ from kb.research_note_evidence import (
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
     research_note_evidence_maintenance_due,
+    research_note_evidence_resolution_mode,
     research_note_source_state_dependency_count,
     resolve_research_note_source_baseline_check,
     review_research_note_source_state,
@@ -262,6 +263,7 @@ def test_baseline_check_audit_is_idempotent_bounded_and_resolvable() -> None:
 
     assert repeated == checked
     assert repeated["links"][0]["evidence_baseline_check"]["checked_at"] == 1_800_000_000
+    assert repeated["links"][0]["evidence_baseline_check"]["resolution_mode"] == "user_decision"
     assert len(repeated["links"][0]["evidence_baseline_check_history"]) == 1
 
     changed = repeated
@@ -387,6 +389,15 @@ def test_evidence_maintenance_due_respects_version_and_persisted_retry_schedule(
 
     external_state = {"links": [{"kind": "source", "evidence_quote": "External evidence"}]}
     assert research_note_evidence_maintenance_due(external_state, now=100.0) is False
+
+
+def test_evidence_resolution_mode_is_allowlisted_and_fails_safe_to_system() -> None:
+    assert research_note_evidence_resolution_mode("candidate") == "user_decision"
+    assert research_note_evidence_resolution_mode("source_changed") == "user_decision"
+    assert research_note_evidence_resolution_mode("verification_failed") == "system_auto"
+    assert research_note_evidence_resolution_mode("new_internal_failure") == "system_auto"
+    assert research_note_evidence_resolution_mode("source_lost") == "source_boundary"
+    assert research_note_evidence_resolution_mode("candidate", terminal=True) == "source_boundary"
 
 
 def test_current_context_baseline_rejects_existing_changed_or_invalid_evidence(tmp_path: Path) -> None:

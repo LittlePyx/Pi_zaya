@@ -63,10 +63,12 @@ Primary local URLs:
 | `kb/converter/quality_center.py` | Conversion source-quality scan/repair summaries |
 | `kb/converter/quality_repair.py` | Markdown quality analysis, repair planning, and safe repair |
 | `kb/task_runtime.py` + `kb/bg_queue_state.py` | Thread-safe background queue for PDF conversion and chat tasks |
-| `kb/retrieval_engine.py` | Query translation, heuristic filtering, result caching |
+| `kb/product_query_policy.py` | Product BM25 query translation, deterministic expansion, RRF, and fail-safe fallback |
+| `kb/retrieval_engine.py` | Evidence grouping, document focus, deep-read enrichment, and reference packing |
 | `kb/candidate_retriever.py` | Minimal candidate-retrieval protocol; keeps ranking channels outside orchestration |
-| `kb/dense_retriever.py` + `kb/hybrid_retriever.py` | Internal exact-cosine and BM25+dense RRF kernels; not product-enabled until embedding persistence and consent land |
-| `kb/embedding_provider.py` + `kb/embedding_index.py` | Model-neutral local executor boundary and atomic, document-incremental exact-vector snapshots; still outside the product path |
+| `kb/dense_retriever.py` + `kb/hybrid_retriever.py` | Exact-cosine and BM25+dense RRF kernels; product use is explicit opt-in and limited to selected-paper/basket scope |
+| `kb/local_semantic_component_service.py` + `kb/portable_local_semantic_runtime.py` | Optional local component consent/lifecycle and the verified product runtime/index binding |
+| `kb/embedding_provider.py` + `kb/embedding_index.py` | Model-neutral experimental executor boundary and exact-vector snapshots; the product uses the separately verified local-component index path |
 | `kb/cross_encoder_reranker.py` | Model-agnostic, fail-open cross-encoder reranking boundary |
 | `kb/retrieval_metrics.py` | Recall@K, MRR, and nDCG evaluation primitives |
 | `kb/retrieval_eval_fixture.py` + `kb/retrieval_benchmark.py` | Frozen real-paper chunk qrels, corpus integrity, and raw/product-query BM25 baselines |
@@ -107,7 +109,7 @@ All via environment variables. At minimum set one API key:
 - React API contracts should be typed in `web/src/api`.
 - Quality fixes should flow from source diagnostics to converter/repair code, not only hide bad UI states.
 - Run `python tools/check_architecture_budgets.py`; protected oversized files may shrink but must not grow.
-- Do not describe retrieval as sparse+dense hybrid until the product path actually has an enabled embedding index.
+- Describe sparse+dense retrieval precisely: it is optional, local, explicitly enabled, and restricted to selected-paper/basket scope; BM25 remains the default and full-library mode.
 
 ## Database Files
 

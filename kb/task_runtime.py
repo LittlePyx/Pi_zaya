@@ -16,6 +16,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from difflib import SequenceMatcher
 from pathlib import Path
+from kb.direct_question_evidence import prioritize_direct_question_hits, requests_direct_question_evidence
+from kb.source_grounded_fallback import (
+    build_exact_relation_grounded_fallback as _build_exact_relation_grounded_fallback,
+    build_provider_failure_grounded_fallback as _build_provider_failure_grounded_fallback,
+)
 
 from kb import runtime_state as RUNTIME
 from kb.bg_queue_state import (
@@ -381,6 +386,7 @@ from kb.research_answer_plan import (
     build_research_facet_queries,
     infer_research_question_facets,
 )
+from kb.product_query_policy import search_hits_with_fallback
 from kb.retrieval_engine import (
     _collect_doc_overview_snippets,
     _deep_read_md_for_context,
@@ -388,7 +394,6 @@ from kb.retrieval_engine import (
     _enrich_grouped_refs_with_llm_pack,
     _extract_md_headings,
     _group_hits_by_doc_for_refs,
-    _search_hits_with_fallback,
     _source_prompt_match_score,
     _top_heading,
 )
@@ -406,6 +411,8 @@ from kb.retrieval_heuristics import (
     _should_bypass_kb_retrieval,
     _should_prioritize_attached_image,
 )
+from kb.local_dense_runtime import normalize_retrieval_mode
+from kb.task_retrieval_observation import TaskRetrievalObservation
 from kb.retriever_cache import get_cached_retriever
 from kb.source_blocks import (
     extract_equation_number,
@@ -426,39 +433,6 @@ GENERATION_START_FAILED_MESSAGE_ZH = "回答任务未能启动，请稍后重试
 GENERATION_INTERRUPTED_MESSAGE = "Answer was interrupted before completion. Please retry."
 
 
-def _build_provider_failure_grounded_fallback(prompt: str, hits: list[dict]) -> str:
-    rows = [hit for hit in list(hits or []) if isinstance(hit, dict) and str(hit.get("text") or "").strip()]
-    if not rows:
-        return ""
-    q = str(prompt or "").strip()
-    evidence = " ".join(str(hit.get("text") or "") for hit in rows[:8])
-    prefer_zh = bool(re.search(r"[\u4e00-\u9fff]", q))
-    if re.search(
-        r"\b(?:refocus|refocusing|out[ -]of[ -]focus)\b|重聚焦|重新对焦|离焦.{0,8}对焦",
-        q,
-        flags=re.I,
-    ) and all(
-        re.search(pattern, evidence, flags=re.I)
-        for pattern in (r"\btwo steps?\b", r"\bray[ -]tracing\b", r"\bwave propagation\b")
-    ):
-        if prefer_zh:
-            return (
-                "模型服务暂时不可用，先按已定位原文给出结论：数字重聚焦分为 two steps，"
-                "先用 ray tracing 重建光子轨迹，再用 wave propagation 反演衍射传播，使离焦样品重新对焦。"
-            )
-        return (
-            "The model service is temporarily unavailable. The located source states that digital refocusing uses "
-            "two steps: ray tracing reconstructs photon trajectories, then wave propagation reverses diffraction."
-        )
-    lines = ["模型服务暂时不可用，先列出已定位的原文依据：" if prefer_zh else "The model service is temporarily unavailable. Located source evidence:"]
-    for hit in rows[:3]:
-        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-        heading = str((meta or {}).get("heading_path") or (meta or {}).get("top_heading") or "").strip()
-        snippet = re.sub(r"\s+", " ", str(hit.get("text") or "").strip())
-        if len(snippet) > 360:
-            snippet = snippet[:357].rstrip() + "..."
-        lines.append(f"- {heading}: {snippet}" if heading else f"- {snippet}")
-    return "\n".join(lines).strip()
 GENERATION_INTERRUPTED_MESSAGE_ZH = "回答尚未完成就中断了，请重试。"
 
 
@@ -3577,11 +3551,8 @@ def _selected_research_context_filter_terms(items: list[dict]) -> dict[str, list
         if not isinstance(item, dict):
             continue
         raw_doi = (
-            item.get("libraryMatchDoi")
-            or item.get("library_match_doi")
-            or item.get("doi")
-            or item.get("doiUrl")
-            or item.get("doi_url")
+            item.get("libraryMatchDoi") or item.get("library_match_doi")
+            or item.get("doi") or item.get("doiUrl") or item.get("doi_url")
         )
         raw_title = (
             item.get("libraryMatchTitle")
@@ -3604,6 +3575,7 @@ def _selected_research_context_filter_terms(items: list[dict]) -> dict[str, list
         if kind == "reference":
             if _selected_context_library_match_usable(item):
                 add("source_paths", item.get("libraryMatchPath") or item.get("library_match_path"))
+                continue
             elif not has_bibliographic_identity:
                 add_item_constraint(item)
         else:
@@ -4316,6 +4288,7 @@ def _finalize_generation_answer(
     paper_guide_precomputed_support_resolution: list[dict] | None = None,
     paper_guide_fast_exact: bool = False,
     settings_obj=None,
+    external_supplement_mode: str = "disabled",
 ) -> dict:
     supplement_builder = None
     if settings_obj and getattr(settings_obj, "api_key", None):
@@ -4352,15 +4325,14 @@ def _finalize_generation_answer(
         paper_guide_evidence_cards=paper_guide_evidence_cards,
         paper_guide_contracts_seed=dict(paper_guide_contracts_seed or {}),
         paper_guide_retrieval_confidence_hint=dict(paper_guide_retrieval_confidence_hint or {}),
-        paper_guide_precomputed_support_resolution=list(
-            paper_guide_precomputed_support_resolution or []
-        ),
+        paper_guide_precomputed_support_resolution=list(paper_guide_precomputed_support_resolution or []),
         paper_guide_fast_exact=bool(paper_guide_fast_exact),
         apply_paper_guide_answer_postprocess=_apply_paper_guide_answer_postprocess,
         maybe_append_library_figure_markdown=_maybe_append_library_figure_markdown,
         validate_structured_citations=_validate_structured_citations,
         build_paper_guide_supplement_lines=supplement_builder,
         validate_freeform_numeric_citations=_validate_freeform_numeric_citations,
+        external_supplement_mode=external_supplement_mode,
     )
 
 
@@ -4814,77 +4786,12 @@ def _gen_store_research_trace_meta(task: dict, *, research_trace: dict | None) -
         pass
 
 
-def _gen_compact_agent_trace(agent_trace: dict | None) -> dict:
-    return _agent_finalize_compact_trace(agent_trace)
-
-
-def _gen_agent_source_summary(agent_trace: dict | None) -> dict:
-    return _agent_finalize_source_summary(agent_trace)
-
-
-def _gen_answer_runtime_check(
-    task: dict,
-    *,
-    answer: str,
-    answer_quality: dict | None = None,
-    agent_trace: dict | None = None,
-    agent_source_summary: dict | None = None,
-    answer_mode: str = "",
-    source_blend: str = "",
-    runtime_repair: dict | None = None,
-) -> dict:
-    return _agent_finalize_answer_runtime_check(
-        task,
-        answer=answer,
-        answer_quality=answer_quality,
-        agent_trace=agent_trace,
-        agent_source_summary=agent_source_summary,
-        answer_mode=answer_mode,
-        source_blend=source_blend,
-        runtime_repair=runtime_repair,
-    )
-
-
-def _gen_answer_contract(
-    task: dict,
-    *,
-    answer_quality: dict | None = None,
-    agent_source_summary: dict | None = None,
-    answer_runtime_check: dict | None = None,
-) -> dict:
-    return _agent_finalize_answer_contract(
-        task,
-        answer_quality=answer_quality,
-        agent_source_summary=agent_source_summary,
-        answer_runtime_check=answer_runtime_check,
-    )
-
-
-def _gen_repair_answer_runtime(
-    task: dict,
-    *,
-    prompt: str,
-    answer: str,
-    answer_quality: dict | None = None,
-    agent_trace: dict | None = None,
-    agent_source_summary: dict | None = None,
-    answer_mode: str = "",
-    source_blend: str = "",
-) -> dict:
-    return _agent_finalize_repair_answer_runtime(
-        task,
-        prompt=prompt,
-        answer=answer,
-        answer_quality=answer_quality,
-        agent_trace=agent_trace,
-        agent_source_summary=agent_source_summary,
-        answer_mode=answer_mode,
-        source_blend=source_blend,
-    )
-
-
-def _sync_runtime_repaired_answer_contracts(paper_guide_contracts: dict | None, *, answer: str) -> dict:
-    return _agent_finalize_sync_runtime_repaired_answer_contracts(paper_guide_contracts, answer=answer)
+_gen_compact_agent_trace = _agent_finalize_compact_trace
+_gen_agent_source_summary = _agent_finalize_source_summary
+_gen_answer_runtime_check = _agent_finalize_answer_runtime_check
+_gen_answer_contract = _agent_finalize_answer_contract
+_gen_repair_answer_runtime = _agent_finalize_repair_answer_runtime
+_sync_runtime_repaired_answer_contracts = _agent_finalize_sync_runtime_repaired_answer_contracts
 
 
 def _answer_allows_local_evidence_actions(
@@ -5146,6 +5053,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
     paper_guide_prompt_family = ""
     answer_hits: list[dict] = []
     settings_obj = None
+    retrieval_observation = TaskRetrievalObservation()
 
     try:
         conv_id = str(task.get("conv_id") or "")
@@ -5162,6 +5070,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         chat_db = Path(str(task.get("chat_db") or "")).expanduser()
         db_dir = Path(str(task.get("db_dir") or "")).expanduser()
         top_k = int(task.get("top_k") or 6)
+        requested_retrieval_mode = normalize_retrieval_mode(task.get("retrieval_mode"))
         temperature = float(task.get("temperature") or 0.15)
         requested_max_tokens = int(task.get("max_tokens") or 1200)
         max_tokens = requested_max_tokens
@@ -5242,6 +5151,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             "user_message_id": int(task.get("user_msg_id") or 0),
             "assistant_message_id": int(task.get("assistant_msg_id") or 0),
             "external_supplement_mode": str(task.get("external_supplement_mode") or "disabled"),
+            "retrieval_mode": requested_retrieval_mode,
         }
         research_trace = _trace_new(
             session_id=session_id,
@@ -5284,6 +5194,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 "image_attachment_count": int(len(raw_image_atts or [])) if isinstance(raw_image_atts, list) else 0,
                 "selected_research_context_count": int(len(selected_research_context_items)),
                 "external_supplement_mode": str(task.get("external_supplement_mode") or "disabled"),
+                "retrieval_mode": requested_retrieval_mode,
             },
         )
         if paper_guide_source_scoped:
@@ -5661,6 +5572,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
         seed_refs_should_stay_pending = False
         basket_filter_trace: dict[str, object] = {}
         if paper_guide_exact_preflight:
+            retrieval_observation.begin(
+                time.perf_counter() - max(0.0, float(exact_preflight_elapsed_s or 0.0)),
+                effective_query_scope or "current_paper",
+                "structured_exact",
+            )
             exact_hit = _build_exact_preflight_hit(
                 paper_guide_exact_preflight,
                 source_name=paper_guide_bound_source_name,
@@ -5671,7 +5587,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 grouped_docs = [dict(exact_hit)]
                 answer_grouped_docs = [dict(exact_hit)]
                 refs_seed_docs_for_display = [dict(exact_hit)]
-                scores_raw = [float(exact_hit.get("score") or 1_000_000.0)]
+            hits_raw, scores_raw = retrieval_observation.select_and_publish(
+                query=str(prompt or ""),
+                sparse_hits=hits_raw,
+                db_dir=db_dir,
+                retrieval_mode=requested_retrieval_mode,
+                source_paths=[paper_guide_bound_source_path],
+                publish=lambda **patch: _gen_update_task(session_id, task_id, **patch),
+            )
             used_query = str(prompt or "").strip()
             query_variants = [used_query] if used_query else []
             paper_guide_retrieval_confidence_hint = {
@@ -5692,6 +5615,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     "bypass_reason": "exact_support_preflight",
                     "raw_hit_count": int(len(hits_raw)),
                     "raw_hits": _trace_summarize_hits(hits_raw, limit=2),
+                    "local_retrieval": retrieval_observation.local_trace,
                 },
             )
             _trace_section(
@@ -5704,9 +5628,11 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 },
             )
             _gen_update_task(session_id, task_id, stage="exact support ready")
+            retrieval_observation.record(hits=hits_raw, query_variants=query_variants)
         elif prompt and (not bypass_kb):
             _gen_update_task(session_id, task_id, stage="retrieve")
             t_ret0 = time.perf_counter()
+            retrieval_observation.begin(t_ret0, effective_query_scope)
             fast_bound_section_hits = _paper_guide_fast_bound_section_hits(
                 paper_guide_source_scoped=bool(paper_guide_source_scoped),
                 paper_guide_cross_paper_refs=bool(paper_guide_cross_paper_refs),
@@ -5716,6 +5642,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 top_k=int(top_k or 4),
             )
             if fast_bound_section_hits:
+                retrieval_observation.channel = "structured_section"
                 hits_raw = list(fast_bound_section_hits)
                 scores_raw = [float(hit.get("score") or 1_000_000.0) for hit in hits_raw]
                 used_query = str(prompt or retrieval_prompt or "").strip()
@@ -5728,7 +5655,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     section="author_biographies",
                 )
             else:
-                hits_raw, scores_raw, used_query, used_translation, query_variants = _search_hits_with_fallback(
+                hits_raw, scores_raw, used_query, used_translation, query_variants = search_hits_with_fallback(
                     retrieval_prompt,
                     retriever,
                     top_k=top_k,
@@ -5793,7 +5720,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     paper_guide_prompt_family in {"method", "reproduce"}
                     and _paper_guide_prompt_requests_exact_method_support(prompt or retrieval_prompt or "")
                 )
-                prompt_targeted = prompt_targeted or method_exact_support_targeted
+                prompt_targeted = prompt_targeted or method_exact_support_targeted or requests_direct_question_evidence(prompt)
                 citation_lookup_targeted = paper_guide_prompt_family == "citation_lookup"
                 scoped_has_target = _paper_guide_has_requested_target_hits(
                     scoped_hits,
@@ -6027,7 +5954,6 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         source=paper_guide_bound_source_name or paper_guide_bound_source_path,
                     )
                 hits_raw = scoped_hits
-                scores_raw = [float(h.get("score", 0.0) or 0.0) for h in hits_raw]
             if effective_query_scope == "basket":
                 basket_scoped_hits, basket_filter_trace = _filter_hits_for_selected_research_context(
                     hits_raw,
@@ -6042,7 +5968,16 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         constraints=int(basket_filter_trace.get("constraint_count") or 0),
                     )
                 hits_raw = basket_scoped_hits
-                scores_raw = [float(h.get("score", 0.0) or 0.0) for h in hits_raw]
+            bm25_hits_for_shadow = list(hits_raw or [])
+            hits_raw, scores_raw = retrieval_observation.select_and_publish(
+                query=str(used_query or prompt or ""),
+                sparse_hits=list(hits_raw or []),
+                db_dir=db_dir,
+                retrieval_mode=requested_retrieval_mode,
+                source_paths=[paper_guide_bound_source_path] if effective_query_scope == "current_paper" else selected_context_refs_source_paths,
+                filter_selected_hits=(lambda rows: _filter_hits_for_selected_research_context(rows, selected_research_context_items)[0]) if effective_query_scope == "basket" else None,
+                publish=lambda **patch: _gen_update_task(session_id, task_id, **patch),
+            )
             _perf_log(
                 "gen.retrieve",
                 elapsed=time.perf_counter() - t_ret0,
@@ -6060,6 +5995,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                     "top_hits": _trace_summarize_hits(list(hits_raw or []), limit=6),
                     "paper_guide_cross_paper_refs": bool(paper_guide_cross_paper_refs),
                     "basket_filter": dict(basket_filter_trace or {}),
+                    "local_retrieval": retrieval_observation.local_trace,
                 },
             )
             _trace_event(
@@ -6067,6 +6003,14 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 elapsed_s=time.perf_counter() - t_ret0,
                 hit_count=int(len(hits_raw or [])),
                 query_variant_count=int(len(query_variants or [])),
+            )
+            retrieval_observation.record(
+                hits=hits_raw or [],
+                query_variants=query_variants or [],
+                translation_used=bool(used_translation),
+                query=str(used_query or retrieval_prompt or prompt or ""),
+                bm25_hits_for_shadow=bm25_hits_for_shadow,
+                db_dir=db_dir,
             )
             hits = _group_hits_by_top_heading(hits_raw, top_k=top_k)
 
@@ -6766,6 +6710,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                         requested_facets=requested_research_facets,
                         limit=answer_passage_limit,
                     )
+                answer_hits = prioritize_direct_question_hits(answer_hits, list(hits_raw or []), limit=answer_passage_limit)
                 answer_hits = _selection_merge_same_source_answer_hits(answer_hits)
                 answer_hit_limit = min(answer_hit_limit, max(1, len(answer_hits)))
         else:
@@ -6778,7 +6723,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             selected_research_context_evidence_hits = _selected_research_context_evidence_hits(
                 selected_research_context_items,
                 max_hits=min(8, max(1, len(selected_research_context_items) * 2)),
-                prompt=(prompt or retrieval_prompt or ""),
+                prompt="\n".join([str(prompt or retrieval_prompt or ""), *list(query_variants or [])[1:]]),
                 db_dir=db_dir,
             )
             if selected_research_context_evidence_hits:
@@ -7445,6 +7390,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 answer_depth=answer_depth,
                 answer_output_mode=answer_output_mode,
                 paper_guide_mode=bool(paper_guide_source_scoped),
+                external_supplement_mode=str(task.get("external_supplement_mode") or "disabled"),
                 paper_guide_contract_enabled=paper_guide_contract_enabled,
                 paper_guide_prompt_family=paper_guide_prompt_family,
                 paper_guide_special_focus_block=paper_guide_special_focus_block,
@@ -7461,10 +7407,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
                 paper_guide_fast_exact=bool(paper_guide_exact_preflight),
                 settings_obj=settings_obj,
             )
-            return _apply_research_facet_quality(
-                finalized,
-                prompt=prompt_for_user or prompt,
-            )
+            return _apply_research_facet_quality(finalized, prompt=prompt_for_user or prompt)
 
         finalize_state = _finalize_candidate(partial)
         initial_answer_quality = (
@@ -7746,6 +7689,24 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             answer_mode=agent_answer_mode,
             source_blend=str(agent_scope_context.get("answer_source_blend") or ""),
         )
+        if (
+            paper_guide_source_scoped
+            and local_evidence_actions_allowed
+            and not bool(answer_quality.get("minimum_ok"))
+        ):
+            exact_recovery = _build_exact_relation_grounded_fallback(
+                prompt_for_user or prompt, list(answer_hits or [])
+            )
+            if exact_recovery:
+                recovered_state = _finalize_candidate(exact_recovery)
+                recovered_quality = dict(recovered_state.get("answer_quality") or {})
+                if bool(recovered_quality.get("minimum_ok")):
+                    recovered_quality.update(self_heal_attempted=True, self_heal_succeeded=True)
+                    recovered_state["answer_quality"] = recovered_quality
+                    finalize_state, answer_quality = recovered_state, recovered_quality
+                    answer = str(recovered_state.get("answer") or exact_recovery)
+                    paper_guide_contracts = dict(recovered_state.get("paper_guide_contracts") or {})
+                    local_evidence_actions_allowed = True
         if (
             paper_guide_source_scoped
             and local_evidence_actions_allowed
@@ -8330,6 +8291,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
 
     except Exception as e:
         snap = _gen_get_task(session_id) or {}
+        retrieval_observation.record_failure(error=e, task_snapshot=snap, task_id=task_id)
         if bool(snap.get("answer_ready")) and str(
             snap.get("answer") or snap.get("partial") or ""
         ).strip():

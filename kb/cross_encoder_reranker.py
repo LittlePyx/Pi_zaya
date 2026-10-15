@@ -24,9 +24,11 @@ class CrossEncoderReranker:
         score_pairs: PairScorer,
         *,
         candidate_limit: int = 40,
+        protected_prefix: int = 0,
     ) -> None:
         self._score_pairs = score_pairs
         self._candidate_limit = max(1, int(candidate_limit))
+        self._protected_prefix = max(0, int(protected_prefix))
 
     @property
     def candidate_limit(self) -> int:
@@ -37,7 +39,11 @@ class CrossEncoderReranker:
         if not str(query or "").strip() or not source_hits:
             return source_hits[: max(0, int(top_k))] if top_k is not None else source_hits
 
-        rerankable = source_hits[: self._candidate_limit]
+        protected_count = min(len(source_hits), self._protected_prefix)
+        protected = source_hits[:protected_count]
+        rerankable = source_hits[protected_count : self._candidate_limit]
+        if not rerankable:
+            return source_hits[: max(0, int(top_k))] if top_k is not None else source_hits
         pairs = [(str(query), str(hit.get("text") or "")) for hit in rerankable]
         try:
             raw_scores = list(self._score_pairs(pairs))
@@ -59,7 +65,7 @@ class CrossEncoderReranker:
             hit["score"] = score
             ranked.append((score, index, hit))
         ranked.sort(key=lambda item: (item[0], -item[1]), reverse=True)
-        output = [hit for _score, _index, hit in ranked]
+        output = protected + [hit for _score, _index, hit in ranked]
         output.extend(source_hits[self._candidate_limit :])
         if top_k is not None:
             return output[: max(0, int(top_k))]

@@ -7,6 +7,7 @@ import json
 import math
 import re
 from pathlib import Path
+from kb import citation_shelf_concurrency as shelf_concurrency
 
 from kb.path_safety import clean_file_source_path_input
 from kb.research_note_evidence import (
@@ -836,6 +837,7 @@ class ChatStore:
 
     def _init_db(self) -> None:
         with self._connect() as conn:
+            shelf_concurrency.initialize(conn)
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS conversations (
@@ -1490,6 +1492,7 @@ class ChatStore:
             conn.execute("UPDATE conversations SET project_id = NULL WHERE project_id = ?", (project_id,))
             self._archive_excess_conversations(conn, project_id=None)
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'project' AND scope_id = ?", (project_id,))
+            conn.execute("DELETE FROM citation_shelf_write_receipts WHERE scope = 'project' AND scope_id = ?", (project_id,))
             conn.execute("DELETE FROM research_briefs WHERE project_id = ?", (project_id,))
             conn.execute("DELETE FROM research_evidence_matrices WHERE project_id = ?", (project_id,))
             cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
@@ -3251,6 +3254,7 @@ class ChatStore:
             conn.execute("DELETE FROM conversation_research_states WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM conversation_sources WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM citation_shelves WHERE scope = 'conversation' AND scope_id = ?", (conv_id,))
+            conn.execute("DELETE FROM citation_shelf_write_receipts WHERE scope = 'conversation' AND scope_id = ?", (conv_id,))
             conn.execute("DELETE FROM message_refs WHERE conv_id = ?", (conv_id,))
             conn.execute("DELETE FROM messages WHERE conv_id = ?", (conv_id,))
             cur = conn.execute("DELETE FROM conversations WHERE id = ?", (conv_id,))
@@ -3621,12 +3625,13 @@ class ChatStore:
                 """,
                 (scope_norm, scope_id),
             ).fetchone()
-        return self._hydrate_citation_shelf_row(
-            row,
-            scope=scope_norm,
-            scope_id=scope_id,
-            project_id=resolved_project_id,
-        )
+            guarded = bool(conn.execute(
+                "SELECT 1 FROM citation_shelf_write_receipts WHERE scope=? AND scope_id=? AND mutation_id=''",
+                (scope_norm, scope_id),
+            ).fetchone())
+        return {**self._hydrate_citation_shelf_row(
+            row, scope=scope_norm, scope_id=scope_id, project_id=resolved_project_id,
+        ), "concurrency_guarded": guarded}
 
     def save_citation_shelf(
         self,
@@ -3637,7 +3642,12 @@ class ChatStore:
         project_id: str | None = None,
         scope: str = "project",
         allow_empty_overwrite: bool = False,
+        expected_revision: int | None = None,
+        mutation_id: str = "",
+        mutations: list[dict] | None = None,
     ) -> dict | None:
+        if mutations and (expected_revision is None or not mutation_id):
+            raise shelf_concurrency.CitationShelfConflict("Operations require a revision and mutation ID")
         normalized_items = _normalize_citation_shelf_items(items)
         try:
             items_json = json.dumps(normalized_items, ensure_ascii=False, default=str)
@@ -3665,6 +3675,23 @@ class ChatStore:
                 """,
                 (scope_norm, scope_id),
             ).fetchone()
+            pending_ops = shelf_concurrency.pending_operations(conn, scope_norm, scope_id, mutations) if mutations else []
+            duplicate = bool(mutations and not pending_ops) or shelf_concurrency.check_write(
+                conn, scope_norm, scope_id, int(row["revision"] or 0) if row else 0,
+                expected_revision, "" if mutations else mutation_id,
+            )
+            if duplicate:
+                current = self._hydrate_citation_shelf_row(
+                    row, scope=scope_norm, scope_id=scope_id, project_id=resolved_project_id,
+                )
+                return {**current, "acknowledged_mutation_id": mutation_id, "concurrency_guarded": True}
+            if mutations:
+                normalized_items, opened = shelf_concurrency.apply_operations(
+                    json.loads(row["items_json"] or "[]") if row else [], bool(row["open"]) if row else False,
+                    pending_ops, _normalize_citation_shelf_items,
+                )
+                items_json = json.dumps(normalized_items, ensure_ascii=False, default=str)
+                open_int = int(opened)
             if row and not normalized_items and not allow_empty_overwrite:
                 try:
                     existing_items = json.loads(row["items_json"] or "[]")
@@ -3677,13 +3704,19 @@ class ChatStore:
                         scope_id=scope_id,
                         project_id=resolved_project_id,
                     )
+            if expected_revision is not None:
+                shelf_concurrency.acknowledge(conn, scope_norm, scope_id, mutation_id)
+                for operation in pending_ops:
+                    shelf_concurrency.acknowledge(conn, scope_norm, scope_id, operation["id"])
             if row and str(row["items_json"] or "[]") == items_json and int(row["open"] or 0) == open_int:
-                return self._hydrate_citation_shelf_row(
+                current = self._hydrate_citation_shelf_row(
                     row,
                     scope=scope_norm,
                     scope_id=scope_id,
                     project_id=resolved_project_id,
                 )
+                return {**current, "concurrency_guarded": expected_revision is not None,
+                        **({"acknowledged_mutation_id": mutation_id} if mutation_id else {})}
             created_at = float(row["created_at"] or now) if row else now
             revision = int(row["revision"] or 0) + 1 if row else 1
             conn.execute(
@@ -3705,6 +3738,8 @@ class ChatStore:
             "scope_id": scope_id,
             "project_id": resolved_project_id,
             "items": normalized_items,
+            **({"acknowledged_mutation_id": mutation_id} if mutation_id else {}),
+            "concurrency_guarded": expected_revision is not None,
             "open": bool(open_int),
             "revision": revision,
             "created_at": created_at,
@@ -3829,6 +3864,7 @@ class ChatStore:
             if resolved is None:
                 return None
             scope_norm, scope_id, resolved_project_id = resolved
+            shelf_concurrency.check_write(conn, scope_norm, scope_id, 0, None)
             conn.execute(
                 "DELETE FROM citation_shelves WHERE scope = ? AND scope_id = ?",
                 (scope_norm, scope_id),
@@ -4003,6 +4039,43 @@ class ChatStore:
                 """
             ).fetchone()
         return int(row["answer_count"] or 0) if row else 0
+
+    def count_located_answer_sources(self, located_sources: list[tuple[str, str]]) -> int:
+        from kb.retrieval_source_scope import source_path_key
+
+        count = 0
+        with self._connect() as conn:
+            for cid, source in set(located_sources):
+                rows = conn.execute(
+                    """
+                    SELECT refs.hits_json FROM message_refs AS refs
+                    WHERE refs.conv_id = ? AND EXISTS (
+                        SELECT 1 FROM messages AS answer
+                        WHERE answer.conv_id = refs.conv_id AND answer.role = 'assistant'
+                          AND length(trim(answer.content)) > 0
+                          AND refs.user_msg_id = (
+                            SELECT MAX(question.id) FROM messages AS question
+                            WHERE question.conv_id = answer.conv_id AND question.role = 'user'
+                              AND question.id < answer.id
+                          )
+                    )
+                    """, (cid,),
+                ).fetchall()
+                found = False
+                for row in rows:
+                    try:
+                        hits = json.loads(row["hits_json"] or "[]")
+                    except (ValueError, TypeError):
+                        continue
+                    for hit in hits if isinstance(hits, list) else ():
+                        meta = hit.get("meta") if isinstance(hit, dict) else None
+                        if isinstance(meta, dict) and meta.get("evidence_ready") is not False and source_path_key(meta.get("source_path")) == source_path_key(source):
+                            found = True
+                            break
+                    if found:
+                        break
+                count += int(found)
+        return count
 
     def update_message_content(self, message_id: int, content: str, *, touch_conversation: bool = False) -> bool:
         mid = int(message_id or 0)

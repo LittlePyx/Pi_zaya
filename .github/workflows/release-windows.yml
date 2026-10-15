@@ -79,6 +79,93 @@ jobs:
         run: |
           python tools/retrieval_eval/run_retrieval_eval.py --dry-run --fail-on-quality
           python tools/retrieval_eval/run_research_qa_baseline.py --validate-only
+          python tools/retrieval_eval/run_dense_research_qa_benchmark.py --validate-only
+          python tools/retrieval_eval/run_research_qa_baseline.py --fixture docs/retrieval_eval_development_v1.json --baseline docs/retrieval_bm25_baseline_development_v1.json --validate-only
+          python tools/retrieval_eval/run_cross_encoder_research_qa_benchmark.py --validate-only
+          python tools/retrieval_eval/validate_semantic_paraphrase_fixture.py
+          python tools/retrieval_eval/validate_semantic_retrieval_report.py
+          python tools/retrieval_eval/validate_semantic_representation_report.py
+          python tools/retrieval_eval/validate_parent_collapsed_multivector_candidate.py
+          python tools/retrieval_eval/run_parent_collapsed_multivector_benchmark.py --validate-only
+          python tools/retrieval_eval/validate_e5_large_instruct_candidate.py
+          python tools/retrieval_eval/run_e5_large_instruct_benchmark.py --validate-only
+          python tools/retrieval_eval/validate_candidate_comparison_protocol.py
+          python tools/retrieval_eval/validate_candidate_batch.py
+          python tools/retrieval_eval/run_candidate_screening.py --candidate-id granite_embedding_278m_multilingual_v1 --validate-only
+          python tools/retrieval_eval/run_candidate_screening.py --candidate-id qwen3_embedding_0_6b_v1 --validate-only
+          python tools/retrieval_eval/run_candidate_screening.py --nominate --validate-only
+          python tools/retrieval_eval/validate_qwen_fusion_protocol_v2.py
+          python tools/retrieval_eval/validate_qwen_fusion_tuning_v2_invalidation.py
+          python tools/retrieval_eval/validate_user_journey_expansion_protocol.py
+          python tools/retrieval_eval/validate_user_journey_authoring_manifest.py
+          python tools/retrieval_eval/build_user_journey_expansion_fixture.py --db-root db --check
+          python tools/retrieval_eval/validate_user_journey_expansion_fixture.py
+          python tools/retrieval_eval/validate_user_journey_bm25_baseline.py
+          python tools/retrieval_eval/build_user_journey_bm25_outcome.py --check
+          python tools/retrieval_eval/validate_user_journey_qwen_dense_protocol.py
+          python tools/retrieval_eval/run_user_journey_qwen_dense_diagnostic.py --validate-only
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_protocol.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_invalidation.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_protocol.py
+          python tools/retrieval_eval/run_user_journey_fusion_v3_selection.py --validate-only
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_semantic_protocol.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_semantic_invalidation.py
+          python tools/retrieval_eval/validate_user_journey_fusion_v3_1_semantic_protocol_v2.py
+          python tools/retrieval_eval/run_user_journey_fusion_v3_1_semantic_acceptance.py --validate-only
+          python tools/retrieval_eval/validate_product_shadow_protocol.py
+          python tools/retrieval_eval/run_product_shadow_operational_replay.py --validate-only
+          python tools/retrieval_eval/validate_product_shadow_vectorized_protocol.py
+          python tools/retrieval_eval/validate_product_opt_in_contract.py
+          python tools/retrieval_eval/validate_cpu_query_compatibility_protocol.py
+          python tools/retrieval_eval/run_cpu_query_compatibility.py --validate-only
+          python tools/retrieval_eval/validate_cpu_full_index_feasibility_protocol.py
+          python tools/retrieval_eval/run_cpu_full_index_feasibility.py --validate-only
+          python tools/retrieval_eval/validate_cpu_padding_diagnostic_protocol.py
+          python tools/retrieval_eval/analyze_cpu_padding.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_screen_protocol.py
+          python tools/retrieval_eval/validate_lighter_runtime_stage0.py
+          python tools/retrieval_eval/validate_lighter_runtime_stage0_e5_small.py
+          python tools/retrieval_eval/validate_e5_small_window_census_protocol.py
+          python tools/retrieval_eval/analyze_e5_small_window_census.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_stage1_e5_small_protocol.py
+          python tools/retrieval_eval/run_lighter_runtime_stage1_e5_small.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_stage2_e5_small_protocol.py
+          python tools/retrieval_eval/run_lighter_runtime_stage2_e5_small.py --validate-only
+          python tools/retrieval_eval/validate_local_semantic_preparation_protocol.py
+          python tools/retrieval_eval/validate_product_e5_selector_shadow_protocol.py
+          python tools/retrieval_eval/validate_product_e5_selector_shadow_report.py
+          python tools/retrieval_eval/validate_product_e5_user_journey_protocol.py
+          python tools/retrieval_eval/validate_product_e5_user_journey_report.py
+          python tools/retrieval_eval/validate_scoped_fresh_authoring_protocol.py
+          python tools/retrieval_eval/validate_scoped_fresh_cases.py
+          python tools/retrieval_eval/validate_scoped_fresh_e5_protocol.py
+          python tools/retrieval_eval/validate_scoped_fresh_e5_report.py
+          python tools/retrieval_eval/validate_portable_optional_e5_protocol.py
+          python tools/retrieval_eval/validate_portable_optional_e5_report.py
+          python tools/retrieval_eval/validate_portable_e5_product_startup_protocol.py
+          python tools/retrieval_eval/validate_portable_e5_product_startup_report.py
+          python tools/retrieval_eval/validate_portable_e5_architecture_startup_protocol.py
+          python tools/retrieval_eval/validate_portable_e5_architecture_startup_report.py
+          python tools/retrieval_eval/validate_local_semantic_component_lifecycle_contract.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_protocol.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_report.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_protocol_v2.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_report_v2.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_protocol_v3.py
+          python tools/retrieval_eval/validate_portable_e5_full_size_lifecycle_report_v3.py
+          python tools/retrieval_eval/run_product_e5_runtime_parity.py --validate-only
+          python tools/retrieval_eval/validate_lighter_runtime_stress_manifest.py
+          python tools/retrieval_eval/validate_lighter_runtime_pointer_invalidation.py
+          python tools/retrieval_eval/validate_lighter_runtime_stage1_protocol.py
+          python tools/retrieval_eval/run_lighter_runtime_stage1.py --validate-only
+          python tools/retrieval_eval/run_product_shadow_vectorized_replay.py --validate-only
+          python tools/research_qa/validate_claim_entailment_fixture.py
+          python tools/research_qa/validate_claim_nli_candidate.py
+          python tools/research_qa/run_claim_nli_benchmark.py --validate-only
+          python tools/research_qa/run_claim_verifier_baseline.py --validate-only
+          python tools/research_qa/build_claim_shadow_report.py --validate-only
+          python tools/research_qa/build_quality_outcome_report.py --validate-only
+          python tools/observability/validate_local_observability_contract.py
           python tools/research_qa/run_research_qa_eval.py --dry-run
           python tools/version_ab/run_version_ab_eval.py --dry-run
           python tools/evidence_matrix/run_comparison_eval.py --dry-run
@@ -199,6 +286,36 @@ jobs:
           "PI_ZAYA_SIGNING_THUMBPRINT=$($certificate.Thumbprint)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "PI_ZAYA_IMPORTED_CERT_THUMBPRINTS=$((@($imported.Thumbprint) -join ';'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Build verified optional local semantic component
+        shell: pwsh
+        run: |
+          $buildRoot = Join-Path $env:RUNNER_TEMP "pi-zaya-local-semantic-component"
+          $venv = Join-Path $buildRoot ".venv"
+          $artifacts = Join-Path $buildRoot "artifacts"
+          $stageZeroReport = Join-Path $buildRoot "stage0.json"
+          python -m venv $venv
+          $componentPython = Join-Path $venv "Scripts\python.exe"
+          & $componentPython -m pip install --disable-pip-version-check --no-compile -r ".\tools\retrieval_eval\lighter_runtime_requirements_v1.txt"
+          if ($LASTEXITCODE -ne 0) { throw "Installing the optional component build environment failed." }
+          & $componentPython ".\tools\retrieval_eval\prepare_lighter_runtime_candidate.py" `
+            --candidate-id multilingual_e5_small_official_onnx_v1 `
+            --artifact-root $artifacts `
+            --report $stageZeroReport
+          if ($LASTEXITCODE -ne 0) { throw "Preparing the pinned E5 component artifact failed." }
+          python ".\tools\release\build_local_semantic_component.py" `
+            --artifact-source (Join-Path $artifacts "multilingual_e5_small_official_onnx_v1") `
+            --site-packages (Join-Path $venv "Lib\site-packages") `
+            --output-dir ".\release" `
+            --release-tag "v$env:PI_ZAYA_VERSION"
+          if ($LASTEXITCODE -ne 0) { throw "Building the optional local semantic component failed." }
+          $componentManifest = [IO.Path]::GetFullPath(".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.manifest.json")
+          python ".\tools\release\validate_local_semantic_component_release.py" `
+            --archive ".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip" `
+            --manifest $componentManifest
+          if ($LASTEXITCODE -ne 0) { throw "Validating the optional local semantic component failed." }
+          "PI_ZAYA_LOCAL_SEMANTIC_COMPONENT_MANIFEST=$componentManifest" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PI_ZAYA_LOCAL_SEMANTIC_COMPONENT_ARCHIVE=$([IO.Path]::GetFullPath('.\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
       - name: Build self-contained Windows x64 ZIP and installer
         shell: pwsh
         run: |
@@ -207,11 +324,34 @@ jobs:
             $signing.SigningThumbprint = $env:PI_ZAYA_SIGNING_THUMBPRINT
             $signing.RequireSignature = $true
           }
-          .\tools\release\build_windows_portable.ps1 -PythonRuntime Embedded -SkipFrontendBuild -KeepStage @signing
+          .\tools\release\build_windows_portable.ps1 `
+            -PythonRuntime Embedded `
+            -SkipFrontendBuild `
+            -KeepStage `
+            -LocalSemanticComponentManifestPath $env:PI_ZAYA_LOCAL_SEMANTIC_COMPONENT_MANIFEST `
+            -LocalSemanticComponentArchivePath $env:PI_ZAYA_LOCAL_SEMANTIC_COMPONENT_ARCHIVE `
+            @signing
           .\tools\release\build_windows_installer.ps1 `
             -StageRoot ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64" `
             -InnoSetupCompiler $env:PI_ZAYA_ISCC `
             @signing
+
+      - name: Validate promoted local semantic product path
+        shell: pwsh
+        run: |
+          $stageRoot = [IO.Path]::GetFullPath(".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64")
+          $stagePython = Join-Path $stageRoot "runtime\python\python.exe"
+          $validationRoot = Join-Path $env:RUNNER_TEMP "pi-zaya-semantic-product-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          if (Test-Path -LiteralPath $validationRoot) { throw "Local semantic product validation root already exists." }
+          & $stagePython ".\tools\release\validate_local_semantic_product_path.py" `
+            --archive ".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip" `
+            --manifest $env:PI_ZAYA_LOCAL_SEMANTIC_COMPONENT_MANIFEST `
+            --work-root $validationRoot
+          $validationExitCode = $LASTEXITCODE
+          if (Test-Path -LiteralPath $validationRoot) {
+            Remove-Item -LiteralPath $validationRoot -Recurse -Force
+          }
+          if ($validationExitCode -ne 0) { throw "Promoted local semantic product path validation failed." }
 
       - name: Smoke-test downloaded ZIP on a clean Windows profile
         shell: pwsh
@@ -231,7 +371,8 @@ jobs:
         run: |
           $artifacts = @(
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.zip",
-            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe"
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe",
+            ".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip"
           )
           foreach ($artifact in $artifacts) {
             $expected = ((Get-Content -LiteralPath "$artifact.sha256" -Raw).Trim() -split '\s+')[0]
@@ -269,7 +410,10 @@ jobs:
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64.manifest.json",
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe",
             ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.exe.sha256",
-            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.manifest.json"
+            ".\release\Pi_zaya-v$env:PI_ZAYA_VERSION-windows-x64-setup.manifest.json",
+            ".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip",
+            ".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip.sha256",
+            ".\release\Pi_zaya-local-semantic-e5-small-v1-windows-x64.manifest.json"
           )
           gh release create $tag @assets --verify-tag --prerelease --notes-file $env:PI_ZAYA_RELEASE_NOTES --title $title
 

@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_portable_optional_e5_v1",
+  "generated_at": "2026-09-03T03:01:03.733614+00:00",
+  "protocol_sha256": "f390527e145ced855a2d0fd8b1e54c84a87ac008f63bdc14f7cb6b1dca6acc10",
+  "package": {
+    "base_archive_bytes": 94876265,
+    "base_archive_growth_bytes": 0,
+    "component_raw_bytes": 541333859,
+    "component_archive_bytes": 296365646,
+    "combined_download_bytes": 391241911,
+    "component_to_base_ratio": 3.123707,
+    "separate_optional_archive": true,
+    "contains_user_library_data": false,
+    "runtime_overlay_bytes": 48911180,
+    "model_artifact_bytes": 492421554,
+    "component_root": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\test_results\\e5p1\\stage\\c"
+  },
+  "timings": {
+    "base_extraction_ms": 8292.031,
+    "component_assembly_ms": 6157.335,
+    "component_compression_ms": 149876.756,
+    "embedded_worker_wall_ms": 18858.782
+  },
+  "runtime": {
+    "python_version": "3.10.11",
+    "onnxruntime_version": "1.23.2",
+    "tokenizers_version": "0.21.4",
+    "onnxruntime_module_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\test_results\\e5p1\\stage\\c\\python\\site-packages\\onnxruntime\\__init__.py",
+    "tokenizers_module_path": "F:\\research-papers\\2026\\Jan\\else\\kb_chat\\test_results\\e5p1\\stage\\c\\python\\site-packages\\tokenizers\\__init__.py",
+    "import_ms": 15182.311,
+    "cold_load_ms": 2444.685,
+    "query_p95_ms": 85.006,
+    "peak_process_rss_mib": 1168.672
+  },
+  "cold_load": {
+    "cold_start": true,
+    "index_cache_hit": false
+  },
+  "queries": [
+    {
+      "case_id": "fresh-fdm-integration-time-boundary",
+      "duration_ms": 85.183,
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "cold_start": false,
+      "index_cache_hit": true,
+      "source_escape_count": 0,
+      "first_relevant_rank": 9,
+      "ranked_chunk_ids": [
+        "6b1a3c7c4aa0aaa9:1",
+        "6b1a3c7c4aa0aaa9:19",
+        "6b1a3c7c4aa0aaa9:9",
+        "6b1a3c7c4aa0aaa9:25",
+        "6b1a3c7c4aa0aaa9:4",
+        "6b1a3c7c4aa0aaa9:26",
+        "6b1a3c7c4aa0aaa9:13",
+        "6b1a3c7c4aa0aaa9:6",
+        "6b1a3c7c4aa0aaa9:20",
+        "6b1a3c7c4aa0aaa9:22"
+      ]
+    },
+    {
+      "case_id": "fresh-scinerf-overlap-rate",
+      "duration_ms": 81.643,
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "cold_start": false,
+      "index_cache_hit": true,
+      "source_escape_count": 0,
+      "first_relevant_rank": 10,
+      "ranked_chunk_ids": [
+        "7f6b9404bccea454:35",
+        "7f6b9404bccea454:0",
+        "7f6b9404bccea454:9",
+        "7f6b9404bccea454:1",
+        "7f6b9404bccea454:16",
+        "7f6b9404bccea454:3",
+        "7f6b9404bccea454:4",
+        "7f6b9404bccea454:37",
+        "7f6b9404bccea454:33",
+        "7f6b9404bccea454:31"
+      ]
+    }
+  ],
+  "execution": {
+    "query_count": 2,
+    "index_build_call_count": 0,
+    "network_used": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "integrity": {
+    "base_archive_before_sha256": "ef9247b8af3856deee6b9c8ea5b2605cd0af58f77c41aa7acb571f98a75f9968",
+    "base_archive_after_sha256": "ef9247b8af3856deee6b9c8ea5b2605cd0af58f77c41aa7acb571f98a75f9968",
+    "artifact_before_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "artifact_after_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "runtime_overlay_before_sha256": "4dc3b33398c560f3218d0c1b746cd446eddedb714633765dcecb742becb08b32",
+    "runtime_overlay_after_sha256": "4dc3b33398c560f3218d0c1b746cd446eddedb714633765dcecb742becb08b32",
+    "component_tree_sha256": "17b7c352cd6836ac6d2f4958db15ef05ddba650e4299494e7fe270d7e9ab81b9",
+    "component_archive_sha256": "54d0f4fbd1c07913f5915dafbab224cf5510072fd767fcffd62da0e0b8ac3ad3"
+  },
+  "gate": {
+    "checks": {
+      "base_archive_unchanged": true,
+      "artifact_source_unchanged": true,
+      "runtime_source_unchanged": true,
+      "separate_optional_archive": true,
+      "component_raw_size": true,
+      "component_zip_size": true,
+      "combined_download_size": true,
+      "no_user_data": true,
+      "assembly_time": true,
+      "compression_time": true,
+      "embedded_worker_wall": true,
+      "exact_runtime_versions": true,
+      "overlay_modules_used": true,
+      "import_time": false,
+      "cold_load_time": true,
+      "warm_query_p95": true,
+      "peak_process_rss": true,
+      "cold_index_load": true,
+      "selected_scope_queries": true,
+      "zero_build_and_network": true,
+      "product_remained_disabled": true
+    },
+    "passes_all": false
+  },
+  "decision": {
+    "status": "optional_component_rejected_keep_bm25_investigate_smaller_runtime",
+    "bundle_with_base_application": false,
+    "product_enabled": false,
+    "user_mode_control_visible": false,
+    "next_action": "keep_bm25_and_investigate_smaller_runtime_candidate"
+  },
+  "result_fingerprint": "2120f98ec523d98c0e890a66be008d71a65a67f04e468b3edf61ada48625df7d"
+}

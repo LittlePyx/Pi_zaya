@@ -14,8 +14,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from kb.retrieval_benchmark import evaluate_bm25_baseline
-from kb.retrieval_engine import _search_hits_with_fallback
-from kb.retrieval_eval_fixture import load_qrels_fixture, sha256_file
+from kb.product_query_policy import search_hits_with_fallback
+from kb.retrieval_eval_fixture import sha256_file
+from kb.retrieval_semantic_eval_fixture import load_retrieval_benchmark_fixture
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
 
@@ -42,7 +43,7 @@ def _product_bm25_search(
     whole_library: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     settings = SimpleNamespace(api_key=None, query_expansion_enabled=False)
-    hits, _scores, _used_query, used_translation, query_variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, used_translation, query_variants = search_hits_with_fallback(
         query,
         retriever,
         top_k,
@@ -192,7 +193,7 @@ def main() -> int:
     args = parser.parse_args()
 
     fixture_path = args.fixture.resolve()
-    fixture = load_qrels_fixture(fixture_path)
+    fixture = load_retrieval_benchmark_fixture(fixture_path, repo_root=REPO_ROOT)
     if args.validate_only:
         errors = _validate_baseline(fixture, fixture_path, args.baseline.resolve())
         if errors:

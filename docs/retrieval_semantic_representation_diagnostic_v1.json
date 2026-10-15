@@ -1,0 +1,831 @@
+{
+  "schema_version": 1,
+  "report_kind": "semantic_chunk_representation_diagnostic",
+  "fixture": {
+    "id": "research_qa_semantic_paraphrase_v1",
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d"
+  },
+  "benchmark": {
+    "path": "docs/retrieval_semantic_paraphrase_benchmark_v1.json",
+    "sha256": "e47a15ba36e1a6f00826e91a554ba4d4d90ca82a8d0cb3d60cdbdb32a35d45a1",
+    "decision": "rejected_for_product_promotion"
+  },
+  "candidate_report": {
+    "path": "docs/retrieval_dense_multilingual_e5_base_unseen_v2.json",
+    "sha256": "85d930a87ae87d7c15eb82343e56c960d1d0c59a7d46873ef74dde9810f43c91",
+    "indexed_truncated_chunk_count": 135
+  },
+  "candidate": {
+    "model_id": "intfloat/multilingual-e5-base",
+    "revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+    "tokenizer_class": "XLMRobertaTokenizerFast",
+    "transformers_version": "4.29.2",
+    "passage_prefix": "passage: ",
+    "max_length": 512,
+    "local_files_only": true,
+    "trust_remote_code": false,
+    "product_enabled": false
+  },
+  "corpus": {
+    "document_count": 10,
+    "chunk_count": 1673,
+    "fingerprint": "d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516",
+    "tokenized_chunk_count": 1673,
+    "truncated_chunk_count": 135,
+    "max_token_count": 4054
+  },
+  "population": {
+    "case_count": 12,
+    "label_count": 15,
+    "unique_relevant_chunk_count": 13,
+    "truncated_relevant_label_count": 0,
+    "evidence_outside_window_label_count": 0,
+    "max_relevant_token_count": 405
+  },
+  "focus": {
+    "case_ids": [
+      "semantic-mamba-selective-state-zh",
+      "semantic-kan-edge-functions-zh",
+      "semantic-timesfm-probability-zh",
+      "semantic-gemma3-vision-tokens-en",
+      "semantic-long-context-synthesis-zh"
+    ],
+    "case_count": 5,
+    "label_count": 6,
+    "truncated_label_count": 0,
+    "evidence_outside_window_label_count": 0,
+    "max_token_count": 405
+  },
+  "labels": [
+    {
+      "case_id": "semantic-mamba-selective-state-zh",
+      "failure_category": "shared_top10_miss",
+      "chunk_id": "53802a4f79933bae:4",
+      "text_sha256": "532d17ddfb9d54433d72e58087a1c4f5740ce53312bf4cfb7f7cd17e7c129491",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1191,
+      "token_count_with_prefix": 305,
+      "would_truncate": false,
+      "evidence_term_count": 4,
+      "resolved_term_count": 4,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "selection mechanism",
+          "char_start": 710,
+          "char_end": 729,
+          "first_token": 201,
+          "last_token": 205,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "input-dependent",
+          "char_start": 829,
+          "char_end": 844,
+          "first_token": 227,
+          "last_token": 229,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "filter out irrelevant information",
+          "char_start": 1119,
+          "char_end": 1152,
+          "first_token": 291,
+          "last_token": 295,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "remember relevant information",
+          "char_start": 1157,
+          "char_end": 1186,
+          "first_token": 297,
+          "last_token": 299,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-kan-edge-functions-zh",
+      "failure_category": "shared_top10_miss",
+      "chunk_id": "4582761a1616bdd6:3",
+      "text_sha256": "3ed6947d1f5493e5017bf9506cb128fded60037acf5de2a1750e1d5368b1accf",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1052,
+      "token_count_with_prefix": 276,
+      "would_truncate": false,
+      "evidence_term_count": 4,
+      "resolved_term_count": 4,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "learnable activation functions on edges",
+          "char_start": 556,
+          "char_end": 595,
+          "first_token": 147,
+          "last_token": 155,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "no linear weight matrices",
+          "char_start": 662,
+          "char_end": 687,
+          "first_token": 175,
+          "last_token": 179,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "1D function",
+          "char_start": 754,
+          "char_end": 765,
+          "first_token": 195,
+          "last_token": 197,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "spline",
+          "char_start": 784,
+          "char_end": 790,
+          "first_token": 202,
+          "last_token": 203,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-bitnet-ternary-efficiency-zh",
+      "failure_category": "non_focus",
+      "chunk_id": "a0923c9f6b527c9f:5",
+      "text_sha256": "25093ee42c486b8a4ce8578e8656b6dbed05aa7514fc7ce0b5f4a70db6cc8ffa",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1325,
+      "token_count_with_prefix": 330,
+      "would_truncate": false,
+      "evidence_term_count": 5,
+      "resolved_term_count": 5,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "{-1, 0, 1}",
+          "char_start": 273,
+          "char_end": 283,
+          "first_token": 65,
+          "last_token": 71,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "1.58 bits",
+          "char_start": 367,
+          "char_end": 376,
+          "first_token": 92,
+          "last_token": 95,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "multiplication operations",
+          "char_start": 532,
+          "char_end": 557,
+          "first_token": 131,
+          "last_token": 134,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "FP16",
+          "char_start": 785,
+          "char_end": 789,
+          "first_token": 187,
+          "last_token": 189,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "3B",
+          "char_start": 1249,
+          "char_end": 1251,
+          "first_token": 304,
+          "last_token": 305,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-sam2-streaming-memory-en",
+      "failure_category": "non_focus",
+      "chunk_id": "36b6b8be924bad5a:3",
+      "text_sha256": "960a31ecd00c7ff3528605256d019767e9834d13603b97159ddf1c645d23e480",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 478,
+      "token_count_with_prefix": 135,
+      "would_truncate": false,
+      "evidence_term_count": 4,
+      "resolved_term_count": 4,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "streaming memory",
+          "char_start": 425,
+          "char_end": 441,
+          "first_token": 122,
+          "last_token": 123,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "previous prompts",
+          "char_start": 454,
+          "char_end": 470,
+          "first_token": 127,
+          "last_token": 129,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "predictions",
+          "char_start": 475,
+          "char_end": 486,
+          "first_token": 131,
+          "last_token": 132,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "clicks, boxes, or masks",
+          "char_start": 353,
+          "char_end": 376,
+          "first_token": 101,
+          "last_token": 109,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-medsam-box-architecture-en",
+      "failure_category": "non_focus",
+      "chunk_id": "ac11f427a96c4cc4:8",
+      "text_sha256": "100ad80e87966308b4beb890ab2dc7dbf103f5e2b2f1db557b490c4163dac889",
+      "page_start": 5,
+      "page_end": 5,
+      "char_count": 975,
+      "token_count_with_prefix": 259,
+      "would_truncate": false,
+      "evidence_term_count": 5,
+      "resolved_term_count": 5,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "bounding boxes",
+          "char_start": 188,
+          "char_end": 202,
+          "first_token": 63,
+          "last_token": 66,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "image encoder",
+          "char_start": 601,
+          "char_end": 614,
+          "first_token": 154,
+          "last_token": 157,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "prompt encoder",
+          "char_start": 618,
+          "char_end": 632,
+          "first_token": 160,
+          "last_token": 163,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "mask decoder",
+          "char_start": 640,
+          "char_end": 652,
+          "first_token": 167,
+          "last_token": 170,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "cross-attention",
+          "char_start": 952,
+          "char_end": 969,
+          "first_token": 248,
+          "last_token": 250,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-modernbert-attention-en",
+      "failure_category": "non_focus",
+      "chunk_id": "eabb38f4bf4fc81d:8",
+      "text_sha256": "18a48b03c3e6034ff62f1e608eec6ffcca22c1ce27e058e7d49f5098b25e0974",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1101,
+      "token_count_with_prefix": 308,
+      "would_truncate": false,
+      "evidence_term_count": 5,
+      "resolved_term_count": 5,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "every third layer",
+          "char_start": 412,
+          "char_end": 429,
+          "first_token": 104,
+          "last_token": 106,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "global attention",
+          "char_start": 194,
+          "char_end": 210,
+          "first_token": 48,
+          "last_token": 49,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "128 token",
+          "char_start": 515,
+          "char_end": 524,
+          "first_token": 128,
+          "last_token": 130,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "160,000",
+          "char_start": 476,
+          "char_end": 483,
+          "first_token": 118,
+          "last_token": 119,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "10,000",
+          "char_start": 578,
+          "char_end": 584,
+          "first_token": 144,
+          "last_token": 144,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-deepseek-r1-zero-boundary-en",
+      "failure_category": "non_focus",
+      "chunk_id": "606d3883253df045:4",
+      "text_sha256": "71bd01ae213d23c8aa062f4a08103f8c10010dacdad165cca4404557e4b366a9",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1012,
+      "token_count_with_prefix": 246,
+      "would_truncate": false,
+      "evidence_term_count": 4,
+      "resolved_term_count": 4,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "poor readability",
+          "char_start": 256,
+          "char_end": 272,
+          "first_token": 56,
+          "last_token": 58,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "language mixing",
+          "char_start": 277,
+          "char_end": 292,
+          "first_token": 60,
+          "last_token": 62,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "writing",
+          "char_start": 544,
+          "char_end": 551,
+          "first_token": 126,
+          "last_token": 126,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "open-domain question answering",
+          "char_start": 556,
+          "char_end": 586,
+          "first_token": 128,
+          "last_token": 134,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-deepseek-r1-zero-boundary-en",
+      "failure_category": "non_focus",
+      "chunk_id": "606d3883253df045:6",
+      "text_sha256": "a5b5d25ee427a608e7a68e8b1be54890f56434ae047dc4d12c06f13907ff0ae9",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 279,
+      "token_count_with_prefix": 84,
+      "would_truncate": false,
+      "evidence_term_count": 1,
+      "resolved_term_count": 1,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "without supervised fine-tuning",
+          "char_start": 144,
+          "char_end": 174,
+          "first_token": 41,
+          "last_token": 48,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-gemma3-vision-tokens-en",
+      "failure_category": "raw_dense_top10_regression",
+      "chunk_id": "7c0059b4861a99a7:34",
+      "text_sha256": "c68b24ad350fc614538750afec4635ccd825c8666c81bd00edf5240de9e2c7d9",
+      "page_start": 8,
+      "page_end": 8,
+      "char_count": 1265,
+      "token_count_with_prefix": 405,
+      "would_truncate": false,
+      "evidence_term_count": 4,
+      "resolved_term_count": 4,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "SigLIP",
+          "char_start": 525,
+          "char_end": 531,
+          "first_token": 158,
+          "last_token": 159,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "vision encoder is frozen",
+          "char_start": 560,
+          "char_end": 584,
+          "first_token": 172,
+          "last_token": 178,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "256 image tokens",
+          "char_start": 679,
+          "char_end": 695,
+          "first_token": 201,
+          "last_token": 204,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "4x4 average pooling",
+          "char_start": 873,
+          "char_end": 892,
+          "first_token": 246,
+          "last_token": 251,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-timesfm-probability-zh",
+      "failure_category": "shared_top10_miss",
+      "chunk_id": "0bb62cdf7be2eb9d:21",
+      "text_sha256": "875b955502290d8f1455082ec6259ebd8abfe2447c85d6c69835069dd86e42d2",
+      "page_start": 4,
+      "page_end": 4,
+      "char_count": 881,
+      "token_count_with_prefix": 268,
+      "would_truncate": false,
+      "evidence_term_count": 5,
+      "resolved_term_count": 5,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "point forecasting",
+          "char_start": 394,
+          "char_end": 411,
+          "first_token": 131,
+          "last_token": 133,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "mean squared error",
+          "char_start": 480,
+          "char_end": 498,
+          "first_token": 147,
+          "last_token": 151,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "probabilistic forecasting",
+          "char_start": 683,
+          "char_end": 708,
+          "first_token": 219,
+          "last_token": 222,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "output heads",
+          "char_start": 743,
+          "char_end": 755,
+          "first_token": 231,
+          "last_token": 233,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "quantile loss",
+          "char_start": 811,
+          "char_end": 824,
+          "first_token": 245,
+          "last_token": 247,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-bindgpt-three-roles-zh",
+      "failure_category": "non_focus",
+      "chunk_id": "385eac8794116d02:1",
+      "text_sha256": "3d8975e842c1e26027ea6073e86fe3aed10beec5f0b94ba9f846ef63dab70293",
+      "page_start": 1,
+      "page_end": 1,
+      "char_count": 1259,
+      "token_count_with_prefix": 273,
+      "would_truncate": false,
+      "evidence_term_count": 5,
+      "resolved_term_count": 5,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "molecular graphs and conformations jointly",
+          "char_start": 431,
+          "char_end": 473,
+          "first_token": 87,
+          "last_token": 95,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "graph reconstruction",
+          "char_start": 509,
+          "char_end": 529,
+          "first_token": 104,
+          "last_token": 107,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "3D molecular generative model",
+          "char_start": 760,
+          "char_end": 789,
+          "first_token": 163,
+          "last_token": 168,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "conformer generator",
+          "char_start": 791,
+          "char_end": 810,
+          "first_token": 170,
+          "last_token": 172,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "pocket-conditioned",
+          "char_start": 853,
+          "char_end": 871,
+          "first_token": 183,
+          "last_token": 186,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-long-context-synthesis-zh",
+      "failure_category": "raw_dense_top10_regression",
+      "chunk_id": "7c0059b4861a99a7:6",
+      "text_sha256": "c996891f93d11f0cd901215bedcd9063e1ba7eac734f80748286d00ddf386317",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1162,
+      "token_count_with_prefix": 363,
+      "would_truncate": false,
+      "evidence_term_count": 3,
+      "resolved_term_count": 3,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "5:1 interleaving",
+          "char_start": 596,
+          "char_end": 612,
+          "first_token": 171,
+          "last_token": 175,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "5 local layers",
+          "char_start": 1072,
+          "char_end": 1086,
+          "first_token": 340,
+          "last_token": 343,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "global layer",
+          "char_start": 622,
+          "char_end": 634,
+          "first_token": 179,
+          "last_token": 180,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-long-context-synthesis-zh",
+      "failure_category": "raw_dense_top10_regression",
+      "chunk_id": "eabb38f4bf4fc81d:8",
+      "text_sha256": "18a48b03c3e6034ff62f1e608eec6ffcca22c1ce27e058e7d49f5098b25e0974",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1101,
+      "token_count_with_prefix": 308,
+      "would_truncate": false,
+      "evidence_term_count": 3,
+      "resolved_term_count": 3,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "every third layer",
+          "char_start": 412,
+          "char_end": 429,
+          "first_token": 104,
+          "last_token": 106,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "128 token",
+          "char_start": 515,
+          "char_end": 524,
+          "first_token": 128,
+          "last_token": 130,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "local sliding window",
+          "char_start": 526,
+          "char_end": 546,
+          "first_token": 132,
+          "last_token": 135,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-segmentation-transfer-en",
+      "failure_category": "non_focus",
+      "chunk_id": "36b6b8be924bad5a:4",
+      "text_sha256": "a63a17d96df0a97da1ca63a084817953d0d0391c8f31142297ad9b56dd32b668",
+      "page_start": 2,
+      "page_end": 2,
+      "char_count": 1242,
+      "token_count_with_prefix": 294,
+      "would_truncate": false,
+      "evidence_term_count": 3,
+      "resolved_term_count": 3,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "streaming memory",
+          "char_start": 147,
+          "char_end": 163,
+          "first_token": 38,
+          "last_token": 39,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "data engine",
+          "char_start": 222,
+          "char_end": 233,
+          "first_token": 53,
+          "last_token": 54,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "model in the loop",
+          "char_start": 280,
+          "char_end": 297,
+          "first_token": 66,
+          "last_token": 69,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    },
+    {
+      "case_id": "semantic-segmentation-transfer-en",
+      "failure_category": "non_focus",
+      "chunk_id": "ac11f427a96c4cc4:8",
+      "text_sha256": "100ad80e87966308b4beb890ab2dc7dbf103f5e2b2f1db557b490c4163dac889",
+      "page_start": 5,
+      "page_end": 5,
+      "char_count": 975,
+      "token_count_with_prefix": 259,
+      "would_truncate": false,
+      "evidence_term_count": 3,
+      "resolved_term_count": 3,
+      "all_evidence_inside_window": true,
+      "terms": [
+        {
+          "term": "bounding boxes",
+          "char_start": 188,
+          "char_end": 202,
+          "first_token": 63,
+          "last_token": 66,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "positional encoding",
+          "char_start": 848,
+          "char_end": 867,
+          "first_token": 222,
+          "last_token": 226,
+          "resolved": true,
+          "fully_inside_window": true
+        },
+        {
+          "term": "cross-attention",
+          "char_start": 952,
+          "char_end": 969,
+          "first_token": 248,
+          "last_token": 250,
+          "resolved": true,
+          "fully_inside_window": true
+        }
+      ]
+    }
+  ],
+  "decision": {
+    "truncation_explains_frozen_failures": false,
+    "rechunk_stored_citation_units": false,
+    "interpretation": "The corpus contains long truncated chunks, but none of the 15 labelled semantic evidence units and none of the six labels behind the five focus failures exceed the pinned window. The measured failures are not evidence-loss-by-truncation.",
+    "only_permitted_subchunk_experiment": "Represent each original chunk by multiple bounded child embeddings, score the parent by child max score, and collapse results back to the unchanged parent chunk ID/page locator before fusion or citation.",
+    "next_action": "Do not alter stored chunking. Reprioritize the frozen multilingual NLI baseline; if retrieval experimentation resumes, pre-register a development-only parent-collapsed multi-vector candidate before replaying the frozen slice."
+  }
+}

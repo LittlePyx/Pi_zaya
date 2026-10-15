@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
 from pathlib import Path
@@ -3725,7 +3726,7 @@ def test_get_conversation_refs_treats_stale_pending_pack_as_fast_ready(monkeypat
     assert warm_calls["n"] == 1
 
 
-def test_get_conversation_refs_pending_payload_includes_pack_primary_evidence(monkeypatch):
+def test_get_conversation_refs_pending_payload_hides_unverified_evidence(monkeypatch):
     references_router._REFS_CONVERSATION_CACHE.clear()
     references_router._REFS_CONVERSATION_WARMING.clear()
     refs = {
@@ -3752,13 +3753,14 @@ def test_get_conversation_refs_pending_payload_includes_pack_primary_evidence(mo
     out = references_router.get_conversation_refs("conv-pending-primary")
 
     pack = out[8]
-    assert pack["primary_evidence"]["heading_path"] == "2. Comparison of theory / 2.2 Basis patterns generation"
-    assert pack["primary_evidence"]["selection_reason"] == "pending_section_seed"
-    assert pack["primary_evidence_heading_path"] == "2. Comparison of theory / 2.2 Basis patterns generation"
-    assert pack["hits"][0]["ui_meta"]["reader_open"]["primaryEvidence"]["heading_path"] == "2. Comparison of theory / 2.2 Basis patterns generation"
+    assert pack["display_state"] == "pending"
+    assert pack["hits"] == []
+    assert pack["pending_hit_count"] == 1
+    assert "primary_evidence" not in pack
+    assert "primary_evidence_heading_path" not in pack
 
 
-def test_get_conversation_refs_pending_payload_prefers_authoritative_doc_list_when_available(monkeypatch):
+def test_get_conversation_refs_pending_payload_hides_authoritative_list_until_bound(monkeypatch):
     references_router._REFS_CONVERSATION_CACHE.clear()
     references_router._REFS_CONVERSATION_WARMING.clear()
 
@@ -3854,21 +3856,13 @@ def test_get_conversation_refs_pending_payload_prefers_authoritative_doc_list_wh
     out = references_router.get_conversation_refs("conv-pending-doc-list")
 
     pack = out[15]
-    titles = [((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("display_name") for hit in list(pack.get("hits") or [])]
     assert pack["pending"] is True
-    assert titles[:2] == [
-        "ICIP-2025-SCIGS.pdf",
-        "CVPR-2024-SCINeRF.pdf",
-    ]
-    assert titles[2] in {
-        "OE-2007.pdf",
-        "OE-2007-Single-shot compressive spectral imaging with a dual-disperser architecture.pdf",
-    }
-    assert "NatPhoton-2019" not in " ".join(str(item or "") for item in titles)
-    assert all(bool(((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("score_pending")) for hit in list(pack.get("hits") or []))
+    assert pack["display_state"] == "pending"
+    assert pack["hits"] == []
+    assert pack["pending_hit_count"] == 2
 
 
-def test_build_pending_conversation_refs_payload_stabilizes_multi_paper_identity_before_authoritative_doc_list(monkeypatch):
+def test_build_pending_conversation_refs_payload_never_exposes_candidate_identity(monkeypatch):
     prompt = "Which papers in my library mention SCI (Snapshot Compressive Imaging)?"
     hits = [
         {
@@ -3908,23 +3902,9 @@ def test_build_pending_conversation_refs_payload_stabilizes_multi_paper_identity
     monkeypatch.setattr(
         references_router,
         "_references_build_multi_paper_doc_list_contract",
-        lambda **kwargs: [
-            {
-                "source_path": r"db\CVPR-2024-SCINeRF\CVPR-2024-SCINeRF.en.md",
-                "source_name": "CVPR-2024-SCINeRF.pdf",
-                "heading_path": "2. Related Work",
-            },
-            {
-                "source_path": r"db\ICIP-2025-SCIGS\ICIP-2025-SCIGS.en.md",
-                "source_name": "ICIP-2025-SCIGS.pdf",
-                "heading_path": "1. Introduction",
-            },
-            {
-                "source_path": r"db\OE-2007\OE-2007.en.md",
-                "source_name": "OE-2007.pdf",
-                "heading_path": "5. Conclusions",
-            },
-        ],
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("pending candidates must not be stabilized for display")
+        ),
     )
 
     out = references_router._build_pending_conversation_refs_payload(
@@ -3938,29 +3918,13 @@ def test_build_pending_conversation_refs_payload_stabilizes_multi_paper_identity
     )
 
     pack = out[18]
-    titles = [
-        ((hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}) or {}).get("display_name")
-        for hit in list(pack.get("hits") or [])
-    ]
-
-    assert titles == [
-        "CVPR-2024-SCINeRF.pdf",
-        "ICIP-2025-SCIGS.pdf",
-        "OE-2007.pdf",
-    ]
-    assert "NatPhoton-2019" not in " ".join(str(title or "") for title in titles)
+    assert pack["hits"] == []
+    assert pack["pending_hit_count"] == 4
     assert pack["payload_mode"] == "pending"
     assert pack["pending"] is True
 
 
-def test_build_pending_conversation_refs_payload_localizes_provisional_evidence(monkeypatch):
-    monkeypatch.setattr(references_router, "_ref_card_user_locale", lambda prompt: "zh")
-    monkeypatch.setattr(
-        references_router,
-        "_filter_pending_refs_hits_by_prompt_focus",
-        lambda prompt, hits: list(hits),
-    )
-
+def test_build_pending_conversation_refs_payload_contains_no_provisional_copy():
     out = references_router._build_pending_conversation_refs_payload(
         {
             19: {
@@ -3980,14 +3944,10 @@ def test_build_pending_conversation_refs_payload_localizes_provisional_evidence(
         doc_list_by_user={},
     )
 
-    ui = out[19]["hits"][0]["ui_meta"]
-    assert ui["render_locale"] == "zh"
-    assert ui["summary_kind"] == "evidence"
-    assert ui["summary_display_role"] == "source_evidence"
-    assert ui["summary_label"] == "原文证据"
-    assert "SCINeRF" in ui["why_line"]
-    assert "NeRF 训练" in ui["why_line"]
-    assert "This pending match" not in ui["why_line"]
+    pack = out[19]
+    assert pack["hits"] == []
+    assert pack["display_state"] == "pending"
+    assert "待核验" not in json.dumps(pack, ensure_ascii=False)
 
 
 def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_non_authoritative_rendered_payload(monkeypatch):
@@ -4134,7 +4094,7 @@ def test_get_conversation_refs_full_payload_prefers_authoritative_doc_list_over_
     assert list((warm.get("authoritative_doc_list_by_user") or {}).get(21) or []) == messages[1]["meta"]["paper_guide_contracts"]["doc_list"]
 
 
-def test_build_pending_conversation_refs_payload_uses_empty_authoritative_doc_list_and_forwards_guide(monkeypatch):
+def test_build_pending_conversation_refs_payload_does_not_render_empty_authoritative_list(monkeypatch):
     refs = {
         51: {
             "prompt": "Besides this paper, what other papers in my library discuss ADMM?",
@@ -4149,22 +4109,13 @@ def test_build_pending_conversation_refs_payload_uses_empty_authoritative_doc_li
             ],
         }
     }
-    calls: dict[str, object] = {}
-
-    def fake_build_doc_list_refs_payload(*, user_msg_id, pack, doc_list, **kwargs):
-        calls["user_msg_id"] = int(user_msg_id)
-        calls["prompt"] = str(pack.get("prompt") or "")
-        calls["doc_list"] = list(doc_list or [])
-        calls["kwargs"] = dict(kwargs)
-        return {
-            "user_msg_id": int(user_msg_id),
-            "payload_mode": "full",
-            "pipeline_debug": {"doc_list_authoritative": True},
-            "guide_filter": {"active": True, "hidden_self_source": True, "filtered_hit_count": 1},
-            "hits": [],
-        }
-
-    monkeypatch.setattr(references_router, "build_doc_list_refs_payload", fake_build_doc_list_refs_payload)
+    monkeypatch.setattr(
+        references_router,
+        "build_doc_list_refs_payload",
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("pending state must not render an evidence list")
+        ),
+    )
 
     out = references_router._build_pending_conversation_refs_payload(
         refs,
@@ -4174,17 +4125,11 @@ def test_build_pending_conversation_refs_payload_uses_empty_authoritative_doc_li
         guide_source_name="CVPR-2024-SCINeRF.pdf",
     )
 
-    assert calls["doc_list"] == []
-    assert dict(calls.get("kwargs") or {}).get("guide_mode") is True
-    assert dict(calls.get("kwargs") or {}).get("allow_exact_locate") is False
-    assert dict(calls.get("kwargs") or {}).get("allow_expensive_llm") is False
-    assert dict(calls.get("kwargs") or {}).get("apply_copy_polish") is False
-    assert dict(calls.get("kwargs") or {}).get("seed_only") is True
-    assert dict(calls.get("kwargs") or {}).get("guide_source_name") == "CVPR-2024-SCINeRF.pdf"
     pack = dict(out.get(51) or {})
     assert list(pack.get("hits") or []) == []
     assert bool(pack.get("pending")) is True
     assert str(pack.get("display_state") or "") == "pending"
+    assert int(pack.get("pending_hit_count") or 0) == 1
 
 
 def test_get_conversation_refs_empty_authoritative_doc_list_overrides_stale_full_payload(monkeypatch):

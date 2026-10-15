@@ -2617,15 +2617,17 @@ test('guide refs remain renderable when only the bound source was filtered out',
   await expect(page.locator('.kb-prov-locate-chip')).toHaveCount(0)
 })
 
-test('refs render after the latest user message while assistant is still streaming', async ({ page }) => {
+test('refs show progress without provisional cards while assistant is still streaming', async ({ page }) => {
   await mockReaderDoc(page)
   await openMessageListRegressionPage(page, '/__message_list_test__?scenario=live-user-pending-refs')
 
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('live-user-pending-refs')
   await expect(page.locator('.kb-refs-panel')).toBeVisible()
   await page.locator('.kb-refs-panel .ant-collapse-header').click()
-  await expect(page.getByTestId('refs-panel-pending-note')).toBeVisible()
-  await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper')
+  await expect(page.getByTestId('refs-panel-pending-progress')).toBeVisible()
+  await expect(page.getByTestId('refs-panel-pending-progress')).toContainText('系统正在完成来源定位与证据绑定')
+  await expect(page.locator('.kb-ref-title')).toHaveCount(0)
+  await expect(page.locator('.kb-ref-action')).toHaveCount(0)
   await expect(page.locator('.kb-ref-score')).toHaveCount(0)
 })
 

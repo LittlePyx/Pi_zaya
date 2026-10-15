@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "id": "research_qa_claim_entailment_v1",
+  "description": "Model-independent semantic verification gold set built from frozen local-paper evidence. It distinguishes entailment, direct contradiction, and insufficient evidence; contradiction cases include high-lexical-overlap traps that a term-overlap verifier should not pass.",
+  "source_qrels": {
+    "path": "docs/retrieval_eval_unseen_v2.json",
+    "id": "research_qa_unseen_corpus_v2_chunk_qrels",
+    "sha256": "4062ce7f0a1ce4afc86f44fbe74fdc375bbeeeb6b2bdc934344e4e0d53d749d7"
+  },
+  "curation_status": "frozen_before_nli_model_selection",
+  "expected_case_count": 24,
+  "expected_label_counts": {
+    "contradiction": 8,
+    "entailment": 8,
+    "insufficient": 8
+  },
+  "expected_locale_counts": {
+    "en": 12,
+    "zh": 12
+  },
+  "minimum_lexical_adversaries": 4,
+  "minimum_cross_lingual_cases": 12,
+  "minimum_lexical_adversary_claim_coverage": 0.45,
+  "evidence": [
+    {
+      "id": "mamba-selection",
+      "source_case_id": "mamba-selective-state",
+      "segments": [
+        {
+          "chunk_id": "53802a4f79933bae:4",
+          "chunk_text_sha256": "532d17ddfb9d54433d72e58087a1c4f5740ce53312bf4cfb7f7cd17e7c129491",
+          "quote": "We design a simple selection mechanism by parameterizing the SSM parameters based on the input. This allows the model to filter out irrelevant information and remember relevant information indefinitely."
+        }
+      ]
+    },
+    {
+      "id": "bitnet-ternary",
+      "source_case_id": "bitnet-ternary-efficiency",
+      "segments": [
+        {
+          "chunk_id": "a0923c9f6b527c9f:5",
+          "chunk_text_sha256": "25093ee42c486b8a4ce8578e8656b6dbed05aa7514fc7ce0b5f4a70db6cc8ffa",
+          "quote": "Every parameter is ternary, taking on values of {-1, 0, 1}. Its new computation paradigm requires almost no multiplication operations for matrix multiplication."
+        }
+      ]
+    },
+    {
+      "id": "sam2-memory",
+      "source_case_id": "sam2-streaming-memory",
+      "segments": [
+        {
+          "chunk_id": "36b6b8be924bad5a:3",
+          "chunk_text_sha256": "960a31ecd00c7ff3528605256d019767e9834d13603b97159ddf1c645d23e480",
+          "quote": "SAM 2 is capable of interactively segmenting regions through prompts (clicks, boxes, or masks) on one or multiple video frames by utilizing a streaming memory that stores previous prompts and predictions."
+        }
+      ]
+    },
+    {
+      "id": "medsam-box",
+      "source_case_id": "medsam-box-architecture",
+      "segments": [
+        {
+          "chunk_id": "ac11f427a96c4cc4:8",
+          "chunk_text_sha256": "100ad80e87966308b4beb890ab2dc7dbf103f5e2b2f1db557b490c4163dac889",
+          "quote": "Point-based prompts can introduce ambiguity, particularly when proximate structures resemble each other. The prompt encoder transforms the user-drawn bounding boxes into feature representations via positional encoding."
+        }
+      ]
+    },
+    {
+      "id": "modernbert-attention",
+      "source_case_id": "modernbert-alternating-attention",
+      "segments": [
+        {
+          "chunk_id": "eabb38f4bf4fc81d:8",
+          "chunk_text_sha256": "18a48b03c3e6034ff62f1e608eec6ffcca22c1ce27e058e7d49f5098b25e0974",
+          "quote": "In ModernBERT, every third layer employs global attention with a RoPE theta of 160,000 and the remaining layers use a 128 token, local sliding window attention with a RoPE theta of 10,000."
+        }
+      ]
+    },
+    {
+      "id": "deepseek-r1-zero",
+      "source_case_id": "deepseek-r1-zero-boundary",
+      "segments": [
+        {
+          "chunk_id": "606d3883253df045:6",
+          "chunk_text_sha256": "a5b5d25ee427a608e7a68e8b1be54890f56434ae047dc4d12c06f13907ff0ae9",
+          "quote": "DeepSeek-R1-Zero relies exclusively on reinforcement learning without supervised fine-tuning."
+        },
+        {
+          "chunk_id": "606d3883253df045:4",
+          "chunk_text_sha256": "71bd01ae213d23c8aa062f4a08103f8c10010dacdad165cca4404557e4b366a9",
+          "quote": "It faces challenges such as poor readability and language mixing, occasionally combining English and Chinese within a single chain-of-thought response."
+        }
+      ]
+    },
+    {
+      "id": "gemma3-vision",
+      "source_case_id": "gemma3-vision-tokens",
+      "segments": [
+        {
+          "chunk_id": "7c0059b4861a99a7:34",
+          "chunk_text_sha256": "c68b24ad350fc614538750afec4635ccd825c8666c81bd00edf5240de9e2c7d9",
+          "quote": "The vision encoder is frozen, and only the language model is trained. Each image is represented by 256 image tokens. The 896 resolution encoder has a 4x4 average pooling on its output."
+        }
+      ]
+    },
+    {
+      "id": "timesfm-objective",
+      "source_case_id": "timesfm-probabilistic-boundary",
+      "segments": [
+        {
+          "chunk_id": "0bb62cdf7be2eb9d:21",
+          "chunk_text_sha256": "875b955502290d8f1455082ec6259ebd8abfe2447c85d6c69835069dd86e42d2",
+          "quote": "We focus on point forecasting and use a point forecasting loss during training like Mean Squared Error. Probabilistic forecasting can use multiple output heads, each minimizing a separate quantile loss."
+        }
+      ]
+    }
+  ],
+  "cases": [
+    {
+      "id": "mamba-entails",
+      "evidence_id": "mamba-selection",
+      "locale": "en",
+      "claim": "Mamba makes the SSM parameters depend on the input so it can discard irrelevant information and retain relevant information.",
+      "label": "entailment",
+      "adversary_type": "faithful_paraphrase",
+      "claim_token_coverage": 0.529412,
+      "rationale": "The claim preserves the input-conditioned selection and filter/remember relationship."
+    },
+    {
+      "id": "mamba-contradicts",
+      "evidence_id": "mamba-selection",
+      "locale": "en",
+      "claim": "Mamba keeps the SSM parameters independent of the input and cannot filter irrelevant information or remember relevant information.",
+      "label": "contradiction",
+      "adversary_type": "lexical_negation_reversal",
+      "claim_token_coverage": 0.625,
+      "rationale": "High-overlap negation reverses the exact mechanism described by the evidence."
+    },
+    {
+      "id": "mamba-insufficient",
+      "evidence_id": "mamba-selection",
+      "locale": "en",
+      "claim": "Mamba was pretrained with a bidirectional masked-language objective on exactly two trillion tokens.",
+      "label": "insufficient",
+      "adversary_type": "unsupported_training_detail",
+      "claim_token_coverage": 0.142857,
+      "rationale": "The excerpt neither states nor contradicts this training recipe."
+    },
+    {
+      "id": "bitnet-entails-zh",
+      "evidence_id": "bitnet-ternary",
+      "locale": "zh",
+      "claim": "BitNet b1.58 的每个参数只能取 {-1, 0, 1} 三个值，因此矩阵乘法几乎不需要乘法运算。",
+      "label": "entailment",
+      "adversary_type": "cross_lingual_faithful_paraphrase",
+      "claim_token_coverage": 0.071429,
+      "rationale": "中文 claim 与英文证据表达相同的三值权重和计算结果。"
+    },
+    {
+      "id": "bitnet-contradicts-zh",
+      "evidence_id": "bitnet-ternary",
+      "locale": "zh",
+      "claim": "BitNet b1.58 的参数只能取 {-1, 1} 两个值，明确禁止使用零权重。",
+      "label": "contradiction",
+      "adversary_type": "cross_lingual_value_reversal",
+      "claim_token_coverage": 0.045455,
+      "rationale": "证据明确包含零，中文 claim 将三值关系反转为二值。"
+    },
+    {
+      "id": "bitnet-insufficient-zh",
+      "evidence_id": "bitnet-ternary",
+      "locale": "zh",
+      "claim": "BitNet b1.58 在 NVIDIA A100 上经过实测可获得恰好两倍吞吐率。",
+      "label": "insufficient",
+      "adversary_type": "cross_lingual_unsupported_hardware_metric",
+      "claim_token_coverage": 0.0,
+      "rationale": "证据没有给出指定硬件或恰好两倍的实测结果。"
+    },
+    {
+      "id": "sam2-entails",
+      "evidence_id": "sam2-memory",
+      "locale": "en",
+      "claim": "SAM 2 uses a streaming memory to carry previous prompts and predictions while accepting clicks, boxes, or masks on video frames.",
+      "label": "entailment",
+      "adversary_type": "faithful_paraphrase",
+      "claim_token_coverage": 0.761905,
+      "rationale": "The claim directly preserves the memory contents and supported prompt forms."
+    },
+    {
+      "id": "sam2-contradicts",
+      "evidence_id": "sam2-memory",
+      "locale": "en",
+      "claim": "SAM 2 uses a streaming memory that discards all previous prompts and predictions between video frames.",
+      "label": "contradiction",
+      "adversary_type": "lexical_negation_reversal",
+      "claim_token_coverage": 0.75,
+      "rationale": "The high-overlap claim reverses stores into discards."
+    },
+    {
+      "id": "sam2-insufficient",
+      "evidence_id": "sam2-memory",
+      "locale": "en",
+      "claim": "SAM 2 retains exactly sixteen raw RGB frames in its streaming memory.",
+      "label": "insufficient",
+      "adversary_type": "unsupported_memory_capacity",
+      "claim_token_coverage": 0.416667,
+      "rationale": "The excerpt describes stored prompts and predictions but gives no raw-frame count."
+    },
+    {
+      "id": "medsam-entails-zh",
+      "evidence_id": "medsam-box",
+      "locale": "zh",
+      "claim": "MedSAM 认为点提示在相邻结构相似时容易产生歧义，并把用户画的框通过位置编码转换成特征。",
+      "label": "entailment",
+      "adversary_type": "cross_lingual_faithful_paraphrase",
+      "claim_token_coverage": 0.0,
+      "rationale": "中文 claim 忠实保留了点提示歧义和框提示编码两个关系。"
+    },
+    {
+      "id": "medsam-contradicts-zh",
+      "evidence_id": "medsam-box",
+      "locale": "zh",
+      "claim": "MedSAM 认为框提示比点提示更容易在相邻结构之间产生歧义，因此不对框做位置编码。",
+      "label": "contradiction",
+      "adversary_type": "cross_lingual_relation_reversal",
+      "claim_token_coverage": 0.0,
+      "rationale": "claim 同时反转了歧义来源和框提示的位置编码处理。"
+    },
+    {
+      "id": "medsam-insufficient-zh",
+      "evidence_id": "medsam-box",
+      "locale": "zh",
+      "claim": "MedSAM 的掩码解码器固定包含十二层 Transformer。",
+      "label": "insufficient",
+      "adversary_type": "cross_lingual_unsupported_architecture_count",
+      "claim_token_coverage": 0.0,
+      "rationale": "证据没有提供掩码解码器的层数。"
+    },
+    {
+      "id": "modernbert-entails",
+      "evidence_id": "modernbert-attention",
+      "locale": "en",
+      "claim": "ModernBERT makes every third layer global with RoPE theta 160,000; other layers use a 128-token local window with theta 10,000.",
+      "label": "entailment",
+      "adversary_type": "faithful_numeric_paraphrase",
+      "claim_token_coverage": 0.9,
+      "rationale": "The layer cadence, window, and both theta values match the evidence."
+    },
+    {
+      "id": "modernbert-contradicts",
+      "evidence_id": "modernbert-attention",
+      "locale": "en",
+      "claim": "ModernBERT makes every third layer local with RoPE theta 10,000; other layers use global attention with theta 160,000.",
+      "label": "contradiction",
+      "adversary_type": "lexical_role_swap",
+      "claim_token_coverage": 0.882353,
+      "rationale": "Nearly all terms match, but the local/global roles and theta assignments are swapped."
+    },
+    {
+      "id": "modernbert-insufficient",
+      "evidence_id": "modernbert-attention",
+      "locale": "en",
+      "claim": "ModernBERT's alternating attention supports a maximum context of exactly one million tokens.",
+      "label": "insufficient",
+      "adversary_type": "unsupported_context_limit",
+      "claim_token_coverage": 0.307692,
+      "rationale": "The excerpt gives layer behavior but no one-million-token context limit."
+    },
+    {
+      "id": "deepseek-entails-zh",
+      "evidence_id": "deepseek-r1-zero",
+      "locale": "zh",
+      "claim": "DeepSeek-R1-Zero 完全依靠强化学习且没有监督微调，并存在可读性差和中英文混杂的问题。",
+      "label": "entailment",
+      "adversary_type": "cross_lingual_faithful_paraphrase",
+      "claim_token_coverage": 0.088235,
+      "rationale": "中文 claim 覆盖两个英文证据片段共同支持的训练边界和缺陷。"
+    },
+    {
+      "id": "deepseek-contradicts-zh",
+      "evidence_id": "deepseek-r1-zero",
+      "locale": "zh",
+      "claim": "DeepSeek-R1-Zero 先进行监督微调且不采用纯强化学习，同时没有语言混杂问题。",
+      "label": "contradiction",
+      "adversary_type": "cross_lingual_scope_reversal",
+      "claim_token_coverage": 0.103448,
+      "rationale": "claim 反转了训练起点与已报告的语言混杂限制。"
+    },
+    {
+      "id": "deepseek-insufficient-zh",
+      "evidence_id": "deepseek-r1-zero",
+      "locale": "zh",
+      "claim": "DeepSeek-R1-Zero 的强化学习阶段恰好使用八十万条推理提示。",
+      "label": "insufficient",
+      "adversary_type": "cross_lingual_unsupported_dataset_size",
+      "claim_token_coverage": 0.136364,
+      "rationale": "两个证据片段都未给出强化学习提示数量。"
+    },
+    {
+      "id": "gemma3-entails",
+      "evidence_id": "gemma3-vision",
+      "locale": "en",
+      "claim": "Gemma 3 freezes the vision encoder, represents each image with 256 tokens, and applies 4x4 average pooling at resolution 896.",
+      "label": "entailment",
+      "adversary_type": "faithful_numeric_paraphrase",
+      "claim_token_coverage": 0.65,
+      "rationale": "All three training/tokenization details are explicitly supported."
+    },
+    {
+      "id": "gemma3-contradicts",
+      "evidence_id": "gemma3-vision",
+      "locale": "en",
+      "claim": "Gemma 3 trains the vision encoder while freezing the language model, and represents each image with 896 tokens after 256x256 pooling.",
+      "label": "contradiction",
+      "adversary_type": "lexical_role_and_numeric_swap",
+      "claim_token_coverage": 0.55,
+      "rationale": "High overlap hides both the frozen-component reversal and swapped token/pooling numbers."
+    },
+    {
+      "id": "gemma3-insufficient",
+      "evidence_id": "gemma3-vision",
+      "locale": "en",
+      "claim": "Gemma 3 uses a twelve-layer vision encoder with exactly one billion trainable parameters.",
+      "label": "insufficient",
+      "adversary_type": "unsupported_parameter_count",
+      "claim_token_coverage": 0.214286,
+      "rationale": "The excerpt does not state encoder depth or parameter count."
+    },
+    {
+      "id": "timesfm-entails-zh",
+      "evidence_id": "timesfm-objective",
+      "locale": "zh",
+      "claim": "TimesFM 默认做点预测并使用均方误差；若做概率预测，可以增加多个输出头并分别优化分位数损失。",
+      "label": "entailment",
+      "adversary_type": "cross_lingual_faithful_paraphrase",
+      "claim_token_coverage": 0.0,
+      "rationale": "中文 claim 保留了默认目标和概率扩展方式。"
+    },
+    {
+      "id": "timesfm-contradicts-zh",
+      "evidence_id": "timesfm-objective",
+      "locale": "zh",
+      "claim": "TimesFM 默认就是概率预测并使用分位数损失，而点预测需要额外增加多个输出头。",
+      "label": "contradiction",
+      "adversary_type": "cross_lingual_role_reversal",
+      "claim_token_coverage": 0.0,
+      "rationale": "claim 对调了默认点预测和可选概率预测的损失及输出头关系。"
+    },
+    {
+      "id": "timesfm-insufficient-zh",
+      "evidence_id": "timesfm-objective",
+      "locale": "zh",
+      "claim": "TimesFM 的概率输出固定采用九个分位点。",
+      "label": "insufficient",
+      "adversary_type": "cross_lingual_unsupported_quantile_count",
+      "claim_token_coverage": 0.0,
+      "rationale": "证据说明可用分位数损失，但没有固定分位点数量。"
+    }
+  ]
+}

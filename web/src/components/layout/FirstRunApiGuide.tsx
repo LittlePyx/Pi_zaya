@@ -33,7 +33,7 @@ export function FirstRunApiGuide({
   }, [hasTextApiKey, refresh, visible])
 
   useEffect(() => {
-    if (!visible || status?.completed || status?.current_step !== 'prepare_document') return
+    if (!visible || status?.completed || !['prepare_document', 'ask_question'].includes(status?.current_step || '')) return
     const timer = window.setInterval(() => { void refresh() }, 5000)
     return () => window.clearInterval(timer)
   }, [refresh, status?.completed, status?.current_step, visible])

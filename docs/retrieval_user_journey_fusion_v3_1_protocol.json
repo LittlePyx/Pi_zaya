@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_fusion_v3_1_replacement_protocol",
+  "curation_status": "frozen_after_v3_infrastructure_invalidation_before_replacement_measurement",
+  "purpose": "Permit one replacement execution of the unchanged fusion-v3 candidate after correcting only depth-aware projection of the frozen BM25 MRR control.",
+  "predecessor": {
+    "protocol_path": "docs/retrieval_user_journey_fusion_v3_protocol.json",
+    "protocol_sha256": "c238b0609c3874ac2f1a4f3688ebe7b9a0957946ce4884a53def19c2488ae500",
+    "invalidation_path": "docs/retrieval_user_journey_fusion_v3_execution_invalidation.json",
+    "invalidation_sha256": "bf5f5af9f6d083585c600a9c48e787840147881fcbdff4394b966b66da232ca2"
+  },
+  "unchanged_contract_section_sha256": {
+    "partition": "7246871dc8825394f9cc58a8190479460034c76a5edb09197c7b9ea0c0d9a9f9",
+    "frozen_representation": "b3e6c743d3af6a0583111380c8aa49ff2e5b5354edf92a8740b82081fee2417a",
+    "frozen_candidate": "96b5faefdc714b25840ff7b682fb91719788b8c7f5a2863fa0c645c415f2c38d",
+    "depth_contract": "665aba797f501995323ffb8219dd3be4cda37b17f007481a30276cec3b3c4b6d",
+    "product_control": "1f41e58407ae7cea5165078f77fa2ef3a0ece3e7398eca2377d546957157432f",
+    "calibration_gate": "f0a49e6f7ae78cfaba9139b5fb4773b6a1eb405ab5ddfd50cc3854da15e02623",
+    "holdout_gate": "b6de7d0e2afde68bf29d0744b3a78cf7518d52df44690360a3328405908ffeb3",
+    "combined_gate": "b2c6218e242c9d64995c4d4e99108fe2167c479194912bbe67baa18c4857f9dc",
+    "semantic_acceptance_gate": "9e5acd314b27b6437ba7486b0d83b26a682116b72010df3b694a74ae885ab57c",
+    "safety_boundary": "5e0cf91ad1a4a62e3cb0cfa3b3a3ea69530ec484e3fbbd4d2d502f805b9de46d"
+  },
+  "sole_correction": {
+    "component": "frozen_product_control_projection",
+    "metric": "mrr",
+    "source_ranking_depth": 20,
+    "selection_ranking_depth": 10,
+    "rule": "If the frozen baseline first_relevant_rank is null or greater than 10, expected selection-depth MRR is 0. Otherwise expected MRR remains the frozen baseline value.",
+    "affected_case_mode_pairs": [
+      "scoped:journey-dualscale-resolution-results",
+      "full_library:journey-piln-vs-pidl-supervision"
+    ],
+    "candidate_result_or_gate_observed_before_correction": false
+  },
+  "replacement_execution": {
+    "maximum_runs": 1,
+    "same_command_flow": "calibration_then_automatic_conditional_holdout",
+    "candidate_changes": 0,
+    "representation_changes": 0,
+    "index_builds": 0,
+    "ranking_or_reporting_depth_changes": 0,
+    "gate_changes": 0,
+    "holdout_policy_changes": 0,
+    "product_enabled": false
+  }
+}

@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_qwen_dense_diagnostic_protocol_v1",
+  "curation_status": "frozen_before_diagnostic_implementation_and_measurement",
+  "purpose": "Measure whether the already selected Qwen dense representation retrieves complementary local-library evidence on realistic reading journeys before designing any fusion-v3 algorithm.",
+  "evidence": {
+    "fixture_path": "docs/retrieval_user_journey_expansion_v1.json",
+    "fixture_sha256": "6463cf63ba1853fc8704eead89de0ee36061481613621b1fa72ea4b7fe5429ca",
+    "bm25_baseline_path": "docs/retrieval_user_journey_bm25_baseline_v1.json",
+    "bm25_baseline_sha256": "28748a9d590a637dcd8e2847f2ba9efc437b069ee4769feb95f3821986576fca",
+    "bm25_outcome_path": "docs/retrieval_user_journey_bm25_outcome_v1.json",
+    "bm25_outcome_sha256": "078741e522b007add3d720947bc9b3afd0721af5ed2a7595fb9776a5ecad070b",
+    "qwen_predecessor_report_path": "docs/retrieval_candidate_screening_qwen3_embedding_0_6b_v1.json",
+    "qwen_predecessor_report_sha256": "623fd13b08b8dc965e0d08b5a6a9ae3718ef8d1e93dd1535fe30bc45da0b5249",
+    "candidate_batch_path": "docs/retrieval_candidate_batch_v1.json",
+    "candidate_batch_sha256": "ed026e779e9774e8d24b727752a394475d1f08c95e2bbb3c918f8e4876ddd533",
+    "fusion_v2_invalidation_path": "docs/retrieval_qwen_fusion_tuning_v2_invalidation.json",
+    "fusion_v2_invalidation_sha256": "38f5324286d00b544ea79e44abffd83b0b647863c17b849653ea246c0447be30"
+  },
+  "partition": {
+    "source": "fixture.split.calibration_case_ids",
+    "case_count": 12,
+    "ordered_case_ids_sha256": "43de2b28ee0219e1a3b18abad32c70ef34d094def315bbb3587b32e8cfaa0346",
+    "holdout_case_count": 6,
+    "ordered_holdout_case_ids_sha256": "4df4672460577882e7cb4a2b08f2d75222e5cb8a4fedaedba7858dd1fdd2c36b",
+    "holdout_access_allowed": false,
+    "semantic_acceptance_access_allowed": false
+  },
+  "frozen_representation": {
+    "candidate_id": "qwen3_embedding_0_6b_v1",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "model_safetensors_sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "dimension": 1024,
+    "pooling": "last_token",
+    "padding_side": "left",
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+    "passage_prefix": "",
+    "max_length": 8192,
+    "batch_size": 1,
+    "allow_download": false,
+    "trust_remote_code": false,
+    "parent_chunks_unchanged": true,
+    "query_translation_or_expansion": false
+  },
+  "existing_index": {
+    "relative_path": "test_results/retrieval_candidate_screening_v1/qwen3_embedding_0_6b_v1/index_v1",
+    "build_id": "eaf61f67c2974f519e9ea6ce23f5ccbe",
+    "corpus_fingerprint": "7e3261179b44da0e2baa430ea14243ef6885a49ee73d3e921b48bfc57f35bdf5",
+    "document_count": 31,
+    "chunk_count": 2251,
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "size_bytes": 9801699,
+    "rebuild_allowed": false
+  },
+  "diagnostic_contract": {
+    "channels": [
+      "bm25_product_queries_frozen_control",
+      "qwen_dense_single_vector"
+    ],
+    "modes": [
+      "scoped",
+      "full_library"
+    ],
+    "retrieval_ranking_depth": 20,
+    "reported_metric_depths": [
+      5,
+      10,
+      20
+    ],
+    "query_embedding_cache": true,
+    "expected_unique_query_embeddings": 12,
+    "maximum_runs": 1,
+    "no_fusion_or_reranking": true,
+    "no_case_ids_or_qrels_available_to_retriever": true,
+    "report_is_diagnostic_only": true
+  },
+  "predeclared_analysis": {
+    "comparison_depth": 10,
+    "classify_each_calibration_case_as": [
+      "both_hit",
+      "bm25_only",
+      "dense_only",
+      "neither"
+    ],
+    "report_relevant_rank_buckets": [
+      "rank_1",
+      "ranks_2_5",
+      "ranks_6_10",
+      "ranks_11_20",
+      "miss_top20"
+    ],
+    "fusion_v3_may_be_designed_only_if": {
+      "dense_only_case_count_minimum_in_either_mode": 2,
+      "dense_recall_at_10_strict_gain_in_at_least_one_mode": true
+    },
+    "fusion_v3_eligibility_is_not_product_eligibility": true
+  },
+  "safety_boundary": {
+    "model_or_prompt_variants": 0,
+    "index_builds": 0,
+    "holdout_runs": 0,
+    "fusion_candidates": 0,
+    "cross_encoder_runs": 0,
+    "external_web_or_model_knowledge_for_labels": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

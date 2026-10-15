@@ -98,3 +98,39 @@ def test_failed_quality_answer_cannot_expose_evidence_actions() -> None:
 
     assert rendered[1].get("cite_details") == []
     assert "provenance" not in rendered[1]
+
+
+def test_incomplete_answer_keeps_independently_bound_local_evidence():
+    from api.chat_render import _message_local_evidence_actions_allowed
+    quote = "The method trains on single noisy images without clean targets."
+    message = {"meta": {"answer_quality": {"minimum_ok": False, "has_hits": True,
+        "incomplete_fragment": True, "citation_plan": {"slots": [{
+            "preferred_system": "system_a", "candidate_hits": [2], "source_path": "paper.md",
+            "evidence_quote": quote, "block_id": "b2", "page_start": 1}]}}}}
+    assert _message_local_evidence_actions_allowed(message) is not False
+
+
+def test_incomplete_local_answer_renders_links_details_and_copy_together(tmp_path, monkeypatch):
+    from kb.source_blocks import load_source_blocks
+    import ui.refs_renderer as refs_renderer
+    # This is a registered-library fixture stored in pytest's temporary folder,
+    # rather than a temporary chat upload, which the product excludes on purpose.
+    monkeypatch.setattr(refs_renderer, "_is_temp_source_path", lambda _path: False)
+    quote = "The method trains on single noisy images without clean targets."
+    source = tmp_path / "paper.md"
+    source.write_text(f"<!-- kb_page: 1 -->\n## Method\n\n{quote}\n", encoding="utf-8")
+    block = next(row for row in load_source_blocks(source) if row.get("kind") == "paragraph")
+    path = str(source)
+    slot = {"preferred_system": "system_a", "candidate_hits": [1], "source_path": path,
+        "evidence_quote": quote, **{k: block[k] for k in ("block_id", "anchor_id", "page_start", "heading_path")}}
+    plan = {"budget": {"system_a": 1, "system_b": 0}, "slots": [slot]}
+    message = {"id": 2, "role": "assistant", "content": quote[:-1] + " [1];", "meta": {
+        "canonical_hit_paths": [path], "answer_quality": {"has_hits": True, "minimum_ok": False,
+        "incomplete_fragment": True, "citation_plan": plan}}}
+    result = enrich_messages_with_reference_render(
+        [{"id": 1, "role": "user", "content": "What training data is used?"}, message],
+        {1: {"hits": [{"text": quote, "meta": {"source_path": path, **block}}]}}, conv_id="incomplete-local")[-1]
+    assert len(result["cite_details"]) == 1
+    assert result["cite_details"][0]["source_path"] == path
+    assert "](#kb-cite-" in result["rendered_body"]
+    assert "single noisy images" in result["copy_markdown"]

@@ -20,7 +20,6 @@ from api.internal_access import require_management_api
 from api.reference_ui import (
     _attach_pack_display_contract,
     _compact_reader_open_text,
-    _filter_pending_refs_hits_by_prompt_focus,
     _refs_card_polish_llm_enabled,
     _refs_prompt_focus_terms,
     _translate_summary_to_zh,
@@ -3754,46 +3753,6 @@ def _load_authoritative_doc_list_contracts(
     return out
 
 
-def _load_pending_doc_list_contracts(
-    *,
-    store,
-    conv_id: str,
-    pending_user_msg_ids: set[int],
-) -> dict[int, list[dict]]:
-    return _load_authoritative_doc_list_contracts(
-        store=store,
-        conv_id=conv_id,
-        user_msg_ids=pending_user_msg_ids,
-    )
-
-
-def _mark_doc_list_pending_pack(*, payload_pack: dict, pending_count: int) -> dict:
-    pack2 = dict(payload_pack or {})
-    hits_out: list[dict] = []
-    for raw_hit in list(pack2.get("hits") or []):
-        if not isinstance(raw_hit, dict):
-            continue
-        hit = dict(raw_hit)
-        meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-        meta2 = dict(meta or {})
-        meta2["ref_pack_state"] = "pending"
-        hit["meta"] = meta2
-        ui_meta = hit.get("ui_meta") if isinstance(hit.get("ui_meta"), dict) else {}
-        if isinstance(ui_meta, dict):
-            ui_meta2 = dict(ui_meta)
-            ui_meta2["score_pending"] = True
-            ui_meta2["score"] = None
-            ui_meta2["score_tier"] = ""
-            hit["ui_meta"] = ui_meta2
-        hits_out.append(hit)
-    pack2["hits"] = hits_out
-    pack2["pending"] = True
-    pack2["pending_hit_count"] = int(max(0, int(pending_count or 0)))
-    pack2["payload_mode"] = "pending"
-    pack2["enrichment_pending"] = True
-    return _attach_pack_display_contract(pack2)
-
-
 def _doc_list_source_paths(doc_list: list[dict] | None) -> list[str]:
     out: list[str] = []
     for item in list(doc_list or []):
@@ -3913,50 +3872,6 @@ def _normalize_authoritative_doc_list_contracts_for_refs(
     return out
 
 
-def _filter_pending_multi_paper_hits_for_display(prompt: str, hits: list[dict] | None) -> list[dict]:
-    rows = [dict(hit) for hit in list(hits or []) if isinstance(hit, dict)]
-    if (not rows) or (not prompt_explicitly_requests_multi_paper_list(prompt)):
-        return rows
-    try:
-        doc_list_seed = _references_build_multi_paper_doc_list_contract(
-            prompt=prompt,
-            seed_docs=list(rows),
-            answer_hits=list(rows),
-            evidence_cards=[],
-        )
-    except Exception:
-        return rows
-    source_order = _doc_list_source_paths(doc_list_seed)
-    if not source_order:
-        return rows
-    rows_by_source: dict[str, dict] = {}
-    for row in rows:
-        meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-        source_path = str((meta or {}).get("source_path") or "").strip()
-        if source_path and source_path not in rows_by_source:
-            rows_by_source[source_path] = row
-    filtered: list[dict] = []
-    seen: set[str] = set()
-    for source_path in source_order:
-        row = rows_by_source.get(source_path)
-        if not isinstance(row, dict) or source_path in seen:
-            continue
-        filtered.append(row)
-        seen.add(source_path)
-    target_count = min(3, len(rows))
-    if len(filtered) < target_count:
-        for row in rows:
-            meta = row.get("meta") if isinstance(row.get("meta"), dict) else {}
-            source_path = str((meta or {}).get("source_path") or "").strip()
-            if (not source_path) or source_path in seen:
-                continue
-            filtered.append(row)
-            seen.add(source_path)
-            if len(filtered) >= target_count:
-                break
-    return filtered or rows
-
-
 def _render_authoritative_doc_list_pack(
     *,
     user_msg_id: int,
@@ -4000,143 +3915,37 @@ def _build_pending_conversation_refs_payload(
     guide_source_path: str = "",
     guide_source_name: str = "",
 ) -> dict[int, dict]:
+    """Return a progress-only payload until evidence binding is durable.
+
+    Retrieval seeds have not passed the answer/citation binding contract yet.
+    Exposing them as provisional evidence cards made an internal task look like
+    an unresolved user decision. Keep only the pack-level progress state; the
+    existing poll and background repair paths replace it automatically with a
+    grounded fast/full payload.
+    """
+    del doc_list_by_user, guide_mode, guide_source_path, guide_source_name
     out: dict[int, dict] = {}
-    authoritative_map = {
-        int(key): [dict(item) for item in list(value or []) if isinstance(item, dict)]
-        for key, value in dict(doc_list_by_user or {}).items()
-        if str(key).isdigit() or isinstance(key, int)
-    }
     for user_msg_id, pack in (refs or {}).items():
         if not isinstance(pack, dict):
             continue
-        prompt = str(pack.get("prompt") or "").strip()
-        render_locale = _ref_card_user_locale(prompt)
-        prefer_zh = render_locale == "zh"
-        focus_terms = [str(term or "").strip() for term in _refs_prompt_focus_terms(prompt) if str(term or "").strip()]
-        focus_action = prompt_reference_focus_action(prompt)
         raw_hits = [hit for hit in list(pack.get("hits") or []) if isinstance(hit, dict)]
-        if prompt_explicitly_requests_multi_paper_list(prompt):
-            filtered_hits = _filter_pending_multi_paper_hits_for_display(prompt, raw_hits)
-            if not filtered_hits:
-                filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)
-            filtered_hits = filtered_hits[:3]
-        else:
-            filtered_hits = _filter_pending_refs_hits_by_prompt_focus(prompt, raw_hits)[:2]
-        pending_count = 0
-        hits_out: list[dict] = []
-        for hit in raw_hits:
-            if not isinstance(hit, dict):
-                continue
-            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-            if str((meta or {}).get("ref_pack_state") or "").strip().lower() == "pending":
-                pending_count += 1
-        authoritative_doc_list_present = int(user_msg_id) in authoritative_map
-        authoritative_doc_list = [dict(item) for item in list(authoritative_map.get(int(user_msg_id), []) or []) if isinstance(item, dict)]
-        if authoritative_doc_list_present:
-            authoritative_pack = _render_authoritative_doc_list_pack(
-                user_msg_id=int(user_msg_id),
-                pack=pack,
-                doc_list=authoritative_doc_list,
-                guide_mode=bool(guide_mode),
-                guide_source_path=str(guide_source_path or "").strip(),
-                guide_source_name=str(guide_source_name or "").strip(),
-                pending=True,
-            )
-            out[int(user_msg_id)] = _mark_doc_list_pending_pack(
-                payload_pack=authoritative_pack,
-                pending_count=pending_count,
-            )
-            continue
-        for hit in filtered_hits:
-            meta = hit.get("meta") if isinstance(hit.get("meta"), dict) else {}
-            source_path = str((meta or {}).get("source_path") or "").strip()
-            heading_path = str((meta or {}).get("ref_best_heading_path") or (meta or {}).get("top_heading") or "").strip()
-            display_name = _source_name_from_md_path(source_path) if source_path else "Reference"
-            snippet_seed = ""
-            for key in ("ref_show_snippets", "ref_snippets", "ref_overview_snippets"):
-                raw = (meta or {}).get(key)
-                if isinstance(raw, list):
-                    snippet_seed = next((str(item or "").strip() for item in raw if str(item or "").strip()), "")
-                if snippet_seed:
-                    break
-            if not snippet_seed:
-                snippet_seed = str(hit.get("text") or "").strip()
-            summary_line = _compact_reader_open_text(snippet_seed)
-            focus_text = (
-                (" 与 " if prefer_zh else " and ").join(focus_terms[:2])
-                if len(focus_terms) >= 2
-                else (
-                    focus_terms[0]
-                    if focus_terms
-                    else ("当前问题" if prefer_zh else "the requested concept")
-                )
-            )
-            section_text = heading_path or ("命中章节" if prefer_zh else "the matched section")
-            if focus_action == "compare":
-                why_line = (
-                    f"“{section_text}”正在核验 {focus_text} 的对比依据。"
-                    if prefer_zh
-                    else f"“{section_text}” is being checked for direct comparison evidence about {focus_text}."
-                )
-            elif focus_action == "define":
-                why_line = (
-                    f"“{section_text}”正在核验 {focus_text} 的定义原句。"
-                    if prefer_zh
-                    else f"“{section_text}” is being checked for the source definition of {focus_text}."
-                )
-            else:
-                why_line = (
-                    f"“{section_text}”正在核验与 {focus_text} 直接相关的原文。"
-                    if prefer_zh
-                    else f"“{section_text}” is being checked for source evidence directly about {focus_text}."
-                )
-            reader_open = {
-                "sourcePath": source_path,
-                "sourceName": display_name,
-                "headingPath": heading_path or None,
-                "snippet": summary_line or None,
-                "highlightSnippet": summary_line or None,
-                "strictLocate": False,
-            }
-            primary_evidence = {
-                "source_path": source_path,
-                "source_name": display_name,
-                "heading_path": heading_path or None,
-                "snippet": summary_line or None,
-                "highlight_snippet": summary_line or None,
-                "selection_reason": "pending_section_seed",
-                "strict_locate": False,
-            }
-            hit2 = dict(hit)
-            hit2["ui_meta"] = {
-                "display_name": display_name,
-                "heading_path": heading_path,
-                "summary_line": summary_line,
-                "summary_kind": "evidence",
-                "summary_display_role": "evidence",
-                "summary_label": "原文证据" if prefer_zh else "Source Evidence",
-                "summary_title": "待核验的原文片段" if prefer_zh else "Source Passage Being Checked",
-                "summary_generation": "pending_section_seed",
-                "summary_basis": "待核验的命中章节原文" if prefer_zh else "Provisional source text from the matched section",
-                "why_line": why_line,
-                "why_generation": "pending_focus_seed",
-                "why_basis": "命中章节与问题关键词的待核验对齐" if prefer_zh else "Provisional alignment between the matched section and question terms",
-                "render_locale": render_locale,
-                "score": None,
-                "score_pending": True,
-                "score_tier": "",
-                "primary_evidence": {key: value for key, value in primary_evidence.items() if value not in (None, "", [], {})},
-                "source_path": source_path,
-                "reader_open": {key: value for key, value in reader_open.items() if value not in (None, "", [], {})},
-            }
-            if isinstance(hit2["ui_meta"].get("reader_open"), dict) and hit2["ui_meta"].get("primary_evidence"):
-                hit2["ui_meta"]["reader_open"] = dict(hit2["ui_meta"]["reader_open"])
-                hit2["ui_meta"]["reader_open"]["primaryEvidence"] = dict(hit2["ui_meta"]["primary_evidence"])
-            hits_out.append(hit2)
-        pack2 = dict(pack)
-        pack2["hits"] = hits_out
+        pending_count = sum(
+            1
+            for hit in raw_hits
+            if isinstance(hit.get("meta"), dict)
+            and str(hit["meta"].get("ref_pack_state") or "").strip().lower() == "pending"
+        )
+        pack2 = _without_nested_render_payload(pack)
+        pack2["hits"] = []
+        for key in (
+            "cite_details",
+            "primary_evidence",
+            "primary_evidence_alignment",
+            "primary_evidence_heading_path",
+        ):
+            pack2.pop(key, None)
         pack2["pending"] = True
-        pack2["pending_hit_count"] = int(pending_count)
+        pack2["pending_hit_count"] = pending_count
         pack2["payload_mode"] = "pending"
         pack2["enrichment_pending"] = True
         out[int(user_msg_id)] = _attach_pack_display_contract(pack2)

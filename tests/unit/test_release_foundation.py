@@ -10,8 +10,8 @@ from kb.version import read_app_version, release_tag
 def test_canonical_version_is_valid_and_tagged() -> None:
     version = read_app_version()
 
-    assert version == "0.1.0-beta.13"
-    assert release_tag(version) == "v0.1.0-beta.13"
+    assert version == "0.1.0-beta.14"
+    assert release_tag(version) == "v0.1.0-beta.14"
 
 
 def test_invalid_version_file_is_rejected(tmp_path: Path) -> None:
@@ -214,6 +214,49 @@ def test_windows_release_contract_keeps_license_and_smoke_gates() -> None:
     assert "In-place installer upgrade removed user data" in installer_smoke
     assert "Uninstaller removed Pi_zaya user data" in installer_smoke
     assert "A real Pi_zaya installation already exists" in installer_smoke
+
+
+def test_windows_release_builds_and_embeds_optional_semantic_component() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github" / "workflows" / "release-windows.yml").read_text(
+        encoding="utf-8"
+    )
+    portable = (root / "tools" / "release" / "build_windows_portable.ps1").read_text(
+        encoding="utf-8"
+    )
+    builder = (
+        root / "tools" / "release" / "build_local_semantic_component.py"
+    ).read_text(encoding="utf-8")
+    service = (root / "kb" / "local_semantic_component_service.py").read_text(
+        encoding="utf-8"
+    )
+    product_validator = (
+        root / "tools" / "release" / "validate_local_semantic_product_path.py"
+    ).read_text(encoding="utf-8")
+    archive = "Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip"
+
+    assert "Build verified optional local semantic component" in workflow
+    assert "lighter_runtime_requirements_v1.txt" in workflow
+    assert "multilingual_e5_small_official_onnx_v1" in workflow
+    assert "build_local_semantic_component.py" in workflow
+    assert f'release\\{archive}"' in workflow
+    assert f'release\\{archive}.sha256"' in workflow
+    assert "LocalSemanticComponentManifestPath" in portable
+    assert "kb\\local_semantic_component_manifest.json" in portable
+    assert "local_semantic_component_manifest_included" in portable
+    assert "EXPECTED_ARTIFACT_TREE_SHA256" in builder
+    assert "__pycache__" in builder and '".pyc"' in builder
+    assert "date_time=(1980, 1, 1, 0, 0, 0)" in builder
+    assert "LOCAL_SEMANTIC_COMPONENT_BUNDLED_MANIFEST_PATH" in service
+    assert "Validate promoted local semantic product path" in workflow
+    assert "validate_local_semantic_product_path.py" in workflow
+    assert '"used_mode") != "hybrid_local"' in product_validator
+    assert "local_semantic_scope_not_eligible" in product_validator
+    assert '"library_unchanged"' in product_validator
+    assert "build_local_semantic_acceptance_report" in product_validator
+    assert "KB_LOCAL_OBSERVABILITY_PATH" in product_validator
+    assert "warm_hybrid_latency_ms" in product_validator
+    assert "observation_path.unlink(missing_ok=True)" in product_validator
 
 
 def test_browser_gates_retain_first_failure_diagnostics() -> None:

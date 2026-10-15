@@ -1,9 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
-import { Button, Typography, message } from 'antd'
-import { FileTextOutlined, ReloadOutlined, UserOutlined } from '@ant-design/icons'
-import { MarkdownRenderer } from './MarkdownRenderer'
-import { CopyBar } from './CopyBar'
+import { message } from 'antd'
+import { UserOutlined } from '@ant-design/icons'
 import { CitationPopover } from './CitationPopover'
 import { CiteShelf } from './CiteShelf'
 import {
@@ -13,15 +11,15 @@ import {
 import { useCitationPopoverPreview } from './useCitationPopoverPreview'
 import { useCitationPopoverState } from './useCitationPopoverState'
 import type {
+  ReaderCitationShelfPayload,
   ReaderLocateResult,
   ReaderOpenPayload,
+  ReaderSelectionShelfPayload,
 } from './reader/readerTypes'
-import {
-  READER_CITATION_SHELF_CHANNEL,
-  READER_CITATION_SHELF_EVENT,
-  READER_SELECTION_SHELF_CHANNEL,
-  READER_SELECTION_SHELF_EVENT,
-} from './reader/readerTypes'
+import { useReaderShelfEvents } from './useReaderShelfEvents'
+import { buildShelfPendingSave, reconcileShelfHydration, shelfHydrationIsCurrent, type ShelfHydrationRequest, type ShelfScopeSnapshot } from './citeShelfPersistence'
+import { applyShelfMutationIntent, readShelfMutationIntent, recordShelfMutation } from './citeShelfMutationJournal'
+import { enqueueShelfSave, loadShelfWithRetry, saveShelfForWorkspace } from './citeShelfSaveQueue'
 import { buildBasicReaderOpenPayload } from './reader/readerOpenPayloadUtils'
 import {
   buildGuideLocateCandidates,
@@ -71,7 +69,6 @@ import {
   shelfLibraryFullTextDetail,
   shelfItemNeedsPersistedMetadataHydrate,
   shelfItemNeedsSummaryBackfill,
-  shelfItemsForBackend,
   shelfMetadataHydrateAttemptKey,
   shelfPaperIdentity,
   shelfRepairMetaFromEntry,
@@ -98,8 +95,6 @@ import {
 } from './citeShelfStorage'
 import {
   citeDetailFromReaderSelection,
-  normalizeReaderCitationShelfPayload,
-  normalizeReaderSelectionShelfPayload,
   readerSelectionNote,
 } from './readerShelfPayload'
 import { RefsPanel } from '../refs/RefsPanel'
@@ -107,7 +102,6 @@ import {
   chatApi,
   type CitationShelfRecord,
   type Message,
-  type ResearchNoteRecord,
   type ResearchNoteSourceLink,
 } from '../../api/chat'
 import { referencesApi, type ShelfMetadataRepairImpact } from '../../api/references'
@@ -115,17 +109,11 @@ import { useT } from '../../i18n'
 import { useChatStore } from '../../stores/chatStore'
 import { basenameFromSourcePath } from '../../utils/sourcePath'
 import {
-  RESEARCH_NOTES_CHANGED_EVENT,
-  RESEARCH_NOTES_SYNC_CHANNEL,
-} from './readerResearchNoteCapture'
-import {
-  cleanAssistantAnswerPresentationText,
   getMessageCiteDetailRecords,
   getMessageCopyMarkdownValue,
   getMessageCopyTextValue,
   getMessageRenderedBodyContent,
   getMessageRenderPacket,
-  splitLeadingAssistantSourceNotice,
 } from './messageRenderPacket'
 import { remapStructuredEntryToGuideAnchors } from './messageStructuredLocateRemap'
 import {
@@ -156,7 +144,6 @@ import {
   type MessageRow,
 } from './messageListDerived'
 import { buildFallbackCiteDetailsFromRefHits } from './messageFallbackCitations'
-import { resolveLowConfidenceMeta, stripLeadingLowConfidenceNotice } from './messageLowConfidence'
 import {
   mergeShelfReaderLocatorMaintenanceResult,
   shelfReaderLocatorMaintenanceFingerprint,
@@ -167,29 +154,23 @@ import {
 } from './useShelfReaderLocatorMaintenance'
 import { createMessageLocateResolvers } from './messageLocateResolvers'
 import { buildMessageMarkdownLocateProps } from './messageMarkdownLocateProps'
-import { MessageProvenanceChips } from './MessageProvenanceChips'
-import { MessageReferenceCandidates } from './MessageReferenceCandidates'
 import { UserMessageBubble } from './UserMessageBubble'
-import { AssistantMessageNotices, AssistantSourceNotice, AssistantSourceSummaryNotice } from './AssistantMessageNotices'
+import { AssistantCompletedMessageContent } from './AssistantCompletedMessageContent'
+import { buildAssistantCompletedContentState } from './assistantCompletedContentState'
+import { AssistantAuditTracePanels } from './AssistantAuditTracePanels'
+import { AssistantEvidenceNavigationPanels } from './AssistantEvidenceNavigationPanels'
+import { AssistantMessageActions } from './AssistantMessageActions'
+import { AssistantAvatar, AssistantStreamingMessage } from './AssistantStreamingMessage'
 import {
   lookupGuideCandidatesBySourcePath,
   sourcePathLookupKeys,
 } from './messageSourceIdentity'
 import {
   contextItemTitle,
-  getMessageAgentTrace,
-  getMessageResearchTrace,
   imageAttachmentsOf,
   isImageOnlyPlaceholder,
-  messageHasAgentTraceHint,
 } from './messageTraceUtils'
-import {
-  sourceSummaryFromAnswerContract,
-  type AnswerSourceNoticeViewModel,
-} from './answerSourceNoticeViewModel'
-import { AgentTracePanel } from './AgentTracePanel'
-import { ResearchTracePanel } from './ResearchTracePanel'
-import { ResearchContextReceipt } from './ResearchContextReceipt'
+import type { AnswerSourceNoticeViewModel } from './answerSourceNoticeViewModel'
 import { EvidenceDrawer } from './EvidenceDrawer'
 import { EvidenceMatrixWorkspace } from './EvidenceMatrixWorkspace'
 import { ResearchBriefWorkspace } from './ResearchBriefWorkspace'
@@ -198,10 +179,10 @@ import { ResearchNoteModal } from './ResearchNoteModal'
 import { researchNoteAnswerEvidenceEligible } from './researchNote'
 import { messageEvidenceActionPolicy } from './messageEvidencePolicy'
 import { ResearchNotesPanel } from './ResearchNotesPanel'
+import { useResearchNoteCollection } from './useResearchNoteCollection'
 import { generationRetryPrompt, isGenerationFailureAnswer } from './generationFailureUi'
 import { EVIDENCE_MATRIX_WORKSPACE_ENABLED } from '../../utils/featureFlags'
 
-const { Text } = Typography
 const SHELF_BACKEND_PERSIST_MS = 320
 const SHELF_AUTO_REPAIR_BATCH_SIZE = 8
 const SHELF_AUTO_REPAIR_RETRY_MS = 15000
@@ -303,14 +284,6 @@ function usesSourceBoundSystemAMetadata(item: CiteShelfItem): boolean {
   )
 }
 
-function AssistantAvatar() {
-  return (
-    <div className="kb-msg-avatar kb-msg-avatar-assistant">
-      <img src="/pi_logo.png" alt="Pi assistant" className="h-5 w-5 object-contain" loading="lazy" />
-    </div>
-  )
-}
-
 export function MessageList({
   activeConvId,
   shelfProjectId,
@@ -389,13 +362,21 @@ export function MessageList({
   const [researchNoteOpen, setResearchNoteOpen] = useState(false)
   const [researchNoteInitialMessageId, setResearchNoteInitialMessageId] = useState<number | null>(null)
   const [researchNoteInitialNoteId, setResearchNoteInitialNoteId] = useState('')
-  const [researchNotes, setResearchNotes] = useState<ResearchNoteRecord[]>([])
-  const [researchNotesLoading, setResearchNotesLoading] = useState(false)
-  const researchNotesLoadSeqRef = useRef(0)
   const assistantLocatePrepCacheRef = useRef(new Map<string, AssistantLocatePrep>())
   const assistantLocatePrepPerfRef = useRef<MessageListPrepPerfEvent | null>(null)
   const [guideDocCandidates, setGuideDocCandidates] = useState<LocateCandidate[]>([])
   const S = useT()
+  const {
+    deleteNote: deleteResearchNote,
+    loading: researchNotesLoading,
+    notes: researchNotes,
+    upsertNote: upsertResearchNote,
+  } = useResearchNoteCollection({
+    onCountChange: onResearchNotesStateChange,
+    onDeleteError: () => message.error(S.research_notes_delete_failed),
+    onDeleteSuccess: () => message.success(S.research_notes_deleted),
+    projectId: shelfProjectId,
+  })
   const shelfScopeId = shelfProjectScopeId(shelfProjectId)
   const shelfProjectReady = Boolean(String(shelfProjectId || '').trim())
   const applyShelfReaderLocatorMaintenance = useCallback((
@@ -429,49 +410,6 @@ export function MessageList({
       return sameShelfItems(current, next) ? current : next
     })
   }, [readerLocateResults])
-  const loadResearchNotes = useCallback(async () => {
-    const sequence = researchNotesLoadSeqRef.current + 1
-    researchNotesLoadSeqRef.current = sequence
-    setResearchNotesLoading(true)
-    try {
-      const records = await chatApi.listResearchNotes(String(shelfProjectId || '').trim() || null)
-      if (researchNotesLoadSeqRef.current !== sequence) return
-      setResearchNotes(Array.isArray(records) ? records : [])
-    } catch {
-      if (researchNotesLoadSeqRef.current !== sequence) return
-      setResearchNotes([])
-    } finally {
-      if (researchNotesLoadSeqRef.current === sequence) setResearchNotesLoading(false)
-    }
-  }, [shelfProjectId])
-  useEffect(() => {
-    void loadResearchNotes()
-    return () => {
-      researchNotesLoadSeqRef.current += 1
-    }
-  }, [loadResearchNotes])
-  useEffect(() => {
-    const refresh = () => { void loadResearchNotes() }
-    window.addEventListener(RESEARCH_NOTES_CHANGED_EVENT, refresh)
-    const channel = typeof BroadcastChannel !== 'undefined'
-      ? new BroadcastChannel(RESEARCH_NOTES_SYNC_CHANNEL)
-      : null
-    if (channel) {
-      channel.onmessage = (event) => {
-        const data = event?.data && typeof event.data === 'object'
-          ? event.data as Record<string, unknown>
-          : {}
-        if (String(data.type || '') === 'research-notes-changed') refresh()
-      }
-    }
-    return () => {
-      window.removeEventListener(RESEARCH_NOTES_CHANGED_EVENT, refresh)
-      channel?.close()
-    }
-  }, [loadResearchNotes])
-  useEffect(() => {
-    onResearchNotesStateChange?.({ count: researchNotes.length })
-  }, [onResearchNotesStateChange, researchNotes.length])
   const skipShelfPersistOnceRef = useRef(false)
   const persistShelfTimerRef = useRef<number | null>(null)
   const persistShelfBackendTimerRef = useRef<number | null>(null)
@@ -479,11 +417,11 @@ export function MessageList({
   const shelfRevisionByKeyRef = useRef<Record<string, number>>({})
   const shelfBackendRevisionByKeyRef = useRef<Record<string, number>>({})
   const shelfBackendHydratedKeysRef = useRef(new Set<string>())
-  const shelfEmptyBackendSaveIntentRef = useRef<Record<string, number>>({})
   const shelfBackendHydrateSeqRef = useRef(0)
   const shelfAsyncScopeEpochRef = useRef(0)
-  const shelfStateTouchedAtRef = useRef(Date.now())
-  const latestShelfStateRef = useRef<{ convId?: string | null; projectId?: string | null; open: boolean; items: CiteShelfItem[] }>({
+  const shelfClearRevisionByKeyRef = useRef<Record<string, number>>({})
+  const pendingShelfRestoreRef = useRef<ShelfScopeSnapshot | null>(null)
+  const latestShelfStateRef = useRef<ShelfScopeSnapshot>({
     convId: activeConvId,
     projectId: shelfScopeId,
     open: false,
@@ -528,10 +466,12 @@ export function MessageList({
     return current
   }, [shelfAsyncScopeIsCurrent])
 
-  const persistShelfLocalNow = useCallback((items: CiteShelfItem[], open: boolean) => {
+  const persistShelfLocalNow = useCallback((items: CiteShelfItem[], open: boolean, clear = false) => {
     const storageKey = shelfStorageKey(shelfScopeId)
     const currentRevision = Number(shelfRevisionByKeyRef.current[storageKey] || 0)
     const nextItems = dedupeShelfItems(items).slice(0, SHELF_MAX_ITEMS)
+    pendingShelfRestoreRef.current = null
+    recordShelfMutation(latestShelfStateRef.current, { convId: activeConvId, projectId: shelfScopeId, open, items: nextItems }, clear)
     const nextRevision = persistShelfSnapshot(storageKey, { open, items: nextItems }, currentRevision)
     shelfRevisionByKeyRef.current[storageKey] = nextRevision
     activeStorageKeyRef.current = storageKey
@@ -543,44 +483,30 @@ export function MessageList({
     }
   }, [activeConvId, shelfScopeId])
 
-  const markShelfEmptyBackendSaveIntent = useCallback((projectId?: string | null) => {
-    const storageKey = shelfStorageKey(projectId)
-    shelfEmptyBackendSaveIntentRef.current[storageKey] = Date.now() + 5000
-  }, [])
-
   const saveShelfBackendNow = useCallback((
-    state: { convId?: string | null; projectId?: string | null; open: boolean; items: CiteShelfItem[] },
+    state: ShelfScopeSnapshot,
     options?: { allowEmptyOverwrite?: boolean },
   ) => {
-    const projectScopeId = shelfProjectScopeId(state.projectId)
-    const storageKey = shelfStorageKey(projectScopeId)
-    if (!shelfBackendHydratedKeysRef.current.has(storageKey)) return
-    const items = shelfItemsForBackend(state.items)
-    const emptyShelf = items.length <= 0
-    const emptyIntentUntil = Number(shelfEmptyBackendSaveIntentRef.current[storageKey] || 0)
-    const allowEmptyOverwrite = Boolean(options?.allowEmptyOverwrite || emptyIntentUntil > Date.now())
-    if (emptyShelf && !allowEmptyOverwrite && Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0) > 0) {
-      return
-    }
-    void chatApi.saveCitationShelf({
-      convId: state.convId || undefined,
-      projectId: projectScopeId === '__default__' ? undefined : projectScopeId,
-      scope: 'project',
-      open: state.open,
-      items,
-      allowEmptyOverwrite,
+    const storageKey = shelfStorageKey(state.projectId)
+    const intent = readShelfMutationIntent(state.projectId)
+    const pending = buildShelfPendingSave(state, {
+      hydrated: shelfBackendHydratedKeysRef.current.has(storageKey),
+      backendRevision: Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0),
+      allowEmptyOverwrite: Boolean(options?.allowEmptyOverwrite || intent?.clear || intent?.removedKeys.length),
     })
-      .then((record) => {
-        const latestKey = shelfStorageKey(projectScopeId)
-        shelfBackendRevisionByKeyRef.current[latestKey] = Math.max(0, Number(record.revision || 0))
-        shelfBackendHydratedKeysRef.current.add(latestKey)
-        if (emptyShelf && allowEmptyOverwrite) {
-          delete shelfEmptyBackendSaveIntentRef.current[latestKey]
-        }
-      })
-      .catch(() => {
-        // Local shelf storage remains the immediate fallback when the API is unavailable.
-      })
+    if (!pending) return
+    enqueueShelfSave(pending, (record) => {
+      const stale = Number(record.revision || 0) < Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0)
+      shelfBackendRevisionByKeyRef.current[storageKey] = Math.max(
+        Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0), Number(record.revision || 0),
+      )
+      const current = latestShelfStateRef.current
+      if (stale || !record.concurrency_guarded || !shelfBackendHydratedKeysRef.current.has(storageKey) || shelfStorageKey(current.projectId) !== storageKey) return
+      const merged = applyShelfMutationIntent({ ...current, open: record.open, items: restoreShelfItems(record.items) }, readShelfMutationIntent(current.projectId))
+      latestShelfStateRef.current = merged
+      setShelfItems(merged.items)
+      setShelfOpen(merged.open)
+    })
   }, [])
 
   useEffect(() => {
@@ -916,10 +842,14 @@ export function MessageList({
       if (current && savedSnapshots.some((item) => item.id === current)) return current
       return savedSnapshots[0]?.id || ''
     })
-    const snapshot = migrateLegacyShelfSnapshot(nextStorageKey, legacyKeys)
+    const savedSnapshot = migrateLegacyShelfSnapshot(nextStorageKey, legacyKeys)
+    const snapshot = savedSnapshot && { ...savedSnapshot, ...applyShelfMutationIntent(
+      { ...savedSnapshot, projectId: shelfScopeId }, readShelfMutationIntent(shelfScopeId),
+    ) }
     if (!snapshot) {
       shelfRevisionByKeyRef.current[nextStorageKey] = 0
       latestShelfStateRef.current = { convId: activeConvId, projectId: shelfScopeId, open: false, items: [] }
+      pendingShelfRestoreRef.current = latestShelfStateRef.current
       setShelfItems([])
       setShelfOpen(false)
       setFocusedShelfKey('')
@@ -934,6 +864,7 @@ export function MessageList({
       items: snapshot.items,
     }
     setShelfItems(snapshot.items)
+    pendingShelfRestoreRef.current = latestShelfStateRef.current
     setShelfOpen(snapshot.open)
     setFocusedShelfKey('')
     activeStorageKeyRef.current = nextStorageKey
@@ -945,65 +876,28 @@ export function MessageList({
     const requestSeq = shelfBackendHydrateSeqRef.current + 1
     shelfBackendHydrateSeqRef.current = requestSeq
     let cancelled = false
-    let requestStartedAt = Date.now()
-    const timer = window.setTimeout(() => {
-      requestStartedAt = Date.now()
-      chatApi.getCitationShelf({ convId: activeConvId || undefined, projectId: requestProjectId, scope: 'project' })
-        .then((record) => {
-          if (cancelled || shelfBackendHydrateSeqRef.current !== requestSeq) return
+    const request: ShelfHydrationRequest = {
+      storageKey, sequence: requestSeq, snapshot: latestShelfStateRef.current,
+      clearRevision: Number(shelfClearRevisionByKeyRef.current[storageKey] || 0),
+    }
+    const stop = loadShelfWithRetry(
+      { convId: activeConvId || undefined, projectId: requestProjectId, scope: 'project' },
+      (record) => {
           const latest = latestShelfStateRef.current
-          if (shelfStorageKey(latest.projectId) !== storageKey) return
-          const backendRevision = Math.max(0, Number(record.revision || 0))
-          shelfBackendRevisionByKeyRef.current[storageKey] = backendRevision
+          if (cancelled || !shelfHydrationIsCurrent(request, shelfBackendHydrateSeqRef.current, latest)) return
+          shelfBackendRevisionByKeyRef.current[storageKey] = Math.max(
+            Number(shelfBackendRevisionByKeyRef.current[storageKey] || 0), Number(record.revision || 0),
+          )
           shelfBackendHydratedKeysRef.current.add(storageKey)
-
-          const backendItems = restoreShelfItems(Array.isArray(record.items) ? record.items : [])
-          const currentItems = dedupeShelfItems(latest.items || []).slice(0, SHELF_MAX_ITEMS)
-          const rawBackendUpdatedAt = Number(record.updated_at || 0)
-          const backendUpdatedAtMs = rawBackendUpdatedAt > 1000000000000
-            ? rawBackendUpdatedAt
-            : rawBackendUpdatedAt * 1000
-          const localSnapshot = readShelfSnapshot(storageKey)
-          const localUpdatedAtMs = Number(localSnapshot?.updatedAt || 0)
-          const stateChangedAfterRequest = shelfStateTouchedAtRef.current > requestStartedAt + 10
-          const localLooksNewer = localUpdatedAtMs > backendUpdatedAtMs + 500
-
-          let nextItems: CiteShelfItem[]
-          let nextOpen = Boolean(record.open)
-          let shouldSaveBackend = false
-
-          if (backendRevision <= 0) {
-            nextItems = currentItems.length > 0 ? currentItems : backendItems
-            nextOpen = latest.open || Boolean(record.open)
-            shouldSaveBackend = nextItems.length > 0 || nextOpen
-          } else if (backendItems.length <= 0 && currentItems.length > 0) {
-            if (stateChangedAfterRequest || localLooksNewer) {
-              nextItems = currentItems
-              nextOpen = latest.open
-              shouldSaveBackend = true
-            } else {
-              nextItems = []
-              nextOpen = Boolean(record.open)
-            }
-          } else if (currentItems.length <= 0) {
-            nextItems = backendItems
-            nextOpen = Boolean(record.open)
-          } else if (backendUpdatedAtMs > localUpdatedAtMs + 500 && !stateChangedAfterRequest) {
-            nextItems = backendItems
-            nextOpen = Boolean(record.open)
-          } else {
-            nextItems = dedupeShelfItems([...currentItems, ...backendItems]).slice(0, SHELF_MAX_ITEMS)
-            nextOpen = latest.open || Boolean(record.open)
-            shouldSaveBackend = !sameShelfItems(nextItems, backendItems) || nextOpen !== Boolean(record.open)
-          }
-
-          latestShelfStateRef.current = {
-            convId: latest.convId,
-            projectId: latest.projectId,
-            open: nextOpen,
-            items: nextItems,
-          }
-          if (!sameShelfItems(currentItems, nextItems)) {
+          const { snapshot, shouldSaveBackend, allowEmptyOverwrite } = reconcileShelfHydration({
+            request, current: latest, record,
+            localUpdatedAt: Number(readShelfSnapshot(storageKey)?.updatedAt || 0),
+            clearRevision: Number(shelfClearRevisionByKeyRef.current[storageKey] || 0),
+            intent: readShelfMutationIntent(shelfScopeId),
+          })
+          const { items: nextItems, open: nextOpen } = snapshot
+          latestShelfStateRef.current = snapshot
+          if (!sameShelfItems(latest.items, nextItems)) {
             setShelfItems(nextItems)
             setFocusedShelfKey((current) => (
               current && nextItems.some((item) => item.key === current) ? current : ''
@@ -1013,17 +907,18 @@ export function MessageList({
             setShelfOpen(nextOpen)
           }
           if (shouldSaveBackend) {
-            saveShelfBackendNow({ convId: latest.convId, projectId: latest.projectId, open: nextOpen, items: nextItems })
+            if (!readShelfMutationIntent(shelfScopeId)) recordShelfMutation({ ...snapshot, open: false, items: [] }, snapshot)
+            saveShelfBackendNow(snapshot, { allowEmptyOverwrite })
           }
-        })
-        .catch(() => {
+        },
+        () => {
           if (cancelled || shelfBackendHydrateSeqRef.current !== requestSeq) return
           shelfBackendHydratedKeysRef.current.delete(storageKey)
-        })
-    }, 0)
+        },
+    )
     return () => {
       cancelled = true
-      window.clearTimeout(timer)
+      stop()
     }
   }, [activeConvId, saveShelfBackendNow, shelfScopeId])
 
@@ -1078,7 +973,11 @@ export function MessageList({
   }, [activeConvId, shelfScopeId])
 
   useLayoutEffect(() => {
-    shelfStateTouchedAtRef.current = Date.now()
+    if (activeStorageKeyRef.current !== shelfStorageKey(shelfScopeId)) return
+    const restoring = pendingShelfRestoreRef.current
+    if (restoring && (restoring.open !== shelfOpen || !sameShelfItems(restoring.items, shelfItems))) return
+    pendingShelfRestoreRef.current = null
+    recordShelfMutation(latestShelfStateRef.current, { convId: activeConvId, projectId: shelfScopeId, open: shelfOpen, items: shelfItems })
     latestShelfStateRef.current = { convId: activeConvId, projectId: shelfScopeId, open: shelfOpen, items: shelfItems }
   }, [activeConvId, shelfItems, shelfOpen, shelfScopeId])
 
@@ -1815,53 +1714,17 @@ export function MessageList({
     }, 160)
   }
 
-  const addReaderCitationToShelf = (rawPayload: unknown) => {
-    const payload = normalizeReaderCitationShelfPayload(rawPayload)
-    if (!payload) return
-    const payloadProjectId = String(payload.projectId || '').trim()
-    if (payloadProjectId && shelfProjectScopeId(payloadProjectId) !== shelfScopeId) return
+  const addReaderCitationToShelf = (payload: ReaderCitationShelfPayload) => {
+    if (shelfProjectScopeId(latestShelfStateRef.current.projectId) !== shelfScopeId) return false
     const detail = normalizeCiteDetail(payload.detail)
-    if (!detail) return
+    if (!detail) return false
     addToShelf(detail)
+    return true
   }
-  const addReaderCitationToShelfRef = useRef(addReaderCitationToShelf)
-  addReaderCitationToShelfRef.current = addReaderCitationToShelf
-
-  useEffect(() => {
-    const handleWindowEvent = (event: Event) => {
-      const custom = event as CustomEvent<unknown>
-      addReaderCitationToShelfRef.current(custom.detail)
-    }
-    window.addEventListener(READER_CITATION_SHELF_EVENT, handleWindowEvent)
-
-    let channel: BroadcastChannel | null = null
-    if (typeof BroadcastChannel !== 'undefined') {
-      channel = new BroadcastChannel(READER_CITATION_SHELF_CHANNEL)
-      channel.onmessage = (event) => {
-        const data = event?.data && typeof event.data === 'object'
-          ? event.data as Record<string, unknown>
-          : {}
-        if (String(data.type || '') !== 'reader-citation-shelf') return
-        addReaderCitationToShelfRef.current(data)
-        const requestId = String(data.requestId || '').trim()
-        if (requestId) {
-          channel?.postMessage({ type: 'reader-citation-shelf-ack', requestId })
-        }
-      }
-    }
-    return () => {
-      window.removeEventListener(READER_CITATION_SHELF_EVENT, handleWindowEvent)
-      channel?.close()
-    }
-  }, [])
-
-  const addReaderSelectionToShelf = (rawPayload: unknown) => {
-    const payload = normalizeReaderSelectionShelfPayload(rawPayload)
-    if (!payload) return
-    const payloadProjectId = String(payload.projectId || '').trim()
-    if (payloadProjectId && shelfProjectScopeId(payloadProjectId) !== shelfScopeId) return
+  const addReaderSelectionToShelf = (payload: ReaderSelectionShelfPayload) => {
+    if (shelfProjectScopeId(latestShelfStateRef.current.projectId) !== shelfScopeId) return false
     const detail = citeDetailFromReaderSelection(payload, payload.conversationId || activeConvId)
-    if (!detail) return
+    if (!detail) return false
     const note = readerSelectionNote(payload, S)
     const currentItems = latestShelfStateRef.current.items
     const { nextItems, focusKey, summaryTarget } = mergeReaderSelectionDetailIntoShelfItems(currentItems, detail, {
@@ -1879,37 +1742,13 @@ export function MessageList({
     window.setTimeout(() => {
       fetchShelfSummaryForItem(summaryTarget, { force: true })
     }, 420)
+    return true
   }
-  const addReaderSelectionToShelfRef = useRef(addReaderSelectionToShelf)
-  addReaderSelectionToShelfRef.current = addReaderSelectionToShelf
-
-  useEffect(() => {
-    const handleWindowEvent = (event: Event) => {
-      const custom = event as CustomEvent<unknown>
-      addReaderSelectionToShelfRef.current(custom.detail)
-    }
-    window.addEventListener(READER_SELECTION_SHELF_EVENT, handleWindowEvent)
-
-    let channel: BroadcastChannel | null = null
-    if (typeof BroadcastChannel !== 'undefined') {
-      channel = new BroadcastChannel(READER_SELECTION_SHELF_CHANNEL)
-      channel.onmessage = (event) => {
-        const data = event?.data && typeof event.data === 'object'
-          ? event.data as Record<string, unknown>
-          : {}
-        if (String(data.type || '') !== 'reader-selection-shelf') return
-        addReaderSelectionToShelfRef.current(data)
-        const requestId = String(data.requestId || '').trim()
-        if (requestId) {
-          channel?.postMessage({ type: 'reader-selection-shelf-ack', requestId })
-        }
-      }
-    }
-    return () => {
-      window.removeEventListener(READER_SELECTION_SHELF_EVENT, handleWindowEvent)
-      channel?.close()
-    }
-  }, [])
+  useReaderShelfEvents({
+    projectId: shelfProjectId,
+    onCitation: addReaderCitationToShelf,
+    onSelection: addReaderSelectionToShelf,
+  })
 
   const startPaperGuideFromDetail = async (detail: CiteDetail) => {
     const isInPaperReference = Boolean(detail.isInpaper)
@@ -2049,23 +1888,6 @@ export function MessageList({
       isInpaper: true,
     } as unknown as CiteDetail)
   }, [openReaderFromDetail])
-
-  const upsertResearchNote = useCallback((record: ResearchNoteRecord) => {
-    setResearchNotes((current) => [
-      record,
-      ...current.filter((note) => note.id !== record.id),
-    ].sort((a, b) => Number(b.updated_at || 0) - Number(a.updated_at || 0)))
-  }, [])
-
-  const deleteResearchNote = useCallback(async (noteId: string) => {
-    try {
-      await chatApi.deleteResearchNote(noteId)
-      setResearchNotes((current) => current.filter((note) => note.id !== noteId))
-      message.success(S.research_notes_deleted)
-    } catch {
-      message.error(S.research_notes_delete_failed)
-    }
-  }, [S.research_notes_delete_failed, S.research_notes_deleted])
 
   const selectedSavedSnapshot = useMemo(
     () => savedShelfSnapshots.find((item) => item.id === selectedSavedSnapshotId) || null,
@@ -2252,13 +2074,7 @@ export function MessageList({
     }
     try {
       const latest = latestShelfStateRef.current
-      const record = await chatApi.saveCitationShelf({
-        convId: activeConvId || undefined,
-        projectId,
-        scope: 'project',
-        open: latest.open,
-        items: shelfItemsForBackend(latest.items),
-      })
+      const record = await saveShelfForWorkspace({ ...latest, convId: activeConvId || undefined, projectId })
       shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
       const persistedItems = restoreShelfItems(Array.isArray(record.items) ? record.items : [])
       const seedItems = reconcilePersistedShelfSelection(requestedItems, persistedItems)
@@ -2303,13 +2119,7 @@ export function MessageList({
     }
     try {
       const latest = latestShelfStateRef.current
-      const record = await chatApi.saveCitationShelf({
-        convId: activeConvId || undefined,
-        projectId,
-        scope: 'project',
-        open: latest.open,
-        items: shelfItemsForBackend(latest.items),
-      })
+      const record = await saveShelfForWorkspace({ ...latest, convId: activeConvId || undefined, projectId })
       shelfBackendRevisionByKeyRef.current[shelfStorageKey(projectId)] = Math.max(0, Number(record.revision || 0))
       const persistedItems = restoreShelfItems(Array.isArray(record.items) ? record.items : [])
       const seedItems = reconcilePersistedShelfSelection(requestedItems, persistedItems)
@@ -2415,9 +2225,9 @@ export function MessageList({
         ? openResearchGapWorkspace
         : undefined}
       onRemove={(key) => {
-        const willBeEmpty = latestShelfStateRef.current.items.filter((item) => item.key !== key).length <= 0
-        if (willBeEmpty) markShelfEmptyBackendSaveIntent(shelfScopeId)
-        setShelfItems((current) => current.filter((item) => item.key !== key))
+        const next = latestShelfStateRef.current.items.filter((item) => item.key !== key)
+        persistShelfLocalNow(next, latestShelfStateRef.current.open)
+        setShelfItems(next)
         if (focusedShelfKey === key) setFocusedShelfKey('')
         if (shelfSummaryLoadingKey === key) setShelfSummaryLoadingKey('')
         setShelfSummaryStatusByKey((current) => {
@@ -2434,7 +2244,7 @@ export function MessageList({
         delete shelfAutoRepairRetryAfterRef.current[key]
       }}
       onClear={() => {
-        markShelfEmptyBackendSaveIntent(shelfScopeId)
+        persistShelfLocalNow([], latestShelfStateRef.current.open, true)
         setShelfItems([])
         setFocusedShelfKey('')
         setShelfSummaryLoadingKey('')
@@ -2446,19 +2256,7 @@ export function MessageList({
         setShelfRepairImpact(null)
         const projectScopeId = shelfProjectScopeId(shelfScopeId)
         const storageKey = shelfStorageKey(projectScopeId)
-        void chatApi.deleteCitationShelf({
-          convId: activeConvId || undefined,
-          projectId: projectScopeId === '__default__' ? undefined : projectScopeId,
-          scope: 'project',
-        })
-          .then((record) => {
-            shelfBackendRevisionByKeyRef.current[storageKey] = Math.max(0, Number(record.revision || 0))
-            shelfBackendHydratedKeysRef.current.add(storageKey)
-            delete shelfEmptyBackendSaveIntentRef.current[storageKey]
-          })
-          .catch(() => {
-            // Local state remains cleared; the guarded save path will avoid accidental backend overwrite.
-          })
+        shelfClearRevisionByKeyRef.current[storageKey] = Number(shelfClearRevisionByKeyRef.current[storageKey] || 0) + 1
       }}
       onUpdateTags={(key, tags) => {
         const nextTags = normalizeShelfTags(tags)
@@ -2505,21 +2303,6 @@ export function MessageList({
   const renderedResearchNotesNode = researchNotesPortalTarget
     ? createPortal(researchNotesNode, researchNotesPortalTarget)
     : null
-  const cleanGenerationPartial = generationPartial !== undefined && generationPartial !== null
-    ? cleanAssistantAnswerPresentationText(generationPartial)
-    : ''
-  const generationSourceNotice = splitLeadingAssistantSourceNotice(cleanGenerationPartial)
-  const visibleGenerationPartial = generationSourceNotice.notice ? generationSourceNotice.body : cleanGenerationPartial
-  const generationContractSourceSummary = sourceSummaryFromAnswerContract(generationAnswerContract)
-  const effectiveGenerationSourceSummary = generationContractSourceSummary || generationAgentSourceSummary
-  const hasGenerationAnswerContract = Boolean(
-    generationAnswerContract && Object.keys(generationAnswerContract).length > 0,
-  )
-  const hasGenerationAgentSourceSummary = Boolean(
-    hasGenerationAnswerContract
-      || (effectiveGenerationSourceSummary && Object.keys(effectiveGenerationSourceSummary).length > 0),
-  )
-
   return (
     <>
       <div ref={scrollRef} className="kb-message-scroll kb-main-scroll">
@@ -2545,9 +2328,6 @@ export function MessageList({
             const message = row.message
             const isUser = message.role === 'user'
             const trace = assistantTraceByMsgId.get(message.id)
-            const agentTrace = !isUser ? getMessageAgentTrace(message) : null
-            const canLoadAgentTrace = !isUser ? messageHasAgentTraceHint(message) : false
-            const researchTrace = !isUser ? getMessageResearchTrace(message) : null
             const selectedResearchContextPack = !isUser
               ? selectedResearchContextByAssistantId.get(Number(message.id)) || null
               : null
@@ -2571,18 +2351,11 @@ export function MessageList({
             const isImageOnlyUserMessage = isUser && imageAttachments.length > 0 && !showUserText
             const prep = !isUser ? assistantLocatePrepByMsgId.get(message.id) : undefined
             const rawBodyContent = prep?.bodyContent || getMessageRenderedBodyContent(message)
-            const lowConfidenceMeta = !isUser
-              ? resolveLowConfidenceMeta(
-                (message.meta && typeof message.meta === 'object')
-                  ? message.meta as Record<string, unknown>
-                  : null,
-                String(rawBodyContent || ''),
-                S,
-              )
-              : null
-            const bodyContent = lowConfidenceMeta
-              ? stripLeadingLowConfidenceNotice(rawBodyContent)
-              : rawBodyContent
+            const { bodyContent, lowConfidenceMeta } = buildAssistantCompletedContentState(
+              message,
+              String(rawBodyContent || ''),
+              S,
+            )
             const retryPrompt = !isUser && onRetryMessage && isGenerationFailureAnswer(message.content)
               ? generationRetryPrompt(messages, message.id, trace?.userMsgId)
               : ''
@@ -2776,79 +2549,54 @@ export function MessageList({
                 ) : (
                   <div className="kb-msg-bubble kb-msg-bubble-assistant">
                     <>
-                      <AssistantMessageNotices
-                        message={message}
-                        lowConfidenceMeta={lowConfidenceMeta}
-                        provenanceModeLabel={provenanceModeLabel}
-                        onOpenEvidence={(sourceNotice) => openEvidenceDrawer(sourceNotice, effectiveCiteDetails)}
-                        S={S}
-                      />
-                      <MarkdownRenderer
-                        content={bodyContent}
+                      <AssistantCompletedMessageContent
+                        bodyContent={bodyContent}
                         citeDetails={effectiveCiteDetails}
                         linkifyPlainCitations={!renderPacket}
+                        lowConfidenceMeta={lowConfidenceMeta}
+                        markdownLocateProps={markdownLocateProps}
+                        message={message}
+                        onOpenEvidence={(sourceNotice) => openEvidenceDrawer(sourceNotice, effectiveCiteDetails)}
                         onCitationClick={openCitation}
                         onCitationHover={previewCitation}
                         onCitationLeave={scheduleCitationPreviewClose}
-                        {...markdownLocateProps}
-                      />
-                      <ResearchContextReceipt
-                        pack={selectedResearchContextPack}
-                        onOpenReader={onOpenReader}
-                        onFollowUp={onResearchContextFollowUp ? useReceiptItemAsFollowUp : undefined}
+                        provenanceModeLabel={provenanceModeLabel}
                         S={S}
                       />
-                      <MessageReferenceCandidates
-                        views={unlinkedReferenceViews}
+                      <AssistantEvidenceNavigationPanels
+                        contextPack={selectedResearchContextPack}
+                        interactions={{
+                          onAddReferenceToShelf: addToShelf,
+                          onFollowUp: onResearchContextFollowUp ? useReceiptItemAsFollowUp : undefined,
+                          onOpenProvenanceEntry: openReaderByStructuredEntry,
+                          onOpenReader,
+                          onOpenReference: openReaderFromDetail,
+                        }}
                         messageId={message.id}
-                        canOpenReader={Boolean(onOpenReader)}
-                        onOpenReader={openReaderFromDetail}
-                        onAddToShelf={addToShelf}
+                        provenanceEntries={showProvenanceLocateChips ? provenanceLocateEntries : []}
+                        referenceViews={unlinkedReferenceViews}
                         S={S}
                       />
-                      <MessageProvenanceChips
-                        entries={showProvenanceLocateChips ? provenanceLocateEntries : []}
-                        messageId={message.id}
-                        onOpenEntry={openReaderByStructuredEntry}
+                      <AssistantAuditTracePanels
+                        interactions={{
+                          onAddReferenceToShelf: addToShelf,
+                          onLoadAgentTrace: (messageId) => chatApi.getMessageAgentTrace(messageId, activeConvId),
+                          onOpenReference: openReaderFromDetail,
+                        }}
+                        message={message}
                       />
-                      <AgentTracePanel
-                        trace={agentTrace}
+                      <AssistantMessageActions
+                        canSaveAsEvidenceNote={canSaveAsEvidenceNote}
+                        copyMarkdown={getMessageCopyMarkdownValue(message)}
+                        copyText={getMessageCopyTextValue(message)}
                         messageId={message.id}
-                        canLoadTrace={canLoadAgentTrace}
-                        onLoadTrace={(messageId) => chatApi.getMessageAgentTrace(messageId, activeConvId)}
-                        onOpenReference={openReaderFromDetail}
-                        onAddReferenceToShelf={addToShelf}
+                        onOpenEvidenceNote={openResearchNoteEditor}
+                        onRetry={onRetryMessage}
+                        retryDisabled={generationPartial !== undefined && generationPartial !== null}
+                        retryLabel={S.chat_retry_answer}
+                        retryPrompt={retryPrompt}
+                        saveEvidenceNoteLabel={S.research_note_action}
                       />
-                      <ResearchTracePanel trace={researchTrace} />
-                      <div className="kb-answer-export-actions">
-                        <CopyBar
-                          text={getMessageCopyTextValue(message)}
-                          markdown={getMessageCopyMarkdownValue(message)}
-                        />
-                        {canSaveAsEvidenceNote ? (
-                          <Button
-                            size="small"
-                            type="text"
-                            icon={<FileTextOutlined />}
-                            data-testid={`research-note-open-${message.id}`}
-                            onClick={() => openResearchNoteEditor(message.id)}
-                          >
-                            {S.research_note_action}
-                          </Button>
-                        ) : null}
-                      </div>
-                      {retryPrompt ? (
-                        <Button
-                          className="kb-generation-retry-btn"
-                          type="text"
-                          size="small"
-                          icon={<ReloadOutlined />}
-                          disabled={generationPartial !== undefined && generationPartial !== null}
-                          onClick={() => onRetryMessage?.(retryPrompt)}
-                        >
-                          {S.chat_retry_answer}
-                        </Button>
-                      ) : null}
                     </>
                   </div>
                 )}
@@ -2862,47 +2610,18 @@ export function MessageList({
           })}
 
           {generationPartial !== undefined && generationPartial !== null ? (
-            <div className="kb-message-row is-assistant">
-              <AssistantAvatar />
-              <div className="kb-msg-bubble kb-msg-bubble-assistant is-streaming">
-                {generationStage ? (
-                  <div className="mb-2 flex items-center gap-2">
-                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-[var(--accent)]" />
-                    <Text type="secondary" className="text-xs">
-                      {S.chat_activity_generation}
-                    </Text>
-                  </div>
-                ) : null}
-                {hasGenerationAgentSourceSummary ? (
-                  <AssistantSourceSummaryNotice
-                    answerContract={generationAnswerContract}
-                    sourceSummary={effectiveGenerationSourceSummary}
-                    fallbackNoticeText={generationSourceNotice.notice}
-                    onOpenEvidence={(sourceNotice) => openEvidenceDrawer(sourceNotice, [])}
-                    S={S}
-                  />
-                ) : generationSourceNotice.notice ? (
-                  <AssistantSourceNotice noticeText={generationSourceNotice.notice} S={S} />
-                ) : null}
-                {visibleGenerationPartial ? (
-                  <div className="break-words text-sm leading-7 text-[var(--text)]" data-testid="streaming-markdown-answer">
-                    <MarkdownRenderer content={visibleGenerationPartial} citeDetails={[]} />
-                  </div>
-                ) : (
-                  <div className="flex items-center gap-1 py-1">
-                    <span className="typing-dot" />
-                    <span className="typing-dot" style={{ animationDelay: '0.15s' }} />
-                    <span className="typing-dot" style={{ animationDelay: '0.3s' }} />
-                  </div>
-                )}
-                <AgentTracePanel
-                  trace={generationAgentTrace}
-                  onOpenReference={openReaderFromDetail}
-                  onAddReferenceToShelf={addToShelf}
-                />
-                <ResearchTracePanel trace={generationTrace} />
-              </div>
-            </div>
+            <AssistantStreamingMessage
+              partial={generationPartial}
+              stage={generationStage}
+              trace={generationTrace}
+              agentTrace={generationAgentTrace}
+              agentSourceSummary={generationAgentSourceSummary}
+              answerContract={generationAnswerContract}
+              onOpenEvidence={(sourceNotice) => openEvidenceDrawer(sourceNotice, [])}
+              onOpenReference={openReaderFromDetail}
+              onAddReferenceToShelf={addToShelf}
+              S={S}
+            />
           ) : null}
         </div>
       </div>

@@ -13,7 +13,7 @@ try:
     from kb.config import load_settings
     from kb.store import load_all_chunks
     from kb.retriever import BM25Retriever
-    from kb.retrieval_engine import _search_hits_with_fallback
+    from kb.product_query_policy import search_hits_with_fallback
     from kb.paper_guide_provenance import _build_paper_guide_answer_provenance
     from kb.paper_guide_focus import _extract_caption_panel_letters
     from api.chat_render import enrich_messages_with_reference_render
@@ -23,7 +23,7 @@ except ModuleNotFoundError:  # pragma: no cover
     from kb.config import load_settings  # type: ignore
     from kb.store import load_all_chunks  # type: ignore
     from kb.retriever import BM25Retriever  # type: ignore
-    from kb.retrieval_engine import _search_hits_with_fallback  # type: ignore
+    from kb.product_query_policy import search_hits_with_fallback  # type: ignore
     from kb.paper_guide_provenance import _build_paper_guide_answer_provenance  # type: ignore
     from kb.paper_guide_focus import _extract_caption_panel_letters  # type: ignore
     from api.chat_render import enrich_messages_with_reference_render  # type: ignore
@@ -113,7 +113,7 @@ def _retrieve_hits(prompt: str, *, db_dir: Path, top_k: int) -> list[dict[str, A
     settings = load_settings()
     chunks = load_all_chunks(db_dir)
     retriever = BM25Retriever(chunks)
-    hits_raw, _scores, _used_query, _used_translation, *_query_variants = _search_hits_with_fallback(
+    hits_raw, _scores, _used_query, _used_translation, *_query_variants = search_hits_with_fallback(
         prompt,
         retriever,
         top_k=top_k,

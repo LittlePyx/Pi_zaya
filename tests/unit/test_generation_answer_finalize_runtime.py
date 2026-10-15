@@ -4845,6 +4845,8 @@ def test_fast_exact_finalize_binds_planned_source_before_claim_audit(monkeypatch
         "AlphaNet parallelizes coded acquisition within one integration time [1]."
     ]
     assert audited_answers[0] in out["answer"]
+    assert out["answer_quality"]["finalization_outcome"]["status"] == "passed"
+    assert out["answer_quality"]["finalization_outcome"]["gate_pass_count"] == 1
 
 
 def test_finalize_fast_exact_reuses_support_without_full_text_rescan(monkeypatch):
@@ -7371,6 +7373,13 @@ def test_finalize_generation_answer_rechecks_claims_after_late_answer_mutation(m
     assert "提高十倍" not in out["answer"]
     assert out["answer_quality"]["claim_evidence"]["final_gate_applied"] is True
     assert out["answer_quality"]["claim_evidence"]["minimum_ok"] is True
+    assert out["answer_quality"]["finalization_outcome"]["status"] in {
+        "passed",
+        "repaired",
+        "narrowed",
+        "repaired_and_narrowed",
+    }
+    assert out["answer_quality"]["finalization_outcome"]["final_ok"] is True
     assert audit_calls == 1
     timing = out["answer_quality"]["_finalize_timing_ms"]
     assert timing["mode"] == "standard"

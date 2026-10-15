@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_lighter_runtime_stage2_e5_small_v1",
+  "status": "frozen_before_single_full_build",
+  "frozen_at": "2026-09-03",
+  "purpose": "Build and atomically read back the sole complete E5-small window index, then decide deployability from frozen semantic retrieval and safety gates.",
+  "authorization": {
+    "umbrella_protocol_path": "docs/retrieval_lighter_runtime_screen_protocol_v1.json",
+    "umbrella_protocol_sha256": "dffc76974fcdd1d288e5bc5e16f5590e4d09e140f26a7591b269f396a5817dea",
+    "stage_1_protocol_path": "docs/retrieval_lighter_runtime_stage1_e5_small_protocol_v1.json",
+    "stage_1_protocol_sha256": "01309083feb769ef99cfe61a0dd94b44b193c772e540bc5740c6f7ac31f5ad39",
+    "stage_1_report_path": "docs/retrieval_lighter_runtime_stage1_e5_small_v1.json",
+    "stage_1_report_sha256": "19a42c13a779e4eabb37438d45749485fa6864f85d3c924c6f5a6163be1502cc",
+    "stage_1_result_fingerprint": "0750c32c42c09f8f9613734662ff1e6c3c7bee1169c9341b51e5afed778cd645",
+    "stage_1_decision": "passed_stage_1_authorize_single_full_build",
+    "full_builds_consumed_by_qwen": 0,
+    "maximum_full_builds_across_batch": 1,
+    "accepted_product_control_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_acceptance_v2.json",
+    "accepted_product_control_sha256": "13e2d5dc30afcdc3f174c4ef139b30513d3072bb9f025cc0932f85fe66354ca8"
+  },
+  "source_corpus": {
+    "runtime_db_argument_required": true,
+    "tree_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "document_count": 10,
+    "parent_chunk_count": 1673,
+    "writes_allowed": false
+  },
+  "candidate": {
+    "candidate_id": "multilingual_e5_small_official_onnx_v1",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "artifact_path": "test_results/retrieval_lighter_runtime_v1/artifacts/multilingual_e5_small_official_onnx_v1/model.onnx",
+    "artifact_bytes": 470268510,
+    "artifact_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "embedding_dimension": 384,
+    "pooling": "attention_masked_mean_over_last_hidden_state",
+    "normalization": "l2_float32"
+  },
+  "representation": {
+    "parent_count": 1673,
+    "window_count": 2016,
+    "content_window_tokens": 448,
+    "minimum_content_overlap_tokens": 64,
+    "nominal_content_stride_tokens": 384,
+    "passage_prefix": "passage: ",
+    "query_prefix": "query: ",
+    "maximum_input_tokens": 512,
+    "parent_score_collapse": "maximum_window_cosine_then_parent_id",
+    "retriever_implementation": "kb.parent_collapsed_dense_retriever.ParentCollapsedDenseRetriever",
+    "retriever_source_sha256": "814d22eea98096a46d7499bb1cdcd6c890e2b6b808efaca97ef79bede77d1724",
+    "returned_result_identity": "complete_immutable_parent_chunk",
+    "child_window_text_returned": false,
+    "silent_tail_loss_allowed": false
+  },
+  "index_format": {
+    "schema_version": 1,
+    "root_path": "test_results/retrieval_lighter_runtime_v1/stage2_e5_small_index_v1",
+    "generation_id_format": "uuid4_hex",
+    "vectors_file": "vectors.f32",
+    "vectors_format": "float32_little_endian_l2_row_major",
+    "windows_file": "windows.json",
+    "window_metadata_fields": [
+      "parent_id",
+      "parent_position",
+      "window_ordinal"
+    ],
+    "manifest_file": "manifest.json",
+    "current_pointer_file": "current.json",
+    "staging_directory_then_atomic_generation_rename": true,
+    "atomic_current_pointer_replace": true,
+    "readback_shape_hash_and_parent_mapping_required": true,
+    "paper_text_stored_in_index": false,
+    "query_text_stored_in_index": false
+  },
+  "execution": {
+    "maximum_runs": 1,
+    "hard_subprocess_timeout_seconds": 660,
+    "attempt_receipt_path": "test_results/retrieval_lighter_runtime_v1/stage2_e5_small_attempt_v1.json",
+    "worker_result_path": "test_results/retrieval_lighter_runtime_v1/stage2_e5_small_worker_v1.json",
+    "report_path": "docs/retrieval_lighter_runtime_stage2_e5_small_v1.json",
+    "raw_query_vectors_retained_in_tracked_report": false,
+    "report_persisted_before_outcome_validation": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "runtime_gates": {
+    "maximum_provider_load_ms": 30000.0,
+    "maximum_full_build_ms": 600000.0,
+    "minimum_parent_chunks_per_second": 2.75,
+    "maximum_peak_process_rss_mib": 6144.0,
+    "maximum_warm_query_p95_ms": 1000.0,
+    "maximum_index_bytes": 10000000,
+    "maximum_truncated_query_count": 0,
+    "maximum_truncated_parent_count": 0,
+    "maximum_uncovered_content_token_count": 0,
+    "require_exact_parent_window_counts": true,
+    "require_finite_unit_vectors": true,
+    "require_atomic_readback": true,
+    "require_source_artifact_tokenizer_unchanged": true,
+    "all_required": true
+  },
+  "semantic_evaluation": {
+    "fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "case_count": 12,
+    "modes": [
+      "scoped",
+      "full_library"
+    ],
+    "channels": [
+      "bm25_product_queries_selection_control",
+      "e5_small_window_raw_dense",
+      "e5_small_window_protected_dense_tail"
+    ],
+    "raw_dense_is_diagnostic_only": true,
+    "protected_tail_source_sha256": "f120174d277fd190008fb0c1d5749315df83cb75fd1ca143aa864991c28d95b2",
+    "protected_tail": {
+      "protected_sparse_prefix": 5,
+      "sparse_tail_window": 5,
+      "dense_novelty_quota": 2,
+      "candidate_multiplier": 4,
+      "fusion_output_depth": 10,
+      "candidate_retrieval_depth": 40
+    },
+    "minimum_protected_recall_at_10_gain_vs_product_each_mode": 0.15,
+    "protected_recall_at_5_equal_to_product_each_mode": true,
+    "protected_wrong_source_at_5_equal_to_product_each_mode": true,
+    "protected_mrr_no_regression_vs_product_each_mode": true,
+    "protected_ndcg_at_10_no_regression_vs_product_each_mode": true,
+    "all_required": true
+  },
+  "decision": {
+    "pass_status": "runtime_candidate_eligible_for_optional_preparation_design",
+    "failure_status": "no_deployable_dense_runtime_keep_bm25_product",
+    "product_enablement_allowed": false,
+    "preparation_design_allowed_only_on_pass": true
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

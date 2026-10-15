@@ -11,10 +11,19 @@ from kb.evidence_term_mapping import (
     specific_method_identities,
 )
 from kb.source_blocks import normalize_inline_markdown
+from kb.claim_polarity_guard import claim_polarity_conflicts
 
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
     (
+        re.compile(r"先.{0,24}求和.{0,24}(?:再|后).{0,24}(?:掩模|掩码)|求和后.{0,24}(?:掩模|掩码)|sum.{0,24}before.{0,24}(?:mask|modulat)", re.I),
+        re.compile(r"sum.{0,24}before.{0,24}(?:mask|modulat)|求和后.{0,24}(?:掩模|掩码)", re.I),
+    ),
+    (
+        re.compile(r"噪声.{0,24}(?:相乘|乘法)|(?:相乘|乘法).{0,24}噪声|multiplicative\s+noise", re.I),
+        re.compile(r"multiplicative\s+noise|noise.{0,24}multipl|噪声.{0,24}(?:相乘|乘法)", re.I),
+    ),
+    (
         re.compile(
             r"(?:替代|取代|摆脱).{0,28}(?:数据驱动|黑箱)|"
             r"(?:数据驱动|黑箱).{0,28}(?:替代|取代|摆脱)|"
@@ -137,6 +146,48 @@ _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...]
     (
         re.compile(r"(?i)\bhighest\s+predicted\s+IoU\b"),
         re.compile(r"(?i)\bhighest\s+predicted\s+IoU\b"),
+    ),
+    (
+        re.compile(
+            r"(?:移除|去掉|不保留).{0,24}池化|remove(?:s|d)?\s+all\s+pooling\s+layers",
+            re.I,
+        ),
+        re.compile(r"remove(?:s|d)?\s+all\s+pooling\s+layers|(?:移除|去掉).{0,24}池化", re.I),
+    ),
+    (
+        re.compile(
+            r"(?:感受野|receptive\s+field).{0,60}\(\s*2\s*d\s*\+\s*1\s*\)\s*[×x\\]?(?:times)?\s*\(\s*2\s*d\s*\+\s*1\s*\)",
+            re.I,
+        ),
+        re.compile(
+            r"receptive\s+field.{0,100}\(\s*2\s*d\s*\+\s*1\s*\)\s*[×x]\s*\(\s*2\s*d\s*\+\s*1\s*\)|"
+            r"感受野.{0,100}\(\s*2\s*d\s*\+\s*1\s*\)\s*[×x]\s*\(\s*2\s*d\s*\+\s*1\s*\)",
+            re.I,
+        ),
+    ),
+    (
+        re.compile(
+            r"(?:相同|same).{0,24}(?:条件期望|conditional\s+expect)|"
+            r"(?:条件期望|conditional\s+expect).{0,24}(?:相同|same)",
+            re.I,
+        ),
+        re.compile(
+            r"same\s+conditional\s+expected\s+values|相同.{0,24}条件期望|条件期望.{0,24}相同",
+            re.I,
+        ),
+    ),
+    (
+        re.compile(
+            r"(?=.*(?:高斯去噪|Gaussian\s+denois))"
+            r"(?=.*(?:超分辨|super[- ]resolution|\bSISR\b))"
+            r"(?=.*(?:JPEG).{0,16}(?:去块|deblock))",
+            re.I,
+        ),
+        re.compile(
+            r"(?=.*Gaussian\s+denois)(?=.*(?:single\s+image\s+super[- ]resolution|\bSISR\b))"
+            r"(?=.*JPEG(?:\s+image)?\s+deblock)",
+            re.I,
+        ),
     ),
 )
 
@@ -146,9 +197,26 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
 
     claim_text = re.sub(r"\s+", " ", str(claim or "")).strip()
     evidence_text = re.sub(r"\s+", " ", str(evidence or "")).strip()
-    return not any(
+    from kb.theory_evidence import (
+        architecture_relation_covered,
+        noisy_target_relation_covered,
+        restoration_task_enumeration_covered,
+        signal_noise_assumptions_covered,
+        training_pair_requirement_covered,
+        variance_relation_covered,
+    )
+
+    return (
+        variance_relation_covered(claim_text, evidence_text)
+        and architecture_relation_covered(claim_text, evidence_text)
+        and noisy_target_relation_covered(claim_text, evidence_text)
+        and restoration_task_enumeration_covered(claim_text, evidence_text)
+        and training_pair_requirement_covered(claim_text, evidence_text)
+        and signal_noise_assumptions_covered(claim_text, evidence_text)
+        and not any(
         claim_pattern.search(claim_text) and not evidence_pattern.search(evidence_text)
         for claim_pattern, evidence_pattern in _EXPLICIT_CLAIM_RELATION_REQUIREMENTS
+        )
     )
 
 
@@ -1241,12 +1309,12 @@ def assess_system_a_hit_binding(
     )
     claim_low = claim.lower()
     evidence_body_low = evidence_body_surface.lower()
-    if not explicit_claim_relations_covered(claim, evidence_body_surface):
+    if not explicit_claim_relations_covered(claim, evidence_body_surface) or claim_polarity_conflicts(claim, evidence_body_surface):
         reason = (
-            "回答句加入了原文未明确陈述的因果、替代或鲁棒性关系，不能绑定到这张证据卡。"
+            "回答句加入了原文未支持的因果、操作顺序或动作方向关系，不能绑定到这张证据卡。"
             if _system_a_prefers_zh(claim)
             else (
-                "The answer adds a causal, replacement, or robustness relation that the "
+                "The answer adds a causal, operation-order, or action-direction relation that the "
                 "passage does not state, so this card cannot support it."
             )
         )

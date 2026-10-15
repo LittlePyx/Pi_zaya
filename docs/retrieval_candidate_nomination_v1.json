@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "report_kind": "dense_candidate_nomination_v1",
+  "created_at": "2026-09-02T19:15:20.083695+00:00",
+  "protocol_sha256": "ca9ac9d83e10e8891c788b13d3e6a6f6d403c7da382363bbda786fe4dc3cfcfa",
+  "candidate_batch_sha256": "ed026e779e9774e8d24b727752a394475d1f08c95e2bbb3c918f8e4876ddd533",
+  "candidate_report_sha256": {
+    "qwen3_embedding_0_6b_v1": "623fd13b08b8dc965e0d08b5a6a9ae3718ef8d1e93dd1535fe30bc45da0b5249",
+    "granite_embedding_278m_multilingual_v1": "6974d345510d0564ed34b74c611acef13e30b6805e2649f2396bbdc151eba31d"
+  },
+  "decision": {
+    "eligible_candidate_ids": [],
+    "nominee_candidate_id": "",
+    "confirmation_allowed": false,
+    "status": "no_eligible_candidate"
+  },
+  "confirmation_accessed": false,
+  "product_enabled": false
+}

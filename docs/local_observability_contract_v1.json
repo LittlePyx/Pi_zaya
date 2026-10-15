@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "service_name": "pi_zaya",
+  "sink": {
+    "format": "otel_aligned_jsonl",
+    "default_enabled": false,
+    "path_environment_variable": "KB_LOCAL_OBSERVABILITY_PATH",
+    "external_export_enabled": false
+  },
+  "retention": {
+    "strategy": "size_rotation",
+    "default_max_bytes": 8388608,
+    "default_backup_count": 1,
+    "max_bytes_environment_variable": "KB_LOCAL_OBSERVABILITY_MAX_BYTES",
+    "backup_count_environment_variable": "KB_LOCAL_OBSERVABILITY_BACKUP_COUNT"
+  },
+  "privacy": {
+    "raw_content_allowed": false,
+    "prohibited_attribute_names": [
+      "api_key",
+      "claim",
+      "claim_text",
+      "credential",
+      "evidence",
+      "evidence_text",
+      "exception",
+      "exception_message",
+      "file_path",
+      "model",
+      "prompt",
+      "query",
+      "response",
+      "source_path",
+      "source_title",
+      "translated_query",
+      "url"
+    ]
+  },
+  "attribute_types": {
+    "stable_id": [
+      "error_category_id",
+      "fallback_reason_id",
+      "model_revision",
+      "model_route_id",
+      "outcome_id",
+      "question_type_id",
+      "retrieval_channel_id",
+      "source_scope_id",
+      "status",
+      "verification_outcome_id"
+    ],
+    "boolean": [
+      "cache_hit",
+      "cold_start",
+      "index_cache_hit",
+      "product_output_unchanged",
+      "protected_prefix_preserved",
+      "repair_required",
+      "repair_succeeded",
+      "streaming",
+      "translation_used",
+      "usage_reported"
+    ],
+    "non_negative_count": [
+      "attempt_count",
+      "changed_count_at_10",
+      "changed_count_at_5",
+      "dense_novelty_count",
+      "detected_issue_count",
+      "gate_pass_count",
+      "input_token_count",
+      "narrow_action_count",
+      "output_token_count",
+      "overlap_count_at_10",
+      "overlap_count_at_5",
+      "product_hit_count",
+      "query_variant_count",
+      "repair_action_count",
+      "retrieval_hit_count",
+      "shadow_hit_count",
+      "source_escape_count",
+      "supported_claim_count",
+      "tool_call_count",
+      "tool_error_count",
+      "total_claim_count",
+      "total_token_count",
+      "unsupported_claim_count"
+    ],
+    "duration_ms": [
+      "duration_ms"
+    ]
+  },
+  "events": {
+    "pi_zaya.agent_run": [
+      "duration_ms",
+      "input_token_count",
+      "outcome_id",
+      "output_token_count",
+      "question_type_id",
+      "retrieval_hit_count",
+      "status",
+      "supported_claim_count",
+      "tool_call_count",
+      "tool_error_count",
+      "unsupported_claim_count",
+      "verification_outcome_id"
+    ],
+    "pi_zaya.answer_finalization": [
+      "detected_issue_count",
+      "duration_ms",
+      "gate_pass_count",
+      "narrow_action_count",
+      "outcome_id",
+      "repair_action_count",
+      "repair_required",
+      "repair_succeeded",
+      "status"
+    ],
+    "pi_zaya.claim_verification": [
+      "duration_ms",
+      "fallback_reason_id",
+      "model_revision",
+      "outcome_id",
+      "status",
+      "supported_claim_count",
+      "total_claim_count",
+      "unsupported_claim_count",
+      "verification_outcome_id"
+    ],
+    "pi_zaya.model_call": [
+      "attempt_count",
+      "duration_ms",
+      "error_category_id",
+      "input_token_count",
+      "model_route_id",
+      "outcome_id",
+      "output_token_count",
+      "status",
+      "streaming",
+      "total_token_count",
+      "usage_reported"
+    ],
+    "pi_zaya.retrieval": [
+      "cache_hit",
+      "duration_ms",
+      "fallback_reason_id",
+      "input_token_count",
+      "outcome_id",
+      "query_variant_count",
+      "retrieval_channel_id",
+      "retrieval_hit_count",
+      "source_scope_id",
+      "status",
+      "translation_used"
+    ],
+    "pi_zaya.retrieval_shadow": [
+      "changed_count_at_10",
+      "changed_count_at_5",
+      "cold_start",
+      "dense_novelty_count",
+      "duration_ms",
+      "fallback_reason_id",
+      "index_cache_hit",
+      "outcome_id",
+      "overlap_count_at_10",
+      "overlap_count_at_5",
+      "product_hit_count",
+      "product_output_unchanged",
+      "protected_prefix_preserved",
+      "retrieval_channel_id",
+      "shadow_hit_count",
+      "source_escape_count",
+      "source_scope_id",
+      "status"
+    ]
+  }
+}

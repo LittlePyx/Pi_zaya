@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_user_journey_bm25_outcome_v1",
+  "fixture": {
+    "path": "docs/retrieval_user_journey_expansion_v1.json",
+    "sha256": "6463cf63ba1853fc8704eead89de0ee36061481613621b1fa72ea4b7fe5429ca"
+  },
+  "baseline": {
+    "path": "docs/retrieval_user_journey_bm25_baseline_v1.json",
+    "sha256": "28748a9d590a637dcd8e2847f2ba9efc437b069ee4769feb95f3821986576fca",
+    "result_fingerprint": "d693926a5fbe959aee66d0bd57f0743daf58b8c55c685f9ea822c36c5689933e"
+  },
+  "depth_contract": {
+    "retrieval_ranking_depth": 20,
+    "reported_metric_depths": [
+      1,
+      3,
+      5,
+      10,
+      20
+    ],
+    "note": "This BM25 baseline has no fusion layout; future fusion ranking and reporting depths must be separate fields."
+  },
+  "split_summary": {
+    "calibration": {
+      "scoped": {
+        "case_count": 12,
+        "metrics": {
+          "mrr": 0.277244,
+          "recall@5": 0.194444,
+          "recall@10": 0.222222,
+          "ndcg@10": 0.16104,
+          "contract_recall@10": 0.25,
+          "contract_recall@20": 0.375,
+          "wrong_source_rate@5": 0.0
+        },
+        "first_relevant_rank_buckets": {
+          "miss_top20": 5,
+          "rank_1": 2,
+          "ranks_11_20": 1,
+          "ranks_2_5": 3,
+          "ranks_6_10": 1
+        }
+      },
+      "full_library": {
+        "case_count": 12,
+        "metrics": {
+          "mrr": 0.178513,
+          "recall@5": 0.152778,
+          "recall@10": 0.152778,
+          "ndcg@10": 0.118022,
+          "contract_recall@10": 0.166667,
+          "contract_recall@20": 0.25,
+          "wrong_source_rate@5": 0.383333
+        },
+        "first_relevant_rank_buckets": {
+          "miss_top20": 7,
+          "rank_1": 1,
+          "ranks_11_20": 1,
+          "ranks_2_5": 3
+        }
+      }
+    },
+    "holdout": {
+      "scoped": {
+        "case_count": 6,
+        "metrics": {
+          "mrr": 0.107009,
+          "recall@5": 0.166667,
+          "recall@10": 0.25,
+          "ndcg@10": 0.115467,
+          "contract_recall@10": 0.25,
+          "contract_recall@20": 0.777778,
+          "wrong_source_rate@5": 0.0
+        },
+        "first_relevant_rank_buckets": {
+          "ranks_11_20": 4,
+          "ranks_2_5": 2
+        }
+      },
+      "full_library": {
+        "case_count": 6,
+        "metrics": {
+          "mrr": 0.058059,
+          "recall@5": 0.083333,
+          "recall@10": 0.166667,
+          "ndcg@10": 0.075934,
+          "contract_recall@10": 0.166667,
+          "contract_recall@20": 0.305556,
+          "wrong_source_rate@5": 0.333333
+        },
+        "first_relevant_rank_buckets": {
+          "miss_top20": 3,
+          "ranks_11_20": 2,
+          "ranks_2_5": 1
+        }
+      }
+    }
+  },
+  "calibration_only_diagnosis": {
+    "scoped": {
+      "by_reading_journey": {
+        "cross_paper_evidence_comparison": {
+          "case_count": 4,
+          "recall@10": 0.208333,
+          "contract_recall@20": 0.25,
+          "miss_top20_count": 2
+        },
+        "experimental_configuration_or_metric": {
+          "case_count": 1,
+          "recall@10": 0.0,
+          "contract_recall@20": 0.5,
+          "miss_top20_count": 0
+        },
+        "single_paper_boundary_or_limitation": {
+          "case_count": 4,
+          "recall@10": 0.208333,
+          "contract_recall@20": 0.5,
+          "miss_top20_count": 2
+        },
+        "single_paper_mechanism": {
+          "case_count": 3,
+          "recall@10": 0.333333,
+          "contract_recall@20": 0.333333,
+          "miss_top20_count": 1
+        }
+      },
+      "product_query_vs_raw_recall@10_case_counts": {
+        "improved": 3,
+        "unchanged": 9,
+        "regressed": 0
+      }
+    },
+    "full_library": {
+      "by_reading_journey": {
+        "cross_paper_evidence_comparison": {
+          "case_count": 4,
+          "recall@10": 0.208333,
+          "contract_recall@20": 0.375,
+          "miss_top20_count": 1
+        },
+        "experimental_configuration_or_metric": {
+          "case_count": 1,
+          "recall@10": 0.0,
+          "contract_recall@20": 0.0,
+          "miss_top20_count": 1
+        },
+        "single_paper_boundary_or_limitation": {
+          "case_count": 4,
+          "recall@10": 0.125,
+          "contract_recall@20": 0.25,
+          "miss_top20_count": 3
+        },
+        "single_paper_mechanism": {
+          "case_count": 3,
+          "recall@10": 0.166667,
+          "contract_recall@20": 0.166667,
+          "miss_top20_count": 2
+        }
+      },
+      "product_query_vs_raw_recall@10_case_counts": {
+        "improved": 1,
+        "unchanged": 11,
+        "regressed": 0
+      }
+    }
+  },
+  "decision": {
+    "product_bm25_recall_is_sufficient": false,
+    "reason": "Most frozen reading journeys do not retrieve all required evidence in the first 10 or 20 results.",
+    "candidate_design_may_use": "calibration cases and aggregates only",
+    "holdout_case_details_may_be_used_for_candidate_design": false,
+    "next_step": "freeze and run one calibration-only Qwen dense diagnostic before designing fusion v3",
+    "product_behavior_changed": false
+  }
+}

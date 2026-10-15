@@ -24,6 +24,7 @@ import {
 const LOCAL_KB_RE = /Local KB|本地文献库|鏈湴鏂囩尞搴?/
 
 const SOURCE_PANEL_RE = /Sources & evidence|依据与来源/
+const SOURCE_CHECK_AVAILABLE_RE = /Source check available|来源核对可用/
 const NEEDS_REVIEW_RE = /Needs review|需要核对/
 const REVIEW_FRACTION_RE = /Review 1\/2|需核对 1\/2/
 const CHECKED_FRACTION_RE = /Checked 1\/1|已核对 1\/1/
@@ -1558,19 +1559,33 @@ test('research notes reject answers that contain external supplementation', asyn
         cite_details: [{ num: 1, source_path: 'paper.md', evidence_quote: 'Local evidence.' }],
       },
     }
+    const generationFailure = {
+      id: 6,
+      role: 'assistant',
+      content: 'Answer stream failed. Please retry.',
+      copy_markdown: 'Answer stream failed. Please retry.',
+    }
     return {
       externalEligible: researchNoteAnswerEvidenceEligible(external as never),
       localEligible: researchNoteAnswerEvidenceEligible(local as never),
+      generationFailureEligible: researchNoteAnswerEvidenceEligible(generationFailure as never),
       answerIds: buildResearchNoteAnswers([
         { id: 1, role: 'user', content: 'Question' },
         external,
         { id: 3, role: 'user', content: 'Local question' },
         local,
+        { id: 5, role: 'user', content: 'Failed question' },
+        generationFailure,
       ] as never).map((item) => item.messageId),
     }
   })
 
-  expect(result).toEqual({ externalEligible: false, localEligible: true, answerIds: [4] })
+  expect(result).toEqual({
+    externalEligible: false,
+    localEligible: true,
+    generationFailureEligible: false,
+    answerIds: [4],
+  })
 })
 
 test('message evidence policy blocks false local actions for external and failed answers', async ({ page }) => {
@@ -3467,7 +3482,8 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByTestId('message-list-test-scenario')).toContainText('agent-trace-reference-actions')
   const traceSummary = page.locator('.kb-agent-trace > summary').first()
   await expect(traceSummary).toContainText(SOURCE_PANEL_RE)
-  await expect(traceSummary).toContainText(NEEDS_REVIEW_RE)
+  await expect(traceSummary).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(traceSummary).not.toContainText(NEEDS_REVIEW_RE)
   await expect(traceSummary).not.toContainText(REVIEW_FRACTION_RE)
   await expect(traceSummary).not.toContainText('reference_followup')
   await expect(traceSummary).not.toContainText('done')
@@ -3475,15 +3491,14 @@ test('research agent trace references can open and enter the literature basket',
   await expect(page.getByText('Research Agent Trace')).toHaveCount(0)
   await expect(page.getByText('Tool Calls')).toHaveCount(0)
   await page.getByText(SOURCE_PANEL_RE).click()
-  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(NEEDS_REVIEW_RE)
+  await expect(page.getByTestId('agent-trace-evidence-status')).toHaveCount(0)
   await expect(page.getByTestId('agent-trace-quality-gate')).toHaveCount(0)
-  await expect(page.locator('.kb-agent-trace-summary')).not.toContainText(REVIEW_FRACTION_RE)
+  await expect(page.locator('.kb-agent-trace-summary')).toHaveCount(0)
   await expect(page.getByText(DIAGNOSTICS_RE)).toHaveCount(0)
   await expect(page.getByTestId('agent-evidence-matrix')).toContainText(EVIDENCE_MAP_RE)
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('Fast hyperspectral single-pixel imaging')
   await expect(page.getByTestId('agent-evidence-matrix-row').first()).toContainText('frequency-division multiplexed illumination')
-  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
-  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText(MISMATCH_RE)
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toHaveCount(0)
   const ref = page.getByTestId('agent-trace-reference').first()
   await expect(ref.getByTestId('agent-trace-ref-title')).toContainText('Fast hyperspectral single-pixel imaging')
 
@@ -3518,6 +3533,8 @@ test('research agent evaluation and execution diagnostics require the internal d
   await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(ANSWER_QUALITY_RE)
   await expect(page.getByTestId('agent-trace-quality-gate')).toContainText(REPAIRED_RE)
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText('fully solves every downstream limitation')
+  await expect(page.getByTestId('agent-trace-unsupported-claim')).toContainText(MISMATCH_RE)
   await expect(page.getByText(DIAGNOSTICS_RE)).toBeVisible()
   await expect(page.getByText('Resolved 1 upstream reference from 1 citing source paper.')).toBeHidden()
   await page.getByText(DIAGNOSTICS_RE).click()
@@ -3585,9 +3602,10 @@ test('research agent trace can be loaded from stored audit endpoint on demand', 
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
   await page.getByText(SOURCE_PANEL_RE).click()
   await expect(page.getByText('Stored audit trace was loaded on demand.')).toBeHidden()
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(GROUNDED_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(GROUNDED_RE)
   await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(CHECKED_FRACTION_RE)
-  await expect(page.getByTestId('agent-trace-evidence-status')).toContainText(GROUNDED_RE)
+  await expect(page.getByTestId('agent-trace-evidence-status')).toHaveCount(0)
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: '1/1' })).toHaveCount(0)
   await expect(page.locator('.kb-agent-trace-summary strong', { hasText: 'library' })).toHaveCount(0)
   await expect(page.getByText('3/9')).toHaveCount(0)
@@ -3702,7 +3720,8 @@ test('external source notice is compacted outside the answer body', async ({ pag
   await expect(page.getByTestId('assistant-source-notice')).toContainText(NOT_FROM_KB_RE)
   await expect(page.getByText('no matching local knowledge-base evidence was found')).toHaveCount(0)
   await expect(page.locator('.kb-markdown-chat')).not.toContainText('knowledge-base-grounded answer')
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NOT_FROM_KB_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(NOT_FROM_KB_RE)
 })
 
 test('hybrid source notice is compacted outside the answer body', async ({ page }) => {
@@ -3714,7 +3733,8 @@ test('hybrid source notice is compacted outside the answer body', async ({ page 
   await expect(page.getByTestId('assistant-source-notice')).toContainText(LOCAL_EXTERNAL_RE)
   await expect(page.getByText('local citations [n] come from the knowledge base')).toHaveCount(0)
   await expect(page.locator('.kb-markdown-chat')).not.toContainText('uncited background may use external model context')
-  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(NEEDS_REVIEW_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).toContainText(SOURCE_CHECK_AVAILABLE_RE)
+  await expect(page.locator('.kb-agent-trace > summary').first()).not.toContainText(NEEDS_REVIEW_RE)
 })
 
 test('streaming research agent partial hides appended trace json', async ({ page }) => {

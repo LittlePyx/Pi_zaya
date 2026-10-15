@@ -39,9 +39,12 @@ export type OnboardingStep = 'connect_model' | 'prepare_document' | 'ask_questio
 
 export interface AppOnboardingStatus {
   text_model_ready: boolean
+  text_model_configured?: boolean
+  text_model_connection_status?: 'missing' | 'configured' | 'ok' | 'failed'
   imported_document_count: number
   ready_document_count: number
   grounded_answer_count: number
+  located_evidence_count?: number
   current_step: OnboardingStep
   completed: boolean
 }

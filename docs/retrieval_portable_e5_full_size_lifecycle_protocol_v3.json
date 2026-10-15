@@ -1,0 +1,167 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_portable_e5_full_size_lifecycle_v3",
+  "status": "frozen_before_single_release_component_lifecycle_execution",
+  "frozen_at": "2026-09-03",
+  "purpose": "Exercise the deterministic release-format E5 component once through the proven short-path lifecycle, embedded beta.13 Python, copied evaluation corpus/index, one stale-index repair, and safe removal without network, publication, or product enablement.",
+  "authorization": {
+    "lifecycle_contract_path": "docs/retrieval_local_semantic_component_lifecycle_contract_v2.json",
+    "lifecycle_contract_sha256": "b10047eb5921dcbcabf8e88c026cfa60d1ed25dfddf905d8337874083c0dacfc",
+    "full_size_v2_protocol_path": "docs/retrieval_portable_e5_full_size_lifecycle_protocol_v2.json",
+    "full_size_v2_protocol_sha256": "c66c4456ea669f57e684d24016bf2f616aa3b8bc63aa18b1f24423314b95a8df",
+    "full_size_v2_report_path": "docs/retrieval_portable_e5_full_size_lifecycle_v2.json",
+    "full_size_v2_report_sha256": "1fed1e34dde206b1f51d4d5f6aaae6538fd5ca25f68652f08a22e701459c069b",
+    "full_size_v2_result_fingerprint": "7440961c0be3e681e4c1ac1bb6a9de8dc7a4d78d5c9e7719438893924907709d",
+    "full_size_v2_decision": "full_size_short_path_lifecycle_passed_authorize_management_api_e2e",
+    "release_builder_path": "tools/release/build_local_semantic_component.py",
+    "release_builder_sha256": "7ae8815cc22b671bfeadad0f38c4ea2449534fb2f6f4e9933db78744653c2e4e",
+    "release_validator_path": "tools/release/validate_local_semantic_component_release.py",
+    "release_validator_sha256": "e1d540591b6a8ac29bf65f063d1553de0d4051a387af83e2a225d5213b99a711"
+  },
+  "base_portable": {
+    "version": "0.1.0-beta.13",
+    "commit": "9c78a7635896",
+    "archive_path": ".runtime/release-verify-beta13-20260825-1436/Pi_zaya-v0.1.0-beta.13-windows-x64.zip",
+    "archive_root": "Pi_zaya-v0.1.0-beta.13-windows-x64",
+    "archive_bytes": 94876265,
+    "archive_sha256": "ef9247b8af3856deee6b9c8ea5b2605cd0af58f77c41aa7acb571f98a75f9968",
+    "python_version": "3.10.11"
+  },
+  "component": {
+    "component_id": "pizaya_local_semantic_e5_small_windows_x64_v1",
+    "candidate_id": "multilingual_e5_small_official_onnx_v1",
+    "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "release_id": "v0.1.0-beta.13-component.1",
+    "immutable_manifest_url": "https://github.com/LittlePyx/Pi_zaya/releases/download/v0.1.0-beta.13-component.1/Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip",
+    "manifest_url_is_validation_only_and_not_fetched": true,
+    "archive_path": "test_results/e5p7/release/Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip",
+    "archive_name": "Pi_zaya-local-semantic-e5-small-v1-windows-x64.zip",
+    "archive_root": "c",
+    "archive_bytes": 299558739,
+    "archive_sha256": "ad8bfb006b91bd9714ad4758c2da00f18557451a293279c11e3b3b24c8123ea8",
+    "payload_bytes": 538888249,
+    "payload_file_count": 360,
+    "payload_sha256": "1561576403759fbe072c9fe4a5d14fe9bf3e03e3b0da62d0841a6328aa6c317c",
+    "contains_user_library_data": false
+  },
+  "release_handoff": {
+    "manifest_path": "test_results/e5p7/release/Pi_zaya-local-semantic-e5-small-v1-windows-x64.manifest.json",
+    "manifest_sha256": "bcfb6ffa14d32a3da54522652364da2f0e9a84ddac926bc49653a2db6a50b367",
+    "deterministic_zip_metadata": true,
+    "cached_bytecode_entries_removed": 320,
+    "previous_payload_file_count": 680,
+    "release_payload_file_count": 360,
+    "maximum_component_relative_path_characters": 146,
+    "expected_full_size_layout_max_path_characters": 214,
+    "external_network_used": false,
+    "release_published": false,
+    "product_enabled": false
+  },
+  "execution": {
+    "runner_path": "tools/retrieval_eval/run_portable_e5_full_size_lifecycle.py",
+    "runner_sha256": "492ed145b4ef9af5dcb43fd690356cf391000a7b57b65945ce304d3c2a71fae8",
+    "worker_path": "tools/retrieval_eval/portable_e5_lifecycle_worker.py",
+    "worker_sha256": "e8c0b62cfac451fd2e83229677f88300246d26a65dd973d0b779d86668390a43",
+    "implementation_files": {
+      "kb/local_semantic_component.py": "0282021c099fe6d50d0de421e802e8332b17e50a1f71794711d3f57f5ee35e4c",
+      "kb/local_semantic_component_download.py": "60a3be837f468556dec441a3cb9872ee3497adfe45a21cedf32779bff7174101",
+      "kb/local_semantic_component_lifecycle.py": "9555f3c1c5cde3f5e43475b2cbdcb4ecc1b2e12c13d14e3e6218522a3e02ba6b",
+      "kb/local_semantic_component_lifecycle_store.py": "e7185b400efa79efbc285c2f6025b7a780915d478f9b53acf1e8f2342fdef310",
+      "kb/local_semantic_component_lifecycle_contract.py": "5987c1fa69050619e6d5404cc36d50c8b8b96e6350c47d041682315302984a46",
+      "kb/portable_local_semantic_runtime.py": "99bf5debfe626351d2d70b4ead5a3b0396cbc7f27e82834b894d7608f3381a83"
+    },
+    "fixture_path": "docs/retrieval_scoped_fresh_cases_v1.json",
+    "fixture_sha256": "3472826090e032739903db91dd8c359adbc68bff6fcbe40ec9f136bb945b1d27",
+    "source_db_path": "test_results/retrieval_product_e5_user_journey_v1/db",
+    "source_db_file_count": 33,
+    "source_db_bytes": 3577032,
+    "source_db_tree_sha256": "b5087ac5984900448320fd6aea87d45b674f2bad92810ebc0f787515fcd1249d",
+    "source_index_path": "test_results/retrieval_product_e5_user_journey_v1/index",
+    "source_index_file_count": 5,
+    "source_index_bytes": 4870347,
+    "source_index_tree_sha256": "bd71f8bfc4d5df827220e4270b2088a28808d88eb8946e6f6bcf42a7aa31f0b6",
+    "result_root": "test_results/e5p8",
+    "report_path": "docs/retrieval_portable_e5_full_size_lifecycle_v3.json",
+    "component_store_relative_path": "c",
+    "hard_subprocess_timeout_seconds": 180,
+    "allow_external_network": false,
+    "allow_model_download": false,
+    "allow_user_library_write": false,
+    "allow_product_enablement": false,
+    "case_ids": [
+      "fresh-fdm-integration-time-boundary",
+      "fresh-scinerf-overlap-rate"
+    ],
+    "expected_queries": [
+      {
+        "case_id": "fresh-fdm-integration-time-boundary",
+        "first_relevant_rank": 9,
+        "ranked_chunk_ids": [
+          "6b1a3c7c4aa0aaa9:1",
+          "6b1a3c7c4aa0aaa9:19",
+          "6b1a3c7c4aa0aaa9:9",
+          "6b1a3c7c4aa0aaa9:25",
+          "6b1a3c7c4aa0aaa9:4",
+          "6b1a3c7c4aa0aaa9:26",
+          "6b1a3c7c4aa0aaa9:13",
+          "6b1a3c7c4aa0aaa9:6",
+          "6b1a3c7c4aa0aaa9:20",
+          "6b1a3c7c4aa0aaa9:22"
+        ]
+      },
+      {
+        "case_id": "fresh-scinerf-overlap-rate",
+        "first_relevant_rank": 10,
+        "ranked_chunk_ids": [
+          "7f6b9404bccea454:35",
+          "7f6b9404bccea454:0",
+          "7f6b9404bccea454:9",
+          "7f6b9404bccea454:1",
+          "7f6b9404bccea454:16",
+          "7f6b9404bccea454:3",
+          "7f6b9404bccea454:4",
+          "7f6b9404bccea454:37",
+          "7f6b9404bccea454:33",
+          "7f6b9404bccea454:31"
+        ]
+      }
+    ]
+  },
+  "gates": {
+    "maximum_base_extraction_ms": 120000.0,
+    "maximum_install_ready_ms": 120000.0,
+    "maximum_cold_load_ms": 30000.0,
+    "maximum_warm_query_p95_ms": 1000.0,
+    "maximum_stale_repair_ms": 60000.0,
+    "maximum_removal_ms": 30000.0,
+    "maximum_peak_process_rss_mib": 2048.0,
+    "maximum_component_path_chars": 259,
+    "expected_component_layout_max_path_chars": 214,
+    "require_embedded_python_3_10_11": true,
+    "require_exact_v3_rankings": true,
+    "require_hybrid_without_fallback": true,
+    "require_zero_source_escapes": true,
+    "require_one_incremental_stale_repair": true,
+    "require_zero_network": true,
+    "require_bm25_continuity": true,
+    "require_component_and_index_disabled_before_delete": true,
+    "require_cleanup_after_worker_exit": true,
+    "require_product_and_ui_disabled": true,
+    "all_required": true
+  },
+  "decision": {
+    "pass_status": "release_component_lifecycle_passed_authorize_opt_in_ui_e2e",
+    "failure_status": "release_component_lifecycle_rejected_keep_bm25_repair_release_handoff",
+    "product_enablement_allowed": false,
+    "ordinary_user_surface_allowed": false
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "selected_paper_scope_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "external_web_or_model_knowledge_used": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

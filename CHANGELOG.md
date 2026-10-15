@@ -2,6 +2,22 @@
 
 All notable user-facing changes are recorded here. Pi_zaya follows Semantic Versioning for release identifiers.
 
+## [0.1.0-beta.14] - Unreleased
+
+### Fixed
+
+- Pass explicit selected-source paths into local semantic retrieval; rank within the selected paper/basket before taking top K, including BM25 zero-hit cases. Full-library/default retrieval remains BM25.
+- Apply basket excerpt constraints again after fusion and preserve original evidence identities and locators.
+- Reject aligned explicit action-polarity conflicts during answer evidence repair; preserve existing numeric/unit/source checks. This deterministic guard is not an entailment model.
+- First-use readiness now requires a configuration-bound successful text-model connection check and committed usable chunk files. Completion also requires a successful source locate tied to answer evidence.
+- Persist connection-check outcomes without credentials or model reply text, retaining verification across restart while invalidating it when provider settings change.
+- Skip malformed CORE ranking responses with no closing table rows before invoking the HTML parser.
+
+### Documentation
+
+- Separate published beta.13, local beta.14 candidate, optional selected-scope semantic retrieval, and internal-only evidence workspaces.
+- Keep historical experiment reports immutable; current retrieval runs record the revised implementation separately.
+
 ## [0.1.0-beta.13] - 2026-08-25
 
 ### Added

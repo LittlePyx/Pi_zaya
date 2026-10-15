@@ -70,6 +70,7 @@ import {
   researchNoteEvidenceMaintenanceDue,
   researchNoteEvidenceMaintenanceTracked,
   researchNoteEvidenceNextRetryAt,
+  researchNoteEvidenceResolutionMode,
   researchNoteEvidenceReviewIssues,
   researchNoteEvidenceReviewSummary,
   researchNoteEvidenceSystemRetryRequired,
@@ -236,17 +237,14 @@ function evidenceHealthStatus(
   if (entry.link.evidence_verification?.status === 'invalid') return 'invalid'
   const check = entry.link.evidence_baseline_check
   const checkReason = String(check?.reason || '')
-  if (checkReason === 'source_lost') return 'lost'
-  if (
-    checkReason === 'source_unreadable'
-    || checkReason === 'source_unstable'
-    || (check?.terminal && RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS.has(checkReason))
-  ) return 'unreadable'
-  if (RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(checkReason)) {
+  const resolutionMode = researchNoteEvidenceResolutionMode(entry.link)
+  if (check && resolutionMode === 'source_boundary') return checkReason === 'source_lost' ? 'lost' : 'unreadable'
+  if (check && resolutionMode === 'user_decision' && RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(checkReason)) {
     return checkReason === 'candidate' ? 'candidate' : 'changed'
   }
   if (
-    check?.status === 'failed'
+    (check && resolutionMode === 'system_auto')
+    || check?.status === 'failed'
     || RESEARCH_NOTE_EVIDENCE_SYSTEM_RETRY_REASONS.has(checkReason)
   ) return 'recovering'
   if (review?.data?.source_changed) return 'changed'

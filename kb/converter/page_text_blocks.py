@@ -23,6 +23,7 @@ from .heuristics import (
 from .layout_analysis import _detect_column_split_x, _is_frontmatter_noise_line, sort_blocks_reading_order
 from .models import TextBlock
 from .page_figure_metadata import expand_visual_crop_for_intersecting_caption
+from .page_line_classification import looks_like_mixed_math_prose_line
 from .text_utils import _normalize_text
 
 
@@ -183,6 +184,8 @@ def extract_text_blocks(
                     return False
                 if re.search(r"\b(?:19|20)\d{2}\b", tt) and len(re.findall(r"\b[A-Za-z]{2,}\b", tt)) >= 4:
                     return False
+            if looks_like_mixed_math_prose_line(tt):
+                return False
             # Captions should never be merged into equations.
             try:
                 if _is_caption_like_text(tt):

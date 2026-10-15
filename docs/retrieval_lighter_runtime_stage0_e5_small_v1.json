@@ -1,0 +1,262 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_lighter_runtime_stage0_v1",
+  "created_at": "2026-09-03T00:23:14.224938+00:00",
+  "protocol_sha256": "dffc76974fcdd1d288e5bc5e16f5590e4d09e140f26a7591b269f396a5817dea",
+  "requirements_sha256": "bb01652dbbd4e734cf639ac2b57b834f1b9a7fb86fc87924e0166b8114eb0fb9",
+  "candidate": {
+    "candidate_id": "multilingual_e5_small_official_onnx_v1",
+    "evaluation_order": 2,
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "artifact_path": "onnx/model.onnx",
+    "artifact_bytes": 470268510,
+    "artifact_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "artifact_reused": false,
+    "downloaded_bytes_this_run": 470268510,
+    "download_attempts_this_run": 1
+  },
+  "environment": {
+    "python_version": "3.10.11",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "virtual_environment": true,
+    "user_site_enabled": false,
+    "locked_distribution_count": 24,
+    "installed_distribution_count_excluding_bootstrap": 24,
+    "distributions": [
+      {
+        "name": "certifi",
+        "version": "2026.7.22",
+        "installed_bytes": 252874
+      },
+      {
+        "name": "charset-normalizer",
+        "version": "3.5.1",
+        "installed_bytes": 795434
+      },
+      {
+        "name": "colorama",
+        "version": "0.4.6",
+        "installed_bytes": 131201
+      },
+      {
+        "name": "coloredlogs",
+        "version": "15.0.1",
+        "installed_bytes": 366103
+      },
+      {
+        "name": "filelock",
+        "version": "3.32.5",
+        "installed_bytes": 623786
+      },
+      {
+        "name": "flatbuffers",
+        "version": "25.12.19",
+        "installed_bytes": 171346
+      },
+      {
+        "name": "fsspec",
+        "version": "2026.7.0",
+        "installed_bytes": 1388258
+      },
+      {
+        "name": "huggingface-hub",
+        "version": "0.36.2",
+        "installed_bytes": 4389245
+      },
+      {
+        "name": "humanfriendly",
+        "version": "10.0",
+        "installed_bytes": 652852
+      },
+      {
+        "name": "idna",
+        "version": "3.19",
+        "installed_bytes": 604790
+      },
+      {
+        "name": "mpmath",
+        "version": "1.3.0",
+        "installed_bytes": 3627472
+      },
+      {
+        "name": "numpy",
+        "version": "2.2.6",
+        "installed_bytes": 51328459
+      },
+      {
+        "name": "onnx",
+        "version": "1.18.0",
+        "installed_bytes": 33336571
+      },
+      {
+        "name": "onnxruntime",
+        "version": "1.23.2",
+        "installed_bytes": 41658907
+      },
+      {
+        "name": "packaging",
+        "version": "26.3",
+        "installed_bytes": 860429
+      },
+      {
+        "name": "protobuf",
+        "version": "7.36.1",
+        "installed_bytes": 2292072
+      },
+      {
+        "name": "pyreadline3",
+        "version": "3.5.6",
+        "installed_bytes": 548938
+      },
+      {
+        "name": "pyyaml",
+        "version": "6.0.3",
+        "installed_bytes": 624017
+      },
+      {
+        "name": "requests",
+        "version": "2.34.2",
+        "installed_bytes": 415436
+      },
+      {
+        "name": "sympy",
+        "version": "1.14.0",
+        "installed_bytes": 51290747
+      },
+      {
+        "name": "tokenizers",
+        "version": "0.21.4",
+        "installed_bytes": 7360751
+      },
+      {
+        "name": "tqdm",
+        "version": "4.70.0",
+        "installed_bytes": 492999
+      },
+      {
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "installed_bytes": 300327
+      },
+      {
+        "name": "urllib3",
+        "version": "2.7.0",
+        "installed_bytes": 766149
+      }
+    ],
+    "installed_distribution_bytes": 204279163
+  },
+  "onnx": {
+    "onnx_version": "1.18.0",
+    "onnxruntime_version": "1.23.2",
+    "available_providers": [
+      "AzureExecutionProvider",
+      "CPUExecutionProvider"
+    ],
+    "session_providers": [
+      "CPUExecutionProvider"
+    ],
+    "checker_ms": 3436.988,
+    "session_create_ms": 496.298,
+    "inputs": [
+      {
+        "name": "input_ids",
+        "type": "tensor(int64)",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ]
+      },
+      {
+        "name": "attention_mask",
+        "type": "tensor(int64)",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ]
+      },
+      {
+        "name": "token_type_ids",
+        "type": "tensor(int64)",
+        "shape": [
+          "batch_size",
+          "sequence_length"
+        ]
+      }
+    ],
+    "outputs": [
+      {
+        "name": "last_hidden_state",
+        "type": "tensor(float)",
+        "shape": [
+          "batch_size",
+          "sequence_length",
+          384
+        ]
+      }
+    ],
+    "session_run_calls": 0
+  },
+  "tokenizer": {
+    "repository_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "files": [
+      {
+        "repository_path": "onnx/config.json",
+        "local_name": "config.json",
+        "bytes": 653,
+        "sha256": "bbb7c1333fc4b3e27fbc9cd5d2070aabcc1d4dfb99917c3633e772f97545a6b6",
+        "downloaded_bytes_this_run": 653,
+        "reused": false
+      },
+      {
+        "repository_path": "onnx/sentencepiece.bpe.model",
+        "local_name": "sentencepiece.bpe.model",
+        "bytes": 5069051,
+        "sha256": "cfc8146abe2a0488e9e2a0c56de7952f7c11ab059eca145a0a727afce0db2865",
+        "downloaded_bytes_this_run": 5069051,
+        "reused": false
+      },
+      {
+        "repository_path": "onnx/special_tokens_map.json",
+        "local_name": "special_tokens_map.json",
+        "bytes": 167,
+        "sha256": "d05497f1da52c5e09554c0cd874037a083e1dc1b9cfd48034d1c717f1afc07a7",
+        "downloaded_bytes_this_run": 167,
+        "reused": false
+      },
+      {
+        "repository_path": "onnx/tokenizer.json",
+        "local_name": "tokenizer.json",
+        "bytes": 17082730,
+        "sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+        "downloaded_bytes_this_run": 17082730,
+        "reused": false
+      },
+      {
+        "repository_path": "onnx/tokenizer_config.json",
+        "local_name": "tokenizer_config.json",
+        "bytes": 443,
+        "sha256": "a1d6bc8734a6f635dc158508bef000f8e2e5a759c7d92f984b2c86e5ff53425b",
+        "downloaded_bytes_this_run": 443,
+        "reused": false
+      }
+    ],
+    "tokenizer_load_calls": 0
+  },
+  "execution": {
+    "paper_text_accessed": false,
+    "queries_encoded": 0,
+    "documents_embedded": 0,
+    "vectors_created": 0,
+    "model_inference_runs": 0,
+    "product_requirements_modified": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "decision": {
+    "status": "passed_stage_0",
+    "stage_1_allowed": true,
+    "product_enabled": false
+  }
+}

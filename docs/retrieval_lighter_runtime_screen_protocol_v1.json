@@ -1,0 +1,214 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_lighter_runtime_screen_v1",
+  "status": "frozen_before_artifact_download",
+  "frozen_at": "2026-09-03",
+  "purpose": "Select at most one deployable CPU ONNX embedding runtime without repeating an unbounded full-corpus experiment or exposing an unavailable user feature.",
+  "authorization": {
+    "parent_report_path": "docs/retrieval_cpu_padding_diagnostic_v1.json",
+    "parent_report_sha256": "af1a6fc67929af03ba3c1afaf3fe3a3c37330796343f8d1d251df8c57596973a",
+    "parent_result_fingerprint": "58ecfe98fc10f3e628320e870879d6b091f741a1e4c2069153be264467b78658",
+    "parent_decision": "skip_native_qwen_and_screen_lighter_runtime"
+  },
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "core_release_requirements_modified": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "host_contract": {
+    "platform": "windows_x64",
+    "cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "physical_cores": 8,
+    "logical_processors": 16,
+    "required_instruction_set": "AVX2",
+    "observed_instruction_set": "AVX2",
+    "observation_method": "torch_2.3.1_cpu_capability_read_only",
+    "release_python_version": "3.10.11"
+  },
+  "runtime_contract": {
+    "python_version": "3.10.11",
+    "onnxruntime_version": "1.23.2",
+    "execution_provider": "CPUExecutionProvider",
+    "intra_op_threads": 8,
+    "inter_op_threads": 1,
+    "graph_optimization_level": "ORT_ENABLE_ALL",
+    "torch_allowed": false,
+    "transformers_allowed": false,
+    "optimum_allowed": false,
+    "remote_code_allowed": false,
+    "isolated_user_site": true,
+    "product_requirements_modified": false
+  },
+  "candidate_budget": {
+    "maximum_candidates": 2,
+    "evaluation_order_is_binding": true,
+    "stop_after_first_stage_1_pass": true,
+    "maximum_stage_1_runs_per_candidate": 1,
+    "maximum_stage_2_full_builds_across_batch": 1,
+    "maximum_total_primary_artifact_bytes_if_both_needed": 1100396298,
+    "download_only_current_candidate": true
+  },
+  "candidates": [
+    {
+      "evaluation_order": 1,
+      "candidate_id": "qwen3_embedding_0_6b_official_quint8_avx2_onnx_v1",
+      "selection_role": "preserve_accepted_semantics_change_execution_engine",
+      "model_id": "Qwen/Qwen3-Embedding-0.6B",
+      "model_revision": "bd58e9fd4b0467770da53678d8da25481c0f959b",
+      "declared_license": "apache-2.0",
+      "parameter_count_label": "0.6B",
+      "primary_artifact": {
+        "path": "onnx/model_quint8_avx2.onnx",
+        "bytes": 600127788,
+        "sha256": "a7eda29cc374b01ae75eb1af1ab65c3c61a64c43f39f16e08c6e37c075dcbf4d",
+        "url": "https://huggingface.co/Qwen/Qwen3-Embedding-0.6B/resolve/bd58e9fd4b0467770da53678d8da25481c0f959b/onnx/model_quint8_avx2.onnx"
+      },
+      "tokenizer": {
+        "model_id": "Qwen/Qwen3-Embedding-0.6B",
+        "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+        "reuse_verified_local_snapshot": true,
+        "padding_side": "left",
+        "maximum_length": 8192
+      },
+      "encoding": {
+        "dimension": 1024,
+        "pooling": "last_non_padding_token",
+        "normalization": "l2",
+        "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+        "passage_prefix": ""
+      },
+      "stage_1_quality_route": {
+        "read_only_parent_index": "test_results/retrieval_cpu_full_index_feasibility_v1/index",
+        "parent_index_tree_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50",
+        "mixed_runtime_query_replay": true,
+        "bounded_document_vector_parity": true,
+        "minimum_mean_cosine_to_parent": 0.98,
+        "minimum_worst_cosine_to_parent": 0.95
+      }
+    },
+    {
+      "evaluation_order": 2,
+      "candidate_id": "multilingual_e5_small_official_onnx_v1",
+      "selection_role": "materially_smaller_multilingual_fallback",
+      "model_id": "intfloat/multilingual-e5-small",
+      "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+      "declared_license": "mit",
+      "parameter_count_label": "0.1B",
+      "primary_artifact": {
+        "path": "onnx/model.onnx",
+        "bytes": 470268510,
+        "sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+        "url": "https://huggingface.co/intfloat/multilingual-e5-small/resolve/03415a4be176a1620747c692ed433219fabc3def/onnx/model.onnx"
+      },
+      "tokenizer": {
+        "repository_subdirectory": "onnx",
+        "revision": "03415a4be176a1620747c692ed433219fabc3def",
+        "required_files": [
+          "config.json",
+          "sentencepiece.bpe.model",
+          "special_tokens_map.json",
+          "tokenizer.json",
+          "tokenizer_config.json"
+        ],
+        "padding_side": "right",
+        "maximum_length": 512
+      },
+      "encoding": {
+        "dimension": 384,
+        "pooling": "attention_masked_mean",
+        "normalization": "l2",
+        "query_prefix": "query: ",
+        "passage_prefix": "passage: "
+      },
+      "stage_1_quality_route": {
+        "parent_index_reuse_allowed": false,
+        "bounded_runtime_only": true,
+        "full_quality_requires_stage_2": true,
+        "silent_long_text_tail_loss_allowed": false,
+        "returned_evidence_chunk_must_remain_complete": true
+      }
+    }
+  ],
+  "stage_0_preflight": {
+    "artifact_sha256_and_size_required": true,
+    "onnx_parse_and_checker_required": true,
+    "graph_inputs_outputs_recorded": true,
+    "cpu_provider_only_required": true,
+    "dependency_tree_and_installed_bytes_recorded": true,
+    "fresh_python_3_10_11_environment_required": true,
+    "system_and_user_site_packages_forbidden": true,
+    "model_inference_allowed": false,
+    "paper_text_access_allowed": false
+  },
+  "stage_1_bounded_screen": {
+    "fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "query_count": 12,
+    "stress_document_count": 64,
+    "sample_selection": "qrel_parents_then_length_strata_then_sha256_tie_break",
+    "sample_manifest_frozen_before_model_inference": true,
+    "length_aware_batching": true,
+    "maximum_batch_size": 8,
+    "maximum_padded_tokens_per_batch": 4096,
+    "oversize_singletons": true,
+    "maximum_wall_clock_seconds_per_candidate": 600,
+    "maximum_provider_load_ms": 30000.0,
+    "maximum_warm_query_p95_ms": 1000.0,
+    "maximum_peak_process_rss_mib": 4096.0,
+    "maximum_projected_full_build_ms": 600000.0,
+    "minimum_projected_throughput_chunks_per_second": 2.75,
+    "required_quality_for_qwen_compatible_index": {
+      "minimum_recall_at_10_gain_each_mode": 0.15,
+      "preserve_product_recall_at_5_each_mode": true,
+      "preserve_product_wrong_source_at_5_each_mode": true,
+      "no_mrr_or_ndcg_at_10_regression_vs_accepted_parent": true
+    },
+    "all_applicable_gates_required": true,
+    "failure_action": "delete_current_candidate_artifact_and_continue_or_stop_according_to_order"
+  },
+  "stage_2_single_winner": {
+    "requires_stage_1_pass": true,
+    "isolated_full_corpus_document_count": 10,
+    "isolated_full_corpus_chunk_count": 1673,
+    "maximum_full_builds_across_batch": 1,
+    "maximum_full_build_ms": 600000.0,
+    "minimum_throughput_chunks_per_second": 2.75,
+    "maximum_peak_process_rss_mib": 6144.0,
+    "maximum_warm_query_p95_ms": 1000.0,
+    "maximum_index_bytes": 10000000,
+    "same_semantic_quality_gates_as_accepted_parent": true,
+    "atomic_publish_and_readback_required": true,
+    "source_corpus_unchanged_required": true,
+    "pass_decision": "runtime_candidate_eligible_for_optional_preparation_design",
+    "failure_decision": "no_deployable_dense_runtime_keep_bm25_product"
+  },
+  "excluded_routes": [
+    {
+      "route": "native_pytorch_qwen_cpu",
+      "reason": "Measured 82.54 minute build and 15.75 GiB peak RSS."
+    },
+    {
+      "route": "length_aware_native_qwen_cpu",
+      "reason": "Tokenizer diagnostic projects 27.45 minutes, above the frozen bound."
+    },
+    {
+      "route": "e5_base_parent_collapsed_multivector",
+      "reason": "Prior development replay failed the full-library raw Recall@10 and safe-fusion gain gates."
+    },
+    {
+      "route": "cross_encoder_productization",
+      "reason": "A deployable first-stage dense runtime remains the blocking dependency."
+    }
+  ],
+  "execution": {
+    "artifact_downloads": 0,
+    "model_inference_runs": 0,
+    "full_index_builds": 0,
+    "report_path": "docs/retrieval_lighter_runtime_screen_v1.json",
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

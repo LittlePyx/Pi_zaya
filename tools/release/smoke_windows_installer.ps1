@@ -82,7 +82,7 @@ function Invoke-SetupInstall {
         "/CURRENTUSER",
         ('/DIR="' + $installRoot + '"')
     )
-    $process = Start-Process -FilePath $installer -ArgumentList $arguments -PassThru -Wait
+    $process = Start-Process -FilePath $installer -ArgumentList $arguments -PassThru -Wait -WindowStyle Hidden
     if ($process.ExitCode -ne 0) {
         throw "Silent installer exited with code $($process.ExitCode)."
     }
@@ -130,7 +130,7 @@ try {
     }
 
     $uninstaller = Join-Path $installRoot "unins000.exe"
-    $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru -Wait
+    $uninstallProcess = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -PassThru -Wait -WindowStyle Hidden
     if ($uninstallProcess.ExitCode -ne 0) {
         throw "Silent uninstaller exited with code $($uninstallProcess.ExitCode)."
     }
@@ -154,7 +154,7 @@ finally {
     if ($installed) {
         $uninstaller = Join-Path $installRoot "unins000.exe"
         if (Test-Path -LiteralPath $uninstaller -PathType Leaf) {
-            Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -ErrorAction SilentlyContinue | Out-Null
+            Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART") -Wait -WindowStyle Hidden -ErrorAction SilentlyContinue | Out-Null
         }
     }
     if (-not $KeepData -and (Test-Path -LiteralPath $smokeRoot)) {

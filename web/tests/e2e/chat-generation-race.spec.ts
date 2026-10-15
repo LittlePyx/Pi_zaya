@@ -602,6 +602,7 @@ test('default chat send uses the research agent with library-only supplementatio
   const payload = backend.getGeneratePayloads()[0]
   expect(payload.agent_mode).toBe(true)
   expect(payload.external_supplement_mode).toBe('disabled')
+  expect(payload.retrieval_mode).toBe('bm25')
 
   const userMeta = await page.evaluate(async (content) => {
     const { useChatStore } = await import('/src/stores/chatStore.ts')
@@ -612,6 +613,7 @@ test('default chat send uses the research agent with library-only supplementatio
     agent_mode: 'research_agent',
     agent_mode_requested: true,
     external_supplement_mode: 'disabled',
+    retrieval_mode: 'bm25',
   })
 
   backend.releaseStream()

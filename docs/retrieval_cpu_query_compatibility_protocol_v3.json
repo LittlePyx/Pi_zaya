@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_cpu_query_compatibility_v3",
+  "status": "frozen_recovery_after_unobserved_v2_runner_failure_before_recovery_query",
+  "frozen_at": "2026-09-03",
+  "purpose": "Recover one usable CPU float32 query-compatibility outcome after v2 lost its unobserved in-memory report; the candidate, fusion, dataset, index, and gates remain unchanged.",
+  "predecessor": {
+    "protocol_path": "docs/retrieval_cpu_query_compatibility_protocol_v2.json",
+    "protocol_sha256": "e524378d1be22de93c3de4a77949c8dd80dc8e35c99786598a27367aed1eaf37",
+    "invalidation_path": "docs/retrieval_cpu_query_compatibility_execution_invalidation_v2.json",
+    "invalidation_sha256": "7b574e7f2233e926d261256e12e4dedae0eb773172adbf1a546f19d71ee5c3eb",
+    "attempted_measurement_runs": 1,
+    "usable_outcomes": 0,
+    "quality_metrics_observed_by_operator": false,
+    "candidate_or_gate_changes": 0
+  },
+  "accepted_parent": {
+    "report_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_acceptance_v2.json",
+    "report_sha256": "5862818541ddff4ac70169e6183404abb3d9f184ec75db5e08b908e5084fb432",
+    "result_fingerprint": "a3c81c2805cd887011219b68a33e6bbf3ed8688f5209b8483263e1a41ce2847a",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "device": "cuda",
+    "dtype": "float16"
+  },
+  "fixture": {
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "case_count": 12,
+    "modes": [
+      "scoped",
+      "full_library"
+    ]
+  },
+  "read_only_index": {
+    "relative_path": "test_results/retrieval_user_journey_fusion_v3_1_semantic/qwen_index_v1",
+    "tree_sha256": "fef412fcf632b98c8a5dbbe7223e9986996045b105b7f2a371d30b28c25da2da",
+    "tree_file_count": 5,
+    "tree_size_bytes": 7277202,
+    "build_id": "21e9718aa59f483988f3e88571a3c01c",
+    "corpus_fingerprint": "19dd55b81535593219b0fdb8744b6c74cdfe51d68c3567dfd822780be927ec7a",
+    "current_pointer_sha256": "440a80aa69338582b263463a69d8eb4a5161e80e0b3a1d03831c76b686a4a332",
+    "manifest_sha256": "9ad735efacdbbe9d4d6c8c33ad5605a7939e1558a622300a6e0c1eeab02544d2",
+    "vectors_sha256": "04bd9d7904695538004d6cd52f77c974fd16e3cada22e8a4fa0bd994541b32d8",
+    "document_embedding_runtime": "cuda_float16_parent",
+    "writes_allowed": false,
+    "build_allowed": false
+  },
+  "cpu_query_candidate": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "provider_identity": "a5bb526562ff581e073496f8fc14077e119373c5051a70a78aec7306770434e9",
+    "device": "cpu",
+    "dtype": "float32",
+    "pooling": "last_token",
+    "padding_side": "left",
+    "max_length": 8192,
+    "allow_download": false,
+    "trust_remote_code": false
+  },
+  "fusion": {
+    "strategy": "protected_dense_tail",
+    "protected_sparse_prefix": 5,
+    "sparse_tail_window": 5,
+    "dense_novelty_quota": 2,
+    "candidate_multiplier": 4,
+    "ranking_depth": 10
+  },
+  "predeclared_gate": {
+    "minimum_semantic_recall_at_10_gain_each_mode": 0.15,
+    "require_recall_at_5_equal_to_product": true,
+    "require_wrong_source_at_5_equal_to_product": true,
+    "require_no_regression_vs_parent_fusion_metrics": [
+      "recall@5",
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "require_wrong_source_at_5_no_worse_than_parent": true,
+    "maximum_provider_load_ms": 30000.0,
+    "maximum_warm_query_embedding_p95_ms": 1000.0,
+    "required_query_completion_rate": 1.0,
+    "require_index_tree_unchanged": true
+  },
+  "execution": {
+    "reference_cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "reference_memory_gib": 63.86,
+    "prior_attempted_measurement_runs": 1,
+    "prior_usable_outcomes": 0,
+    "maximum_recovery_runs": 1,
+    "raw_report_persist_before_validation": true,
+    "report_path": "docs/retrieval_cpu_query_compatibility_v1.json",
+    "unique_query_count": 12,
+    "no_document_embeddings_created": true,
+    "no_product_index_changes": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "pass_decision": "passed_for_cpu_full_index_feasibility",
+    "reject_decision": "rejected_cpu_qwen_query_runtime"
+  }
+}

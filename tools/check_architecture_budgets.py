@@ -22,7 +22,7 @@ LINE_BUDGETS = {
     "kb/retrieval_engine.py": 5_099,
     "kb/reference_index.py": 4_928,
     "web/src/stores/chatStore.ts": 3_149,
-    "web/src/components/chat/MessageList.tsx": 3_007,
+    "web/src/components/chat/MessageList.tsx": 2_732,
     "web/src/pages/ResearchNotesPage.tsx": 3_003,
     "web/src/styles/citeShelf.css": 2_713,
     "web/src/components/chat/MarkdownRenderer.tsx": 2_643,

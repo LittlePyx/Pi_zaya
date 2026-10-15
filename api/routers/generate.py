@@ -19,6 +19,7 @@ from kb.generation_state_runtime import (
     _strip_empty_citation_bracket_fragments,
     _strip_internal_generation_markers,
 )
+from kb.local_dense_runtime import normalize_retrieval_mode
 from kb.path_safety import resolve_verified_chat_image_upload_path
 from kb.task_runtime import (
     generation_start_failed_message,
@@ -47,12 +48,14 @@ def _generation_user_meta(
     query_scope: str,
     agent_mode: bool,
     external_supplement_mode: str = "disabled",
+    retrieval_mode: str = "bm25",
 ) -> dict[str, object]:
     meta: dict[str, object] = {}
     if prompt_context:
         meta["prompt_context"] = prompt_context
     if query_scope:
         meta["query_scope"] = query_scope
+    meta["retrieval_mode"] = normalize_retrieval_mode(retrieval_mode)
     if agent_mode:
         meta["agent_mode"] = "research_agent"
         meta["agent_mode_requested"] = True
@@ -246,6 +249,15 @@ def _sanitize_prompt_context(value) -> dict:
         "note": 520,
         "kind": 40,
         "key": 160,
+        "headingPath": 320,
+        "blockId": 160,
+        "anchorId": 200,
+        "anchorKind": 80,
+        "libraryMatchPath": 520,
+        "libraryMatchStatus": 80,
+        "libraryMatchTitle": 240,
+        "libraryMatchDoi": 180,
+        "libraryMatchYear": 24,
     }
     for raw in raw_items[:_PROMPT_CONTEXT_MAX_ITEMS]:
         if not isinstance(raw, dict):
@@ -326,6 +338,7 @@ class GenerateBody(BaseModel):
     deep_read: bool = False
     agent_mode: bool = False
     external_supplement_mode: str = Field("disabled", max_length=32)
+    retrieval_mode: str = Field("bm25", max_length=32)
     image_attachments: list[dict[str, Any]] = Field(default_factory=list, max_length=_GENERATE_MAX_IMAGE_ATTACHMENTS)
     preferred_sources: list[str] = Field(default_factory=list, max_length=_GENERATE_MAX_PREFERRED_SOURCES)
     source_lock_path: str = Field("", max_length=_GENERATE_SOURCE_PATH_MAX_CHARS)
@@ -414,11 +427,13 @@ def start_generation(body: GenerateBody):
     user_store_text = prompt if prompt else f"[Image attachment x{len(image_attachments)}]"
     agent_mode = bool(body.agent_mode)
     external_supplement_mode = normalize_external_supplement_mode(body.external_supplement_mode)
+    retrieval_mode = normalize_retrieval_mode(body.retrieval_mode)
     user_meta = _generation_user_meta(
         prompt_context,
         query_scope,
         agent_mode,
         external_supplement_mode,
+        retrieval_mode,
     )
     user_msg_id = chat_store.append_message(
         body.conv_id,
@@ -464,6 +479,7 @@ def start_generation(body: GenerateBody):
         "deep_read": body.deep_read,
         "agent_mode": agent_mode,
         "external_supplement_mode": external_supplement_mode,
+        "retrieval_mode": retrieval_mode,
         "settings_obj": settings,
         "user_msg_id": user_msg_id,
         "assistant_msg_id": assistant_msg_id,

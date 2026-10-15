@@ -10,11 +10,12 @@ from starlette.types import Receive, Scope, Send
 
 from kb.app_paths import configure_release_environment
 from kb.version import read_app_version
+from kb.citation_shelf_concurrency import CitationShelfConflict
 
 configure_release_environment()
 
 from api.routers import app as app_router
-from api.routers import auth, chat, evidence_matrices, generate, library, maintenance, references, research_briefs, research_gaps, settings, user_issues
+from api.routers import auth, chat, evidence_matrices, generate, library, maintenance, references, research_briefs, research_gaps, retrieval, settings, user_issues
 from api.security import auth_settings, auth_token_configured, is_public_api_path, request_is_authenticated
 from kb.config import load_settings
 from kb.research_note_maintenance import (
@@ -59,6 +60,11 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Pi-zaya API", version=read_app_version(), lifespan=lifespan)
+
+
+@app.exception_handler(CitationShelfConflict)
+async def shelf_conflict_response(_request: Request, _error: CitationShelfConflict):
+    return JSONResponse(status_code=409, content={"detail": "Shelf changed; refresh and retry pending changes."})
 
 _CORS_EXPOSE_HEADERS = [
     "Content-Disposition",
@@ -231,5 +237,6 @@ app.include_router(maintenance.router)
 app.include_router(references.router)
 app.include_router(research_briefs.router)
 app.include_router(research_gaps.router)
+app.include_router(retrieval.router)
 app.include_router(settings.router)
 app.include_router(user_issues.router)

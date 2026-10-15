@@ -1,0 +1,838 @@
+{
+  "schema_version": 2,
+  "id": "retrieval_scoped_fresh_cases_v1_chunk_qrels",
+  "curation_status": "frozen_after_source_only_authoring_before_candidate_evaluation",
+  "description": "Fresh single-paper evidence-location qrels authored from twelve previously unused local-library papers without running BM25, dense retrieval, or answer generation.",
+  "source_fixture": {
+    "path": "docs/retrieval_scoped_fresh_authoring_protocol_v1.json",
+    "sha256": "c9d29e8ec68c02733cdbe7b155b77d11818de8f09c71fbaa00ffaf659a5f3cf3",
+    "sha256_newlines": "normalized_lf",
+    "benchmark_id": "retrieval_scoped_fresh_authoring_v1"
+  },
+  "label_policy": {
+    "version": 1,
+    "unit": "indexed_chunk",
+    "candidate_boundary": "twelve previously unused registered local-library documents and their evidence-ready chunks",
+    "selection": "direct committed-source inspection in document order; one or two chunks per case; independent of all retriever rankings",
+    "grades": {
+      "3": "direct evidence that resolves one requested reading-evidence contract",
+      "2": "direct contextual evidence needed with another labelled chunk"
+    },
+    "required_audit_fields": [
+      "chunk_id",
+      "doc_id",
+      "grade",
+      "page_start",
+      "page_end",
+      "text_sha256",
+      "evidence_role"
+    ]
+  },
+  "ks": [
+    1,
+    3,
+    5,
+    10
+  ],
+  "corpus": {
+    "document_count": 12,
+    "chunk_count": 702,
+    "fingerprint_algorithm": "sha256(logical_doc_id,chunk_id,text_sha256,page_span)",
+    "fingerprint": "5d65f3a033d62e15c3b90b7c32314452cb49334652d1db0f0e74a55a2b125317",
+    "documents": [
+      {
+        "doc_id": "3d-sp-video",
+        "index_doc_id": "a34b2661f87a68d2",
+        "paper_sha256": "",
+        "chunk_count": 31
+      },
+      {
+        "doc_id": "dl-spi-review",
+        "index_doc_id": "5527e0d96aeb608a",
+        "paper_sha256": "",
+        "chunk_count": 82
+      },
+      {
+        "doc_id": "fdm-metamaterials",
+        "index_doc_id": "6b1a3c7c4aa0aaa9",
+        "paper_sha256": "",
+        "chunk_count": 32
+      },
+      {
+        "doc_id": "foveated-spi",
+        "index_doc_id": "aa60f6f8d0cbcaa6",
+        "paper_sha256": "",
+        "chunk_count": 55
+      },
+      {
+        "doc_id": "qclfm",
+        "index_doc_id": "831f8c559642fe39",
+        "paper_sha256": "",
+        "chunk_count": 45
+      },
+      {
+        "doc_id": "rt-spi-supp",
+        "index_doc_id": "3c702d1a300625d2",
+        "paper_sha256": "",
+        "chunk_count": 4
+      },
+      {
+        "doc_id": "scigs",
+        "index_doc_id": "32490abae33df8c9",
+        "paper_sha256": "",
+        "chunk_count": 104
+      },
+      {
+        "doc_id": "scinerf",
+        "index_doc_id": "7f6b9404bccea454",
+        "paper_sha256": "",
+        "chunk_count": 104
+      },
+      {
+        "doc_id": "seq-cs",
+        "index_doc_id": "6117def890d573f9",
+        "paper_sha256": "",
+        "chunk_count": 25
+      },
+      {
+        "doc_id": "spd-review",
+        "index_doc_id": "ba919188ff49c763",
+        "paper_sha256": "",
+        "chunk_count": 110
+      },
+      {
+        "doc_id": "sph-biological",
+        "index_doc_id": "11b5152564f8b679",
+        "paper_sha256": "",
+        "chunk_count": 73
+      },
+      {
+        "doc_id": "spi-prospects",
+        "index_doc_id": "7846a2dbb8e31f4a",
+        "paper_sha256": "",
+        "chunk_count": 37
+      }
+    ]
+  },
+  "split": {
+    "name": "sealed_fresh_scoped_holdout",
+    "case_count": 12,
+    "candidate_tuning_allowed": false
+  },
+  "retriever_executed_during_authoring_or_labeling": false,
+  "answer_generation_evaluated": false,
+  "product_boundary": {
+    "library_papers_only": true,
+    "evidence_retrieval_only": true,
+    "writing_or_submission_workflow_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "cases": [
+    {
+      "id": "fresh-3d-video-evolutionary-pattern-refresh",
+      "query": "三维单像素视频怎样在不直接降低空间分辨率的情况下提高帧率？请定位其照明图样筛选与逐帧更新策略，以及压缩加深后的误差代价。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_mechanism_and_limitation",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "mechanism",
+        "tradeoff"
+      ],
+      "query_scope": "locate the evolutionary Hadamard subset selection and its compression error tradeoff",
+      "primary_doc_id": "3d-sp-video",
+      "scope_doc_ids": [
+        "3d-sp-video"
+      ],
+      "contracts": [
+        {
+          "id": "3d-video-pattern-selection",
+          "doc_id": "3d-sp-video",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "a34b2661f87a68d2:19"
+          ]
+        },
+        {
+          "id": "3d-video-compression-error",
+          "doc_id": "3d-sp-video",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "a34b2661f87a68d2:20"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a34b2661f87a68d2:19",
+          "grade": 3,
+          "doc_id": "3d-sp-video",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "3d-video-pattern-selection"
+          ],
+          "text_sha256": "985e35da690e7a38b04baff13e744df03fea550fc391645900a5e635aab6cafd",
+          "evidence_role": "evolutionary_hadamard_subset_selection"
+        },
+        {
+          "chunk_id": "a34b2661f87a68d2:20",
+          "grade": 3,
+          "doc_id": "3d-sp-video",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "3d-video-compression-error"
+          ],
+          "text_sha256": "007c705c317413af5e4a20211080a8ce08db2f1d29e2454fd3ee567f407a0f24",
+          "evidence_role": "compression_height_error_tradeoff"
+        }
+      ],
+      "relevance": {
+        "a34b2661f87a68d2:19": 3,
+        "a34b2661f87a68d2:20": 3
+      }
+    },
+    {
+      "id": "fresh-dl-spi-review-quality-speed-tradeoff",
+      "query": "深度学习单像素成像目前有哪些源自模型本身的主要局限？在高保真与实时处理之间，综述指出了什么瓶颈和可能方向？",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_limitations",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "limitations",
+        "outlook"
+      ],
+      "query_scope": "locate intrinsic deep-learning limitations and the image-quality versus speed bottleneck",
+      "primary_doc_id": "dl-spi-review",
+      "scope_doc_ids": [
+        "dl-spi-review"
+      ],
+      "contracts": [
+        {
+          "id": "dl-spi-intrinsic-limitations",
+          "doc_id": "dl-spi-review",
+          "source_page": 16,
+          "relevant_chunk_ids": [
+            "5527e0d96aeb608a:73"
+          ]
+        },
+        {
+          "id": "dl-spi-speed-quality-bottleneck",
+          "doc_id": "dl-spi-review",
+          "source_page": 17,
+          "relevant_chunk_ids": [
+            "5527e0d96aeb608a:74"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "5527e0d96aeb608a:73",
+          "grade": 3,
+          "doc_id": "dl-spi-review",
+          "page_start": 16,
+          "page_end": 16,
+          "contract_ids": [
+            "dl-spi-intrinsic-limitations"
+          ],
+          "text_sha256": "c49c04d07afdbd2b5c408d0debae63029dedf53b8ad25f3bcfed8504725537a5",
+          "evidence_role": "dataset_interpretability_overfitting_generalization_limits"
+        },
+        {
+          "chunk_id": "5527e0d96aeb608a:74",
+          "grade": 3,
+          "doc_id": "dl-spi-review",
+          "page_start": 17,
+          "page_end": 17,
+          "contract_ids": [
+            "dl-spi-speed-quality-bottleneck"
+          ],
+          "text_sha256": "9d23d7a9fab52475b3f0c0cdfb49bd3053534e28421c11c123f047374c882d71",
+          "evidence_role": "fidelity_realtime_tradeoff_and_directions"
+        }
+      ],
+      "relevance": {
+        "5527e0d96aeb608a:73": 3,
+        "5527e0d96aeb608a:74": 3
+      }
+    },
+    {
+      "id": "fresh-fdm-integration-time-boundary",
+      "query": "Why can frequency-division multiplexing shorten total acquisition while avoiding the detector-bandwidth limit caused by reducing each exposure, and in which non-white-noise settings could keeping the optimal integration time help?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_mechanism_and_boundary",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "mechanism",
+        "boundary"
+      ],
+      "query_scope": "locate the FDM acquisition-speed mechanism, detector integration-time boundary, and non-AWG advantage",
+      "primary_doc_id": "fdm-metamaterials",
+      "scope_doc_ids": [
+        "fdm-metamaterials"
+      ],
+      "contracts": [
+        {
+          "id": "fdm-detector-bandwidth-boundary",
+          "doc_id": "fdm-metamaterials",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "6b1a3c7c4aa0aaa9:20"
+          ]
+        },
+        {
+          "id": "fdm-optimal-integration-time",
+          "doc_id": "fdm-metamaterials",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "6b1a3c7c4aa0aaa9:21"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6b1a3c7c4aa0aaa9:20",
+          "grade": 3,
+          "doc_id": "fdm-metamaterials",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "fdm-detector-bandwidth-boundary"
+          ],
+          "text_sha256": "1e806605e6f20899918725bffec2d472418bd6ce484a2a9298dd56295eeeaf09",
+          "evidence_role": "speed_snr_tradeoff_without_shorter_measurements"
+        },
+        {
+          "chunk_id": "6b1a3c7c4aa0aaa9:21",
+          "grade": 3,
+          "doc_id": "fdm-metamaterials",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "fdm-optimal-integration-time"
+          ],
+          "text_sha256": "120e0a75514cd086d334ec1c03a1d2f0b84d136d413dc2863ec9d3ae12128749",
+          "evidence_role": "non_awg_optimal_integration_time_advantage"
+        }
+      ],
+      "relevance": {
+        "6b1a3c7c4aa0aaa9:20": 3,
+        "6b1a3c7c4aa0aaa9:21": 3
+      }
+    },
+    {
+      "id": "fresh-foveated-blip-frame-tradeoff",
+      "query": "How do fixed-grid low-resolution blip-frames let the foveated camera track motion while its normal subframes change pixel boundaries, and what frame-rate cost or alternative supersampling penalty was reported?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_mechanism_and_tradeoff",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "motion_tracking",
+        "tradeoff"
+      ],
+      "query_scope": "locate the interlaced blip-frame motion mechanism and its measured or alternative cost",
+      "primary_doc_id": "foveated-spi",
+      "scope_doc_ids": [
+        "foveated-spi"
+      ],
+      "contracts": [
+        {
+          "id": "foveated-fixed-grid-blip-mechanism",
+          "doc_id": "foveated-spi",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "aa60f6f8d0cbcaa6:32"
+          ]
+        },
+        {
+          "id": "foveated-blip-frame-cost",
+          "doc_id": "foveated-spi",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "aa60f6f8d0cbcaa6:34"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "aa60f6f8d0cbcaa6:32",
+          "grade": 3,
+          "doc_id": "foveated-spi",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "foveated-fixed-grid-blip-mechanism"
+          ],
+          "text_sha256": "ccdd2a702368597affb80d8e4d27b02b567ee72f95619679c49258f9a2f5baff",
+          "evidence_role": "fixed_grid_blip_frame_motion_comparison"
+        },
+        {
+          "chunk_id": "aa60f6f8d0cbcaa6:34",
+          "grade": 3,
+          "doc_id": "foveated-spi",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "foveated-blip-frame-cost"
+          ],
+          "text_sha256": "8d852490bf7a34eab5d07f1feeca9fd66bf45f39f66b375792dcc036de8ebe94",
+          "evidence_role": "seven_percent_frame_rate_cost_and_alternative_penalty"
+        }
+      ],
+      "relevance": {
+        "aa60f6f8d0cbcaa6:32": 3,
+        "aa60f6f8d0cbcaa6:34": 3
+      }
+    },
+    {
+      "id": "fresh-qclfm-detection-speed-limit",
+      "query": "量子关联光场显微镜的采集为何需要数百秒？论文如何根据单光子探测效率和时间分辨率估算可能的提速幅度？",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_limitation_and_estimate",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "limitation",
+        "quantitative_estimate"
+      ],
+      "query_scope": "locate the QCLFM acquisition bottleneck and detector-efficiency and timing-based speed estimates",
+      "primary_doc_id": "qclfm",
+      "scope_doc_ids": [
+        "qclfm"
+      ],
+      "contracts": [
+        {
+          "id": "qclfm-speed-bottleneck-and-estimates",
+          "doc_id": "qclfm",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "831f8c559642fe39:16"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "831f8c559642fe39:16",
+          "grade": 3,
+          "doc_id": "qclfm",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "qclfm-speed-bottleneck-and-estimates"
+          ],
+          "text_sha256": "6e83965299bb2717799d42e1071d37ea58ca6b327ffed54362d22e0eb6d91737",
+          "evidence_role": "acquisition_limit_and_detector_improvement_estimates"
+        }
+      ],
+      "relevance": {
+        "831f8c559642fe39:16": 3
+      }
+    },
+    {
+      "id": "fresh-rt-spi-mask-material-selection",
+      "query": "Why did the differential-detection spinning-mask experiment choose the photolithographic silver mask instead of the chromium master mask?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_experimental_choice",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "experimental_setup",
+        "material_choice"
+      ],
+      "query_scope": "locate the fabrication comparison and optical reason for choosing the Ag mask",
+      "primary_doc_id": "rt-spi-supp",
+      "scope_doc_ids": [
+        "rt-spi-supp"
+      ],
+      "contracts": [
+        {
+          "id": "rt-spi-ag-mask-selection",
+          "doc_id": "rt-spi-supp",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "3c702d1a300625d2:2"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "3c702d1a300625d2:2",
+          "grade": 3,
+          "doc_id": "rt-spi-supp",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "rt-spi-ag-mask-selection"
+          ],
+          "text_sha256": "7b1f1410506c6b6a055ca3292717eb76faea1514acd41a86ee3d377287061ee6",
+          "evidence_role": "silver_reflectivity_and_complementary_pattern_contrast"
+        }
+      ],
+      "relevance": {
+        "3c702d1a300625d2:2": 3
+      }
+    },
+    {
+      "id": "fresh-scigs-high-frequency-filter",
+      "query": "SCIGS 中固定二维膨胀与跨相机位姿变换为何会产生高频伪影？作者依据采样条件怎样构造滤波操作来抑制它？",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_failure_mechanism_and_mitigation",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "artifact_mechanism",
+        "mitigation"
+      ],
+      "query_scope": "locate the SCIGS high-frequency artifact cause and Gaussian low-pass filtering construction",
+      "primary_doc_id": "scigs",
+      "scope_doc_ids": [
+        "scigs"
+      ],
+      "contracts": [
+        {
+          "id": "scigs-artifact-cause",
+          "doc_id": "scigs",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "32490abae33df8c9:22"
+          ]
+        },
+        {
+          "id": "scigs-filter-construction",
+          "doc_id": "scigs",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "32490abae33df8c9:23"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "32490abae33df8c9:22",
+          "grade": 3,
+          "doc_id": "scigs",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "scigs-artifact-cause"
+          ],
+          "text_sha256": "0e71dc7a0a1e28611df2ecfa00489706faea40256299b16faeb988a488427fd9",
+          "evidence_role": "fixed_dilation_sampling_artifact_cause"
+        },
+        {
+          "chunk_id": "32490abae33df8c9:23",
+          "grade": 3,
+          "doc_id": "scigs",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "scigs-filter-construction"
+          ],
+          "text_sha256": "21a8595280832e4eca400aefeca41ca5f96e844a1f5f2bb0c2c5241ae593ea24",
+          "evidence_role": "sampling_threshold_and_gaussian_low_pass_filter"
+        }
+      ],
+      "relevance": {
+        "32490abae33df8c9:22": 3,
+        "32490abae33df8c9:23": 3
+      }
+    },
+    {
+      "id": "fresh-scinerf-overlap-rate",
+      "query": "Why does SCINeRF improve when mask overlap rises from sparse sampling to about 0.25, yet deteriorate at higher overlap, especially near the fully overlapping case?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_parameter_tradeoff",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "parameter_study",
+        "tradeoff"
+      ],
+      "query_scope": "locate the low-overlap information-loss and high-overlap ambiguity explanation for the chosen rate",
+      "primary_doc_id": "scinerf",
+      "scope_doc_ids": [
+        "scinerf"
+      ],
+      "contracts": [
+        {
+          "id": "scinerf-overlap-tradeoff",
+          "doc_id": "scinerf",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "7f6b9404bccea454:31"
+          ]
+        },
+        {
+          "id": "scinerf-full-overlap-ambiguity",
+          "doc_id": "scinerf",
+          "source_page": 7,
+          "relevant_chunk_ids": [
+            "7f6b9404bccea454:32"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7f6b9404bccea454:31",
+          "grade": 3,
+          "doc_id": "scinerf",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "scinerf-overlap-tradeoff"
+          ],
+          "text_sha256": "5308467ba6c7ce4970688852d148866e1be0e9ad8e20a7375dfe5e29dfcfaa1b",
+          "evidence_role": "sparse_information_loss_and_dense_ambiguity"
+        },
+        {
+          "chunk_id": "7f6b9404bccea454:32",
+          "grade": 3,
+          "doc_id": "scinerf",
+          "page_start": 7,
+          "page_end": 7,
+          "contract_ids": [
+            "scinerf-full-overlap-ambiguity"
+          ],
+          "text_sha256": "f3de3ac294aa1e911ac56e099ed93f603e5108203bae6198e839d5ede18fba77",
+          "evidence_role": "full_overlap_blur_limit_and_rate_choice"
+        }
+      ],
+      "relevance": {
+        "7f6b9404bccea454:31": 3,
+        "7f6b9404bccea454:32": 3
+      }
+    },
+    {
+      "id": "fresh-seq-cs-refinement-rationale",
+      "query": "顺序压缩感知的 refinement 步骤怎样把后续测量资源集中到更可能属于信号支撑的位置？符号代理为何能大致保留真支撑并逐轮排除约一半非支撑位置？",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_algorithm_rationale",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "algorithm",
+        "mechanism"
+      ],
+      "query_scope": "locate the masked sensing-energy allocation and sign-proxy support-refinement rationale",
+      "primary_doc_id": "seq-cs",
+      "scope_doc_ids": [
+        "seq-cs"
+      ],
+      "contracts": [
+        {
+          "id": "seq-cs-energy-allocation",
+          "doc_id": "seq-cs",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "6117def890d573f9:13"
+          ]
+        },
+        {
+          "id": "seq-cs-sign-proxy-refinement",
+          "doc_id": "seq-cs",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "6117def890d573f9:16"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6117def890d573f9:13",
+          "grade": 3,
+          "doc_id": "seq-cs",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "seq-cs-energy-allocation"
+          ],
+          "text_sha256": "2bbc1bf9e950c5f5a0d6dac9de1cf6e8f921c721591a849df404e4c8c252706a",
+          "evidence_role": "masked_measurement_energy_allocation"
+        },
+        {
+          "chunk_id": "6117def890d573f9:16",
+          "grade": 3,
+          "doc_id": "seq-cs",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "seq-cs-sign-proxy-refinement"
+          ],
+          "text_sha256": "c91d7ec7e79b1dba5640f42b3986e8a59ce335c51367b5fa5fc5747969aa34a0",
+          "evidence_role": "support_preservation_and_off_support_halving"
+        }
+      ],
+      "relevance": {
+        "6117def890d573f9:13": 3,
+        "6117def890d573f9:16": 3
+      }
+    },
+    {
+      "id": "fresh-spd-qe-vs-de",
+      "query": "How does the review distinguish quantum efficiency from photon detection efficiency, and which detector response properties make detection efficiency the broader measure?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_concept_distinction",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "definition",
+        "comparison"
+      ],
+      "query_scope": "locate the distinction between photon-to-electron conversion efficiency and overall detection response",
+      "primary_doc_id": "spd-review",
+      "scope_doc_ids": [
+        "spd-review"
+      ],
+      "contracts": [
+        {
+          "id": "spd-qe-versus-de",
+          "doc_id": "spd-review",
+          "source_page": 11,
+          "relevant_chunk_ids": [
+            "ba919188ff49c763:46"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "ba919188ff49c763:46",
+          "grade": 3,
+          "doc_id": "spd-review",
+          "page_start": 11,
+          "page_end": 11,
+          "contract_ids": [
+            "spd-qe-versus-de"
+          ],
+          "text_sha256": "7bec22e268229b014e29c6c9ead0f0be62dc85a5aa99a0a6481571a0ab681029",
+          "evidence_role": "quantum_efficiency_component_of_detection_efficiency"
+        }
+      ],
+      "relevance": {
+        "ba919188ff49c763:46": 3
+      }
+    },
+    {
+      "id": "fresh-sph-unstained-phase-contrast",
+      "query": "为什么未染色脑组织在振幅图中难以区分结构，而单像素压缩全息的相位图能显示更多细节？请定位其分辨能力核验和组织成像证据。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_experimental_evidence",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "biological_imaging",
+        "phase_contrast"
+      ],
+      "query_scope": "locate the phase-resolution check and the amplitude-versus-phase evidence for unstained brain tissue",
+      "primary_doc_id": "sph-biological",
+      "scope_doc_ids": [
+        "sph-biological"
+      ],
+      "contracts": [
+        {
+          "id": "sph-phase-resolution-check",
+          "doc_id": "sph-biological",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "11b5152564f8b679:17"
+          ]
+        },
+        {
+          "id": "sph-unstained-tissue-phase-evidence",
+          "doc_id": "sph-biological",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "11b5152564f8b679:19"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "11b5152564f8b679:17",
+          "grade": 3,
+          "doc_id": "sph-biological",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "sph-phase-resolution-check"
+          ],
+          "text_sha256": "285e8530932d1cde02d4bfcdf6dfaf7de5dbd4a114601d0d58b926641260c427",
+          "evidence_role": "phase_resolution_and_unstained_contrast_rationale"
+        },
+        {
+          "chunk_id": "11b5152564f8b679:19",
+          "grade": 3,
+          "doc_id": "sph-biological",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "sph-unstained-tissue-phase-evidence"
+          ],
+          "text_sha256": "469dc4237c1601f450309419a7211125e95ff2826df521d38419fc5edbcabbe5",
+          "evidence_role": "brain_tissue_phase_detail_over_amplitude"
+        }
+      ],
+      "relevance": {
+        "11b5152564f8b679:17": 3,
+        "11b5152564f8b679:19": 3
+      }
+    },
+    {
+      "id": "fresh-spi-methane-wavelength-differencing",
+      "query": "Why is a single-pixel camera attractive for low-cost methane imaging in the short-wave infrared, and how does alternating the illumination wavelength reveal the gas in successive-frame differences?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_application_mechanism",
+      "coverage_tags": [
+        "fresh_scoped_holdout",
+        "application",
+        "spectral_differencing"
+      ],
+      "query_scope": "locate the SWIR detector-cost motivation and methane absorption wavelength-differencing mechanism",
+      "primary_doc_id": "spi-prospects",
+      "scope_doc_ids": [
+        "spi-prospects"
+      ],
+      "contracts": [
+        {
+          "id": "spi-methane-swir-motivation",
+          "doc_id": "spi-prospects",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "7846a2dbb8e31f4a:29"
+          ]
+        },
+        {
+          "id": "spi-methane-differencing-mechanism",
+          "doc_id": "spi-prospects",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "7846a2dbb8e31f4a:30"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7846a2dbb8e31f4a:29",
+          "grade": 3,
+          "doc_id": "spi-prospects",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "spi-methane-swir-motivation"
+          ],
+          "text_sha256": "3b88e82e115d78fe5a15148e3bf5f57c20c7a825cf316e2a34b75a7f6719eeb8",
+          "evidence_role": "swir_cost_and_methane_application_motivation"
+        },
+        {
+          "chunk_id": "7846a2dbb8e31f4a:30",
+          "grade": 3,
+          "doc_id": "spi-prospects",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "spi-methane-differencing-mechanism"
+          ],
+          "text_sha256": "cf84a01294b6321ef8a27e08c9c88fe7c360205b77d0485e429c686dee077923",
+          "evidence_role": "methane_absorption_and_successive_frame_difference"
+        }
+      ],
+      "relevance": {
+        "7846a2dbb8e31f4a:29": 3,
+        "7846a2dbb8e31f4a:30": 3
+      }
+    }
+  ]
+}

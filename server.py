@@ -107,8 +107,8 @@ def _run_startup_preflight(*, host: str, port: int, app_env: str) -> int:
 # Serve frontend static files in production
 _DIST = Path(__file__).parent / "web" / "dist"
 if _DIST.is_dir():
-    from fastapi.staticfiles import StaticFiles
-    app.mount("/", StaticFiles(directory=str(_DIST), html=True), name="static")
+    from api.frontend_static import FrontendStaticFiles
+    app.mount("/", FrontendStaticFiles(directory=str(_DIST), html=True), name="static")
 
 if __name__ == "__main__":
     host = os.environ.get("KB_SERVER_HOST", "127.0.0.1").strip() or "127.0.0.1"

@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "contract_id": "retrieval_product_opt_in_v1",
+  "status": "frozen_before_product_implementation",
+  "frozen_at": "2026-09-03",
+  "product_boundary": {
+    "purpose": "retrieve_traceable_evidence_from_papers_already_in_the_user_library",
+    "external_web_content_allowed": false,
+    "uncited_model_knowledge_allowed": false,
+    "writing_or_submission_workflow_allowed": false,
+    "embedding_model_contributes_content": false
+  },
+  "accepted_evidence": {
+    "semantic_report_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_acceptance_v2.json",
+    "semantic_report_sha256": "5862818541ddff4ac70169e6183404abb3d9f184ec75db5e08b908e5084fb432",
+    "semantic_result_fingerprint": "a3c81c2805cd887011219b68a33e6bbf3ed8688f5209b8483263e1a41ce2847a",
+    "operational_report_path": "docs/retrieval_product_shadow_vectorized_operational_v1.json",
+    "operational_report_sha256": "2fc943fa0ec430a81f52fc78bd2610d4e92a23e3eaafe9b577f6e21d13326f9f",
+    "operational_result_fingerprint": "b63ec97dc7b5562c1c85e4c532a442725d4b55842caa9a172343dd94992600d0"
+  },
+  "request_contract": {
+    "field": "retrieval_mode",
+    "accepted_values": [
+      "bm25",
+      "hybrid_local"
+    ],
+    "default": "bm25",
+    "unknown_value_policy": "normalize_to_bm25",
+    "scope": "per_generation_request",
+    "external_supplement_mode_independent": true
+  },
+  "hybrid_candidate": {
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "fusion": "protected_dense_tail_5_3_2",
+    "output_depth": 10,
+    "candidate_depth": 40,
+    "product_index_location": "db_dir/dense_index",
+    "test_artifact_dependency_allowed": false
+  },
+  "readiness_contract": {
+    "public_states": [
+      "ready",
+      "unavailable"
+    ],
+    "required_for_ready": [
+      "optional_runtime_dependencies_importable",
+      "pinned_model_revision_cached_locally",
+      "committed_dense_index_present",
+      "index_matches_current_corpus_and_provider",
+      "vectorized_exact_shortlist_available"
+    ],
+    "readiness_check_downloads_model": false,
+    "readiness_check_builds_index": false,
+    "public_payload_exposes_paths": false,
+    "public_payload_exposes_exception_text": false
+  },
+  "runtime_contract": {
+    "generation_request_downloads_model": false,
+    "generation_request_builds_or_refreshes_index": false,
+    "hybrid_failure_policy": "return_original_bm25_ranking",
+    "fallback_blocks_answer": false,
+    "fallback_requires_user_repair": false,
+    "source_scope_must_be_preserved": true,
+    "sparse_prefix_must_be_preserved": true,
+    "top_k_above_output_depth_policy": "append_original_bm25_remainder_without_duplicates"
+  },
+  "user_experience_contract": {
+    "labels_zh": {
+      "bm25": "BM25（默认）",
+      "hybrid_local": "BM25 + 语义检索（本地）"
+    },
+    "show_hybrid_choice_only_when_ready": true,
+    "show_unavailable_hybrid_dead_option": false,
+    "hybrid_disclosure": "仅对本地文献片段做语义匹配，不使用外部网页，也不把模型背景当作证据；首次使用可能需要加载本地模型。",
+    "fallback_disclosure": "本轮已自动使用 BM25 完成，无需用户修复。",
+    "persist_choice_per_conversation": true,
+    "reset_hidden_or_unavailable_choice_to_bm25": true
+  },
+  "rollout_boundary": {
+    "broad_availability_requires_system_managed_preparation": true,
+    "implicit_dependency_install_allowed": false,
+    "implicit_model_download_allowed": false,
+    "implicit_index_build_allowed": false,
+    "ordinary_user_control_may_ship_before_preparation_workflow": false
+  }
+}

@@ -173,6 +173,160 @@ def test_provider_failure_grounded_fallback_keeps_refocus_mechanism_terms() -> N
     assert "wave propagation" in out
 
 
+def test_provider_failure_fallback_answers_complete_task_enumeration() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "单个模型处理哪三类任务？",
+        [
+            {
+                "text": (
+                    "We consider three specific tasks: blind Gaussian denoising, "
+                    "single image super-resolution (SISR), and JPEG image deblocking."
+                )
+            }
+        ],
+    )
+    assert "高斯" in out and "超分辨率" in out and "JPEG" in out
+    assert "[1]" in out
+
+
+def test_provider_failure_fallback_requires_complete_architecture_relation() -> None:
+    prompt = "网络保留池化层吗？卷积核大小和深度 d 时的感受野是什么？"
+    complete = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "We set the filter size to 3 × 3 and remove all pooling layers. "
+                    "The receptive field with depth of d should be (2d+1)×(2d+1)."
+                )
+            }
+        ],
+    )
+    assert "池化" in complete and "(2d+1)" in complete and "[1]" in complete
+
+    incomplete = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "We set the filter size to 3 × 3 and remove all pooling layers. "
+                    "The receptive field grows with depth."
+                )
+            }
+        ],
+    )
+    assert "(2d+1)" not in incomplete
+
+
+def test_provider_failure_fallback_requires_same_conditional_expectation() -> None:
+    prompt = "没有干净标签时，为什么能用带噪目标？对条件期望有什么要求？"
+    supported = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "Input-conditioned target distributions may be replaced with arbitrary distributions "
+                    "that have the same conditional expected values. This implies that targets can be "
+                    "corrupted with zero-mean noise without changing what the network learns."
+                )
+            }
+        ],
+    )
+    assert "相同的条件期望" in supported and "干净目标" in supported
+
+    unsupported = task_runtime._build_provider_failure_grounded_fallback(
+        prompt,
+        [
+            {
+                "text": (
+                    "Input-conditioned target distributions have different conditional expected values "
+                    "and non-zero-mean noise."
+                )
+            }
+        ],
+    )
+    assert "相同的条件期望" not in unsupported
+
+
+def test_provider_failure_fallback_answers_training_pair_requirements() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "只有一张带噪图且没有干净参照时还能训练吗？免除哪两类配对数据？",
+        [
+            {
+                "text": (
+                    "Our N2V scheme does not require noisy image pairs, nor clean target images. "
+                    "It trains directly on the noisy images to be denoised."
+                )
+            }
+        ],
+    )
+    assert "独立带噪图像对" in out and "干净目标" in out and "[1]" in out
+
+
+def test_provider_failure_fallback_answers_both_statistical_assumptions() -> None:
+    out = task_runtime._build_provider_failure_grounded_fallback(
+        "论文对真实信号和噪声分别作了哪两条统计假设？",
+        [
+            {
+                "text": (
+                    "We make two simple statistical assumptions: the signal is not pixel-wise independent, "
+                    "and the noise is conditionally pixel-wise independent given the signal."
+                )
+            }
+        ],
+    )
+    assert "信号不是逐像素独立" in out
+    assert "噪声在像素之间条件独立" in out
+    assert "[1]" in out
+
+
+def test_exact_relation_recovery_requires_complete_dncnn_and_loss_relations() -> None:
+    from kb.source_grounded_fallback import build_exact_relation_grounded_fallback
+
+    dncnn = build_exact_relation_grounded_fallback(
+        "DnCNN \u76f4\u63a5\u9884\u6d4b\u5e72\u51c0\u56fe\u50cf\u5417\uff1f\u7f51\u7edc\u8f93\u51fa\u548c\u53bb\u566a\u56fe\u50cf\u662f\u4ec0\u4e48\u5173\u7cfb\uff1f",
+        [{"text": "The proposed DnCNN is designed to predict the residual image, i.e., the difference between the noisy observation and the latent clean image."}],
+    )
+    assert "\u51cf\u53bb" in dncnn and "[1]" in dncnn
+    assert not build_exact_relation_grounded_fallback(
+        "DnCNN \u76f4\u63a5\u9884\u6d4b\u5e72\u51c0\u56fe\u50cf\u5417\uff1f\u7f51\u7edc\u8f93\u51fa\u548c\u53bb\u566a\u56fe\u50cf\u662f\u4ec0\u4e48\u5173\u7cfb\uff1f",
+        [{"text": "DnCNN predicts an image residual."}],
+    )
+
+    loss = build_exact_relation_grounded_fallback(
+        "\u547d\u9898 1 \u4e2d\uff0c\u81ea\u76d1\u7763\u635f\u5931\u4e0e\u6709\u76d1\u7763\u635f\u5931\u76f8\u5dee\u4ec0\u4e48\u9879\uff1f",
+        [{"text": "The self-supervised loss is the sum of the ordinary supervised loss and the variance of the noise. By minimizing the self-supervised loss, one may find the optimal denoiser."}],
+    )
+    assert "\u566a\u58f0\u65b9\u5dee" in loss and "\u56fa\u5b9a\u5e38\u6570" in loss
+    assert not build_exact_relation_grounded_fallback(
+        "\u547d\u9898 1 \u4e2d\uff0c\u81ea\u76d1\u7763\u635f\u5931\u4e0e\u6709\u76d1\u7763\u635f\u5931\u76f8\u5dee\u4ec0\u4e48\u9879\uff1f",
+        [{"text": "The self-supervised loss includes noise."}],
+    )
+
+
+def test_exact_calibration_recovery_requires_both_named_methods_and_no_negation() -> None:
+    from kb.source_grounded_fallback import build_exact_relation_grounded_fallback
+
+    question = "这个框架只适用于训练神经网络吗？不用干净数据还可以校准哪些传统去噪方法？"
+    complete = (
+        "This allows us to learn denoising functions from single noisy measurements of each object. "
+        "The same approach can also be used to calibrate traditional image denoising methods "
+        "such as median filters and non-local means."
+    )
+    answer = build_exact_relation_grounded_fallback(question, [{"text": complete}])
+    assert "中值滤波" in answer and "非局部均值" in answer and "[1]" in answer
+
+    incomplete_surfaces = (
+        "The same approach can calibrate traditional image denoising methods such as median filters and non-local means.",
+        "The same approach can calibrate traditional image denoising methods.",
+        "The same approach can calibrate traditional image denoising methods such as median filters.",
+        "We learn denoising functions from single noisy measurements. The same approach cannot calibrate traditional image denoising methods such as median filters and non-local means.",
+        "Related work includes median filters and non-local means for image denoising.",
+    )
+    for surface in incomplete_surfaces:
+        assert not build_exact_relation_grounded_fallback(question, [{"text": surface}])
+
+
 def test_detect_answer_intent_by_prompt():
     from kb import task_runtime
 

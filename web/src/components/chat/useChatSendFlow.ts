@@ -7,6 +7,7 @@ import { reportUserIssue } from '../../userIssueReporter'
 import type { ApiSettingsTarget } from '../layout/settingsEvents'
 import type { ResearchRuntimeContext } from './researchContext'
 import type { SelectedResearchContextPack } from './researchContextPack'
+import type { LocalRetrievalMode } from './useLocalSemanticRetrieval'
 
 export function resolveQueryScope(scope: QueryScope, opts: { hasCurrentPaper: boolean; hasBasket: boolean }): QueryScope {
   if (scope === 'current_paper' && !opts.hasCurrentPaper) return 'library'
@@ -45,6 +46,7 @@ export function useChatSendFlow({
   queryScope,
   selectedResearchContext,
   externalSupplementMode,
+  retrievalMode,
   onOpenApiSettings,
   onSelectedResearchContextConsumed,
 }: {
@@ -53,6 +55,7 @@ export function useChatSendFlow({
   queryScope: QueryScope
   selectedResearchContext?: SelectedResearchContextPack | null
   externalSupplementMode: ExternalSupplementMode
+  retrievalMode: LocalRetrievalMode
   onOpenApiSettings: (target: ApiSettingsTarget | '') => void
   onSelectedResearchContextConsumed?: (packId: string) => void
 }) {
@@ -101,6 +104,7 @@ export function useChatSendFlow({
       queryScope: resolvedScope,
       agentMode: true,
       externalSupplementMode,
+      retrievalMode,
     }).then(() => {
       if (!contextPackForSend) return
       onSelectedResearchContextConsumed?.(contextPackForSend.id)
@@ -133,6 +137,7 @@ export function useChatSendFlow({
           selected_context_item_count: Array.isArray(contextPackForSend?.items) ? contextPackForSend.items.length : 0,
           agent_mode: true,
           external_supplement_mode: externalSupplementMode,
+          retrieval_mode: retrievalMode,
           prompt_length: text.trim().length,
           prompt_empty: text.trim().length === 0,
         },
@@ -165,6 +170,7 @@ export function useChatSendFlow({
     onSelectedResearchContextConsumed,
     pendingImages.length,
     queryScope,
+    retrievalMode,
     refreshReadiness,
     researchContext.activeSource.ready,
     researchContext.api.sendBlockTarget,

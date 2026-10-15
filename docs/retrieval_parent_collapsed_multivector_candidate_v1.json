@@ -1,0 +1,101 @@
+{
+  "schema_version": 1,
+  "id": "parent_collapsed_multivector_e5_v1",
+  "curation_status": "frozen_before_development_measurement",
+  "purpose": "Test whether focused child representations improve semantic retrieval while every returned result remains the unchanged parent citation chunk.",
+  "development_fixture": {
+    "path": "docs/retrieval_eval_development_v1.json",
+    "sha256": "269cda5b1861be19a9aebf7b8b95faae6de49d41afb04e53cb2eea2aa3736478",
+    "id": "research_qa_library_development_v1_chunk_qrels",
+    "case_count": 41,
+    "allowed_for_tuning": true
+  },
+  "frozen_acceptance_fixture": {
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "id": "research_qa_semantic_paraphrase_v1",
+    "case_count": 12,
+    "allowed_for_tuning": false,
+    "maximum_candidate_replays": 1
+  },
+  "embedding_candidate": {
+    "model_id": "intfloat/multilingual-e5-base",
+    "revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
+    "provider_identity": "b6f461d0da1959a877bc465919b54dd2121149e360a8c2c973ddfcda1e0ae99b",
+    "declared_license": "mit",
+    "pooling": "attention_masked_mean",
+    "query_prefix": "query: ",
+    "passage_prefix": "passage: ",
+    "encoder_max_length": 512,
+    "dimension": 768,
+    "dtype": "float16",
+    "device": "cuda",
+    "allow_download": false,
+    "trust_remote_code": false,
+    "product_enabled": false
+  },
+  "representation_contract": {
+    "parent_representation": "existing full parent embedding retained",
+    "child_window_unit": "tokenizer_content_token",
+    "fast_tokenizer_offsets_required": true,
+    "child_window_tokens": 256,
+    "child_stride_tokens": 192,
+    "child_overlap_tokens": 64,
+    "final_child_may_be_shorter": true,
+    "minimum_tail_child_tokens": 65,
+    "minimum_parent_tokens_for_children": 321,
+    "child_text": "exact original-text slice from fast-tokenizer offsets",
+    "heading_injection": false,
+    "maximum_children_per_parent": null,
+    "parent_score": "maximum cosine score across full parent and all child representations",
+    "tie_break": "original parent corpus order",
+    "returned_id": "original parent chunk id",
+    "returned_text": "original parent chunk text",
+    "returned_metadata": "original parent chunk metadata",
+    "storage_chunks_changed": false,
+    "page_locators_changed": false
+  },
+  "fusion_contract": {
+    "algorithm": "rrf",
+    "rrf_k": 20.0,
+    "sparse_weight": 2.0,
+    "dense_weight": 1.0,
+    "candidate_multiplier": 4,
+    "protected_sparse_prefix": 5,
+    "dense_source_gate_depth": 5,
+    "cross_encoder": false
+  },
+  "development_gates": {
+    "raw_multivector_recall_at_10_no_regression_vs_parent_dense_in_both_modes": true,
+    "raw_multivector_recall_at_10_min_gain_in_any_mode": 0.02,
+    "safe_rrf_preserves_product_recall_at_5_in_both_modes": true,
+    "safe_rrf_preserves_product_wrong_source_at_5_in_both_modes": true,
+    "safe_rrf_no_regression_vs_product_for": [
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "safe_rrf_recall_at_10_min_gain_in_any_mode": 0.02,
+    "representation_count_multiplier_max": 2.0,
+    "p95_latency_rule": "multivector <= max(parent_dense * 2, parent_dense + 15 ms)",
+    "all_required": true
+  },
+  "frozen_replay_gates": {
+    "run_only_if_all_development_gates_pass": true,
+    "safe_rrf_recall_at_10_min_gain_vs_product": 0.15,
+    "required_modes": [
+      "scoped",
+      "full_library"
+    ],
+    "preserve_product_recall_at_5": true,
+    "preserve_product_wrong_source_at_5": true,
+    "all_required": true
+  },
+  "execution_policy": {
+    "development_measurement_runs": 1,
+    "normal_runtime_downloads": false,
+    "normal_runtime_model_loading": false,
+    "ordinary_user_surface_exposed": false,
+    "failure_action": "reject candidate and keep product BM25 unchanged"
+  }
+}

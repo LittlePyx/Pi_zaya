@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from kb.reference_query_family import prompt_requests_answer_audit
+from kb.claim_verification_observability import record_production_claim_verification
+from kb.local_observability import emit_local_observation
 
 from .planner import plan_research_intent, plan_research_question
 from .research_run import build_research_run
@@ -915,6 +917,38 @@ def _finalize_agent_trace(
         }
     )
     trace.research_run = research_run
+    verification_steps = [
+        step for step in trace.steps if str(step.tool or "") == "verify_answer_citations"
+    ]
+    verification_elapsed_ms = sum(
+        max(0, int(step.elapsed_ms or 0)) for step in verification_steps
+    )
+    verification_step_status = (
+        str(verification_steps[-1].status or "done") if verification_steps else "done"
+    )
+    record_production_claim_verification(
+        evidence_status=str(trace.verification.evidence_status),
+        total_claim_count=int(trace.verification.total_claims or 0),
+        supported_claim_count=int(trace.verification.supported_claims or 0),
+        unsupported_claim_count=int(trace.verification.unsupported_claims or 0),
+        duration_ms=verification_elapsed_ms,
+        step_status=verification_step_status,
+    )
+    emit_local_observation(
+        "pi_zaya.agent_run",
+        {
+            "outcome_id": f"agent_run.{final_status}",
+            "status": final_status,
+            "duration_ms": tool_elapsed_ms,
+            "question_type_id": str(trace.question_type),
+            "verification_outcome_id": str(trace.verification.evidence_status),
+            "retrieval_hit_count": len(hits),
+            "tool_call_count": len(trace.steps),
+            "tool_error_count": int(tool_status_counts.get("error") or 0),
+            "supported_claim_count": int(trace.verification.supported_claims or 0),
+            "unsupported_claim_count": int(trace.verification.unsupported_claims or 0),
+        },
+    )
 
 
 def run_research_agent(
@@ -1120,12 +1154,14 @@ def build_agent_trace_for_completed_answer(
     question_type, plan = plan_research_question(query)
     hits = [h for h in list(evidence_hits or []) if isinstance(h, dict)]
     resolved_answer_mode = str(answer_mode or _answer_mode(agent_notes) or "").strip()
+    verification_started_at = time.perf_counter()
     if resolved_answer_mode in {"general_llm", "external_academic_llm"}:
         verification = _general_answer_verification()
     elif prompt_requests_answer_audit(query) and hits:
         verification = _answer_audit_source_verification(answer, hits)
     else:
         verification = verify_completed_answer(answer, hits, answer_mode=resolved_answer_mode)
+    verification_elapsed_ms = int(round((time.perf_counter() - verification_started_at) * 1000))
     final_status = _normalize_trace_status(status)
     context = dict(scope_context or {})
     context.setdefault("planner_intent", intent.to_dict())
@@ -1182,6 +1218,7 @@ def build_agent_trace_for_completed_answer(
                 )
             ),
             output=verification.to_dict(),
+            elapsed_ms=verification_elapsed_ms,
         )
     )
     _finalize_agent_trace(

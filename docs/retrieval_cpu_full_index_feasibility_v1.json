@@ -1,0 +1,958 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_cpu_full_index_feasibility_v1",
+  "measured_at": "2026-09-02T23:25:48.708701+00:00",
+  "protocol_sha256": "7d95366f197dff57855c75e97ce1992ebdb5aaaf251a37a84576654638b4a941",
+  "fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+  "cpu_query_parent_sha256": "52ed6a51d22b0e6f0b9fc2533e15faf5c66398e1a46b0e0c358568c34015e0ad",
+  "case_ids": [
+    "semantic-mamba-selective-state-zh",
+    "semantic-kan-edge-functions-zh",
+    "semantic-bitnet-ternary-efficiency-zh",
+    "semantic-sam2-streaming-memory-en",
+    "semantic-medsam-box-architecture-en",
+    "semantic-modernbert-attention-en",
+    "semantic-deepseek-r1-zero-boundary-en",
+    "semantic-gemma3-vision-tokens-en",
+    "semantic-timesfm-probability-zh",
+    "semantic-bindgpt-three-roles-zh",
+    "semantic-long-context-synthesis-zh",
+    "semantic-segmentation-transfer-en"
+  ],
+  "candidate": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "provider_identity": "a5bb526562ff581e073496f8fc14077e119373c5051a70a78aec7306770434e9",
+    "device": "cpu",
+    "dtype": "float32",
+    "pooling": "last_token",
+    "padding_side": "left",
+    "max_length": 8192,
+    "document_batch_size": 8,
+    "allow_download": false,
+    "trust_remote_code": false
+  },
+  "attempt": {
+    "started_at": "2026-09-02T22:02:42.373494+00:00",
+    "maximum_runs": 1,
+    "raw_report_persisted_before_validation": true
+  },
+  "source_corpus": {
+    "before_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "after_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "unchanged": true
+  },
+  "build": {
+    "build_id": "7138dcaa15c242bd88bc14042166e879",
+    "corpus_fingerprint": "19dd55b81535593219b0fdb8744b6c74cdfe51d68c3567dfd822780be927ec7a",
+    "document_count": 10,
+    "chunk_count": 1673,
+    "embedded_document_count": 10,
+    "embedded_chunk_count": 1673,
+    "reused_document_count": 0,
+    "reused_chunk_count": 0,
+    "no_op": false,
+    "duration_ms": 4952500.783
+  },
+  "index": {
+    "relative_path": "test_results/retrieval_cpu_full_index_feasibility_v1/index_v1",
+    "tree_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50",
+    "size_bytes": 7277202,
+    "state": "ready",
+    "reason": "embedding index matches the committed corpus and provider",
+    "build_id": "7138dcaa15c242bd88bc14042166e879",
+    "corpus_fingerprint": "19dd55b81535593219b0fdb8744b6c74cdfe51d68c3567dfd822780be927ec7a",
+    "provider_identity": "a5bb526562ff581e073496f8fc14077e119373c5051a70a78aec7306770434e9",
+    "document_count": 10,
+    "chunk_count": 1673,
+    "readback_chunk_count": 1673,
+    "current_pointer_sha256": "ac37a6dfb3e89d4cb30f9d95a27c1e6411d565e009d0ae8b0adb79232baa7d65"
+  },
+  "runtime": {
+    "python": "3.9.7",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "provider_load_ms": 25211.773,
+    "peak_process_rss_mib": 15751.07,
+    "provider": {
+      "model_id": "Qwen/Qwen3-Embedding-0.6B",
+      "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+      "provider_identity": "a5bb526562ff581e073496f8fc14077e119373c5051a70a78aec7306770434e9",
+      "model_fingerprint": "hf-contract-sha256:848e54ae29f95aa7dfa9db47060db30267b33c0d104317fe9390338d97828787",
+      "dimension": 1024,
+      "pooling": "last_token",
+      "padding_side": "left",
+      "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+      "passage_prefix": "",
+      "max_length": 8192,
+      "batch_size": 8,
+      "device": "cpu",
+      "dtype": "float32",
+      "allow_download": false,
+      "trust_remote_code": false,
+      "load_duration_ms": 25211.773,
+      "document_count": 1673,
+      "query_count": 12,
+      "truncated_document_count": 0,
+      "truncated_query_count": 0,
+      "max_observed_tokens": 4712,
+      "document_encode_ms": 4950888.626,
+      "query_encode_ms": 5063.909,
+      "torch_version": "2.3.1+cu121",
+      "model_parameter_dtype": "float32"
+    },
+    "query_timings": [
+      {
+        "ordinal": 1,
+        "duration_ms": 513.492
+      },
+      {
+        "ordinal": 2,
+        "duration_ms": 393.916
+      },
+      {
+        "ordinal": 3,
+        "duration_ms": 413.383
+      },
+      {
+        "ordinal": 4,
+        "duration_ms": 485.044
+      },
+      {
+        "ordinal": 5,
+        "duration_ms": 468.293
+      },
+      {
+        "ordinal": 6,
+        "duration_ms": 471.712
+      },
+      {
+        "ordinal": 7,
+        "duration_ms": 406.751
+      },
+      {
+        "ordinal": 8,
+        "duration_ms": 403.096
+      },
+      {
+        "ordinal": 9,
+        "duration_ms": 372.023
+      },
+      {
+        "ordinal": 10,
+        "duration_ms": 364.07
+      },
+      {
+        "ordinal": 11,
+        "duration_ms": 372.669
+      },
+      {
+        "ordinal": 12,
+        "duration_ms": 407.187
+      }
+    ]
+  },
+  "channels": {
+    "bm25_product_queries_selection_control": {
+      "channel": "bm25_product_queries_selection_control",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.111442,
+            "recall@5": 0.25,
+            "recall@10": 0.375,
+            "ndcg@10": 0.171936,
+            "contract_recall@10": 0.375,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 11.045,
+            "p95": 21.758,
+            "max": 25.267
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.627145,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.187831,
+            "recall@5": 0.166667,
+            "recall@10": 0.291667,
+            "ndcg@10": 0.187177,
+            "contract_recall@10": 0.333333,
+            "wrong_source_rate@5": 0.183333,
+            "wrong_source_rate@10": 0.2
+          },
+          "latency_ms": {
+            "p50": 51.806,
+            "p95": 64.945,
+            "max": 66.372
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.496639,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "wrong_source_rate@10": 0.6
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "cpu_full_index_protected_dense_tail": {
+      "channel": "cpu_full_index_protected_dense_tail",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.146858,
+            "recall@5": 0.25,
+            "recall@10": 0.666667,
+            "ndcg@10": 0.260787,
+            "contract_recall@10": 0.666667,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 432.93,
+            "p95": 516.003,
+            "max": 532.412
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.627145,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 8,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.184576,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.214914,
+            "recall@5": 0.166667,
+            "recall@10": 0.541667,
+            "ndcg@10": 0.261644,
+            "contract_recall@10": 0.583333,
+            "wrong_source_rate@5": 0.183333,
+            "wrong_source_rate@10": 0.158333
+          },
+          "latency_ms": {
+            "p50": 84.984,
+            "p95": 126.816,
+            "max": 127.353
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.7
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.6
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.496639,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "wrong_source_rate@10": 0.5
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 8,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "semantic_acceptance": {
+    "metric": "recall@10",
+    "minimum_gain_in_each_mode": 0.15,
+    "modes": {
+      "scoped": {
+        "recall@10_gain": 0.291667,
+        "minimum_gain_passes": true,
+        "recall@5_equal_to_product": true,
+        "wrong_source_rate@5_equal_to_product": true
+      },
+      "full_library": {
+        "recall@10_gain": 0.25,
+        "minimum_gain_passes": true,
+        "recall@5_equal_to_product": true,
+        "wrong_source_rate@5_equal_to_product": true
+      }
+    },
+    "passes_all": true
+  },
+  "gate": {
+    "semantic_acceptance_passes": true,
+    "mode_checks": {
+      "scoped": {
+        "no_regression_recall@5": true,
+        "no_regression_recall@10": true,
+        "no_regression_mrr": true,
+        "no_regression_ndcg@10": true,
+        "recall_at_5_equal_to_product": true,
+        "wrong_source_at_5_equal_to_product": true,
+        "wrong_source_at_5_no_worse_than_cpu_query_parent": true
+      },
+      "full_library": {
+        "no_regression_recall@5": true,
+        "no_regression_recall@10": true,
+        "no_regression_mrr": true,
+        "no_regression_ndcg@10": true,
+        "recall_at_5_equal_to_product": true,
+        "wrong_source_at_5_equal_to_product": true,
+        "wrong_source_at_5_no_worse_than_cpu_query_parent": true
+      }
+    },
+    "operational_checks": {
+      "provider_load_ms": true,
+      "full_build_ms": false,
+      "build_throughput": false,
+      "peak_process_rss_mib": false,
+      "index_size_bytes": true,
+      "query_completion_rate": true,
+      "warm_query_embedding_p95_ms": true,
+      "document_truncation": true,
+      "all_chunks_embedded": true,
+      "no_reuse": true,
+      "index_ready_and_read_back": true,
+      "source_corpus_unchanged": true
+    },
+    "passes_all": false
+  },
+  "decision": {
+    "status": "rejected_cpu_full_index_runtime",
+    "cpu_optional_runtime_footprint_study_allowed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "summary": {
+    "provider_load_ms": 25211.773,
+    "full_build_ms": 4952500.783,
+    "build_throughput_chunks_per_second": 0.337809,
+    "peak_process_rss_mib": 15751.07,
+    "index_size_bytes": 7277202,
+    "unique_query_count": 12,
+    "query_completion_rate": 1.0,
+    "query_embedding_p50_ms": 406.751,
+    "query_embedding_p95_ms": 513.492,
+    "truncated_document_count": 0
+  },
+  "result_fingerprint": "3085c4ed8cf73b2e68fa071b569610ef1812902c726f1af7b6e91e7ddaae00af"
+}

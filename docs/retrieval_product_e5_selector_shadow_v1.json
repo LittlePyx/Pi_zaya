@@ -1,0 +1,1198 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_product_e5_selector_shadow_v1",
+  "generated_at": "2026-09-03T01:59:48.771218+00:00",
+  "protocol_sha256": "2e6607305a5242eeff2007d397f87e32746412be284d5890c492d1df3e03cf4a",
+  "measurement_recovery": {
+    "path": "docs/retrieval_product_e5_selector_shadow_measurement_recovery_v1.json",
+    "sha256": "50041ebff5e4201a557610ef5990cb3b5fca7606c446f05a8ffab6a6597be9bf"
+  },
+  "source": {
+    "document_count": 10,
+    "parent_chunk_count": 1673,
+    "semantic_case_count": 12,
+    "corpus_fingerprint": "d1602fb0d3a7320806dc1cf1a9c3615d7fc1864471e93270f2135f8f44f27516"
+  },
+  "runtime": {
+    "provider_load_ms": 1142.429,
+    "full_build_ms": 104690.632,
+    "peak_process_rss_mib": 1942.508,
+    "python_version": "3.10.11",
+    "full_build_time_evidence": "conservative_attempt_to_atomic_pointer_upper_bound",
+    "peak_process_rss_evidence": "direct_same_runtime_graph_recovery_replay",
+    "recovery_no_op_ms": 300.387
+  },
+  "index": {
+    "build_id": "16cfa1145a1d47afa4fe3f0fc2c2c9e9",
+    "document_count": 10,
+    "parent_count": 1673,
+    "window_count": 2016,
+    "embedded_parent_count": 1673,
+    "embedded_window_count": 2016,
+    "reused_parent_count": 0,
+    "reused_window_count": 0,
+    "no_op": false,
+    "index_bytes": 3681208,
+    "atomic_readback_passed": true,
+    "recovery_readback_no_op": true
+  },
+  "selector_trace": [
+    {
+      "ordinal": 1,
+      "mode": "scoped",
+      "duration_ms": 1929.956,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": true,
+      "index_cache_hit": false
+    },
+    {
+      "ordinal": 2,
+      "mode": "full_library",
+      "duration_ms": 58.5,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 3,
+      "mode": "scoped",
+      "duration_ms": 57.565,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 4,
+      "mode": "full_library",
+      "duration_ms": 64.12,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 5,
+      "mode": "scoped",
+      "duration_ms": 65.385,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 6,
+      "mode": "full_library",
+      "duration_ms": 63.002,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 7,
+      "mode": "scoped",
+      "duration_ms": 63.446,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 8,
+      "mode": "full_library",
+      "duration_ms": 59.54,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 9,
+      "mode": "scoped",
+      "duration_ms": 54.908,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 10,
+      "mode": "full_library",
+      "duration_ms": 53.737,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 11,
+      "mode": "scoped",
+      "duration_ms": 58.199,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 12,
+      "mode": "full_library",
+      "duration_ms": 63.934,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 13,
+      "mode": "scoped",
+      "duration_ms": 64.936,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 14,
+      "mode": "full_library",
+      "duration_ms": 72.29,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 15,
+      "mode": "scoped",
+      "duration_ms": 61.766,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 16,
+      "mode": "full_library",
+      "duration_ms": 60.779,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 17,
+      "mode": "scoped",
+      "duration_ms": 57.611,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 18,
+      "mode": "full_library",
+      "duration_ms": 56.472,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 19,
+      "mode": "scoped",
+      "duration_ms": 61.911,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 20,
+      "mode": "full_library",
+      "duration_ms": 56.39,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 21,
+      "mode": "scoped",
+      "duration_ms": 65.139,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 22,
+      "mode": "full_library",
+      "duration_ms": 61.306,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 23,
+      "mode": "scoped",
+      "duration_ms": 62.025,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 24,
+      "mode": "full_library",
+      "duration_ms": 62.825,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    }
+  ],
+  "channels": {
+    "bm25_product_queries_selection_control": {
+      "channel": "bm25_product_queries_selection_control",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.111442,
+            "recall@5": 0.25,
+            "recall@10": 0.375,
+            "ndcg@10": 0.171936,
+            "contract_recall@10": 0.375,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 9.337,
+            "p95": 18.051,
+            "max": 18.905
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.627145,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.187831,
+            "recall@5": 0.166667,
+            "recall@10": 0.291667,
+            "ndcg@10": 0.187177,
+            "contract_recall@10": 0.333333,
+            "wrong_source_rate@5": 0.183333,
+            "wrong_source_rate@10": 0.2
+          },
+          "latency_ms": {
+            "p50": 39.398,
+            "p95": 58.766,
+            "max": 68.279
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.496639,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "wrong_source_rate@10": 0.6
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "e5_small_product_selector_candidate": {
+      "channel": "e5_small_product_selector_candidate",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.141435,
+            "recall@5": 0.25,
+            "recall@10": 0.625,
+            "ndcg@10": 0.248568,
+            "contract_recall@10": 0.625,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 69.78,
+            "p95": 918.39,
+            "max": 1940.212
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.627145,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 8,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 6,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.218407,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.208565,
+            "recall@5": 0.166667,
+            "recall@10": 0.458333,
+            "ndcg@10": 0.238724,
+            "contract_recall@10": 0.5,
+            "wrong_source_rate@5": 0.183333,
+            "wrong_source_rate@10": 0.216667
+          },
+          "latency_ms": {
+            "p50": 102.066,
+            "p95": 127.354,
+            "max": 131.243
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.6
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.496639,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "wrong_source_rate@10": 0.5
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 8,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 6,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.218407,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "execution": {
+    "full_build_count": 1,
+    "selection_call_count": 24,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "network_used": false,
+    "measurement_recovery_used": true
+  },
+  "integrity": {
+    "source_before_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "source_after_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "working_db_before_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "working_db_after_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "artifact_tree_before_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "artifact_tree_after_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "model_before_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "model_after_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "tokenizer_before_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+    "tokenizer_after_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+  },
+  "runtime_gate": {
+    "summary": {
+      "completed_selection_calls": 24,
+      "cold_load_count": 1,
+      "warm_cache_hit_count": 23,
+      "fallback_count": 0,
+      "source_escape_count": 0,
+      "protected_prefix_rate": 1.0,
+      "product_sparse_input_unchanged_rate": 1.0,
+      "warm_selector_p95_ms": 65.36,
+      "dense_novelty_count": 48,
+      "mode_counts": {
+        "scoped": 12,
+        "full_library": 12
+      }
+    },
+    "checks": {
+      "single_completed_full_build": true,
+      "full_build_time": true,
+      "peak_process_rss": true,
+      "warm_selector_p95": true,
+      "index_bytes": true,
+      "parent_count": true,
+      "window_count": true,
+      "selection_call_count": true,
+      "cold_load_count": true,
+      "warm_cache_hits": true,
+      "fallback_count": true,
+      "source_escape_count": true,
+      "protected_prefix": true,
+      "product_sparse_input_unchanged": true,
+      "atomic_readback": true,
+      "source_unchanged": true,
+      "artifact_tokenizer_unchanged": true,
+      "product_remained_disabled": true,
+      "network_unused": true
+    },
+    "passes_all": true
+  },
+  "quality_gate": {
+    "modes": {
+      "scoped": {
+        "recall_at_10_gain": 0.25,
+        "checks": {
+          "recall_at_10_gain": true,
+          "recall_at_5_equal": true,
+          "wrong_source_at_5_equal": true,
+          "mrr_no_regression": true,
+          "ndcg_at_10_no_regression": true
+        },
+        "passes_all": true
+      },
+      "full_library": {
+        "recall_at_10_gain": 0.166666,
+        "checks": {
+          "recall_at_10_gain": true,
+          "recall_at_5_equal": true,
+          "wrong_source_at_5_equal": true,
+          "mrr_no_regression": true,
+          "ndcg_at_10_no_regression": true
+        },
+        "passes_all": true
+      }
+    },
+    "passes_all": true
+  },
+  "decision": {
+    "status": "product_selector_shadow_passed_expand_judged_cases",
+    "product_enabled": false,
+    "user_mode_control_visible": false,
+    "next_action": "expand_judged_cases"
+  },
+  "result_fingerprint": "2baee02e77afd8e58a23313b01d89e119a1c7e2a42c7390eea48ef1fa58463b7"
+}

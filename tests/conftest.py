@@ -55,3 +55,8 @@ def _default_api_auth_disabled(monkeypatch):
     monkeypatch.setenv("KB_USER_ISSUES_ALLOW_LOCAL_REMOTE", "0")
     monkeypatch.setenv("KB_USER_ISSUES_CLIENT_ID", "")
 
+
+@pytest.fixture(autouse=True)
+def _isolated_model_connection_checks(monkeypatch, tmp_path):
+    monkeypatch.setenv("KB_MODEL_CONNECTION_STATE_PATH", str(tmp_path / "connection_checks.json"))
+

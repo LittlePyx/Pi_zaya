@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_portable_e5_full_size_lifecycle_v2",
+  "protocol_sha256": "c66c4456ea669f57e684d24016bf2f616aa3b8bc63aa18b1f24423314b95a8df",
+  "timings": {
+    "base_extraction_ms": 7880.359,
+    "worker_wall_ms": 34638.275,
+    "install_ready_ms": 17602.751,
+    "cold_load_ms": 1166.952,
+    "warm_query_p95_ms": 581.175,
+    "stale_repair_ms": 10863.351,
+    "removal_ms": 105.999
+  },
+  "runtime": {
+    "python_version": "3.10.11",
+    "cold_start": true,
+    "index_cache_hit": false,
+    "peak_process_rss_mib": 1130.441
+  },
+  "queries": [
+    {
+      "case_id": "fresh-fdm-integration-time-boundary",
+      "duration_ms": 582.271,
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "source_escape_count": 0,
+      "first_relevant_rank": 9,
+      "ranked_chunk_ids": [
+        "6b1a3c7c4aa0aaa9:1",
+        "6b1a3c7c4aa0aaa9:19",
+        "6b1a3c7c4aa0aaa9:9",
+        "6b1a3c7c4aa0aaa9:25",
+        "6b1a3c7c4aa0aaa9:4",
+        "6b1a3c7c4aa0aaa9:26",
+        "6b1a3c7c4aa0aaa9:13",
+        "6b1a3c7c4aa0aaa9:6",
+        "6b1a3c7c4aa0aaa9:20",
+        "6b1a3c7c4aa0aaa9:22"
+      ]
+    },
+    {
+      "case_id": "fresh-scinerf-overlap-rate",
+      "duration_ms": 560.351,
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "source_escape_count": 0,
+      "first_relevant_rank": 10,
+      "ranked_chunk_ids": [
+        "7f6b9404bccea454:35",
+        "7f6b9404bccea454:0",
+        "7f6b9404bccea454:9",
+        "7f6b9404bccea454:1",
+        "7f6b9404bccea454:16",
+        "7f6b9404bccea454:3",
+        "7f6b9404bccea454:4",
+        "7f6b9404bccea454:37",
+        "7f6b9404bccea454:33",
+        "7f6b9404bccea454:31"
+      ]
+    }
+  ],
+  "stale_repair": {
+    "mutated_doc_id": "11b5152564f8b679",
+    "state_before": "stale",
+    "state_after": "ready",
+    "lifecycle_state": "ready",
+    "index_build_call_count": 1
+  },
+  "removal": {
+    "created": true,
+    "lifecycle_state": "not_installed",
+    "public": {
+      "state": "not_installed",
+      "available": false,
+      "mode": "hybrid_local",
+      "reason_id": "semantic_component_not_installed",
+      "action_id": "enable",
+      "task_id": "",
+      "completed_bytes": 0,
+      "total_bytes": 0,
+      "eta_seconds": null,
+      "required_additional_bytes": 0,
+      "bm25_available": true
+    },
+    "component_pointer_present": false,
+    "index_pointer_present": false,
+    "cleanup_pending_after_worker": true,
+    "cleanup_completed_after_worker_exit": true,
+    "remaining_component_generation_count": 0
+  },
+  "execution": {
+    "explicit_consent": true,
+    "download_network_used": false,
+    "local_archive_adapter_calls": 1,
+    "transport_factory_calls": 1,
+    "bm25_available_in_all_public_states": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "storage_layout_max_path_chars": 239
+  },
+  "gate": {
+    "base_extraction_time": true,
+    "install_ready_time": true,
+    "cold_load_time": true,
+    "warm_query_p95": true,
+    "stale_repair_time": true,
+    "removal_time": true,
+    "peak_memory": true,
+    "embedded_python_exact": true,
+    "ranking_exact": true,
+    "hybrid_without_fallback": true,
+    "zero_source_escapes": true,
+    "stale_repair_completed": true,
+    "no_network": true,
+    "one_local_archive_handoff": true,
+    "bm25_continuity": true,
+    "component_disabled_after_removal": true,
+    "index_disabled_after_removal": true,
+    "cleanup_completed_after_worker_exit": true,
+    "product_remains_disabled": true,
+    "windows_path_budget": true,
+    "windows_path_layout_exact": true
+  },
+  "decision": {
+    "status": "full_size_short_path_lifecycle_passed_authorize_management_api_e2e",
+    "all_gates_passed": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "next_action": "add_management_api_and_failure_path_e2e"
+  },
+  "result_fingerprint": "7440961c0be3e681e4c1ac1bb6a9de8dc7a4d78d5c9e7719438893924907709d"
+}

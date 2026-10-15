@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 
@@ -49,3 +50,44 @@ def is_nonpaper_artifact_source(source_path: str) -> bool:
 
 def is_excluded_source_path(source_path: str) -> bool:
     return is_nonpaper_artifact_source(source_path)
+
+
+def is_temporary_source_path(source_path: str) -> bool:
+    """Return whether a retrieval source is a transient conversion artifact."""
+
+    raw = str(source_path or "").strip()
+    if not raw:
+        return True
+    # An explicitly configured DB root is authoritative even when one of its
+    # parent directories happens to use a temporary-looking name.
+    try:
+        raw_db_dir = str(os.environ.get("KB_DB_DIR", "") or "").strip()
+        if raw_db_dir:
+            db_dir = Path(raw_db_dir).expanduser().resolve()
+            source = Path(raw).expanduser().resolve()
+            if source.is_relative_to(db_dir):
+                return False
+    except Exception:
+        pass
+    if is_excluded_source_path(raw):
+        return True
+    path = Path(raw)
+    low_parts = [str(part).strip().lower() for part in path.parts]
+    low_name = path.name.lower()
+    low_stem = path.stem.lower()
+    if any(part in {"temp", "__pycache__"} for part in low_parts):
+        return True
+    if any(
+        part.startswith("__upload__")
+        or part.startswith("_tmp_")
+        or part.startswith("tmp_")
+        for part in low_parts
+    ):
+        return True
+    if low_name.startswith("__upload__") or low_stem.startswith("__upload__"):
+        return True
+    if low_name.startswith("_tmp_") or low_stem.startswith("_tmp_"):
+        return True
+    if low_name.startswith("tmp_") or low_stem.startswith("tmp_"):
+        return True
+    return False

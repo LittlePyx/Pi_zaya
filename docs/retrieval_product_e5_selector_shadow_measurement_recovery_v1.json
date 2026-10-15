@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "recovery_id": "retrieval_product_e5_selector_shadow_measurement_recovery_v1",
+  "recorded_at": "2026-09-03",
+  "protocol_sha256": "2e6607305a5242eeff2007d397f87e32746412be284d5890c492d1df3e03cf4a",
+  "attempt_receipt_sha256": "e29c8827ddc1b244216300138e5e260939b290bb10460e89ddb47f26500866f7",
+  "failure_stage": "after_atomic_build_readback_and_selector_replay_before_worker_payload_serialization",
+  "reason_id": "windows_peak_rss_handle_signature_missing",
+  "original_error_category": "OSError_GetProcessMemoryInfo_failed",
+  "completed_build": {
+    "count": 1,
+    "build_id": "16cfa1145a1d47afa4fe3f0fc2c2c9e9",
+    "current_pointer_sha256": "063430e8d22f9d75e546e979c10e5b5735caf82e10f8f0088fde505dd9f98a59",
+    "manifest_sha256": "59bedbbbf5535896dc6f2b50568ff577887e3643011936596ab304fc6bc0065e",
+    "index_tree_sha256_after_recovery": "f543da95b6cf76f4d0780eb4496f94e14c38faea413e88dec0943b097c11ec9d",
+    "parent_count": 1673,
+    "window_count": 2016,
+    "vectors_sha256": "6c2d100ccbf6d1ea50c8f59237b8f8d7f723ad04c999086a2f0edbfa2d10d73f",
+    "build_elapsed_upper_bound_ms": 104690.632,
+    "upper_bound_definition": "attempt receipt timestamp through atomic current-pointer mtime; includes worker startup, artifact verification, and provider load",
+    "atomic_readback_passed": true
+  },
+  "measurement_fix": {
+    "change": "declare 64-bit Windows HANDLE and GetProcessMemoryInfo ctypes signatures explicitly",
+    "model_index_or_selector_changed": false,
+    "gate_changed": false,
+    "second_full_build_allowed": false
+  },
+  "recovery_replay": {
+    "worker_result_sha256": "ff92d713f866edb081560f6e01412a31a958ac8382caf006923e184aeea1afc7",
+    "index_build_was_no_op": true,
+    "embedded_parent_count": 0,
+    "embedded_window_count": 0,
+    "selection_call_count": 24,
+    "peak_process_rss_mib": 1942.508,
+    "peak_measurement_scope": "same two-session post-build readback and selector runtime graph over the committed index",
+    "warm_selector_p95_ms": 65.36,
+    "fallback_count": 0,
+    "source_escape_count": 0,
+    "protected_prefix_rate": 1.0,
+    "product_sparse_input_unchanged_rate": 1.0
+  },
+  "integrity": {
+    "artifact_tree_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "source_db_changed": false,
+    "working_db_changed": false,
+    "model_or_tokenizer_changed": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "network_used": false
+  },
+  "report_recovery_authorized": true
+}

@@ -13,6 +13,9 @@ import type { ChatImageAttachment, ChatUploadItem, ExternalSupplementMode, Query
 import { useT } from '../../i18n'
 import { ChatScopeControl } from './ChatScopeControl'
 import { ExternalSupplementControl } from './ExternalSupplementControl'
+import { LocalSemanticControl } from './LocalSemanticControl'
+import type { LocalSemanticComponentResponse } from '../../api/retrieval'
+import type { LocalRetrievalMode } from './useLocalSemanticRetrieval'
 
 const { TextArea } = Input
 
@@ -38,6 +41,15 @@ interface Props {
   onExternalSupplementModeChange: (mode: ExternalSupplementMode) => void
   webSupplementAvailable?: boolean
   onConfigureWebSupplement?: () => void
+  localSemanticStatus: LocalSemanticComponentResponse | null
+  localRetrievalMode: LocalRetrievalMode
+  localSemanticScopeEligible: boolean
+  localSemanticBusy?: boolean
+  onLocalRetrievalModeChange: (mode: LocalRetrievalMode) => void
+  onLocalSemanticEnable: () => Promise<unknown>
+  onLocalSemanticResume: () => Promise<unknown>
+  onLocalSemanticCancel: () => Promise<unknown>
+  onLocalSemanticRemove: () => Promise<unknown>
 }
 
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp'])
@@ -171,6 +183,15 @@ export function ChatInput({
   onExternalSupplementModeChange,
   webSupplementAvailable = false,
   onConfigureWebSupplement,
+  localSemanticStatus,
+  localRetrievalMode,
+  localSemanticScopeEligible,
+  localSemanticBusy = false,
+  onLocalRetrievalModeChange,
+  onLocalSemanticEnable,
+  onLocalSemanticResume,
+  onLocalSemanticCancel,
+  onLocalSemanticRemove,
 }: Props) {
   const S = useT()
   const [text, setText] = useState('')
@@ -449,6 +470,18 @@ export function ChatInput({
                   {S.upload_file_btn}
                 </Button>
                 <ChatScopeControl value={queryScope} options={queryScopeOptions} onChange={onQueryScopeChange} />
+                <LocalSemanticControl
+                  status={localSemanticStatus}
+                  preferredMode={localRetrievalMode}
+                  scopeEligible={localSemanticScopeEligible}
+                  disabled={generating}
+                  busy={localSemanticBusy}
+                  onModeChange={onLocalRetrievalModeChange}
+                  onEnable={onLocalSemanticEnable}
+                  onResume={onLocalSemanticResume}
+                  onCancel={onLocalSemanticCancel}
+                  onRemove={onLocalSemanticRemove}
+                />
                 <ExternalSupplementControl
                   value={externalSupplementMode}
                   disabled={generating}

@@ -1,0 +1,1309 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_lighter_runtime_stage1_qwen_v1",
+  "measured_at": "2026-09-03T00:14:04.307681+00:00",
+  "protocol_sha256": "62a6c5edb9f243dfd631f13a43c776bfbe0b221a4599ef5374c0f4b04d0b3e04",
+  "stress_manifest_sha256": "1e697579abcdf241d943d9caffa160ed78a301d713ad7ab48e40ef02640fbd12",
+  "stage_0_report_sha256": "1c7b2eed6469e002b229337ce5e90bd4770f202818002b4c3192bf8488f75fb9",
+  "accepted_parent_sha256": "13e2d5dc30afcdc3f174c4ef139b30513d3072bb9f025cc0932f85fe66354ca8",
+  "case_ids": [
+    "semantic-mamba-selective-state-zh",
+    "semantic-kan-edge-functions-zh",
+    "semantic-bitnet-ternary-efficiency-zh",
+    "semantic-sam2-streaming-memory-en",
+    "semantic-medsam-box-architecture-en",
+    "semantic-modernbert-attention-en",
+    "semantic-deepseek-r1-zero-boundary-en",
+    "semantic-gemma3-vision-tokens-en",
+    "semantic-timesfm-probability-zh",
+    "semantic-bindgpt-three-roles-zh",
+    "semantic-long-context-synthesis-zh",
+    "semantic-segmentation-transfer-en"
+  ],
+  "candidate": {
+    "candidate_id": "qwen3_embedding_0_6b_official_quint8_avx2_onnx_v1",
+    "artifact_relative_path": "test_results/retrieval_lighter_runtime_v1/artifacts/qwen3_embedding_0_6b_official_quint8_avx2_onnx_v1/model_quint8_avx2.onnx",
+    "artifact_bytes": 600127788,
+    "artifact_sha256": "a7eda29cc374b01ae75eb1af1ab65c3c61a64c43f39f16e08c6e37c075dcbf4d",
+    "onnx_output": "sentence_embedding",
+    "dimension": 1024,
+    "normalization": "l2",
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+    "passage_prefix": ""
+  },
+  "attempt": {
+    "started_at": "2026-09-03T00:13:02.966716+00:00",
+    "maximum_runs": 1,
+    "subprocess_wall_ms": 56349.828,
+    "raw_report_persisted_before_validation": true
+  },
+  "integrity": {
+    "source_before_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "source_after_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "index_before_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50",
+    "index_after_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50",
+    "artifact_before_sha256": "a7eda29cc374b01ae75eb1af1ab65c3c61a64c43f39f16e08c6e37c075dcbf4d",
+    "artifact_after_sha256": "a7eda29cc374b01ae75eb1af1ab65c3c61a64c43f39f16e08c6e37c075dcbf4d"
+  },
+  "runtime": {
+    "python_version": "3.10.11",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "user_site_enabled": false,
+    "onnxruntime_version": "1.23.2",
+    "session_providers": [
+      "CPUExecutionProvider"
+    ],
+    "provider_load_ms": 2570.809,
+    "warmup_ms": 65.102,
+    "peak_process_rss_mib": 1890.293,
+    "installed_distribution_count": 26,
+    "query_timings": [
+      {
+        "ordinal": 1,
+        "case_id": "semantic-mamba-selective-state-zh",
+        "token_count": 46,
+        "duration_ms": 89.407
+      },
+      {
+        "ordinal": 2,
+        "case_id": "semantic-kan-edge-functions-zh",
+        "token_count": 60,
+        "duration_ms": 109.03
+      },
+      {
+        "ordinal": 3,
+        "case_id": "semantic-bitnet-ternary-efficiency-zh",
+        "token_count": 60,
+        "duration_ms": 106.166
+      },
+      {
+        "ordinal": 4,
+        "case_id": "semantic-sam2-streaming-memory-en",
+        "token_count": 56,
+        "duration_ms": 102.625
+      },
+      {
+        "ordinal": 5,
+        "case_id": "semantic-medsam-box-architecture-en",
+        "token_count": 51,
+        "duration_ms": 95.526
+      },
+      {
+        "ordinal": 6,
+        "case_id": "semantic-modernbert-attention-en",
+        "token_count": 52,
+        "duration_ms": 96.067
+      },
+      {
+        "ordinal": 7,
+        "case_id": "semantic-deepseek-r1-zero-boundary-en",
+        "token_count": 56,
+        "duration_ms": 104.255
+      },
+      {
+        "ordinal": 8,
+        "case_id": "semantic-gemma3-vision-tokens-en",
+        "token_count": 58,
+        "duration_ms": 107.814
+      },
+      {
+        "ordinal": 9,
+        "case_id": "semantic-timesfm-probability-zh",
+        "token_count": 55,
+        "duration_ms": 102.792
+      },
+      {
+        "ordinal": 10,
+        "case_id": "semantic-bindgpt-three-roles-zh",
+        "token_count": 57,
+        "duration_ms": 106.266
+      },
+      {
+        "ordinal": 11,
+        "case_id": "semantic-long-context-synthesis-zh",
+        "token_count": 54,
+        "duration_ms": 97.225
+      },
+      {
+        "ordinal": 12,
+        "case_id": "semantic-segmentation-transfer-en",
+        "token_count": 62,
+        "duration_ms": 110.332
+      }
+    ],
+    "truncated_query_count": 0
+  },
+  "document_projection": {
+    "stress_token_counts": [
+      456,
+      239,
+      394,
+      237,
+      109,
+      69,
+      289,
+      254,
+      231,
+      312,
+      202,
+      179,
+      300,
+      37,
+      127,
+      120,
+      15,
+      120,
+      78,
+      79,
+      85,
+      14,
+      68,
+      241,
+      214,
+      152,
+      123,
+      202,
+      179,
+      270,
+      178,
+      197,
+      109,
+      132,
+      531,
+      211,
+      121,
+      210,
+      215,
+      206,
+      218,
+      211,
+      265,
+      603,
+      325,
+      227,
+      396,
+      291,
+      379,
+      274,
+      286,
+      228,
+      350,
+      489,
+      355,
+      322,
+      2094,
+      1012,
+      300,
+      339,
+      660,
+      1590,
+      895,
+      617
+    ],
+    "truncated_stress_count": 0,
+    "encode_ms": 50134.572,
+    "stress_work": {
+      "item_count": 64,
+      "batch_count": 11,
+      "real_tokens": 20231,
+      "padded_tokens": 22260,
+      "padding_amplification": 1.100292,
+      "attention_work_proxy": 15014752,
+      "peak_padded_tokens": 3912,
+      "oversize_singleton_count": 0,
+      "maximum_observed_tokens": 2094
+    },
+    "full_corpus_work": {
+      "item_count": 1673,
+      "batch_count": 242,
+      "real_tokens": 489070,
+      "padded_tokens": 492607,
+      "padding_amplification": 1.007232,
+      "attention_work_proxy": 352912321,
+      "peak_padded_tokens": 4712,
+      "oversize_singleton_count": 1,
+      "maximum_observed_tokens": 4712
+    },
+    "projected_full_build_ms": 1178381.641,
+    "projected_throughput_chunks_per_second": 1.419744
+  },
+  "document_vector_parity": {
+    "count": 64,
+    "mean_cosine": 0.79537325,
+    "minimum_cosine": 0.46647177,
+    "p05_cosine": 0.64765618,
+    "rows": [
+      {
+        "chunk_id": "7c0059b4861a99a7:34",
+        "cosine": 0.81937425
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:3",
+        "cosine": 0.82064607
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:6",
+        "cosine": 0.72216256
+      },
+      {
+        "chunk_id": "0bb62cdf7be2eb9d:21",
+        "cosine": 0.82717506
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:3",
+        "cosine": 0.8275502
+      },
+      {
+        "chunk_id": "606d3883253df045:6",
+        "cosine": 0.84795672
+      },
+      {
+        "chunk_id": "eabb38f4bf4fc81d:8",
+        "cosine": 0.85683887
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:4",
+        "cosine": 0.83225823
+      },
+      {
+        "chunk_id": "385eac8794116d02:1",
+        "cosine": 0.83513218
+      },
+      {
+        "chunk_id": "53802a4f79933bae:4",
+        "cosine": 0.81822066
+      },
+      {
+        "chunk_id": "ac11f427a96c4cc4:8",
+        "cosine": 0.88865345
+      },
+      {
+        "chunk_id": "606d3883253df045:4",
+        "cosine": 0.82894022
+      },
+      {
+        "chunk_id": "a0923c9f6b527c9f:5",
+        "cosine": 0.80760081
+      },
+      {
+        "chunk_id": "eabb38f4bf4fc81d:1",
+        "cosine": 0.86952747
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:287",
+        "cosine": 0.75652026
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:399",
+        "cosine": 0.76740628
+      },
+      {
+        "chunk_id": "606d3883253df045:58",
+        "cosine": 0.84467453
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:400",
+        "cosine": 0.76773411
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:118",
+        "cosine": 0.82474692
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:12",
+        "cosine": 0.86493133
+      },
+      {
+        "chunk_id": "a0923c9f6b527c9f:62",
+        "cosine": 0.79108135
+      },
+      {
+        "chunk_id": "0bb62cdf7be2eb9d:61",
+        "cosine": 0.90164392
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:46",
+        "cosine": 0.84733113
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:322",
+        "cosine": 0.74196352
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:320",
+        "cosine": 0.7896746
+      },
+      {
+        "chunk_id": "606d3883253df045:235",
+        "cosine": 0.78537631
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:27",
+        "cosine": 0.7807632
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:228",
+        "cosine": 0.80029431
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:127",
+        "cosine": 0.84587225
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:306",
+        "cosine": 0.76330823
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:150",
+        "cosine": 0.81196177
+      },
+      {
+        "chunk_id": "385eac8794116d02:83",
+        "cosine": 0.85373817
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:148",
+        "cosine": 0.8445714
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:129",
+        "cosine": 0.84977396
+      },
+      {
+        "chunk_id": "eabb38f4bf4fc81d:72",
+        "cosine": 0.64765618
+      },
+      {
+        "chunk_id": "0bb62cdf7be2eb9d:48",
+        "cosine": 0.84166598
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:41",
+        "cosine": 0.75893817
+      },
+      {
+        "chunk_id": "606d3883253df045:260",
+        "cosine": 0.83137859
+      },
+      {
+        "chunk_id": "eabb38f4bf4fc81d:58",
+        "cosine": 0.83646872
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:260",
+        "cosine": 0.84271094
+      },
+      {
+        "chunk_id": "53802a4f79933bae:57",
+        "cosine": 0.87651396
+      },
+      {
+        "chunk_id": "606d3883253df045:265",
+        "cosine": 0.85322962
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:90",
+        "cosine": 0.77938677
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:76",
+        "cosine": 0.68587013
+      },
+      {
+        "chunk_id": "606d3883253df045:206",
+        "cosine": 0.73857467
+      },
+      {
+        "chunk_id": "53802a4f79933bae:12",
+        "cosine": 0.84348365
+      },
+      {
+        "chunk_id": "a0923c9f6b527c9f:23",
+        "cosine": 0.6884976
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:23",
+        "cosine": 0.8128891
+      },
+      {
+        "chunk_id": "53802a4f79933bae:75",
+        "cosine": 0.79029559
+      },
+      {
+        "chunk_id": "eabb38f4bf4fc81d:23",
+        "cosine": 0.83997284
+      },
+      {
+        "chunk_id": "0bb62cdf7be2eb9d:46",
+        "cosine": 0.85635882
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:35",
+        "cosine": 0.85110505
+      },
+      {
+        "chunk_id": "7c0059b4861a99a7:13",
+        "cosine": 0.72193216
+      },
+      {
+        "chunk_id": "36b6b8be924bad5a:89",
+        "cosine": 0.78691052
+      },
+      {
+        "chunk_id": "606d3883253df045:195",
+        "cosine": 0.80115929
+      },
+      {
+        "chunk_id": "53802a4f79933bae:63",
+        "cosine": 0.84878687
+      },
+      {
+        "chunk_id": "0bb62cdf7be2eb9d:72",
+        "cosine": 0.52375053
+      },
+      {
+        "chunk_id": "385eac8794116d02:38",
+        "cosine": 0.46647177
+      },
+      {
+        "chunk_id": "0bb62cdf7be2eb9d:22",
+        "cosine": 0.85580389
+      },
+      {
+        "chunk_id": "53802a4f79933bae:121",
+        "cosine": 0.83823782
+      },
+      {
+        "chunk_id": "53802a4f79933bae:114",
+        "cosine": 0.73760213
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:190",
+        "cosine": 0.58315117
+      },
+      {
+        "chunk_id": "4582761a1616bdd6:94",
+        "cosine": 0.72623147
+      },
+      {
+        "chunk_id": "ac11f427a96c4cc4:2",
+        "cosine": 0.80344945
+      }
+    ]
+  },
+  "worker_execution": {
+    "warmup_session_run_calls": 1,
+    "query_session_run_calls": 12,
+    "document_session_run_calls": 11,
+    "query_vector_count": 12,
+    "document_vector_count": 64,
+    "full_corpus_documents_embedded": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "channels": {
+    "bm25_product_queries_selection_control": {
+      "channel": "bm25_product_queries_selection_control",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.111442,
+            "recall@5": 0.25,
+            "recall@10": 0.375,
+            "ndcg@10": 0.171936,
+            "contract_recall@10": 0.375,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 11.05,
+            "p95": 19.223,
+            "max": 19.927
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.627145,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.187831,
+            "recall@5": 0.166667,
+            "recall@10": 0.291667,
+            "ndcg@10": 0.187177,
+            "contract_recall@10": 0.333333,
+            "wrong_source_rate@5": 0.183333,
+            "wrong_source_rate@10": 0.2
+          },
+          "latency_ms": {
+            "p50": 49.136,
+            "p95": 74.005,
+            "max": 77.81
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.496639,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "wrong_source_rate@10": 0.6
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 9,
+              "metrics": {
+                "mrr": 0.111111,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.30103,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "qwen_official_quint8_avx2_protected_dense_tail": {
+      "channel": "qwen_official_quint8_avx2_protected_dense_tail",
+      "modes": {
+        "scoped": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.120932,
+            "recall@5": 0.25,
+            "recall@10": 0.458333,
+            "ndcg@10": 0.197228,
+            "contract_recall@10": 0.458333,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 16.212,
+            "p95": 24.917,
+            "max": 26.923
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.430677,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.627145,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.5,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 8,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 12,
+          "metrics": {
+            "mrr": 0.197321,
+            "recall@5": 0.166667,
+            "recall@10": 0.375,
+            "ndcg@10": 0.212469,
+            "contract_recall@10": 0.416667,
+            "wrong_source_rate@5": 0.183333,
+            "wrong_source_rate@10": 0.175
+          },
+          "latency_ms": {
+            "p50": 54.594,
+            "p95": 81.919,
+            "max": 92.364
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "semantic-mamba-selective-state-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.2,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "semantic-kan-edge-functions-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-bitnet-ternary-efficiency-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-sam2-streaming-memory-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-medsam-box-architecture-en",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.8
+              }
+            },
+            {
+              "id": "semantic-modernbert-attention-en",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.289065,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.8,
+                "wrong_source_rate@10": 0.6
+              }
+            },
+            {
+              "id": "semantic-deepseek-r1-zero-boundary-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.496639,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-gemma3-vision-tokens-en",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 1.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.63093,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.4,
+                "wrong_source_rate@10": 0.5
+              }
+            },
+            {
+              "id": "semantic-timesfm-probability-zh",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "semantic-bindgpt-three-roles-zh",
+              "first_relevant_rank": 8,
+              "metrics": {
+                "mrr": 0.125,
+                "recall@5": 0.0,
+                "recall@10": 1.0,
+                "ndcg@10": 0.315465,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-long-context-synthesis-zh",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "semantic-segmentation-transfer-en",
+              "first_relevant_rank": 7,
+              "metrics": {
+                "mrr": 0.142857,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.204382,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "semantic_acceptance": {
+    "metric": "recall@10",
+    "minimum_gain_in_each_mode": 0.15,
+    "modes": {
+      "scoped": {
+        "recall@10_gain": 0.083333,
+        "minimum_gain_passes": false,
+        "recall@5_equal_to_product": true,
+        "wrong_source_rate@5_equal_to_product": true
+      },
+      "full_library": {
+        "recall@10_gain": 0.083333,
+        "minimum_gain_passes": false,
+        "recall@5_equal_to_product": true,
+        "wrong_source_rate@5_equal_to_product": true
+      }
+    },
+    "passes_all": false
+  },
+  "gate": {
+    "semantic_acceptance_passes": false,
+    "mode_checks": {
+      "scoped": {
+        "no_regression_recall@5": true,
+        "no_regression_recall@10": false,
+        "no_regression_mrr": false,
+        "no_regression_ndcg@10": false,
+        "recall_at_5_equal_to_product": true,
+        "wrong_source_at_5_equal_to_product": true
+      },
+      "full_library": {
+        "no_regression_recall@5": true,
+        "no_regression_recall@10": false,
+        "no_regression_mrr": false,
+        "no_regression_ndcg@10": false,
+        "recall_at_5_equal_to_product": true,
+        "wrong_source_at_5_equal_to_product": true
+      }
+    },
+    "operational_checks": {
+      "subprocess_wall_clock": true,
+      "provider_load": true,
+      "warm_query_p95": true,
+      "peak_process_rss": true,
+      "projected_full_build": false,
+      "projected_throughput": false,
+      "query_completion": true,
+      "query_truncation": true,
+      "stress_document_completion": true,
+      "stress_document_truncation": true,
+      "mean_document_vector_parity": false,
+      "worst_document_vector_parity": false,
+      "source_unchanged": true,
+      "index_unchanged": true,
+      "artifact_unchanged": true
+    },
+    "passes_all": false
+  },
+  "decision": {
+    "status": "rejected_stage_1",
+    "single_full_build_allowed": false,
+    "evaluate_second_candidate": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "summary": {
+    "provider_load_ms": 2570.809,
+    "query_p50_ms": 102.792,
+    "query_p95_ms": 110.332,
+    "stress_document_encode_ms": 50134.572,
+    "projected_full_build_ms": 1178381.641,
+    "projected_throughput_chunks_per_second": 1.419744,
+    "peak_process_rss_mib": 1890.293,
+    "mean_document_vector_cosine": 0.79537325,
+    "minimum_document_vector_cosine": 0.46647177
+  },
+  "result_fingerprint": "9bb2553b02b0b2d59faabb352cd19dcae719f01ab71ea9edd398d70cc1ba8beb"
+}

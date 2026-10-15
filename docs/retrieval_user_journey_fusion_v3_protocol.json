@@ -1,0 +1,138 @@
+{
+  "schema_version": 1,
+  "id": "retrieval_user_journey_fusion_v3_protocol",
+  "curation_status": "frozen_before_fusion_v3_runner_and_measurement",
+  "purpose": "Test one evidence-driven sparse-protected dense-tail fusion candidate without reusing the invalid fusion-v2 execution contract or exposing retrieval changes to users.",
+  "evidence": {
+    "fixture_path": "docs/retrieval_user_journey_expansion_v1.json",
+    "fixture_sha256": "6463cf63ba1853fc8704eead89de0ee36061481613621b1fa72ea4b7fe5429ca",
+    "bm25_baseline_path": "docs/retrieval_user_journey_bm25_baseline_v1.json",
+    "bm25_baseline_sha256": "28748a9d590a637dcd8e2847f2ba9efc437b069ee4769feb95f3821986576fca",
+    "qwen_dense_protocol_path": "docs/retrieval_user_journey_qwen_dense_protocol_v1.json",
+    "qwen_dense_protocol_sha256": "8c375ea0ee9a5c5d0fd419b5c992cc65575af25e772618d718420a484c5bd467",
+    "qwen_dense_report_path": "docs/retrieval_user_journey_qwen_dense_diagnostic_v1.json",
+    "qwen_dense_report_sha256": "ca0be8934730ac8088af8666682ece2fe1db12b67070400ecbfadb48d1f7b65a",
+    "fusion_v2_invalidation_path": "docs/retrieval_qwen_fusion_tuning_v2_invalidation.json",
+    "fusion_v2_invalidation_sha256": "38f5324286d00b544ea79e44abffd83b0b647863c17b849653ea246c0447be30",
+    "protected_tail_implementation_path": "kb/protected_dense_tail_retriever.py",
+    "protected_tail_implementation_sha256": "f120174d277fd190008fb0c1d5749315df83cb75fd1ca143aa864991c28d95b2",
+    "semantic_acceptance_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "semantic_acceptance_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d"
+  },
+  "partition": {
+    "calibration_source": "fixture.split.calibration_case_ids",
+    "calibration_case_count": 12,
+    "ordered_calibration_case_ids_sha256": "43de2b28ee0219e1a3b18abad32c70ef34d094def315bbb3587b32e8cfaa0346",
+    "holdout_source": "fixture.split.holdout_case_ids",
+    "holdout_case_count": 6,
+    "ordered_holdout_case_ids_sha256": "4df4672460577882e7cb4a2b08f2d75222e5cb8a4fedaedba7858dd1fdd2c36b",
+    "holdout_hidden_until_calibration_passes": true,
+    "maximum_calibration_runs": 1,
+    "maximum_holdout_runs": 1
+  },
+  "frozen_representation": {
+    "candidate_id": "qwen3_embedding_0_6b_v1",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "dimension": 1024,
+    "pooling": "last_token",
+    "padding_side": "left",
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+    "passage_prefix": "",
+    "max_length": 8192,
+    "allow_download": false,
+    "trust_remote_code": false,
+    "existing_index_reused_without_build": true
+  },
+  "frozen_candidate": {
+    "candidate_id": "protected_tail_dense_quota_2_v3",
+    "algorithm": "protected_dense_tail",
+    "protected_sparse_prefix": 5,
+    "sparse_tail_window": 5,
+    "dense_novelty_quota": 2,
+    "candidate_multiplier": 4,
+    "fusion_output_depth": 10,
+    "sparse_and_dense_candidate_depth": 40,
+    "dense_novelty_excludes_sparse_ranks": 10,
+    "sparse_survivor_selection": "best_dense_rank_then_sparse_rank",
+    "sparse_survivor_output_order": "original_sparse_rank",
+    "dense_novelty_output_order": "dense_rank",
+    "tail_layout": "sparse_1_to_5_then_three_dense_supported_sparse_6_to_10_then_two_dense_novelties_at_9_to_10",
+    "dense_failure_fallback": "original_sparse_top_10",
+    "candidate_count": 1,
+    "rationale": "The calibration diagnostic found a full-library dense-only relevant passage at dense rank 2 while BM25-only evidence remained inside the protected top five."
+  },
+  "depth_contract": {
+    "selection_ranking_depth": 10,
+    "selection_reported_metric_depths": [
+      5,
+      10
+    ],
+    "candidate_retrieval_depth": 40,
+    "diagnostic_depth_20_during_selection": false,
+    "post_selection_depth_20_policy": "requires_a_separate_frozen_continuation_contract_after_selection",
+    "evaluator_must_not_pass_maximum_unrelated_metric_k_to_fusion": true
+  },
+  "product_control": {
+    "strategy": "current_product_bm25_query_pipeline_at_selection_depth_10",
+    "query_expansion": false,
+    "translation_behavior_unchanged": true,
+    "must_match_frozen_baseline_projection_for": [
+      "recall@5",
+      "recall@10",
+      "mrr",
+      "ndcg@10",
+      "contract_recall@10",
+      "wrong_source_rate@5"
+    ]
+  },
+  "calibration_gate": {
+    "required_in_both_modes": [
+      "recall@5_equal_to_product",
+      "wrong_source_rate@5_equal_to_product",
+      "recall@10_no_regression",
+      "mrr_no_regression",
+      "ndcg@10_no_regression",
+      "contract_recall@10_no_regression",
+      "wrong_source_rate@10_no_regression"
+    ],
+    "strict_recall@10_gain_in_at_least_one_mode": true,
+    "all_required": true,
+    "failure_action": "stop_without_holdout_semantic_or_product_access"
+  },
+  "holdout_gate": {
+    "run_only_after_calibration_passes": true,
+    "candidate_configuration_immutable": true,
+    "same_checks_as_calibration": true,
+    "strict_recall@10_gain_in_at_least_one_mode": true,
+    "no_retry_or_substitution": true
+  },
+  "combined_gate": {
+    "required_after_calibration_and_holdout": true,
+    "no_regression_for": [
+      "recall@5",
+      "recall@10",
+      "mrr",
+      "ndcg@10",
+      "contract_recall@10"
+    ],
+    "wrong_source_rate@5_and_10_no_regression": true,
+    "recall@10_minimum_gain_in_at_least_one_mode": 0.02
+  },
+  "semantic_acceptance_gate": {
+    "run_only_after_combined_gate_passes": true,
+    "maximum_runs": 1,
+    "recall@10_minimum_gain_vs_product_in_both_modes": 0.15,
+    "preserve_product_recall@5": true,
+    "preserve_product_wrong_source_rate@5": true
+  },
+  "safety_boundary": {
+    "model_prompt_or_index_variants": 0,
+    "additional_fusion_candidates": 0,
+    "cross_encoder_runs": 0,
+    "external_web_or_model_knowledge_for_labels": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

@@ -91,6 +91,25 @@ _SYSTEM_TERMINAL_REASONS = RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS
 _USER_DECISION_REASONS = {"candidate", "source_changed", "location_changed"}
 
 
+def research_note_evidence_resolution_mode(
+    reason: Any,
+    *,
+    terminal: bool = False,
+) -> str:
+    """Classify an unresolved evidence outcome by who can resolve it.
+
+    Unknown and transient outcomes stay system-owned.  This fail-safe default
+    prevents a new internal verifier reason from silently becoming a task for
+    the reader.  Only the small allowlist below may request a user decision.
+    """
+    normalized_reason = _clean_text(reason, limit=80)
+    if terminal or normalized_reason in _SYSTEM_TERMINAL_REASONS:
+        return "source_boundary"
+    if normalized_reason in _USER_DECISION_REASONS:
+        return "user_decision"
+    return "system_auto"
+
+
 def _clean_text(value: Any, *, limit: int = _TEXT_LIMIT) -> str:
     return str(value or "").replace("\x00", "").strip()[:limit]
 
@@ -547,6 +566,10 @@ def record_research_note_source_baseline_check(
     locator = _baseline_check_locator(link)
     normalized_maintenance_version = _positive_int(maintenance_version)
     normalized_retry_count = _positive_int(retry_count)
+    resolution_mode = research_note_evidence_resolution_mode(
+        normalized_reason,
+        terminal=terminal,
+    )
     try:
         normalized_retry_after = float(retry_after or 0)
     except (TypeError, ValueError):
@@ -573,6 +596,7 @@ def record_research_note_source_baseline_check(
         and (_positive_int(previous.get("retry_count")) == normalized_retry_count)
         and previous_retry_after == normalized_retry_after
         and bool(previous.get("terminal")) == bool(terminal)
+        and _clean_text(previous.get("resolution_mode"), limit=32) == resolution_mode
         and math.isfinite(previous_checked_at)
         and previous_checked_at > 0
     ):
@@ -586,6 +610,7 @@ def record_research_note_source_baseline_check(
         "checked_at": timestamp,
         "status": normalized_status,
         "reason": normalized_reason,
+        "resolution_mode": resolution_mode,
         "source_fingerprint": fingerprint,
         "locator": locator,
     }

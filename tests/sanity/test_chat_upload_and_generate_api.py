@@ -1013,6 +1013,7 @@ def test_generate_accepts_selected_research_context(monkeypatch, tmp_path: Path)
             "query_scope": "basket",
             "agent_mode": True,
             "external_supplement_mode": "web",
+            "retrieval_mode": "hybrid_local",
             "prompt_context": {
                 "id": "ctx-1",
                 "source": "citation_shelf",
@@ -1047,10 +1048,12 @@ def test_generate_accepts_selected_research_context(monkeypatch, tmp_path: Path)
     assert started_tasks[0]["query_scope"] == "basket"
     assert started_tasks[0]["agent_mode"] is True
     assert started_tasks[0]["external_supplement_mode"] == "web"
+    assert started_tasks[0]["retrieval_mode"] == "hybrid_local"
     assert fake_store.messages[0]["meta"]["prompt_context"]["itemCount"] == 1
     assert fake_store.messages[0]["meta"]["query_scope"] == "basket"
     assert fake_store.messages[0]["meta"]["agent_mode_requested"] is True
     assert fake_store.messages[0]["meta"]["external_supplement_mode"] == "web"
+    assert fake_store.messages[0]["meta"]["retrieval_mode"] == "hybrid_local"
 
 
 def test_generate_auto_titles_default_conversation(monkeypatch, tmp_path: Path):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from kb.citation_meta import extract_first_doi, extract_year_hint
+from kb.citation_marker_context import numeric_marker_is_content
 
 _RANGE_DASH_CLASS = r"\-\u2013\u2014\u2212"
 _INPAPER_NUMERIC_RE = re.compile(rf"\[(\d{{1,4}}(?:\s*(?:[{_RANGE_DASH_CLASS},])\s*\d{{1,4}})*)\]")
@@ -79,8 +80,7 @@ def parse_ref_num_set(spec: str, *, max_items: int = 48) -> list[int]:
 
 
 def _inside_markdown_math(text: str, offset: int) -> bool:
-    prefix = str(text or "")[: max(0, int(offset))]
-    return len(re.findall(r"(?<!\\)\$", prefix)) % 2 == 1
+    return numeric_marker_is_content(str(text or ""), max(0, int(offset)))
 
 
 def _looks_like_superscript_citation(text: str, start: int, end: int, spec: str) -> bool:

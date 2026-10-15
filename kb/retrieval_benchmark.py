@@ -5,17 +5,23 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
+from .candidate_retriever import CandidateRetriever
 from .retrieval_eval_fixture import corpus_fingerprint, sha256_text
 from .retrieval_metrics import evaluate_ranking, mean_metrics
 from .retriever import BM25Retriever
 
 
-SearchFunction = Callable[[str, BM25Retriever, int, bool], tuple[list[dict[str, Any]], dict[str, Any]]]
+SearchFunction = Callable[
+    [str, CandidateRetriever, int, bool],
+    tuple[list[dict[str, Any]], dict[str, Any]],
+]
+RetrieverFactory = Callable[[list[dict]], CandidateRetriever]
+ModeRetrieverFactory = Callable[[list[dict], bool], CandidateRetriever]
 
 
 def raw_bm25_search(
     query: str,
-    retriever: BM25Retriever,
+    retriever: CandidateRetriever,
     top_k: int,
     _whole_library: bool,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
@@ -174,10 +180,12 @@ def evaluate_search_channel(
     channel_name: str,
     search: SearchFunction,
     chunk_to_doc: Mapping[str, str],
+    retriever_factory: RetrieverFactory = BM25Retriever,
+    mode_retriever_factory: ModeRetrieverFactory | None = None,
 ) -> dict[str, Any]:
     ks = tuple(max(1, int(item)) for item in list(payload.get("ks") or [1, 3, 5, 10]))
     max_k = max(ks)
-    retrievers: dict[tuple[str, ...], BM25Retriever] = {}
+    retrievers: dict[tuple[str, ...], CandidateRetriever] = {}
     rows_by_mode: dict[str, list[dict[str, Any]]] = {"scoped": [], "full_library": []}
 
     for raw_case in list(payload.get("cases") or []):
@@ -204,7 +212,11 @@ def evaluate_search_channel(
                     if mode == "full_library"
                     or chunk_to_doc.get(str(chunk.get("id") or ""), "") in scope_doc_ids
                 ]
-                retriever = BM25Retriever(selected_chunks)
+                retriever = (
+                    mode_retriever_factory(selected_chunks, mode == "full_library")
+                    if mode_retriever_factory is not None
+                    else retriever_factory(selected_chunks)
+                )
                 retrievers[scope_key] = retriever
             started = time.perf_counter()
             hits, details = search(
@@ -259,6 +271,46 @@ def evaluate_search_channel(
             for mode, rows in rows_by_mode.items()
         },
     }
+
+
+def evaluate_candidate_channel(
+    payload: Mapping[str, Any],
+    chunks: Sequence[Mapping[str, Any]],
+    *,
+    channel_name: str,
+    retriever_factory: RetrieverFactory | None = None,
+    mode_retriever_factory: ModeRetrieverFactory | None = None,
+) -> dict[str, Any]:
+    """Evaluate one candidate retriever against the frozen scoped/full qrels."""
+
+    chunk_to_doc, corpus_errors = validate_indexed_corpus(payload, chunks)
+    if corpus_errors:
+        raise ValueError(
+            "indexed corpus does not match frozen qrels: " + "; ".join(corpus_errors)
+        )
+
+    def direct_search(
+        query: str,
+        retriever: CandidateRetriever,
+        top_k: int,
+        _whole_library: bool,
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        return list(retriever.search(query, top_k=top_k) or []), {
+            "used_translation": False,
+            "query_variant_count": 1,
+        }
+
+    if retriever_factory is None and mode_retriever_factory is None:
+        raise ValueError("a candidate retriever factory is required")
+    return evaluate_search_channel(
+        payload,
+        chunks,
+        channel_name=channel_name,
+        search=direct_search,
+        chunk_to_doc=chunk_to_doc,
+        retriever_factory=retriever_factory or BM25Retriever,
+        mode_retriever_factory=mode_retriever_factory,
+    )
 
 
 def evaluate_bm25_baseline(

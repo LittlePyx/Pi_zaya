@@ -83,7 +83,7 @@ function listShelfStorages(): Storage[] {
   return out
 }
 
-function readShelfStorage(key: string): string {
+export function readShelfStorage(key: string): string {
   for (const storage of listShelfStorages()) {
     try {
       const raw = storage.getItem(key)
@@ -98,7 +98,7 @@ function readShelfStorage(key: string): string {
   return shelfStorageFallback.get(key) || ''
 }
 
-function writeShelfStorage(key: string, payload: string) {
+export function writeShelfStorage(key: string, payload: string) {
   // Always keep in-memory raw snapshot first to survive temporary storage failures.
   shelfStorageFallback.set(key, payload)
   let wrote = false

@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "invalidation_id": "retrieval_cpu_query_compatibility_preflight_invalidation_v1",
+  "status": "invalidated_before_first_cpu_query",
+  "recorded_at": "2026-09-03",
+  "invalidated_protocol": {
+    "path": "docs/retrieval_cpu_query_compatibility_protocol_v1.json",
+    "sha256": "aee8ef592dbb50f6f25960204b550f0956e4df405438f150ae09952ba4938c1e",
+    "expected_index_tree_sha256": "928d30b1aa31bcdfebe529bdefda4f424b96e77148e48f981794a77d37a45013"
+  },
+  "preflight": {
+    "protocol_valid_before_index_check": true,
+    "result_report_absent": true,
+    "parent_provider_identity_matches": true,
+    "semantic_chunk_count": 1673,
+    "semantic_corpus_valid": true,
+    "pinned_model_revision_cached": true,
+    "queries_encoded": 0,
+    "document_embeddings_created": 0,
+    "index_writes_performed": 0,
+    "observed_index_tree_before_sha256": "fef412fcf632b98c8a5dbbe7223e9986996045b105b7f2a371d30b28c25da2da",
+    "observed_index_tree_after_sha256": "fef412fcf632b98c8a5dbbe7223e9986996045b105b7f2a371d30b28c25da2da",
+    "index_tree_unchanged_during_preflight": true
+  },
+  "accepted_index_identity": {
+    "build_id": "21e9718aa59f483988f3e88571a3c01c",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "corpus_fingerprint": "19dd55b81535593219b0fdb8744b6c74cdfe51d68c3567dfd822780be927ec7a",
+    "document_count": 10,
+    "chunk_count": 1673,
+    "current_pointer_sha256": "440a80aa69338582b263463a69d8eb4a5161e80e0b3a1d03831c76b686a4a332",
+    "manifest_sha256": "9ad735efacdbbe9d4d6c8c33ad5605a7939e1558a622300a6e0c1eeab02544d2",
+    "vectors_sha256": "04bd9d7904695538004d6cd52f77c974fd16e3cada22e8a4fa0bd994541b32d8",
+    "tree_file_count": 5,
+    "tree_size_bytes": 7277202
+  },
+  "classification": "frozen_v1_tree_pin_does_not_describe_the_accepted_index",
+  "resolution": {
+    "modify_v1_in_place": false,
+    "freeze_successor_protocol": true,
+    "change_candidate_or_gate": false,
+    "consume_measurement_run": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

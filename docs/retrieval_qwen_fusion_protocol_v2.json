@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "id": "qwen_fusion_comparison_protocol_v2",
+  "curation_status": "frozen_before_implementation_and_measurement",
+  "purpose": "Select at most one guarded fusion strategy for an already-frozen Qwen dense representation without changing the model, query contract, chunks, or hidden evidence boundaries.",
+  "predecessor_evidence": {
+    "candidate_protocol_path": "docs/retrieval_candidate_comparison_protocol_v1.json",
+    "candidate_protocol_sha256": "ca9ac9d83e10e8891c788b13d3e6a6f6d403c7da382363bbda786fe4dc3cfcfa",
+    "candidate_batch_path": "docs/retrieval_candidate_batch_v1.json",
+    "candidate_batch_sha256": "ed026e779e9774e8d24b727752a394475d1f08c95e2bbb3c918f8e4876ddd533",
+    "qwen_screening_report_path": "docs/retrieval_candidate_screening_qwen3_embedding_0_6b_v1.json",
+    "qwen_screening_report_sha256": "623fd13b08b8dc965e0d08b5a6a9ae3718ef8d1e93dd1535fe30bc45da0b5249",
+    "zero_nomination_report_path": "docs/retrieval_candidate_nomination_v1.json",
+    "zero_nomination_report_sha256": "8cb7dc1a3c708a1d73b906ba3a34b8c1e3129dcf83b5265fb0c617c88e1ffe2c"
+  },
+  "evidence_boundary": {
+    "development_fixture_path": "docs/retrieval_eval_development_v1.json",
+    "development_fixture_sha256": "269cda5b1861be19a9aebf7b8b95faae6de49d41afb04e53cb2eea2aa3736478",
+    "tuning_partition_source": "predecessor.inner_split.screening_case_ids",
+    "tuning_case_count": 29,
+    "ordered_tuning_case_ids_sha256": "9b615898bdcbd1b353aac1b16396267e6864edfb7402748681e664abb6eef116",
+    "confirmation_partition_source": "predecessor.inner_split.confirmation_case_ids",
+    "confirmation_case_count": 12,
+    "ordered_confirmation_case_ids_sha256": "22ba2a49806a4c1c5f2c7808e86cf46f8489279ace734332b161de52f2f3390f",
+    "confirmation_hidden_until_one_tuning_nominee": true,
+    "frozen_acceptance_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "frozen_acceptance_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "frozen_acceptance_allowed_for_tuning": false
+  },
+  "frozen_representation": {
+    "candidate_id": "qwen3_embedding_0_6b_v1",
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "model_safetensors_sha256": "0437e45c94563b09e13cb7a64478fc406947a93cb34a7e05870fc8dcd48e23fd",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "dimension": 1024,
+    "pooling": "last_token",
+    "padding_side": "left",
+    "query_prefix": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:",
+    "passage_prefix": "",
+    "max_length": 8192,
+    "parent_chunks_unchanged": true,
+    "query_translation_and_expansion_unchanged": true,
+    "cross_encoder": false,
+    "additional_model_variants": 0,
+    "additional_index_builds": 0
+  },
+  "shared_fusion_contract": {
+    "top_k": 10,
+    "candidate_multiplier": 4,
+    "protected_sparse_prefix": 5,
+    "protected_prefix_order_unchanged": true,
+    "dense_failure_falls_back_to_sparse": true,
+    "deduplicate_by_chunk_identity": true,
+    "no_case_ids_or_qrels_available_to_fusion": true,
+    "no_source_gate_for_new_dense_tail_evidence": true,
+    "product_enabled": false
+  },
+  "frozen_candidates": [
+    {
+      "candidate_id": "ungated_rrf_2_1_k20_v2",
+      "algorithm": "rrf",
+      "sparse_weight": 2.0,
+      "dense_weight": 1.0,
+      "rrf_k": 20.0,
+      "dense_source_gate_depth": 0,
+      "hypothesis": "Isolate the source gate contribution while preserving the predecessor RRF contract."
+    },
+    {
+      "candidate_id": "protected_tail_dense_quota_1_v2",
+      "algorithm": "protected_dense_tail",
+      "dense_novelty_quota": 1,
+      "sparse_tail_window": 5,
+      "dense_candidate_depth": 40,
+      "dense_novelty_excludes_sparse_top": 10,
+      "sparse_survivor_selection": "best_dense_rank_then_sparse_rank",
+      "sparse_survivor_output_order": "original_sparse_rank",
+      "dense_novelty_output_order": "dense_rank",
+      "tail_layout": "protected_sparse_1_to_5_then_four_supported_sparse_survivors_then_one_dense_novelty",
+      "hypothesis": "Admit one complementary dense passage while using dense rank to avoid evicting a semantically supported sparse tail hit."
+    },
+    {
+      "candidate_id": "protected_tail_dense_quota_2_v2",
+      "algorithm": "protected_dense_tail",
+      "dense_novelty_quota": 2,
+      "sparse_tail_window": 5,
+      "dense_candidate_depth": 40,
+      "dense_novelty_excludes_sparse_top": 10,
+      "sparse_survivor_selection": "best_dense_rank_then_sparse_rank",
+      "sparse_survivor_output_order": "original_sparse_rank",
+      "dense_novelty_output_order": "dense_rank",
+      "tail_layout": "protected_sparse_1_to_5_then_three_supported_sparse_survivors_then_two_dense_novelties",
+      "hypothesis": "Test whether a second complementary passage adds recall without weakening the protected evidence prefix."
+    }
+  ],
+  "tuning_screen": {
+    "maximum_runs": 1,
+    "all_three_candidates_in_one_run": true,
+    "data": "tuning_partition_only",
+    "required_checks": [
+      "recall@5_equal_to_product_in_both_modes",
+      "wrong_source_rate@5_equal_to_product_in_both_modes",
+      "recall@10_no_regression_vs_product_in_both_modes",
+      "mrr_no_regression_vs_product_in_both_modes",
+      "ndcg@10_no_regression_vs_product_in_both_modes",
+      "strict_recall@10_gain_in_at_least_one_mode"
+    ],
+    "all_required": true,
+    "screening_result_is_tuning_evidence_only": true
+  },
+  "nomination": {
+    "maximum_nominees": 1,
+    "eligible_candidates_only": true,
+    "ranking_order": [
+      "highest_minimum_recall@10_gain_across_modes",
+      "highest_average_ndcg@10_gain_across_modes",
+      "lowest_dense_novelty_quota_with_rrf_treated_as_infinity",
+      "lexicographically_smallest_candidate_id"
+    ]
+  },
+  "confirmation": {
+    "maximum_runs": 1,
+    "nominee_only": true,
+    "data": "confirmation_partition_only",
+    "required_checks": [
+      "recall@5_equal_to_product_in_both_modes",
+      "wrong_source_rate@5_equal_to_product_in_both_modes",
+      "recall@10_no_regression_vs_product_in_both_modes",
+      "mrr_no_regression_vs_product_in_both_modes",
+      "ndcg@10_no_regression_vs_product_in_both_modes",
+      "strict_recall@10_gain_in_at_least_one_mode"
+    ],
+    "all_required": true,
+    "no_retry_or_candidate_substitution_after_result": true
+  },
+  "combined_development_gate": {
+    "data": "tuning_and_confirmation_case_results",
+    "preserve_product_recall@5_in_both_modes": true,
+    "preserve_product_wrong_source_rate@5_in_both_modes": true,
+    "no_regression_vs_product_for": [
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "recall@10_min_gain_in_both_modes": 0.02,
+    "all_required": true
+  },
+  "frozen_acceptance_gate": {
+    "maximum_runs": 1,
+    "run_only_after_all_prior_gates_pass": true,
+    "recall@10_min_gain_vs_product_in_both_modes": 0.15,
+    "preserve_product_recall@5": true,
+    "preserve_product_wrong_source_rate@5": true
+  },
+  "failure_policy": {
+    "candidate_configuration_changes_after_any_tuning_result": false,
+    "rejected_candidate_retry_under_v2": false,
+    "confirmation_access_without_nominee": false,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "next_failure_action": "expand_real_user_evaluation_evidence_before_any_fusion_v3"
+  }
+}

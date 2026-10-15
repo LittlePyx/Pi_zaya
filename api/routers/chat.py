@@ -67,6 +67,7 @@ from kb.research_note_evidence import (
     record_research_note_source_baseline_check,
     repair_research_note_source_state,
     research_note_evidence_maintenance_due,
+    research_note_evidence_resolution_mode,
     research_note_source_path_matches,
     resolve_research_note_source_baseline_check,
     review_research_note_source_state,
@@ -515,6 +516,27 @@ class CitationShelfBody(BaseModel):
     scope: str | None = Field(None, max_length=40)
     project_id: str | None = Field(None, max_length=120)
     allow_empty_overwrite: bool = False
+    expected_revision: int | None = Field(None, ge=0)
+    mutation_id: str = Field("", max_length=120)
+    mutations: list[dict[str, Any]] = Field(default_factory=list, max_length=120)
+
+    @field_validator("mutations")
+    @classmethod
+    def _check_mutations(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        _bounded_dict_list(value, name="shelf operations", max_items=120, max_json_chars=_CHAT_CITATION_SHELF_MAX_JSON_CHARS)
+        for op in value:
+            if not isinstance(op.get("id"), str) or not 1 <= len(op["id"]) <= 120:
+                raise ValueError("Shelf operation requires a bounded ID")
+            if not isinstance(op.get("clear", False), bool) or ("open" in op and not isinstance(op["open"], bool)):
+                raise ValueError("Invalid shelf operation flags")
+            for key in ("removedKeys", "removedIdentities", "order"):
+                entries = op.get(key, [])
+                if not isinstance(entries, list) or len(entries) > 120 or any(not isinstance(entry, str) for entry in entries):
+                    raise ValueError("Invalid shelf operation keys")
+            _bounded_dict_list(op.get("upserts", []), name="shelf upserts", max_items=120, max_json_chars=_CHAT_CITATION_SHELF_MAX_JSON_CHARS)
+        if len({op["id"] for op in value}) != len(value):
+            raise ValueError("Duplicate shelf operation ID")
+        return value
 
     @field_validator("items")
     @classmethod
@@ -1679,6 +1701,17 @@ def _capture_chat_research_note_evidence_context_baseline(
         persisted_check = persisted_link.get("evidence_baseline_check") if isinstance(persisted_link, dict) else None
         if isinstance(persisted_check, dict) and persisted_check.get("reason") == reason:
             item["checked_at"] = persisted_check.get("checked_at")
+            item["resolution_mode"] = persisted_check.get("resolution_mode") or (
+                research_note_evidence_resolution_mode(
+                    reason,
+                    terminal=bool(persisted_check.get("terminal")),
+                )
+            )
+        else:
+            item["resolution_mode"] = research_note_evidence_resolution_mode(
+                reason,
+                terminal=reason in RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS,
+            )
         items.append(item)
 
     for source_index, raw_link in enumerate(links):
@@ -2912,6 +2945,9 @@ def save_citation_shelf(
         items=body.items,
         open=body.open,
         allow_empty_overwrite=body.allow_empty_overwrite,
+        expected_revision=body.expected_revision,
+        mutation_id=body.mutation_id,
+        mutations=body.mutations,
     )
     if record is None:
         raise HTTPException(404, "conversation not found")

@@ -15,6 +15,7 @@ from openai import OpenAI
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from api.deps import get_settings, load_prefs, save_prefs
+from api.provider_connection_state import load_connection_check, remember_connection_check
 from api.internal_access import management_api_allowed, require_management_api
 from api.security import auth_token_configured, management_auth_required, management_token_configured, request_is_authenticated
 from kb.file_ops import _pick_directory_dialog
@@ -281,6 +282,8 @@ def _provider_readiness(s, target: Literal["text", "vision"]) -> dict:
     last_test = _LLM_TEST_RESULTS.get(target)
     if last_test and last_test.get("fingerprint") != fingerprint:
         last_test = None
+    if last_test is None:
+        last_test = load_connection_check(target, fingerprint)
 
     if not has_key:
         status = "missing"
@@ -1113,6 +1116,7 @@ def test_llm(body: ConnectionTestBody | None = None):
             "checked_at": checked_at,
             "fingerprint": _provider_fingerprint(api_key=api_key, base_url=base_url, model=model),
         }
+        remember_connection_check(target, _LLM_TEST_RESULTS[target])
         return result
     except Exception as e:
         error_type = _classify_connection_error(e)
@@ -1125,6 +1129,7 @@ def test_llm(body: ConnectionTestBody | None = None):
             "checked_at": checked_at,
             "fingerprint": _provider_fingerprint(api_key=api_key, base_url=base_url, model=model),
         }
+        remember_connection_check(target, _LLM_TEST_RESULTS[target])
         return {"ok": False, "error": error_text, "error_type": error_type, "checked_at": checked_at}
 
 

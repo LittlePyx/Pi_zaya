@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "invalidation_id": "retrieval_lighter_runtime_stage1_pointer_invalidation_v1",
+  "status": "retained_before_first_onnx_session_run",
+  "discovered_at": "2026-09-03",
+  "invalidated_protocol": {
+    "path": "docs/retrieval_lighter_runtime_screen_protocol_v1.json",
+    "sha256": "dffc76974fcdd1d288e5bc5e16f5590e4d09e140f26a7591b269f396a5817dea",
+    "field": "candidates[0].stage_1_quality_route.read_only_parent_index",
+    "frozen_value": "test_results/retrieval_cpu_full_index_feasibility_v1/index",
+    "retained_index_value": "test_results/retrieval_cpu_full_index_feasibility_v1/index_v1",
+    "retained_index_tree_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50"
+  },
+  "scope": {
+    "stage_0_result_affected": false,
+    "stage_0_reason": "Stage 0 verified the artifact, graph, CPU provider, and dependency environment without reading a parent embedding index.",
+    "stage_1_execution_under_invalidated_protocol_allowed": false,
+    "historical_protocol_mutation_allowed": false
+  },
+  "recovery": {
+    "protocol_path": "docs/retrieval_lighter_runtime_stage1_qwen_protocol_v1.json",
+    "must_pin_stage_0_report": true,
+    "must_pin_stress_manifest": true,
+    "must_pin_retained_index_v1": true,
+    "must_exist_before_first_inference": true
+  },
+  "execution": {
+    "onnx_session_run_calls_before_retention": 0,
+    "queries_encoded_before_retention": 0,
+    "documents_embedded_before_retention": 0,
+    "vectors_created_before_retention": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

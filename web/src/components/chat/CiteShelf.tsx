@@ -481,7 +481,6 @@ export function CiteShelf({
     const hasVenue = Boolean(String(item.venue || '').trim())
     const hasMetaConflict = shelfItemHasConflictingVenueSignals(item)
     const externalNeedsReview = externalMetadataNeedsVisibleReview(item, display)
-    const unresolved = !item.bibliometricsChecked
     const bibliographicEntry = Boolean(item.isInpaper || item.raw || item.citeFmt || hasDoi || item.externalDoi || item.externalDoiUrl)
     const needsRepair = shelfItemNeedsMetadataRepair(item, display)
 
@@ -491,8 +490,6 @@ export function CiteShelf({
     if (bibliographicEntry && !hasVenue) chips.push(S.shelf_missing_venue)
     if (hasWeakTitle) chips.push(S.shelf_weak_title)
     if (hasMetaConflict) chips.push(S.shelf_meta_conflict)
-    if (bibliographicEntry && unresolved && chips.length <= 1) chips.push(S.shelf_pending_verify)
-
     if (!chips.length) return { chips: [], tip: '', needsRepair }
 
     let tip = S.shelf_auto_fix_tip

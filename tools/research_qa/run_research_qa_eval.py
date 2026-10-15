@@ -25,7 +25,8 @@ from api.reference_card_quality import (
 )
 from kb.citation_audit import summarize_system_b_citation_audit
 from kb.claim_evidence_runtime import claim_evidence_audit
-from kb.retrieval_engine import _group_hits_by_doc_for_refs, _search_hits_with_fallback
+from kb.product_query_policy import search_hits_with_fallback
+from kb.retrieval_engine import _group_hits_by_doc_for_refs
 from kb.retriever import BM25Retriever
 from kb.store import load_all_chunks
 
@@ -761,7 +762,7 @@ def evaluate_retrieval_coverage(
             for item in _as_list(expected.get("requiredRefDocIds"))
             if str(item or "").strip()
         ]
-        hits, _scores, used_query, used_translation, query_variants = _search_hits_with_fallback(
+        hits, _scores, used_query, used_translation, query_variants = search_hits_with_fallback(
             question,
             retriever,
             int(top_k),
@@ -2738,8 +2739,10 @@ def _selected_context_pack(fixture: ResearchQaFixture, case: dict[str, Any]) -> 
         items.append(
             {
                 "key": f"research-qa:{doc_id}",
-                "kind": "source",
+                "kind": "reference",
                 "sourcePath": source_path,
+                "libraryMatchPath": source_path,
+                "libraryMatchStatus": "matched",
                 "sourceName": str(doc.get("title") or doc.get("shortLabel") or doc_id),
                 "title": str(doc.get("title") or doc_id),
             }
@@ -2865,19 +2868,22 @@ def run_case(
     top_k: int,
     max_tokens: int,
     case_timeout_s: float = 0.0,
+    retrieval_mode: str | None = None,
 ) -> dict[str, Any]:
     case_id = str(case.get("id") or "").strip()
     question = str(case.get("question") or "").strip()
     preferred_sources = [source_path_for_doc(fixture, str(doc_id)) for doc_id in _as_list(case.get("docIds"))]
     preferred_sources = [item for item in preferred_sources if item]
     query_scope = str(case.get("queryScope") or "library").strip().lower()
+    if query_scope == "selected_context":
+        query_scope = "basket"
     source_lock_path = preferred_sources[0] if query_scope == "current_paper" and len(preferred_sources) == 1 else ""
     source_lock_name = ""
     if source_lock_path:
         doc_id = str(_as_list(case.get("docIds"))[0] or "").strip()
         doc = fixture.docs_by_id.get(doc_id) or {}
         source_lock_name = str(doc.get("title") or doc.get("shortLabel") or "").strip()
-    prompt_context = _selected_context_pack(fixture, case) if query_scope == "selected_context" else None
+    prompt_context = _selected_context_pack(fixture, case) if query_scope == "basket" else None
     started = time.perf_counter()
     conv = _post_json(
         base_url,
@@ -2915,6 +2921,7 @@ def run_case(
             "source_lock_name": source_lock_name,
             "query_scope": query_scope,
             "prompt_context": prompt_context,
+            **({"retrieval_mode": retrieval_mode} if retrieval_mode else {}),
         },
         timeout_s=_bounded_request_timeout(timeout_s, case_deadline),
     )

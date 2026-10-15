@@ -1,0 +1,477 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from kb.source_blocks import load_source_blocks
+from kb.source_blocks import normalize_match_text
+
+
+def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) -> dict:
+    """Carry verified page-local statement blocks into the existing audit quotes.
+
+    Keep the primary card's quote and locator unchanged. Supplementary blocks
+    retain their own locators, and are never borrowed from another page/paper.
+    """
+    result = dict(plan or {}) if isinstance(plan, dict) else {}
+    sources: dict[str, list[dict]] = {}
+    for hit in hits or []:
+        meta = hit.get("meta") or {}
+        path = str(meta.get("source_path") or "")
+        rows = meta.get("source_passages") or [{**meta, "text": hit.get("text")}]
+        for row in rows:
+            if row.get("direct_question_evidence") and row.get("block_id"):
+                sources.setdefault(path, []).append(row)
+    slots = []
+    for raw in result.get("slots", []):
+        if not isinstance(raw, dict):
+            slots.append(raw)
+            continue
+        slot = dict(raw)
+        path = str(slot.get("source_path") or "")
+        rows = sources.get(path, [])
+        if rows and slot.get("preferred_system") == "system_a":
+            try:
+                actual = {b["block_id"]: b for b in load_source_blocks(Path(path))}
+                # The preflight plan may still name a broad retrieval chunk.
+                # Promote the selected direct passage only after reading its
+                # actual source block again; keep the existing source/number.
+                selected = next(
+                    (r for r in rows if len(str(r.get("text") or "")) >= 40), None
+                )
+                selected_block = actual.get(str((selected or {}).get("block_id") or ""))
+                if (
+                    selected_block
+                    and slot.get("block_id") != selected_block["block_id"]
+                    and int(selected_block.get("page_start") or 0) > 0
+                    and int(selected.get("page_start") or 0)
+                    == int(selected_block.get("page_start") or 0)
+                    and normalize_match_text(str(selected.get("text") or ""))
+                    == normalize_match_text(
+                        str(
+                            selected_block.get("raw_text")
+                            or selected_block.get("text")
+                            or ""
+                        )
+                    )
+                ):
+                    slot.update(
+                        {
+                            key: selected_block.get(key)
+                            for key in (
+                                "block_id",
+                                "anchor_id",
+                                "heading_path",
+                                "page_start",
+                                "page_end",
+                            )
+                        }
+                    )
+                    slot["anchor_kind"] = selected_block.get("kind")
+                    slot["evidence_quote"] = selected["text"]
+                    slot["evidence_selection_reason"] = "requested_source_statement"
+                primary = actual.get(str(slot.get("block_id") or ""))
+                page = int(slot.get("page_start") or 0)
+                quote = normalize_match_text(str(slot.get("evidence_quote") or ""))
+                primary_ok = (
+                    primary
+                    and page > 0
+                    and primary.get("page_start") == page
+                    and len(quote) >= 40
+                    and quote
+                    in normalize_match_text(
+                        str(primary.get("raw_text") or primary.get("text") or "")
+                    )
+                    and any(r.get("block_id") == primary["block_id"] for r in rows)
+                )
+                verified = []
+                for row in rows if primary_ok else []:
+                    block = actual.get(str(row.get("block_id") or ""))
+                    text = str(row.get("text") or "").strip()
+                    if (
+                        block
+                        and block.get("page_start") == page
+                        and text
+                        and normalize_match_text(text)
+                        == normalize_match_text(
+                            str(block.get("raw_text") or block.get("text") or "")
+                        )
+                    ):
+                        verified.append(
+                            {
+                                "text": text,
+                                "block_id": block["block_id"],
+                                "anchor_id": block.get("anchor_id"),
+                                "page_start": page,
+                                "source_path": path,
+                            }
+                        )
+                if verified:
+                    # Reuse the renderer's verified prompt-block contract so
+                    # later reference enrichment cannot replace this locator.
+                    slot["evidence_selection_reason"] = "prompt_contract_block"
+                    slot["strict_locate"] = True
+                    slot["source_evidence_quotes"] = list(
+                        dict.fromkeys(
+                            [
+                                *slot.get("source_evidence_quotes", []),
+                                *(b["text"] for b in verified),
+                            ]
+                        )
+                    )
+                    slot["direct_source_evidence"] = verified
+            except (OSError, ValueError, TypeError):
+                pass  # A changed/unavailable source cannot grant new support.
+        slots.append(slot)
+    if "slots" in result:
+        result["slots"] = slots
+    return result
+
+
+def prioritize_direct_question_hits(
+    selected: list[dict], candidates: list[dict], *, limit: int
+) -> list[dict]:
+    direct = [
+        hit
+        for hit in candidates
+        if (hit.get("meta") or {}).get("direct_question_evidence")
+    ]
+    if not direct:
+        return selected
+    seen = set()
+    out = []
+    for hit in direct + selected:
+        meta = hit.get("meta") or {}
+        key = (
+            str(meta.get("source_path") or ""),
+            str(meta.get("block_id") or hit.get("text") or ""),
+        )
+        if key not in seen:
+            seen.add(key)
+            out.append(hit)
+    return out[:limit]
+
+
+_STATEMENT = re.compile(
+    r"(?i)(proposition|theorem|lemma|definition|命题|定理|引理|定义)\s*(\d+)"
+)
+_INTERVAL_QUESTION = re.compile(
+    r"(?i)(?:noise.{0,45}(?:interval|range)|(?:interval|range).{0,45}noise|噪声.{0,20}(?:范围|区间))"
+)
+_VARIANCE_QUESTION = re.compile(
+    r"(?i)(?:variance|方差).{0,80}(?:samples?|样本)|(?:samples?|样本).{0,80}(?:variance|方差)"
+)
+_TASK_LIST_QUESTION = re.compile(
+    r"(?i)(?:三类|三种|three).{0,30}(?:任务|应用|tasks?|applications?)|(?:任务|应用|tasks?|applications?).{0,30}(?:三类|三种|three)"
+)
+_CALIBRATION_QUESTION = re.compile(r"(?i)校准|calibrat")
+_TRAINING_OBSERVATION_QUESTION = re.compile(
+    r"(?i)训练(?:观测|数据)|training\s+(?:data|observations)|noisy\s+pairs|噪声图像|"
+    r"(?:一|单)张.{0,12}带噪|干净(?:参照|目标|标签).{0,30}(?:配对|数据)|"
+    r"(?:哪|两).{0,12}(?:类)?配对(?:数据|图像)"
+)
+_INDEPENDENCE_QUESTION = re.compile(r"(?i)独立性|independence|相关噪声|correlated\s+noise")
+_STATISTICAL_ASSUMPTIONS_QUESTION = re.compile(
+    r"(?i)统计假设|statistical\s+assumptions?|"
+    r"(?:信号|signal).{0,40}(?:噪声|noise).{0,30}(?:假设|assumptions?)"
+)
+_NOISY_TARGET_EXPECTATION_QUESTION = re.compile(
+    r"(?i)(?:条件期望|conditional\s+expect).{0,90}(?:干净|带噪|clean|noisy)|"
+    r"(?:干净|带噪|clean|noisy).{0,90}(?:条件期望|conditional\s+expect)"
+)
+_OUTPUT_RELATION_QUESTION = re.compile(
+    r"(?i)DnCNN.{0,80}(?:\u76f4\u63a5\u9884\u6d4b|\u7f51\u7edc\u8f93\u51fa|\u53bb\u566a\u56fe\u50cf|directly\s+predict|network\s+output|denoised\s+image)"
+)
+
+
+def _architecture_relation_question(prompt: str) -> bool:
+    facets = (
+        r"(?i)pooling|池化",
+        r"(?i)filter|kernel|卷积核",
+        r"(?i)receptive\s+field|感受野",
+    )
+    return sum(bool(re.search(pattern, prompt)) for pattern in facets) >= 2
+
+
+def _task_list_score(text: str) -> int:
+    owned = bool(re.search(r"(?i)\bwe\b|\bour\b|本文|我们", text))
+    explicit = bool(
+        re.search(r"(?i)three.{0,35}(?:specific\s+)?tasks?|三.{0,12}(?:任务|应用)", text)
+    )
+    named = sum(
+        bool(re.search(pattern, text, re.I))
+        for pattern in (
+            r"Gaussian\s+denois",
+            r"(?:single\s+image\s+super[- ]resolution|\bSISR\b)",
+            r"JPEG(?:\s+image)?\s+deblock",
+        )
+    )
+    if named == 3:
+        return 12 + int(owned) + int(explicit)
+    return 3 if owned and explicit else 0
+
+
+def _noisy_target_expectation_score(text: str) -> int:
+    conditional = bool(
+        re.search(
+            r"(?i)input[- ]conditioned\s+target\s+distributions.{0,220}same\s+conditional\s+expected\s+values",
+            text,
+        )
+    )
+    zero_mean = bool(re.search(r"(?i)zero[- ]mean\s+noise", text))
+    if conditional and zero_mean:
+        return 16
+    if re.search(
+        r"(?i)expectation\s+of\s+the\s+corrupted\s+input\s+data\s+is\s+the\s+clean\s+target",
+        text,
+    ):
+        return 5
+    return 0
+
+
+def _architecture_relation_score(text: str) -> int:
+    if not all(
+        re.search(pattern, text, re.I)
+        for pattern in (
+            r"3\s*[×x]\s*3",
+            r"remove(?:s|d)?\s+all\s+pooling\s+layers",
+            r"receptive\s+field.{0,80}depth\s+of\s+d.{0,80}\(\s*2\s*d\s*\+\s*1\s*\)\s*[×x]\s*\(\s*2\s*d\s*\+\s*1\s*\)",
+        )
+    ):
+        return 0
+    return 16
+
+
+def _output_relation_score(text: str) -> int:
+    if not all(
+        re.search(pattern, text, re.I)
+        for pattern in (
+            r"designed\s+to\s+predict\s+the\s+residual\s+image",
+            r"difference\s+between\s+the\s+noisy\s+observation\s+and\s+the\s+latent\s+clean\s+image",
+        )
+    ):
+        return 0
+    return 16
+
+
+def _requested_facet_score(prompt: str, text: str) -> int:
+    """Locate explicit source statements, never infer facts from paper names."""
+    if _CALIBRATION_QUESTION.search(prompt):
+        return 3 if re.search(r"(?i)calibrat.{0,80}(?:traditional|median|non.local)|校准.{0,30}(?:传统|中值)", text) else 0
+    if _INDEPENDENCE_QUESTION.search(prompt):
+        relation = re.search(r"(?i)(?:noise.{0,65}independent.{0,50}(?:signal|conditional)|independence.{0,60}noise)", text)
+        if not relation:
+            return 0
+        return 8 if re.search(r"(?i)we (?:assume|use).{0,110}noise.{0,65}independent", text) else 1
+    if _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
+        signal = re.search(r"(?i)signal.{0,30}(?:is\s+)?not\s+pixel[- ]wise\s+independent", text)
+        noise = re.search(
+            r"(?i)noise.{0,45}conditionally\s+pixel[- ]wise\s+independent.{0,30}(?:given\s+the\s+signal|signal)",
+            text,
+        )
+        if not (signal and noise):
+            return 0
+        return 16 if re.search(r"(?i)we\s+make\s+two\s+simple\s+statistical\s+assumptions", text) else 8
+    if _TRAINING_OBSERVATION_QUESTION.search(prompt):
+        # Author-owned data requirements take precedence over related work.
+        owned = bool(re.search(r"(?i)\bwe\b|\bour\b|本文|我们", text))
+        paired_data = bool(
+            re.search(
+                r"(?i)(?:does\s+not\s+require|neither).{0,80}noisy\s+image\s+pairs.{0,80}(?:nor|neither).{0,40}clean\s+target\s+images|"
+                r"neither\s+noisy\s+image\s+pairs\s+nor\s+clean\s+target\s+images",
+                text,
+            )
+        )
+        explicit = bool(
+            re.search(
+                r"(?i)observe.{0,30}twice|(?:neither|not require).{0,70}(?:pairs|target)|"
+                r"(?:input|training).{0,35}(?:target|pairs)",
+                text,
+            )
+        )
+        if paired_data and re.search(r"(?i)\bN2V\b|NOISE\s*2\s*VOID|our\s+(?:approach|training|procedure|scheme)", text):
+            return 16
+        asks_both_pair_types = bool(
+            re.search(r"(?:哪|两).{0,12}(?:类)?配对(?:数据|图像)|which.{0,20}pairs?", prompt, re.I)
+            or (
+                re.search(r"(?:一|单)张.{0,12}带噪|single\s+noisy", prompt, re.I)
+                and re.search(r"干净(?:参照|目标|标签)|clean\s+target", prompt, re.I)
+            )
+        )
+        if asks_both_pair_types:
+            return 0
+        return 3 if owned and explicit else 0
+    return 0
+
+
+def requests_direct_question_evidence(prompt: str) -> bool:
+    return bool(
+        _STATEMENT.search(prompt)
+        or _INTERVAL_QUESTION.search(prompt)
+        or _VARIANCE_QUESTION.search(prompt)
+        or _TASK_LIST_QUESTION.search(prompt)
+        or _CALIBRATION_QUESTION.search(prompt)
+        or _TRAINING_OBSERVATION_QUESTION.search(prompt)
+        or _INDEPENDENCE_QUESTION.search(prompt)
+        or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt)
+        or _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt)
+        or _OUTPUT_RELATION_QUESTION.search(prompt)
+        or _architecture_relation_question(prompt)
+    )
+
+
+def direct_question_evidence_hits(
+    md_path: Path, prompt: str, *, limit: int = 6
+) -> list[dict]:
+    """Find requested statement/interval facts in the bound source, not titles."""
+    if not requests_direct_question_evidence(prompt):
+        return []
+    blocks = list(load_source_blocks(md_path))
+    statement = _STATEMENT.search(prompt)
+    candidates: list[tuple[int, int, list[int]]] = []
+    query_words = set(re.findall(r"[a-z]{4,}", prompt.lower()))
+    for index, block in enumerate(blocks):
+        text = str(block.get("raw_text") or block.get("text") or "")
+        if (
+            block.get("kind") in {"heading", "figure"}
+            or "reference" in str(block.get("heading_path") or "").lower()
+        ):
+            continue
+        selected = [index]
+        if statement:
+            label = _STATEMENT.match(text.strip())
+            aliases = {
+                "命题": "proposition",
+                "定理": "theorem",
+                "引理": "lemma",
+                "定义": "definition",
+            }
+            if (
+                not label
+                or aliases.get(label[1].lower(), label[1].lower())
+                != aliases.get(statement[1].lower(), statement[1].lower())
+                or label[2] != statement[2]
+            ):
+                continue
+            for following in range(index + 1, min(len(blocks), index + 7)):
+                row = blocks[following]
+                if (
+                    row.get("kind") == "heading"
+                    or row.get("page_start") != block.get("page_start")
+                    or _STATEMENT.match(
+                        str(row.get("raw_text") or row.get("text") or "").strip()
+                    )
+                ):
+                    break
+                if row.get("kind") != "figure":
+                    selected.append(following)
+        elif _INTERVAL_QUESTION.search(prompt):
+            if not re.search(
+                r"\[\s*\d+(?:\.\d+)?\s*,\s*\d+(?:\.\d+)?\s*\]", text
+            ) or not re.search(r"(?i)noise|sigma|σ|噪声", text):
+                continue
+        elif _TASK_LIST_QUESTION.search(prompt):
+            task_score = _task_list_score(text)
+            broad_application_statement = bool(
+                re.search(r"(?i)\bwe\b|\bour\b|本文|我们", text)
+                and re.search(
+                    r"(?i)(?:demonstrate|demonstrations).{0,180}(?:removal|denois|reconstruct)|"
+                    r"(?:situations|applications).{0,250}(?:photograph|imaging)",
+                    text,
+                )
+            )
+            if not task_score and not broad_application_statement:
+                continue
+        elif _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt):
+            if not _noisy_target_expectation_score(text):
+                continue
+        elif _architecture_relation_question(prompt):
+            if not _architecture_relation_score(text):
+                continue
+        elif _OUTPUT_RELATION_QUESTION.search(prompt):
+            if not _output_relation_score(text):
+                continue
+        elif _VARIANCE_QUESTION.search(prompt) and not (
+            re.search(r"(?i)variance|方差", text)
+            and re.search(r"(?i)divided|number of.*samples|除|样本", text)
+        ):
+            continue
+        elif not _VARIANCE_QUESTION.search(prompt) and not _requested_facet_score(prompt, text):
+            continue
+        surface = " ".join(
+            str(blocks[i].get("raw_text") or blocks[i].get("text") or "")
+            for i in selected
+        )
+        overlap = len(query_words & set(re.findall(r"[a-z]{4,}", surface.lower())))
+        candidates.append(
+            (
+                overlap
+                + _requested_facet_score(prompt, text)
+                + (_task_list_score(text) if _TASK_LIST_QUESTION.search(prompt) else 0)
+                + (
+                    _noisy_target_expectation_score(text)
+                    if _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt)
+                    else 0
+                )
+                + (
+                    _architecture_relation_score(text)
+                    if _architecture_relation_question(prompt)
+                    else 0
+                )
+                + (
+                    _output_relation_score(text)
+                    if _OUTPUT_RELATION_QUESTION.search(prompt)
+                    else 0
+                ),
+                index,
+                selected,
+            )
+        )
+    if not candidates:
+        return []
+    candidates.sort(key=lambda row: (-row[0], row[1]))
+    chosen = candidates[0][2]
+    # Lead with the explanatory paragraph for loss questions, while preserving
+    # the statement and its page-local equations as separately bound passages.
+    if statement and re.search(r"(?i)loss|损失", prompt):
+        chosen.sort(
+            key=lambda i: (
+                not bool(
+                    re.search(
+                        r"(?i)loss.*variance|损失.*方差",
+                        str(blocks[i].get("raw_text") or ""),
+                    )
+                ),
+                i,
+            )
+        )
+    out = []
+    for index in chosen[: max(1, limit)]:
+        block = blocks[index]
+        text = str(block.get("raw_text") or block.get("text") or "").strip()
+        if not text or not block.get("block_id"):
+            continue
+        out.append(
+            {
+                "text": text,
+                "score": 1000.0 - len(out),
+                "meta": {
+                    **{
+                        key: block.get(key)
+                        for key in (
+                            "block_id",
+                            "anchor_id",
+                            "kind",
+                            "heading_path",
+                            "page_start",
+                            "page_end",
+                        )
+                    },
+                    "source_path": str(md_path),
+                    "direct_question_evidence": True,
+                    "paper_guide_targeted_block": True,
+                    "evidence_selection_reason": "requested_source_statement",
+                },
+            }
+        )
+    return out

@@ -1,0 +1,8 @@
+# Benchmark-only runtime for dense_candidate_batch_v1.
+# This file is not imported by or installed into the Pi_zaya product runtime.
+--extra-index-url https://download.pytorch.org/whl/cu121
+torch==2.3.1+cu121
+transformers==4.51.3
+tokenizers==0.21.4
+huggingface-hub==0.30.2
+safetensors==0.5.3

@@ -3,15 +3,17 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import kb.retrieval_engine as retrieval_engine
+from kb.product_query_policy import (
+    deterministic_query_variants,
+    search_hits_with_fallback,
+    translate_query_for_search,
+)
 from kb.retrieval_engine import (
     _anchor_text_bonus,
-    _deterministic_query_variants,
     _extract_direct_prompt_phrases,
     _extract_explicit_anchor_hint,
     _group_hits_by_doc_for_refs,
-    _search_hits_with_fallback,
     _source_prompt_match_score,
-    _translate_query_for_search,
 )
 from kb.retriever import BM25Retriever
 
@@ -71,7 +73,7 @@ def test_explicit_section_focus_selects_the_requested_passage(tmp_path, monkeypa
 
 
 def test_deterministic_query_variants_expand_refocus_mechanism_terms() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "这个 quantum correlation light-field microscope 是怎么把离焦样品重新对焦的？"
     )
     joined = " ".join(variants).lower()
@@ -82,7 +84,7 @@ def test_deterministic_query_variants_expand_refocus_mechanism_terms() -> None:
 
 
 def test_deterministic_query_variants_expand_learned_primal_dual_method_terms() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "Learned Primal-Dual 如何把传统 PDHG 变成可学习网络？"
         "哪些更新被替换，为什么不需要 FBP 初始化？"
     )
@@ -95,7 +97,7 @@ def test_deterministic_query_variants_expand_learned_primal_dual_method_terms() 
 
 
 def test_deterministic_query_variants_cover_both_named_unrolled_networks() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "比较 Learned Primal-Dual 与 ISTA-Net：各自把什么迭代步骤变成可学习模块？"
     )
     joined = "\n".join(variants).lower()
@@ -107,7 +109,7 @@ def test_deterministic_query_variants_cover_both_named_unrolled_networks() -> No
 
 
 def test_deterministic_query_variants_split_unmapped_named_methods() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "FlashAttention \u548c LoRA \u90fd\u88ab\u79f0\u4e3a\u9ad8\u6548\uff0c\u4f46\u5b83\u4eec\u4f18\u5316\u7684\u5bf9\u8c61\u6709\u4ec0\u4e48\u4e0d\u540c\uff1f"
     )
 
@@ -115,7 +117,7 @@ def test_deterministic_query_variants_split_unmapped_named_methods() -> None:
 
 
 def test_deterministic_query_variants_preserve_six_enumerated_paper_names() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "请比较 Informer、Autoformer、FEDformer、PatchTST、TimesNet 和 iTransformer，"
         "每篇论文都给出证据。"
     )
@@ -157,11 +159,11 @@ def test_unmapped_named_methods_survive_lossy_translation(monkeypatch) -> None:
         ]
     )
     monkeypatch.setattr(
-        "kb.retrieval_engine._translate_query_for_search",
+        "kb.product_query_policy.translate_query_for_search",
         lambda _settings, _query: "LoRA motivation",
     )
 
-    hits, _scores, _used_query, _used_translation, variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_translation, variants = search_hits_with_fallback(
         "FlashAttention \u548c LoRA \u90fd\u88ab\u79f0\u4e3a\u9ad8\u6548\uff0c\u8bf7\u6bd4\u8f83\u5b83\u4eec\u3002",
         retriever,
         2,
@@ -182,7 +184,7 @@ def test_unmapped_named_methods_survive_lossy_translation(monkeypatch) -> None:
 
 
 def test_deterministic_query_variants_expand_thick_sample_tradeoff_terms() -> None:
-    variants = _deterministic_query_variants("s2ISM 这篇说的 trade-off 是什么？为什么厚样本会麻烦？")
+    variants = deterministic_query_variants("s2ISM 这篇说的 trade-off 是什么？为什么厚样本会麻烦？")
     joined = " ".join(variants).lower()
 
     assert "snr" in joined
@@ -191,7 +193,7 @@ def test_deterministic_query_variants_expand_thick_sample_tradeoff_terms() -> No
 
 
 def test_query_translation_does_not_treat_representative_as_table_intent() -> None:
-    translated = _translate_query_for_search(
+    translated = translate_query_for_search(
         SimpleNamespace(api_key=None),
         "什么场景真的值得用单像素相机？这篇综述给了哪些代表性应用？",
     )
@@ -203,7 +205,7 @@ def test_query_translation_does_not_treat_representative_as_table_intent() -> No
 
 
 def test_query_translation_keeps_explicit_table_intent() -> None:
-    translated = _translate_query_for_search(
+    translated = translate_query_for_search(
         SimpleNamespace(api_key=None),
         "表格中哪种方法的 PSNR 最高？",
     )
@@ -213,7 +215,7 @@ def test_query_translation_keeps_explicit_table_intent() -> None:
 
 
 def test_query_translation_preserves_color_spi_challenge_terms() -> None:
-    translated = _translate_query_for_search(
+    translated = translate_query_for_search(
         SimpleNamespace(api_key=None),
         "彩色单像素成像相比灰度 SPI 有哪些额外挑战？"
         "深度学习怎样降低系统复杂度和成像时间？",
@@ -227,7 +229,7 @@ def test_query_translation_preserves_color_spi_challenge_terms() -> None:
 
 
 def test_deterministic_query_variants_target_color_spi_source_evidence() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "彩色单像素成像相比灰度 SPI 有哪些额外挑战？"
         "深度学习怎样降低系统复杂度和成像时间？",
     )
@@ -314,7 +316,7 @@ def test_grouped_evidence_keeps_fused_color_spi_chunk_and_page(tmp_path, monkeyp
 
 
 def test_deterministic_query_variants_split_multi_method_microscopy_question() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "显微成像这些 structured detection、interferometric、light-field 方法分别在解决什么麻烦？"
     )
     joined = "\n".join(variants).lower()
@@ -349,7 +351,7 @@ def test_direct_prompt_match_normalizes_pdf_ligatures_in_source_identity() -> No
 
 
 def test_deterministic_query_variants_pair_detector_review_with_pidl() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "单光子成像里，探测器综述和 physics-informed deep learning 这篇应该怎么搭配读？"
     )
     joined = "\n".join(variants).lower()
@@ -360,7 +362,7 @@ def test_deterministic_query_variants_pair_detector_review_with_pidl() -> None:
 
 
 def test_deterministic_query_variants_focus_single_photon_pidl_on_physical_noise_model() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "physics-informed deep learning 在单光子成像里到底帮了什么？"
     )
     joined = "\n".join(variants).lower()
@@ -371,7 +373,7 @@ def test_deterministic_query_variants_focus_single_photon_pidl_on_physical_noise
 
 
 def test_deterministic_query_variants_expand_single_pixel_application_review() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "什么场景真的值得用单像素相机，而不是普通面阵相机？这篇综述给了哪些代表性应用？"
     )
 
@@ -386,7 +388,7 @@ def test_deterministic_query_variants_expand_single_pixel_application_review() -
 
 
 def test_deterministic_query_variants_expand_piln_taxonomy_terms() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "PILN 和综述里的深度学习单像素成像主线是什么关系？"
     )
     joined = " ".join(variants).lower()
@@ -398,7 +400,7 @@ def test_deterministic_query_variants_expand_piln_taxonomy_terms() -> None:
 
 
 def test_deterministic_query_variants_resolve_pidl_and_piln_as_distinct_papers() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "比较 PIDL 与 PILN：训练阶段分别需要哪些物理先验，推理阶段输入输出是什么？"
     )
 
@@ -442,7 +444,7 @@ def test_cassi_alias_matches_dual_disperser_title_without_literal_acronym() -> N
 
 
 def test_deterministic_query_variants_split_cassi_dcd_and_dltr_facets() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "CASSI 与 DCD 的观测模型有什么区别？DLTR 如何利用三维张量低秩性？"
     )
     joined = "\n".join(variants).lower()
@@ -462,14 +464,14 @@ def test_hatnet_alias_and_variants_resolve_dual_scale_transformer_source() -> No
     )
 
     assert _source_prompt_match_score(question, source) >= 7.5
-    variants = " ".join(_deterministic_query_variants(question)).lower()
+    variants = " ".join(deterministic_query_variants(question)).lower()
     assert "dual-scale transformer" in variants
     assert "tensor gradient descent" in variants
     assert "s-sa" in variants and "c-sa" in variants
 
 
 def test_deterministic_query_variants_expand_snapshot_compressive_3d_lineage() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？"
     )
     joined = "\n".join(variants).lower()
@@ -483,7 +485,7 @@ def test_deterministic_query_variants_expand_snapshot_compressive_3d_lineage() -
 
 
 def test_deterministic_query_variants_expand_scinerf_forward_equation() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "SCINeRF 的 SCI 前向成像公式如何连接二值掩模、噪声和 NeRF 联合优化？"
     )
     joined = "\n".join(variants).lower()
@@ -495,7 +497,7 @@ def test_deterministic_query_variants_expand_scinerf_forward_equation() -> None:
 
 
 def test_deterministic_query_variants_expand_fdm_parallel_encoding() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "Both frequency-division-multiplexed SPI and 3D single-pixel video claim speedups. "
         "What does each parallelize and why are multiple detectors needed?"
     )
@@ -554,7 +556,7 @@ def test_snapshot_compressive_3d_lineage_retrieves_all_named_stages_without_an_l
         ]
     )
 
-    hits, _scores, _used_query, _used_translation, _variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_translation, _variants = search_hits_with_fallback(
         "SCI 或压缩快照成像这条线，是怎么从光谱成像走到 3D 场景重建的？",
         retriever,
         3,
@@ -590,13 +592,13 @@ def test_deterministic_query_variants_expand_exact_mechanism_terms() -> None:
     }
 
     for question, required in cases.items():
-        joined = " ".join(_deterministic_query_variants(question)).lower()
+        joined = " ".join(deterministic_query_variants(question)).lower()
         assert all(term in joined for term in required)
 
 
 def test_deterministic_query_variants_target_dl_spi_review_in_english() -> None:
     joined = " ".join(
-        _deterministic_query_variants(
+        deterministic_query_variants(
             "What practical improvements does deep learning bring to single-pixel imaging, "
             "and what limitations should I keep in mind before using it?"
         )
@@ -654,7 +656,7 @@ def test_pidl_piln_comparison_retrieves_both_named_sources_without_an_llm() -> N
         ]
     )
 
-    hits, _scores, _used_query, _used_translation, variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_translation, variants = search_hits_with_fallback(
         "比较 PIDL 与 PILN 的训练先验和推理输入输出",
         retriever,
         2,
@@ -667,7 +669,7 @@ def test_pidl_piln_comparison_retrieves_both_named_sources_without_an_llm() -> N
 
 
 def test_deterministic_query_variants_keep_generic_perovskite_laser_query_neutral() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "钙钛矿激光器这篇和我的单像素成像主线关系大吗？"
         "请直接说明它解决的是什么器件问题。"
     )
@@ -681,7 +683,7 @@ def test_deterministic_query_variants_keep_generic_perovskite_laser_query_neutra
 
 
 def test_deterministic_query_variants_add_device_terms_only_for_explicit_clues() -> None:
-    variants = _deterministic_query_variants(
+    variants = deterministic_query_variants(
         "这篇电驱动双腔钙钛矿激光器如何实现电注入？"
     )
     joined = " ".join(variants).lower()
@@ -745,7 +747,7 @@ def test_perovskite_laser_query_ranks_dual_cavity_device_over_detector_material(
         "请直接说明它解决的是什么器件问题。"
     )
 
-    hits, _scores, _used_query, _used_translation, variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_translation, variants = search_hits_with_fallback(
         question,
         retriever,
         2,
@@ -795,7 +797,7 @@ def test_optically_pumped_perovskite_laser_query_does_not_promote_dual_cavity_pa
         ]
     )
 
-    hits, _scores, _used_query, _used_translation, variants = _search_hits_with_fallback(
+    hits, _scores, _used_query, _used_translation, variants = search_hits_with_fallback(
         "帮我找那篇光泵浦钙钛矿激光器论文",
         retriever,
         2,

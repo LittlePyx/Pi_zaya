@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_cpu_query_compatibility_v1",
+  "status": "frozen_before_first_query",
+  "frozen_at": "2026-09-03",
+  "purpose": "Screen whether CPU float32 query encoding is compatible enough with the accepted Qwen semantic index to justify a full CPU index-build and optional-runtime study.",
+  "accepted_parent": {
+    "report_path": "docs/retrieval_user_journey_fusion_v3_1_semantic_acceptance_v2.json",
+    "report_sha256": "5862818541ddff4ac70169e6183404abb3d9f184ec75db5e08b908e5084fb432",
+    "result_fingerprint": "a3c81c2805cd887011219b68a33e6bbf3ed8688f5209b8483263e1a41ce2847a",
+    "provider_identity": "55229348d5bbe4b1e1935aeb8ffe57cc03c527685b1d08d44f11a56a54525cb8",
+    "device": "cuda",
+    "dtype": "float16"
+  },
+  "fixture": {
+    "path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "case_count": 12,
+    "modes": [
+      "scoped",
+      "full_library"
+    ]
+  },
+  "read_only_index": {
+    "relative_path": "test_results/retrieval_user_journey_fusion_v3_1_semantic/qwen_index_v1",
+    "tree_sha256": "928d30b1aa31bcdfebe529bdefda4f424b96e77148e48f981794a77d37a45013",
+    "document_embedding_runtime": "cuda_float16_parent",
+    "writes_allowed": false,
+    "build_allowed": false
+  },
+  "cpu_query_candidate": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "provider_identity": "a5bb526562ff581e073496f8fc14077e119373c5051a70a78aec7306770434e9",
+    "device": "cpu",
+    "dtype": "float32",
+    "pooling": "last_token",
+    "padding_side": "left",
+    "max_length": 8192,
+    "allow_download": false,
+    "trust_remote_code": false
+  },
+  "fusion": {
+    "strategy": "protected_dense_tail",
+    "protected_sparse_prefix": 5,
+    "sparse_tail_window": 5,
+    "dense_novelty_quota": 2,
+    "candidate_multiplier": 4,
+    "ranking_depth": 10
+  },
+  "predeclared_gate": {
+    "minimum_semantic_recall_at_10_gain_each_mode": 0.15,
+    "require_recall_at_5_equal_to_product": true,
+    "require_wrong_source_at_5_equal_to_product": true,
+    "require_no_regression_vs_parent_fusion_metrics": [
+      "recall@5",
+      "recall@10",
+      "mrr",
+      "ndcg@10"
+    ],
+    "require_wrong_source_at_5_no_worse_than_parent": true,
+    "maximum_provider_load_ms": 30000.0,
+    "maximum_warm_query_embedding_p95_ms": 1000.0,
+    "required_query_completion_rate": 1.0,
+    "require_index_tree_unchanged": true
+  },
+  "execution": {
+    "reference_cpu": "AMD Ryzen 7 5800H with Radeon Graphics",
+    "reference_memory_gib": 63.86,
+    "maximum_runs": 1,
+    "report_path": "docs/retrieval_cpu_query_compatibility_v1.json",
+    "unique_query_count": 12,
+    "no_document_embeddings_created": true,
+    "no_product_index_changes": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "pass_decision": "passed_for_cpu_full_index_feasibility",
+    "reject_decision": "rejected_cpu_qwen_query_runtime"
+  }
+}

@@ -1,4 +1,6 @@
 import { api, authFetch, responseError, responseJson } from './client'
+import type { CitationShelfRecord, CitationShelfRequest, CitationShelfSaveBody } from './citationShelf'
+export type { CitationShelfRecord, CitationShelfRequest, CitationShelfSaveBody } from './citationShelf'
 
 export interface Conversation {
   id: string
@@ -90,7 +92,7 @@ export interface ResearchNoteSourceLink {
     version?: number
     checked_at?: number
     status?: 'skipped' | 'failed' | string
-    reason?: string
+    reason?: string; resolution_mode?: 'system_auto' | 'user_decision' | 'source_boundary' | string
     source_fingerprint?: string
     locator?: Record<string, unknown>
     maintenance_version?: number
@@ -298,7 +300,7 @@ export interface ResearchNoteEvidenceBaselineItem {
   source_index: number
   source_name: string
   status: 'created' | 'skipped' | 'failed'
-  reason: string
+  reason: string; resolution_mode?: 'system_auto' | 'user_decision' | 'source_boundary' | string
   checked_at?: number
 }
 
@@ -866,7 +868,6 @@ export interface ConversationResearchStateRecord {
 
 export type QueryScope = 'current_paper' | 'basket' | 'library'
 export type ExternalSupplementMode = 'disabled' | 'model' | 'web'
-
 export interface MessageProvenanceSegment {
   segment_id: string
   segment_index?: number
@@ -962,30 +963,6 @@ export interface ChatImageAttachment {
   name: string
   mime: string
   url?: string
-}
-
-export interface CitationShelfRecord {
-  version: number
-  scope: string
-  scope_id: string
-  project_id?: string | null
-  items: Array<Record<string, unknown>>
-  open: boolean
-  revision: number
-  created_at: number
-  updated_at: number
-}
-
-export interface CitationShelfRequest {
-  convId?: string | null
-  projectId?: string | null
-  scope?: string
-}
-
-export interface CitationShelfSaveBody extends CitationShelfRequest {
-  items: Array<Record<string, unknown>>
-  open?: boolean
-  allowEmptyOverwrite?: boolean
 }
 
 export type ResearchBriefQualityStatus = 'verified' | 'needs_review' | 'draft' | string
@@ -2131,6 +2108,9 @@ export const chatApi = {
       scope: body.scope || 'project',
       project_id: body.projectId ?? null,
       allow_empty_overwrite: body.allowEmptyOverwrite ?? false,
+      expected_revision: body.expectedRevision,
+      mutation_id: body.mutationId,
+      mutations: body.mutations,
     }),
   appendCitationShelfItem: (body: CitationShelfRequest & { item: Record<string, unknown>; open?: boolean }) =>
     api.post<CitationShelfRecord>(citationShelfItemsUrl(body), {

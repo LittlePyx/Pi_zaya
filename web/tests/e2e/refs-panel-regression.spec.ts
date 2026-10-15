@@ -50,16 +50,17 @@ test('refs panel explains when guide mode filtered the current paper and no exte
   await expect(page.getByTestId('refs-panel-guide-filter-note')).toBeVisible()
 })
 
-test('refs panel renders provisional cards while refs enrichment is pending', async ({ page }) => {
+test('refs panel hides provisional cards while refs enrichment is pending', async ({ page }) => {
   await page.goto('/__refs_panel_test__?scenario=pending-with-hits')
 
   await expect(page.getByTestId('refs-panel-test-scenario')).toHaveText('pending-with-hits')
   await page.getByRole('button').first().click()
-  await expect(page.getByTestId('refs-panel-pending-note')).toBeVisible()
-  await expect(page.locator('.kb-ref-title')).toContainText('Fixture Paper')
+  await expect(page.getByTestId('refs-panel-pending-progress')).toBeVisible()
+  await expect(page.getByTestId('refs-panel-pending-progress')).toContainText('系统正在完成来源定位与证据绑定')
+  await expect(page.locator('.kb-ref-title')).toHaveCount(0)
+  await expect(page.locator('.kb-ref-action')).toHaveCount(0)
   await expect(page.locator('.kb-ref-score')).toHaveCount(0)
-  await page.locator('.kb-ref-action').first().click()
-  await expect(page.getByTestId('refs-panel-open-payload')).toContainText('"strictLocate": false')
+  await expect(page.getByTestId('refs-panel-open-payload')).toContainText('(empty)')
 })
 
 test('refs panel renders synthetic research basket evidence as non-openable context', async ({ page }) => {

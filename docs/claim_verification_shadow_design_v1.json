@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "report_kind": "claim_verification_shadow_design",
+  "inputs": {
+    "fixture": {
+      "path": "docs/claim_entailment_eval_v1.json",
+      "sha256": "dfac6dfaf51bea2a041883e5f5454cefff60a9ab948e2ef072febcac1b4bedb4"
+    },
+    "lexical_report": {
+      "path": "docs/claim_entailment_lexical_baseline_v1.json",
+      "sha256": "38528c43ec33929b59986265a144c75d175b1b9d8aeb519efdcd4605bed484f6"
+    },
+    "nli_report": {
+      "path": "docs/claim_entailment_nli_baseline_v1.json",
+      "sha256": "e6f4c159b510d6e227aa7c019cba68950fb1544aa42465df835a2af16c3d5e65"
+    },
+    "citation_structure_source": {
+      "path": "kb/agent/citation_structure.py",
+      "sha256": "4d68fe76fede0f2b1937e8e00e7850f44cd5a129fc1f1a2cf74d8ab0fd3ee77d"
+    }
+  },
+  "structural_fixture": {
+    "case_count": 24,
+    "structurally_bound_count": 24,
+    "unresolved_count": 0
+  },
+  "strategies": {
+    "production_lexical_overlap": {
+      "case_count": 24,
+      "metrics": {
+        "binary_support_accuracy": 0.541667,
+        "entailment_recall": 0.5,
+        "non_entailment_specificity": 0.5625,
+        "contradiction_false_support_rate": 0.5,
+        "insufficient_false_support_rate": 0.375
+      },
+      "false_supported_ids": [
+        "mamba-contradicts",
+        "sam2-contradicts",
+        "sam2-insufficient",
+        "modernbert-contradicts",
+        "modernbert-insufficient",
+        "gemma3-contradicts",
+        "gemma3-insufficient"
+      ],
+      "false_rejected_ids": [
+        "bitnet-entails-zh",
+        "medsam-entails-zh",
+        "deepseek-entails-zh",
+        "timesfm-entails-zh"
+      ]
+    },
+    "naive_lexical_and_nli": {
+      "case_count": 24,
+      "metrics": {
+        "binary_support_accuracy": 0.791667,
+        "entailment_recall": 0.375,
+        "non_entailment_specificity": 1.0,
+        "contradiction_false_support_rate": 0.0,
+        "insufficient_false_support_rate": 0.0
+      },
+      "false_supported_ids": [],
+      "false_rejected_ids": [
+        "bitnet-entails-zh",
+        "medsam-entails-zh",
+        "deepseek-entails-zh",
+        "gemma3-entails",
+        "timesfm-entails-zh"
+      ]
+    },
+    "lexical_with_nli_contradiction_veto": {
+      "case_count": 24,
+      "metrics": {
+        "binary_support_accuracy": 0.75,
+        "entailment_recall": 0.5,
+        "non_entailment_specificity": 0.875,
+        "contradiction_false_support_rate": 0.125,
+        "insufficient_false_support_rate": 0.125
+      },
+      "false_supported_ids": [
+        "sam2-insufficient",
+        "gemma3-contradicts"
+      ],
+      "false_rejected_ids": [
+        "bitnet-entails-zh",
+        "medsam-entails-zh",
+        "deepseek-entails-zh",
+        "timesfm-entails-zh"
+      ]
+    },
+    "selected_structural_binding_plus_nli": {
+      "case_count": 24,
+      "metrics": {
+        "binary_support_accuracy": 0.916667,
+        "entailment_recall": 0.875,
+        "non_entailment_specificity": 0.9375,
+        "contradiction_false_support_rate": 0.125,
+        "insufficient_false_support_rate": 0.0
+      },
+      "false_supported_ids": [
+        "timesfm-contradicts-zh"
+      ],
+      "false_rejected_ids": [
+        "gemma3-entails"
+      ]
+    }
+  },
+  "selected_shadow_outcomes": {
+    "semantic_support": 8,
+    "semantic_contradiction": 8,
+    "semantic_withheld": 8
+  },
+  "decision": {
+    "selected": "structural_binding_plus_nli",
+    "mode": "shadow_only",
+    "production_effect": false,
+    "ordinary_user_status_exposed": false,
+    "product_enabled": false,
+    "fallback": "current production lexical verifier remains authoritative",
+    "reason": "Naive lexical+NLI intersection removes all false support but drops entailment recall to 37.5%. Structural citation validity plus the frozen NLI argmax keeps 87.5% entailment recall and 93.75% non-entailment specificity, while retaining the known TimesFM false-support case as an explicit shadow failure.",
+    "telemetry_contract": "Persist only fixture/outcome IDs, aggregate counts, duration, model revision, and fallback reason; never claim text, evidence text, source paths, or credentials."
+  }
+}

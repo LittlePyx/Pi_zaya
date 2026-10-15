@@ -1496,7 +1496,7 @@ interface ChatState {
   removePendingImage: (key: string) => void
   dismissUploadItem: (key: string) => void
   sendMessage: (prompt: string, opts: {
-    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean; externalSupplementMode?: ExternalSupplementMode
+    topK: number; temperature: number; maxTokens: number; deepRead: boolean; promptContext?: unknown; queryScope?: QueryScope; agentMode?: boolean; externalSupplementMode?: ExternalSupplementMode; retrievalMode?: 'bm25' | 'hybrid_local'
   }) => Promise<void>
   cancelGeneration: () => void
   clearGeneration: () => void
@@ -2637,7 +2637,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         max_tokens: opts.maxTokens,
         deep_read: opts.deepRead,
         agent_mode: opts.agentMode || undefined,
-        external_supplement_mode: opts.externalSupplementMode || 'disabled',
+        external_supplement_mode: opts.externalSupplementMode || 'disabled', retrieval_mode: opts.retrievalMode || 'bm25',
         prompt_context: opts.promptContext || undefined,
       })
     } catch (err) {
@@ -2659,7 +2659,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...(opts.promptContext ? { prompt_context: opts.promptContext } : {}),
         ...(opts.queryScope ? { query_scope: opts.queryScope } : {}),
         ...(opts.agentMode ? { agent_mode: 'research_agent', agent_mode_requested: true } : {}),
-        ...(opts.agentMode ? { external_supplement_mode: opts.externalSupplementMode || 'disabled' } : {}),
+        ...(opts.agentMode ? { external_supplement_mode: opts.externalSupplementMode || 'disabled' } : {}), retrieval_mode: opts.retrievalMode || 'bm25',
       },
     }
     const startFailureAssistantMessage: Message | null = generationStarted

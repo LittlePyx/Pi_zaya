@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "invalidation_id": "retrieval_cpu_query_compatibility_execution_invalidation_v2",
+  "status": "invalidated_after_query_execution_before_report_persistence",
+  "recorded_at": "2026-09-03",
+  "invalidated_protocol": {
+    "path": "docs/retrieval_cpu_query_compatibility_protocol_v2.json",
+    "sha256": "e524378d1be22de93c3de4a77949c8dd80dc8e35c99786598a27367aed1eaf37"
+  },
+  "execution": {
+    "attempted_measurement_runs": 1,
+    "query_embeddings_executed": 12,
+    "document_embeddings_created": 0,
+    "index_writes_performed": 0,
+    "process_exit_code": 1,
+    "result_report_persisted": false,
+    "usable_outcomes": 0,
+    "quality_metrics_observed_by_operator": false,
+    "threshold_or_candidate_changes_after_execution": 0
+  },
+  "failure": {
+    "category": "runner_post_measurement_validation_error",
+    "stable_message": "CPU query product control changed",
+    "cause": "The validator compared the complete freshly measured BM25 control channel to the parent channel, including nondeterministic latency_ms values.",
+    "model_or_quality_gate_failure": false,
+    "accepted_index_changed": false
+  },
+  "resolution": {
+    "rerun_under_v2": false,
+    "freeze_successor_protocol": true,
+    "successor_must_preserve_candidate_fusion_and_thresholds": true,
+    "successor_must_compare_only_stable_product_ranking_projection": true,
+    "successor_must_atomically_persist_raw_report_before_validation": true,
+    "successor_recovery_runs_allowed": 1,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

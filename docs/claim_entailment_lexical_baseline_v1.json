@@ -1,0 +1,254 @@
+{
+  "schema_version": 1,
+  "report_kind": "lexical_claim_verifier_baseline",
+  "fixture": {
+    "path": "docs/claim_entailment_eval_v1.json",
+    "sha256": "dfac6dfaf51bea2a041883e5f5454cefff60a9ab948e2ef072febcac1b4bedb4"
+  },
+  "verifier": {
+    "contract": "citation_binding_plus_two_term_overlap",
+    "source_path": "kb/agent/verifier.py",
+    "source_sha256": "99a533eebaeccc178cba227d376b1e2d1c05cf00dcc436beb92bdbb0770a6c56",
+    "semantic_entailment": false
+  },
+  "result": {
+    "case_count": 24,
+    "expected_label_counts": {
+      "entailment": 8,
+      "contradiction": 8,
+      "insufficient": 8
+    },
+    "binary_metrics": {
+      "accuracy": 0.541667,
+      "entailment_recall": 0.5,
+      "non_entailment_specificity": 0.5625,
+      "contradiction_false_support_rate": 0.5,
+      "insufficient_false_support_rate": 0.375
+    },
+    "confusion": {
+      "true_supported": 4,
+      "false_rejected": 4,
+      "false_supported": 7,
+      "true_rejected": 9
+    },
+    "cases": [
+      {
+        "id": "mamba-entails",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct": true,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "mamba-contradicts",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "mamba-insufficient",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "bitnet-entails-zh",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": false,
+        "correct": false,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "bitnet-contradicts-zh",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "bitnet-insufficient-zh",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "sam2-entails",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct": true,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "sam2-contradicts",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "sam2-insufficient",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "medsam-entails-zh",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": false,
+        "correct": false,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "medsam-contradicts-zh",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "medsam-insufficient-zh",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "modernbert-entails",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct": true,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "modernbert-contradicts",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "modernbert-insufficient",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "deepseek-entails-zh",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": false,
+        "correct": false,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "deepseek-contradicts-zh",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "deepseek-insufficient-zh",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "gemma3-entails",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": true,
+        "correct": true,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "gemma3-contradicts",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "gemma3-insufficient",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": true,
+        "correct": false,
+        "matched_evidence_count": 1,
+        "unsupported_reason": ""
+      },
+      {
+        "id": "timesfm-entails-zh",
+        "expected_label": "entailment",
+        "expected_supported": true,
+        "observed_supported": false,
+        "correct": false,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "timesfm-contradicts-zh",
+        "expected_label": "contradiction",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      },
+      {
+        "id": "timesfm-insufficient-zh",
+        "expected_label": "insufficient",
+        "expected_supported": false,
+        "observed_supported": false,
+        "correct": true,
+        "matched_evidence_count": 0,
+        "unsupported_reason": "citation_evidence_mismatch"
+      }
+    ]
+  },
+  "interpretation": "Diagnostic baseline only. Passing citation syntax plus lexical overlap is not evidence of entailment; contradiction false-support is a release-blocking metric for any future semantic verifier candidate."
+}

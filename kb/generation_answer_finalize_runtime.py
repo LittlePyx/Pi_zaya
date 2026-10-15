@@ -1,4 +1,12 @@
 from __future__ import annotations
+from kb.reference_origin_binding import origin_sentence_score, origin_topic_identifier
+from kb.citation_marker_context import numeric_marker_is_content, strip_citation_offset, strip_citation_decoration
+from kb.source_passage_evidence import bind_source_passage_primary
+from kb.direct_question_evidence import attach_direct_source_evidence
+from kb.denoising_quality_boundary import (
+    complete_denoising_quality_boundary,
+    complete_n2n_corruption_model_boundary,
+)
 
 import os
 import re
@@ -6,6 +14,7 @@ import time
 from pathlib import Path
 
 from kb.citation_plan import build_citation_plan as _build_citation_plan
+from kb import answer_finalization_outcome as _answer_outcome
 from kb.answer_contract import (
     _apply_answer_contract_v1,
     _build_answer_quality_probe,
@@ -513,7 +522,7 @@ def _citation_plan_with_late_evidence_cards(
     cards into System A while preserving the public one-paper citation number.
     """
 
-    plan = dict(citation_plan or {}) if isinstance(citation_plan, dict) else {}
+    plan = attach_direct_source_evidence(citation_plan, answer_hits)
     if not plan or not _DISTINCT_EVIDENCE_FACETS_RE.search(str(prompt or "")):
         return plan
     requested_relations = {
@@ -547,7 +556,6 @@ def _citation_plan_with_late_evidence_cards(
         requested_relations
         and requested_relations.issubset(authoritative_relation_coverage)
     ):
-        # The immutable page-local plan already proves every requested facet.
         # Scanner cards are useful when the initial plan is incomplete, but
         # replacing this exact bundle with several broad anchored excerpts
         # creates duplicate visible cards and can lose a figure locator.
@@ -609,6 +617,7 @@ def _citation_plan_with_late_evidence_cards(
             if isinstance(raw_card.get("primary_evidence"), dict)
             else {}
         )
+        primary = bind_source_passage_primary(raw_card, primary, hits)
         source_path = str(
             primary.get("source_path") or raw_card.get("source_path") or ""
         ).strip()
@@ -742,7 +751,7 @@ def _citation_plan_with_late_evidence_cards(
     plan["per_paragraph_budget"] = per_paragraph
     plan["system_a_enabled"] = True
     plan["late_evidence_refresh"] = True
-    return plan
+    return attach_direct_source_evidence(plan, answer_hits)
 
 
 def _citation_plan_with_late_target_hits(
@@ -1806,6 +1815,8 @@ def _promote_numeric_inpaper_refs(
     # unresolvable, keep the spec unchanged (it will be stripped or
     # processed by subsequent pipeline steps).
     def _repl(m: re.Match) -> str:
+        if numeric_marker_is_content(protected, m.start()):
+            return m.group(0)
         spec = str(m.group(1) or "").strip()
         nums = [
             int(x)
@@ -1877,27 +1888,7 @@ def _strip_citation_offset(
     Only specs where ALL numbers are >= CITATION_OFFSET are converted.
     Mixed specs (e.g. [10001,35]) are left untouched.
     """
-    if not answer or "[" not in answer:
-        return answer
-
-    def _repl(m: re.Match) -> str:
-        spec = str(m.group(1) or "").strip()
-        nums = [
-            int(x)
-            for x in re.split(r"\s*(?:-|\u2013|\u2014|,|;|；|、)\s*", spec)
-            if x.strip()
-        ]
-        if not nums:
-            return m.group(0)
-
-        # Only convert when ALL numbers carry the offset.
-        if any(n < CITATION_OFFSET for n in nums):
-            return m.group(0)
-
-        new_nums = [n - CITATION_OFFSET for n in nums]
-        return "[" + ",".join(str(n) for n in new_nums) + "]"
-
-    return _FREEFORM_NUMERIC_CITE_RE.sub(_repl, answer)
+    return strip_citation_offset(answer, CITATION_OFFSET, _FREEFORM_NUMERIC_CITE_RE)
 
 
 def _normalize_double_numeric_citations(answer: str) -> str:
@@ -2311,34 +2302,16 @@ def _relocate_planned_origin_system_b_markers(
             for value in list(slot.get("candidate_refs") or [])
             if str(value or "").isdigit() and int(value) > 0
         ]
-        topic = str(slot.get("topic") or "").strip()
+        topic = origin_topic_identifier(str(slot.get("topic") or "").strip())
         if not sid or not refs or not topic:
             continue
         marker = f"[[CITE:{sid}:{refs[0]}]]"
+        if lines and topic not in lines[0] and re.fullmatch(r"[A-Za-z][A-Za-z0-9-]{1,24}", topic) and re.match(r"^(?:不是|并非)", lines[0]) and len([
+            item for item in citation_plan.get("slots", []) if isinstance(item, dict) and item.get("claim_type") == "origin"
+        ]) == 1:
+            lines[0] = topic + lines[0]
 
-        def _origin_score(line: str) -> float:
-            surface = str(line or "")
-            if not re.search(
-                rf"(?i)(?<![A-Za-z0-9]){re.escape(topic)}(?![A-Za-z0-9])",
-                surface,
-            ):
-                return float("-inf")
-            score = 1.0
-            if re.search(
-                r"(?i)upstream\s+paper|prior\s+work|previous\s+work|"
-                r"comes?\s+from|introduced\s+by|proposed\s+by|"
-                r"did\s+not\s+invent|reuses?.{0,36}(?:prior|previous)|"
-                r"上游|先前工作|已有工作|来自|提出者|并非.*发明",
-                surface,
-            ):
-                score += 12.0
-            if re.search(r"(?i)\bet\s+al\.", surface):
-                score += 4.0
-            if re.search(r"(?i)open[- ]domain\s+question\s+answering", surface):
-                score += 5.0
-            return score
-
-        scored = [(_origin_score(line), idx) for idx, line in enumerate(lines)]
+        scored = [(origin_sentence_score(line, topic), idx) for idx, line in enumerate(lines)]
         best_score, best_idx = max(scored, default=(float("-inf"), -1))
         if best_idx < 0 or best_score < 10.0:
             continue
@@ -2473,7 +2446,8 @@ def _strip_final_answer_citation_markers(
         out = _CITE_CANON_RE.sub("", out)
         out = _STRUCT_CITE_GARBAGE_RE.sub("", out)
     if not preserve_numeric_markers:
-        out = _FREEFORM_NUMERIC_CITE_RE.sub("", out)
+        surface = out
+        out = _FREEFORM_NUMERIC_CITE_RE.sub(lambda match: match.group(0) if numeric_marker_is_content(surface, match.start()) else "", surface)
     out = _strip_empty_citation_bracket_fragments(out)
     out = re.sub(r"[ \t]+([,.;:!?])", r"\1", out)
     out = re.sub(r"(?m)[ \t]{2,}", " ", out)
@@ -4362,13 +4336,10 @@ def _maybe_append_paper_guide_supplement_block(
     grounded_answer: str = "",
     support_resolution: list[dict] | None = None,
     build_paper_guide_supplement_lines=None,
+    external_supplement_mode: str = "disabled",
 ) -> str:
     text = str(answer or "").strip()
-    if not text:
-        return text
-    if not paper_guide_mode:
-        return text
-    if not has_hits:
+    if not text or not paper_guide_mode or not has_hits or str(external_supplement_mode).lower() != "model":
         return text
     try:
         enabled = bool(int(str(os.environ.get("KB_PAPER_GUIDE_SUPPLEMENT_BLOCK", "1") or "1")))
@@ -5251,6 +5222,10 @@ def _finalize_fast_exact_generation_answer(
             opportunities,
         )
     )
+    answer = _relocate_planned_origin_system_b_markers(
+        answer,
+        citation_plan=citation_plan,
+    )
     answer, citation_validation = validate_structured_citations(
         answer,
         answer_hits=answer_hits,
@@ -5270,11 +5245,8 @@ def _finalize_fast_exact_generation_answer(
         citation_plan=citation_plan,
         answer_hits=list(answer_hits or []),
     )
-    answer, claim_evidence_meta = audit_and_repair_claim_evidence(
-        answer,
-        answer_hits=claim_evidence_hits,
-        allow_citation_repairs=True,
-        prompt=prompt_text,
+    answer, claim_evidence_meta = _answer_outcome.audit_final_claim_evidence(
+        answer, claim_evidence_hits, prompt_text, audit_and_repair_claim_evidence
     )
     contracts = _build_paper_guide_contract_snapshot(
         paper_guide_mode=True,
@@ -5413,6 +5385,7 @@ def _finalize_fast_exact_generation_answer(
     if dict(citation_validation or {}).get("raw_count"):
         answer_quality["citation_validation"] = dict(citation_validation or {})
     answer_quality["claim_evidence"] = dict(claim_evidence_meta or {})
+    answer_quality["finalization_outcome"] = _answer_outcome.record_answer_finalization_outcome(answer_quality)
     answer_quality["retrieval_confidence"] = dict(
         paper_guide_retrieval_confidence_hint or {}
     )
@@ -8051,11 +8024,7 @@ def _complete_grounded_requested_source_facets(
             sentence = sentence.strip()
             if len(sentence) < 32:
                 continue
-            sentence = re.sub(
-                r"\s*\[(?:\d{1,4}(?:\s*[,\-–]\s*\d{1,4})*)\]\s*",
-                " ",
-                sentence,
-            )
+            sentence = strip_citation_decoration(sentence, _FREEFORM_NUMERIC_CITE_RE)
             sentence = re.sub(r"\s+", " ", sentence).strip()
             key = sentence.casefold()
             if not key or key in seen_sentences or key in text.casefold():
@@ -8668,6 +8637,18 @@ def _normalize_citation_plan_supported_terms(
         answer_hits=answer_hits,
     )
     text = _complete_grounded_requested_source_facets(
+        text,
+        prompt=prompt,
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
+    text = complete_denoising_quality_boundary(
+        text,
+        prompt=prompt,
+        citation_plan=citation_plan,
+        answer_hits=answer_hits,
+    )
+    text = complete_n2n_corruption_model_boundary(
         text,
         prompt=prompt,
         citation_plan=citation_plan,
@@ -9891,6 +9872,7 @@ def _finalize_generation_answer(
     validate_structured_citations,
     build_paper_guide_supplement_lines=None,
     validate_freeform_numeric_citations=None,
+    external_supplement_mode: str = "disabled",
 ) -> dict:
     finalize_started = time.perf_counter()
     if paper_guide_fast_exact and paper_guide_precomputed_support_resolution:
@@ -10239,10 +10221,6 @@ def _finalize_generation_answer(
             prompt=prompt_for_user or prompt,
             opportunities=paper_guide_reference_opportunities,
         )
-        answer = _relocate_planned_origin_system_b_markers(
-            answer,
-            citation_plan=citation_plan_seed,
-        )
         reference_opportunities_for_validation = paper_guide_reference_opportunities
         applied_refs: set[int] = {
             int(match.group(2) or 0)
@@ -10313,6 +10291,10 @@ def _finalize_generation_answer(
         prompt=prompt_for_user or prompt,
         citation_plan=citation_plan_seed,
         answer_hits=answer_hits,
+    )
+    answer = _relocate_planned_origin_system_b_markers(
+        answer,
+        citation_plan=citation_plan_seed,
     )
     if callable(validate_freeform_numeric_citations):
         answer, freeform_validation = validate_freeform_numeric_citations(
@@ -10610,6 +10592,7 @@ def _finalize_generation_answer(
         grounded_answer=grounded_answer,
         support_resolution=list(paper_guide_support_resolution or []),
         build_paper_guide_supplement_lines=build_paper_guide_supplement_lines,
+        external_supplement_mode=external_supplement_mode,
     )
     paper_guide_contracts = _build_paper_guide_contract_snapshot(
         paper_guide_mode=bool(paper_guide_mode),
@@ -10671,6 +10654,7 @@ def _finalize_generation_answer(
     if bool(template_repair_meta.get("changed")):
         answer_quality["template_repair"] = dict(template_repair_meta)
     answer_quality["claim_evidence"] = dict(claim_evidence_meta or {})
+    answer_quality["finalization_outcome"] = _answer_outcome.record_answer_finalization_outcome(answer_quality)
     if bool(retrieval_confidence.get("low_confidence")):
         refs_for_notice = _collect_low_confidence_candidate_refs(
             support_resolution=list(paper_guide_support_resolution or []),

@@ -1,0 +1,1719 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_product_e5_user_journey_v1",
+  "generated_at": "2026-09-03T02:12:10.579396+00:00",
+  "protocol_sha256": "b765d1a9cceba5d39ee9f60d09a15e2c71c568266c8b945bef303b9d1fbb7aca",
+  "source": {
+    "document_count": 31,
+    "parent_chunk_count": 2251,
+    "case_count": 18,
+    "corpus_fingerprint": "20ad35d505d2936dbd80e90df6199e4b3d51fdf4cf8872a36c9211c5d6c99d9f",
+    "evaluation_status": {
+      "labels_pre_registered_before_e5_execution": true,
+      "external_web_or_model_knowledge_used_for_labels": false,
+      "historical_holdout_already_accessed_by_qwen_candidate": true,
+      "new_untouched_holdout_claim_allowed": false,
+      "candidate_tuning_from_this_run_allowed": false,
+      "strata": {
+        "zh": 12,
+        "en": 6,
+        "single_paper_mechanism": 4,
+        "single_paper_boundary_or_limitation": 4,
+        "experimental_configuration_or_metric": 4,
+        "cross_paper_evidence_comparison": 4,
+        "equation_figure_or_table_location": 2,
+        "multi_paper_scope": 4
+      }
+    }
+  },
+  "runtime": {
+    "provider_load_ms": 1149.857,
+    "full_build_ms": 121588.862,
+    "peak_process_rss_mib": 2383.582,
+    "python_version": "3.10.11",
+    "subprocess_wall_ms": 134448.368
+  },
+  "index": {
+    "build_id": "a66067c83cd0440abc8381b31a7b154f",
+    "document_count": 31,
+    "parent_count": 2251,
+    "window_count": 2663,
+    "embedded_parent_count": 2251,
+    "embedded_window_count": 2663,
+    "reused_parent_count": 0,
+    "reused_window_count": 0,
+    "no_op": false,
+    "index_bytes": 4870347,
+    "atomic_readback_passed": true
+  },
+  "selector_trace": [
+    {
+      "ordinal": 1,
+      "mode": "scoped",
+      "duration_ms": 2198.816,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": true,
+      "index_cache_hit": false
+    },
+    {
+      "ordinal": 2,
+      "mode": "full_library",
+      "duration_ms": 81.919,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 3,
+      "mode": "scoped",
+      "duration_ms": 78.053,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 4,
+      "mode": "full_library",
+      "duration_ms": 72.204,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 5,
+      "mode": "scoped",
+      "duration_ms": 73.639,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 6,
+      "mode": "full_library",
+      "duration_ms": 73.023,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 7,
+      "mode": "scoped",
+      "duration_ms": 74.651,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 8,
+      "mode": "full_library",
+      "duration_ms": 72.324,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 9,
+      "mode": "scoped",
+      "duration_ms": 84.695,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 10,
+      "mode": "full_library",
+      "duration_ms": 74.245,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 11,
+      "mode": "scoped",
+      "duration_ms": 71.171,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 12,
+      "mode": "full_library",
+      "duration_ms": 79.888,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 13,
+      "mode": "scoped",
+      "duration_ms": 72.601,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 0,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 14,
+      "mode": "full_library",
+      "duration_ms": 75.863,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 15,
+      "mode": "scoped",
+      "duration_ms": 94.315,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 16,
+      "mode": "full_library",
+      "duration_ms": 71.111,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 17,
+      "mode": "scoped",
+      "duration_ms": 72.257,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 1,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 18,
+      "mode": "full_library",
+      "duration_ms": 76.499,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 19,
+      "mode": "scoped",
+      "duration_ms": 74.831,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 20,
+      "mode": "full_library",
+      "duration_ms": 76.499,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 21,
+      "mode": "scoped",
+      "duration_ms": 78.015,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 22,
+      "mode": "full_library",
+      "duration_ms": 73.463,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 23,
+      "mode": "scoped",
+      "duration_ms": 73.374,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 24,
+      "mode": "full_library",
+      "duration_ms": 76.658,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 25,
+      "mode": "scoped",
+      "duration_ms": 75.749,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 26,
+      "mode": "full_library",
+      "duration_ms": 76.364,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 27,
+      "mode": "scoped",
+      "duration_ms": 83.643,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 28,
+      "mode": "full_library",
+      "duration_ms": 76.363,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 29,
+      "mode": "scoped",
+      "duration_ms": 77.143,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 30,
+      "mode": "full_library",
+      "duration_ms": 79.86,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 31,
+      "mode": "scoped",
+      "duration_ms": 78.754,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 32,
+      "mode": "full_library",
+      "duration_ms": 78.137,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 33,
+      "mode": "scoped",
+      "duration_ms": 73.354,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 0,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 34,
+      "mode": "full_library",
+      "duration_ms": 76.469,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 35,
+      "mode": "scoped",
+      "duration_ms": 73.191,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    },
+    {
+      "ordinal": 36,
+      "mode": "full_library",
+      "duration_ms": 75.644,
+      "requested_mode": "hybrid_local",
+      "used_mode": "hybrid_local",
+      "fallback_reason_id": "",
+      "protected_prefix_preserved": true,
+      "dense_novelty_count": 2,
+      "source_escape_count": 0,
+      "product_sparse_input_unchanged": true,
+      "cold_start": false,
+      "index_cache_hit": true
+    }
+  ],
+  "channels": {
+    "bm25_product_queries_selection_control": {
+      "channel": "bm25_product_queries_selection_control",
+      "modes": {
+        "scoped": {
+          "case_count": 18,
+          "metrics": {
+            "mrr": 0.202778,
+            "recall@5": 0.185185,
+            "recall@10": 0.231481,
+            "ndcg@10": 0.145849,
+            "contract_recall@10": 0.25,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 6.473,
+            "p95": 19.177,
+            "max": 23.915
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "journey-istanet-phase-physics",
+              "first_relevant_rank": 5,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.455605,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.168676,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.337352,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.233402,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-super-subnyquist-sampling-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-istanet-benchmark-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-ct-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "first_relevant_rank": 6,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.193044,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-visual-redundancy-figure-location",
+              "first_relevant_rank": 5,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.237198,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-perovskite-device-figure-location",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 18,
+          "metrics": {
+            "mrr": 0.126852,
+            "recall@5": 0.12963,
+            "recall@10": 0.157407,
+            "ndcg@10": 0.103993,
+            "contract_recall@10": 0.166667,
+            "wrong_source_rate@5": 0.366667,
+            "wrong_source_rate@10": 0.388889
+          },
+          "latency_ms": {
+            "p50": 44.038,
+            "p95": 80.217,
+            "max": 124.567
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "journey-istanet-phase-physics",
+              "first_relevant_rank": 5,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.455605,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.14529,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.6,
+                "wrong_source_rate@10": 0.4
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 0.9
+              }
+            },
+            {
+              "id": "journey-super-subnyquist-sampling-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-istanet-benchmark-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-ct-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.270971,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "journey-visual-redundancy-figure-location",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-perovskite-device-figure-location",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        }
+      }
+    },
+    "e5_small_product_selector_candidate": {
+      "channel": "e5_small_product_selector_candidate",
+      "modes": {
+        "scoped": {
+          "case_count": 18,
+          "metrics": {
+            "mrr": 0.208333,
+            "recall@5": 0.185185,
+            "recall@10": 0.259259,
+            "ndcg@10": 0.155695,
+            "contract_recall@10": 0.277778,
+            "wrong_source_rate@5": 0.0,
+            "wrong_source_rate@10": 0.0
+          },
+          "latency_ms": {
+            "p50": 83.844,
+            "p95": 423.263,
+            "max": 2209.523
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "journey-istanet-phase-physics",
+              "first_relevant_rank": 5,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.455605,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.168676,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.337352,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.233402,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-super-subnyquist-sampling-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-istanet-benchmark-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-ct-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "first_relevant_rank": 6,
+              "metrics": {
+                "mrr": 0.166667,
+                "recall@5": 0.0,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.193044,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-visual-redundancy-figure-location",
+              "first_relevant_rank": 5,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.237198,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-perovskite-device-figure-location",
+              "first_relevant_rank": 10,
+              "metrics": {
+                "mrr": 0.1,
+                "recall@5": 0.0,
+                "recall@10": 0.5,
+                "ndcg@10": 0.177239,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            }
+          ]
+        },
+        "full_library": {
+          "case_count": 18,
+          "metrics": {
+            "mrr": 0.126852,
+            "recall@5": 0.12963,
+            "recall@10": 0.157407,
+            "ndcg@10": 0.103993,
+            "contract_recall@10": 0.166667,
+            "wrong_source_rate@5": 0.366667,
+            "wrong_source_rate@10": 0.411111
+          },
+          "latency_ms": {
+            "p50": 123.91,
+            "p95": 156.045,
+            "max": 206.583
+          },
+          "ks": [
+            5,
+            10
+          ],
+          "cases": [
+            {
+              "id": "journey-istanet-phase-physics",
+              "first_relevant_rank": 5,
+              "metrics": {
+                "mrr": 0.2,
+                "recall@5": 0.5,
+                "recall@10": 1.0,
+                "ndcg@10": 0.455605,
+                "contract_recall@10": 1.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-operator-exchange",
+              "first_relevant_rank": 4,
+              "metrics": {
+                "mrr": 0.25,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.14529,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-large-image-mechanism",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.6,
+                "wrong_source_rate@10": 0.5
+              }
+            },
+            {
+              "id": "journey-realtime-spi-frame-input",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-fashionmnist-mnist-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.1
+              }
+            },
+            {
+              "id": "journey-kuzushiji-modern-ocr-boundary",
+              "first_relevant_rank": 1,
+              "metrics": {
+                "mrr": 1.0,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.613147,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-compensation-combined-degradation-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-hyperspectral-prior-transfer-boundary",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 0.9
+              }
+            },
+            {
+              "id": "journey-super-subnyquist-sampling-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-istanet-benchmark-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-dualscale-resolution-results",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-primal-dual-ct-protocol",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-nafnet-vs-classical-denoising-evidence",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "journey-piln-vs-pidl-supervision",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            },
+            {
+              "id": "journey-cassi-vs-fourier-measurement-encoding",
+              "first_relevant_rank": 2,
+              "metrics": {
+                "mrr": 0.5,
+                "recall@5": 0.5,
+                "recall@10": 0.5,
+                "ndcg@10": 0.386853,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.3
+              }
+            },
+            {
+              "id": "journey-s2ism-vs-iism-information-source",
+              "first_relevant_rank": 3,
+              "metrics": {
+                "mrr": 0.333333,
+                "recall@5": 0.333333,
+                "recall@10": 0.333333,
+                "ndcg@10": 0.270971,
+                "contract_recall@10": 0.5,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.0
+              }
+            },
+            {
+              "id": "journey-visual-redundancy-figure-location",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 1.0,
+                "wrong_source_rate@10": 1.0
+              }
+            },
+            {
+              "id": "journey-perovskite-device-figure-location",
+              "first_relevant_rank": null,
+              "metrics": {
+                "mrr": 0.0,
+                "recall@5": 0.0,
+                "recall@10": 0.0,
+                "ndcg@10": 0.0,
+                "contract_recall@10": 0.0,
+                "wrong_source_rate@5": 0.0,
+                "wrong_source_rate@10": 0.2
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "execution": {
+    "full_build_count": 1,
+    "selection_call_count": 36,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false,
+    "network_used": false
+  },
+  "integrity": {
+    "source_before_sha256": "09d20706edb877e5534f115f92b3252c0917caf23f3e91af55d37d7209557535",
+    "source_after_sha256": "09d20706edb877e5534f115f92b3252c0917caf23f3e91af55d37d7209557535",
+    "working_db_before_sha256": "09d20706edb877e5534f115f92b3252c0917caf23f3e91af55d37d7209557535",
+    "working_db_after_sha256": "09d20706edb877e5534f115f92b3252c0917caf23f3e91af55d37d7209557535",
+    "artifact_tree_before_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "artifact_tree_after_sha256": "5671f8ed0e55e080c2bfb535acd2059d29cd371b510640048bef56eae66f3e01",
+    "model_before_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "model_after_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "tokenizer_before_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39",
+    "tokenizer_after_sha256": "0b44a9d7b51c3c62626640cda0e2c2f70fdacdc25bbbd68038369d14ebdf4c39"
+  },
+  "runtime_gate": {
+    "summary": {
+      "completed_selection_calls": 36,
+      "cold_load_count": 1,
+      "warm_cache_hit_count": 35,
+      "fallback_count": 0,
+      "source_escape_count": 0,
+      "protected_prefix_rate": 1.0,
+      "product_sparse_input_unchanged_rate": 1.0,
+      "warm_selector_p95_ms": 83.959,
+      "dense_novelty_count": 67,
+      "mode_counts": {
+        "scoped": 18,
+        "full_library": 18
+      }
+    },
+    "checks": {
+      "single_completed_full_build": true,
+      "full_build_time": true,
+      "peak_process_rss": true,
+      "warm_selector_p95": true,
+      "index_bytes": true,
+      "parent_count": true,
+      "window_count": true,
+      "selection_call_count": true,
+      "cold_load_count": true,
+      "warm_cache_hits": true,
+      "fallback_count": true,
+      "source_escape_count": true,
+      "protected_prefix": true,
+      "product_sparse_input_unchanged": true,
+      "atomic_readback": true,
+      "source_unchanged": true,
+      "artifact_tokenizer_unchanged": true,
+      "product_remained_disabled": true,
+      "network_unused": true
+    },
+    "passes_all": true
+  },
+  "quality_gate": {
+    "modes": {
+      "scoped": {
+        "recall_at_10_gain": 0.027778,
+        "case_regressions": {
+          "recall@10": [],
+          "contract_recall@10": [],
+          "mrr": [],
+          "wrong_source_rate@10_increase": []
+        },
+        "checks": {
+          "recall@5_no_regression": true,
+          "recall@10_no_regression": true,
+          "mrr_no_regression": true,
+          "ndcg@10_no_regression": true,
+          "contract_recall@10_no_regression": true,
+          "wrong_source_rate@5_no_increase": true,
+          "wrong_source_rate@10_no_increase": true,
+          "maximum_recall@10_case_regressions": true,
+          "maximum_contract_recall@10_case_regressions": true,
+          "maximum_mrr_case_regressions": true,
+          "maximum_wrong_source_rate@10_increase_case_regressions": true
+        },
+        "passes_all": true
+      },
+      "full_library": {
+        "recall_at_10_gain": 0.0,
+        "case_regressions": {
+          "recall@10": [],
+          "contract_recall@10": [],
+          "mrr": [],
+          "wrong_source_rate@10_increase": [
+            "journey-cassi-vs-fourier-measurement-encoding",
+            "journey-dualscale-large-image-mechanism",
+            "journey-nafnet-vs-classical-denoising-evidence",
+            "journey-perovskite-device-figure-location",
+            "journey-piln-vs-pidl-supervision"
+          ]
+        },
+        "checks": {
+          "recall@5_no_regression": true,
+          "recall@10_no_regression": true,
+          "mrr_no_regression": true,
+          "ndcg@10_no_regression": true,
+          "contract_recall@10_no_regression": true,
+          "wrong_source_rate@5_no_increase": true,
+          "wrong_source_rate@10_no_increase": false,
+          "maximum_recall@10_case_regressions": true,
+          "maximum_contract_recall@10_case_regressions": true,
+          "maximum_mrr_case_regressions": true,
+          "maximum_wrong_source_rate@10_increase_case_regressions": false
+        },
+        "passes_all": false
+      }
+    },
+    "minimum_gain_in_at_least_one_mode": true,
+    "passes_all": false
+  },
+  "decision": {
+    "status": "current_domain_quality_rejected_keep_bm25",
+    "product_enabled": false,
+    "user_mode_control_visible": false,
+    "candidate_tuning_allowed": false,
+    "next_action": "keep_bm25_and_record_non_tunable_failure"
+  },
+  "result_fingerprint": "4bedbf5ae2b76f800474aee13ab190c2268dd3948a2c369eddf9d6feb39d7fcf"
+}

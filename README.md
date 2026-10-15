@@ -20,6 +20,10 @@ entry.
 
 The current published Windows beta is [`v0.1.0-beta.13`](https://github.com/LittlePyx/Pi_zaya/releases/tag/v0.1.0-beta.13).
 
+The local development candidate is `0.1.0-beta.14`, not yet published. Its artifact
+names are `Pi_zaya-v0.1.0-beta.14-windows-x64-setup.exe` and
+`Pi_zaya-v0.1.0-beta.14-windows-x64.zip`; the public download links below remain beta.13.
+
 ### Choose the right download
 
 | Release file | Who should use it | How to use it |
@@ -75,10 +79,11 @@ web context.
 | Anchored PDF conversion | Converts PDFs to Markdown while preserving page markers, sections, figures, formulas, and source anchors. |
 | Restart-safe conversion | Persists queued and active conversion jobs, offers explicit recovery after restart, and reuses completed page-cache artifacts without automatically spending model credits. |
 | Evidence-based QA | Searches the indexed library, builds a RAG prompt from retrieved snippets, and returns grounded answers. |
+| Optional local semantic retrieval | After explicit consent, installs a separately verified local component and combines BM25 with local dense retrieval for the current paper or selected basket. The local beta.14 portable candidate bundles the archive for offline installation. BM25 remains the default and the full-library path. |
 | Citation tracing | Surfaces answer evidence, source cards, reference context, and reader locate targets. |
 | Literature basket | Lets users collect papers and excerpts, keep local research context, and export citations. |
 | Research notes workspace | Saves exact source-backed text, table, equation, and figure captures with paper links, comments, tags, search, pinning, archiving, and return-to-source navigation. Markdown and Word exports are backups for continued reading and evidence review, not submission-ready documents. |
-| Evidence matrices | Builds project-scoped, versioned comparisons of methods, experiments, metrics, results, and limitations. Every populated factual cell opens its exact local source evidence; unavailable facts remain empty. Exports Markdown, CSV, or XLSX for evidence review. |
+| Internal evidence matrices | Available only in explicitly enabled internal builds; hidden in ordinary downloads, along with dependent brief/gap/project-status entrances. Retained for development and compatibility testing. |
 | Supplement source choice | Uses the library only by default. Users may select model or web supplementation per conversation; either is used only after insufficient local evidence, and web failure never silently substitutes model knowledge. |
 | Research Agent | Applies planning, source policy, tool-use tracing, evidence sufficiency, and sentence-level citation support checks by default. |
 | Quality tooling | Scans conversion quality, runs repair flows, rebuilds indexes, and tracks metadata/reference sync. |
@@ -127,12 +132,22 @@ At a high level:
 6. The frontend keeps the answer clean while citations, reference cards, reader
    locate targets, and agent traces remain inspectable on demand.
 
-The current release retrieves candidates with BM25, query
-translation/expansion, and structured indexes. It does not yet enable
-embedding-based dense candidate retrieval or a vector database. BM25+dense
-fusion is being developed behind an isolated retrieval boundary and will not
-enter the product path until persistence, user consent, privacy disclosure, and
-retrieval evaluation are complete.
+The published beta.13 retrieves candidates with BM25, query
+translation/expansion, and structured indexes. The local development tree contains the
+next Windows build's explicit opt-in local semantic path: a separately verified
+component maintains an atomic local embedding index and combines BM25 with dense
+retrieval for current-paper and selected-basket queries. It never enables web or
+model knowledge, never uploads library content for retrieval, fails open to
+BM25, and leaves full-library retrieval on BM25. This is an exact local index,
+not an external vector database, and has not been backported to beta.13.
+
+The local beta.14 portable candidate includes the verified component archive.
+Open the retrieval control, choose **Enable local semantic retrieval**, confirm
+**Install and enable**, and wait for the local index to become ready before
+selecting hybrid retrieval. Component installation in this bundled build needs
+no download; answer generation still uses the configured model API. The archive
+adds about 286 MiB to the package and installs about 514 MiB before index/cache
+overhead. Installation and indexing remain explicit user actions.
 
 Key backend entry points:
 
@@ -431,11 +446,9 @@ Environment variables and `.env` values take precedence.
 8. Select source text or use a table, equation, or figure action in the Reader
    to add the exact located evidence and your comment to a new or existing
    research note.
-9. Add important papers to a project literature basket, generate and review its
-   evidence matrix, and keep honest gaps empty.
-10. Export source-backed notes or the evidence matrix for continued reading and
-    evidence review; do not treat these exports as manuscript or submission
-    material.
+9. Add important papers and excerpts to a literature basket and continue asking
+   questions within the selected source scope.
+10. Save and export source-backed reading notes for continued reading and evidence review.
 
 ## Demo
 

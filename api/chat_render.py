@@ -24,6 +24,7 @@ from api.message_render_contract import (
     transform_markdown_outside_code,
 )
 from api.citation_display_registry import remap_system_a_citations_for_display
+from api.citation_marker_integrity import has_bound_local_citation, reconcile_blocked_message, reconcile_render_packet, reconcile_render_projections
 from api.deps import load_prefs
 from api.reference_card_quality import attach_refs_pack_polish_contract
 from api.reference_local_source_meta import (
@@ -157,7 +158,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 58
+_RENDER_CACHE_SCHEMA_VERSION = 61
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -15774,7 +15775,7 @@ def _merge_render_packet_contract_meta(
         citation_plan_sig=effective_citation_plan_sig,
         locale=effective_locale,
     )
-    render_packet = _paper_guide_model_dump(render_packet_model)
+    render_packet = reconcile_render_packet(_paper_guide_model_dump(render_packet_model), local_answer=bool(meta.get("canonical_hit_paths")))
     cache_changed = _sync_render_cache_packet(meta, render_packet)
     if existing_packet == render_packet:
         if contracts_changed or cache_changed:
@@ -16669,7 +16670,7 @@ def _message_local_evidence_actions_allowed(message: dict | None) -> bool | None
         minimum_ok = contract_quality.get(
             "minimum_ok", contract_quality.get("minimumOk")
         )
-    if minimum_ok is False or minimum_ok == 0:
+    if (minimum_ok is False or minimum_ok == 0) and not has_bound_local_citation(quality, contract):
         return False
     has_hits = quality.get("has_hits", quality.get("hasHits"))
     if has_hits is None:
@@ -16781,7 +16782,7 @@ def _strip_message_local_evidence_actions(message: dict) -> dict:
     if contracts:
         meta["paper_guide_contracts"] = contracts
     rec["meta"] = meta
-    return rec
+    return reconcile_blocked_message(rec)
 
 
 def enrich_messages_with_reference_render(
@@ -17284,12 +17285,9 @@ def enrich_messages_with_reference_render(
                 rendered_body=rendered_body_norm,
                 cite_details=cite_details,
             ):
-                # Last-resort contract preservation: do not let Markdown cleanup
-                # replace answer prose if even the marker-only path was altered.
+                # Preserve prose if even marker-only rendering altered it.
                 cite_details = []
-                rendered_body_norm = _strip_structured_cite_tokens_for_display(
-                    _normalize_double_numeric_citation_markers(planned_answer_body)
-                )
+                rendered_body_norm = _strip_structured_cite_tokens_for_display(_normalize_double_numeric_citation_markers(planned_answer_body))
                 rendered_markdown = (
                     f"{notice}\n\n{rendered_body_norm}"
                     if notice and rendered_body_norm
@@ -17297,6 +17295,7 @@ def enrich_messages_with_reference_render(
                 )
                 copy_markdown = rendered_markdown
                 copy_text = _md_to_plain_text(copy_markdown)
+            rendered_body_norm, rendered_markdown, copy_markdown, copy_text = reconcile_render_projections(rendered_body_norm, rendered_markdown, copy_markdown, copy_text, cite_details, source_numbers=set(range(1, len(canonical_paths_for_plan) + 1)))
             rec["cite_details"] = cite_details
             rec["copy_markdown"] = copy_markdown
             rec["copy_text"] = copy_text

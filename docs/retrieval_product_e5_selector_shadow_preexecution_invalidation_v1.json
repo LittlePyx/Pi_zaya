@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "invalidation_id": "retrieval_product_e5_selector_shadow_preexecution_invalidation_v1",
+  "recorded_at": "2026-09-03",
+  "attempt_started_at": "2026-09-03T01:49:41.722121+00:00",
+  "original_protocol_path": "docs/retrieval_product_e5_selector_shadow_protocol_v1.json",
+  "original_protocol_sha256": "842990266b671a462be99dd3d31585d26f2568081797b5eaea390f3da1ce489f",
+  "attempt_receipt_sha256": "6f9414a262914aaf6de1648164ad208216f2f2e7aef5ac1398f495aafcd0be28",
+  "stage": "worker_import_before_model_load_or_index_build",
+  "reason_id": "product_bm25_dependency_missing_from_model_only_runtime",
+  "observed_error_category": "ModuleNotFoundError_rank_bm25",
+  "effects": {
+    "model_loaded": false,
+    "parent_windows_constructed": 0,
+    "full_builds_completed": 0,
+    "index_generation_created": false,
+    "worker_result_created": false,
+    "tracked_report_created": false,
+    "source_db_changed": false,
+    "user_library_changed": false,
+    "product_enabled": false
+  },
+  "root_cause": "The retained Stage-2 environment intentionally contains only model-runtime dependencies, while the actual product BM25 path also requires rank-bm25.",
+  "approved_correction": {
+    "strategy": "combine_two_existing_python_3_10_11_environments_with_an_exact_read_only_site_packages_overlay",
+    "model_runtime_path": "test_results/retrieval_lighter_runtime_v1/.venv",
+    "product_dependency_path": ".ci_venv_2/Lib/site-packages",
+    "rank_bm25_version": "0.2.2",
+    "rank_bm25_source_sha256": "2f28cc795415C01E9F3DB5A8ED019774F9CBA747B272C9C304271589B8081AC6",
+    "numpy_version_in_both_environments": "2.2.6",
+    "package_install_allowed": false,
+    "network_allowed": false,
+    "model_or_selector_tuning_allowed": false,
+    "quality_or_runtime_gate_relaxation_allowed": false
+  },
+  "retry_authorization": {
+    "allowed": true,
+    "reason": "No model load or full build occurred, so the protocol's maximum of one completed full build remains unconsumed.",
+    "requires_protocol_refreeze_with_runtime_overlay": true
+  }
+}

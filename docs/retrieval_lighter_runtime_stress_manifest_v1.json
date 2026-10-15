@@ -1,0 +1,798 @@
+{
+  "schema_version": 1,
+  "manifest_id": "retrieval_lighter_runtime_stress_manifest_v1",
+  "status": "frozen_before_first_onnx_session_run",
+  "purpose": "Deterministic representative and evidence-bearing parent chunks for bounded CPU ONNX speed and vector-parity measurement; contains no paper text.",
+  "sources": {
+    "semantic_fixture_path": "docs/retrieval_semantic_paraphrase_cases_v1.json",
+    "semantic_fixture_sha256": "98417031dc54af544a717d74d70938906b87c35c29232fe35fd903fffd03bc3d",
+    "base_fixture_path": "docs/retrieval_eval_unseen_v2.json",
+    "base_fixture_sha256": "4062ce7f0a1ce4afc86f44fbe74fdc375bbeeeb6b2bdc934344e4e0d53d749d7",
+    "corpus_tree_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "parent_index_relative_path": "test_results/retrieval_cpu_full_index_feasibility_v1/index_v1",
+    "parent_index_tree_sha256": "8c8fa74b7ce72c30687933b0f41d7e6b399615cf4d3a271313c0bfb85e169b50",
+    "parent_build_id": "7138dcaa15c242bd88bc14042166e879"
+  },
+  "selection": {
+    "seed": "pizaya-qwen-onnx-stage1-stress-v1",
+    "algorithm": "all_unique_semantic_qrel_parents_then_sha256_within_five_global_character_length_rank_strata",
+    "qrel_parent_count": 13,
+    "length_stratum_targets": [
+      10,
+      10,
+      10,
+      10,
+      11
+    ],
+    "sample_count": 64,
+    "paper_text_stored": false
+  },
+  "coverage": {
+    "document_count": 10,
+    "document_sample_counts": {
+      "0bb62cdf7be2eb9d": 6,
+      "36b6b8be924bad5a": 13,
+      "385eac8794116d02": 3,
+      "4582761a1616bdd6": 9,
+      "53802a4f79933bae": 7,
+      "606d3883253df045": 8,
+      "7c0059b4861a99a7": 8,
+      "a0923c9f6b527c9f": 3,
+      "ac11f427a96c4cc4": 2,
+      "eabb38f4bf4fc81d": 5
+    },
+    "semantic_case_count": 12,
+    "sample_character_count": 58834,
+    "sample_character_min": 37,
+    "sample_character_p50": 880.5,
+    "sample_character_p95": 2112.8,
+    "sample_character_max": 3563,
+    "corpus_character_count": 1488995,
+    "corpus_character_p50": 735,
+    "corpus_character_p95": 1924.8,
+    "corpus_character_max": 6723
+  },
+  "items": [
+    {
+      "sample_position": 0,
+      "chunk_id": "7c0059b4861a99a7:34",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1348,
+      "parent_vector_index": 1348,
+      "text_sha256": "c68b24ad350fc614538750afec4635ccd825c8666c81bd00edf5240de9e2c7d9",
+      "character_count": 1265,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-gemma3-vision-tokens-en"
+      ]
+    },
+    {
+      "sample_position": 1,
+      "chunk_id": "4582761a1616bdd6:3",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 643,
+      "parent_vector_index": 643,
+      "text_sha256": "3ed6947d1f5493e5017bf9506cb128fded60037acf5de2a1750e1d5368b1accf",
+      "character_count": 1052,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-kan-edge-functions-zh"
+      ]
+    },
+    {
+      "sample_position": 2,
+      "chunk_id": "7c0059b4861a99a7:6",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1320,
+      "parent_vector_index": 1320,
+      "text_sha256": "c996891f93d11f0cd901215bedcd9063e1ba7eac734f80748286d00ddf386317",
+      "character_count": 1162,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-long-context-synthesis-zh"
+      ]
+    },
+    {
+      "sample_position": 3,
+      "chunk_id": "0bb62cdf7be2eb9d:21",
+      "document_id": "0bb62cdf7be2eb9d",
+      "corpus_position": 21,
+      "parent_vector_index": 21,
+      "text_sha256": "875b955502290d8f1455082ec6259ebd8abfe2447c85d6c69835069dd86e42d2",
+      "character_count": 881,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-timesfm-probability-zh"
+      ]
+    },
+    {
+      "sample_position": 4,
+      "chunk_id": "36b6b8be924bad5a:3",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 119,
+      "parent_vector_index": 119,
+      "text_sha256": "960a31ecd00c7ff3528605256d019767e9834d13603b97159ddf1c645d23e480",
+      "character_count": 478,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-sam2-streaming-memory-en"
+      ]
+    },
+    {
+      "sample_position": 5,
+      "chunk_id": "606d3883253df045:6",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1033,
+      "parent_vector_index": 1033,
+      "text_sha256": "a5b5d25ee427a608e7a68e8b1be54890f56434ae047dc4d12c06f13907ff0ae9",
+      "character_count": 279,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-deepseek-r1-zero-boundary-en"
+      ]
+    },
+    {
+      "sample_position": 6,
+      "chunk_id": "eabb38f4bf4fc81d:8",
+      "document_id": "eabb38f4bf4fc81d",
+      "corpus_position": 1598,
+      "parent_vector_index": 1598,
+      "text_sha256": "18a48b03c3e6034ff62f1e608eec6ffcca22c1ce27e058e7d49f5098b25e0974",
+      "character_count": 1101,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-long-context-synthesis-zh",
+        "semantic-modernbert-attention-en"
+      ]
+    },
+    {
+      "sample_position": 7,
+      "chunk_id": "36b6b8be924bad5a:4",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 120,
+      "parent_vector_index": 120,
+      "text_sha256": "a63a17d96df0a97da1ca63a084817953d0d0391c8f31142297ad9b56dd32b668",
+      "character_count": 1242,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-segmentation-transfer-en"
+      ]
+    },
+    {
+      "sample_position": 8,
+      "chunk_id": "385eac8794116d02:1",
+      "document_id": "385eac8794116d02",
+      "corpus_position": 554,
+      "parent_vector_index": 554,
+      "text_sha256": "3d8975e842c1e26027ea6073e86fe3aed10beec5f0b94ba9f846ef63dab70293",
+      "character_count": 1259,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-bindgpt-three-roles-zh"
+      ]
+    },
+    {
+      "sample_position": 9,
+      "chunk_id": "53802a4f79933bae:4",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 851,
+      "parent_vector_index": 851,
+      "text_sha256": "532d17ddfb9d54433d72e58087a1c4f5740ce53312bf4cfb7f7cd17e7c129491",
+      "character_count": 1191,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-mamba-selective-state-zh"
+      ]
+    },
+    {
+      "sample_position": 10,
+      "chunk_id": "ac11f427a96c4cc4:8",
+      "document_id": "ac11f427a96c4cc4",
+      "corpus_position": 1553,
+      "parent_vector_index": 1553,
+      "text_sha256": "100ad80e87966308b4beb890ab2dc7dbf103f5e2b2f1db557b490c4163dac889",
+      "character_count": 975,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-medsam-box-architecture-en",
+        "semantic-segmentation-transfer-en"
+      ]
+    },
+    {
+      "sample_position": 11,
+      "chunk_id": "606d3883253df045:4",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1031,
+      "parent_vector_index": 1031,
+      "text_sha256": "71bd01ae213d23c8aa062f4a08103f8c10010dacdad165cca4404557e4b366a9",
+      "character_count": 1012,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-deepseek-r1-zero-boundary-en"
+      ]
+    },
+    {
+      "sample_position": 12,
+      "chunk_id": "a0923c9f6b527c9f:5",
+      "document_id": "a0923c9f6b527c9f",
+      "corpus_position": 1485,
+      "parent_vector_index": 1485,
+      "text_sha256": "25093ee42c486b8a4ce8578e8656b6dbed05aa7514fc7ce0b5f4a70db6cc8ffa",
+      "character_count": 1325,
+      "selection_group": "qrel_parent",
+      "semantic_case_ids": [
+        "semantic-bitnet-ternary-efficiency-zh"
+      ]
+    },
+    {
+      "sample_position": 13,
+      "chunk_id": "eabb38f4bf4fc81d:1",
+      "document_id": "eabb38f4bf4fc81d",
+      "corpus_position": 1591,
+      "parent_vector_index": 1591,
+      "text_sha256": "f96a25727725896d348248965972fe93b09d2c81ab57865155a945701ace9291",
+      "character_count": 122,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 14,
+      "chunk_id": "36b6b8be924bad5a:287",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 403,
+      "parent_vector_index": 403,
+      "text_sha256": "794c927cc71eae54153e5297bb083ed2e53c92664731630faad7ecd31b43c8dc",
+      "character_count": 323,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 15,
+      "chunk_id": "36b6b8be924bad5a:399",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 515,
+      "parent_vector_index": 515,
+      "text_sha256": "ee9909ba35b912f6ce6d249be4b525a51d6b1ed4d332515e0993d4f95a9b053e",
+      "character_count": 239,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 16,
+      "chunk_id": "606d3883253df045:58",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1085,
+      "parent_vector_index": 1085,
+      "text_sha256": "a4212f5b2d92fb390f887b3741bbbd1bc3cd6fa9273b623b6d8eef4d70e3a008",
+      "character_count": 37,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 17,
+      "chunk_id": "36b6b8be924bad5a:400",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 516,
+      "parent_vector_index": 516,
+      "text_sha256": "a1046ec19b8d386740ec3c0a8a6fc1fb2c2baad5a1bc4b9688da386bed436878",
+      "character_count": 239,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 18,
+      "chunk_id": "7c0059b4861a99a7:118",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1432,
+      "parent_vector_index": 1432,
+      "text_sha256": "6fe12610c81bba8529d8b098c52629e118f8c223678e24da1f09b6ea5782c83c",
+      "character_count": 288,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 19,
+      "chunk_id": "36b6b8be924bad5a:12",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 128,
+      "parent_vector_index": 128,
+      "text_sha256": "3aebca1626be4c8063c3e6b0123b91adf04d9952534c5c77e592034e0c206961",
+      "character_count": 369,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 20,
+      "chunk_id": "a0923c9f6b527c9f:62",
+      "document_id": "a0923c9f6b527c9f",
+      "corpus_position": 1542,
+      "parent_vector_index": 1542,
+      "text_sha256": "c7abe16f50d15de918690ddb47461f0682d7237f47c0c884e640bd13e44fff5b",
+      "character_count": 180,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 21,
+      "chunk_id": "0bb62cdf7be2eb9d:61",
+      "document_id": "0bb62cdf7be2eb9d",
+      "corpus_position": 61,
+      "parent_vector_index": 61,
+      "text_sha256": "df1ff1a8dad69f63f4d4ae565e0160e4118bedcc1fb1aa4619f3286f181a602b",
+      "character_count": 71,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 22,
+      "chunk_id": "4582761a1616bdd6:46",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 686,
+      "parent_vector_index": 686,
+      "text_sha256": "4e8dce8b9aaf34ff04d4e3b853c83fa5f9d8f685f4d91f87e99a5f05ce991b32",
+      "character_count": 228,
+      "selection_group": "length_stratum_0",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 23,
+      "chunk_id": "36b6b8be924bad5a:322",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 438,
+      "parent_vector_index": 438,
+      "text_sha256": "6354be8328b2517f00d69ddd8d5e939dff4d37cf47701b38525607cfa857fa80",
+      "character_count": 534,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 24,
+      "chunk_id": "36b6b8be924bad5a:320",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 436,
+      "parent_vector_index": 436,
+      "text_sha256": "f476cb0524eb8eafa7a52d5a24c140fe6b3f22ae39b524d19ab657a7a05ba3ca",
+      "character_count": 465,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 25,
+      "chunk_id": "606d3883253df045:235",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1262,
+      "parent_vector_index": 1262,
+      "text_sha256": "8027d07e3217e2a20cb8c18a8c0d29ddec89f9e49b6005688d6fb6497d403449",
+      "character_count": 552,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 26,
+      "chunk_id": "4582761a1616bdd6:27",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 667,
+      "parent_vector_index": 667,
+      "text_sha256": "3e8ba850a1905bf03c8bd8690f86eadb8f4f56794e26d678472f940e7add6efd",
+      "character_count": 444,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 27,
+      "chunk_id": "36b6b8be924bad5a:228",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 344,
+      "parent_vector_index": 344,
+      "text_sha256": "5753e11f68759b2eb5973d0a80186cc75ccf74a7d278ddc889161827af5bc329",
+      "character_count": 486,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 28,
+      "chunk_id": "7c0059b4861a99a7:127",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1441,
+      "parent_vector_index": 1441,
+      "text_sha256": "649eb5a9dc8c98e7262ed050f7fe784db6836d3041069acf76bf837a871ab000",
+      "character_count": 531,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 29,
+      "chunk_id": "36b6b8be924bad5a:306",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 422,
+      "parent_vector_index": 422,
+      "text_sha256": "4161c342b87316c199baeec512e5a88bad923d249e9ba24f6731a052e19b077e",
+      "character_count": 535,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 30,
+      "chunk_id": "7c0059b4861a99a7:150",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1464,
+      "parent_vector_index": 1464,
+      "text_sha256": "022bf1f96376105e6cbc42d4c52ce012455140bcdde7c27aadff7b9033265392",
+      "character_count": 516,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 31,
+      "chunk_id": "385eac8794116d02:83",
+      "document_id": "385eac8794116d02",
+      "corpus_position": 636,
+      "parent_vector_index": 636,
+      "text_sha256": "4c1ffe78f83727a4a9c17850378990a5b3390befce04050008076c9b13b57a96",
+      "character_count": 535,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 32,
+      "chunk_id": "36b6b8be924bad5a:148",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 264,
+      "parent_vector_index": 264,
+      "text_sha256": "4e6bb306f0f808120e44cb661d5b1107d3c5f9415599d0fbe5a8eac16b326054",
+      "character_count": 441,
+      "selection_group": "length_stratum_1",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 33,
+      "chunk_id": "4582761a1616bdd6:129",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 769,
+      "parent_vector_index": 769,
+      "text_sha256": "cb4a67d40cd317558d16aa3a21f567f5cdbd70ee3fb5d038296ad89628cce4a5",
+      "character_count": 625,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 34,
+      "chunk_id": "eabb38f4bf4fc81d:72",
+      "document_id": "eabb38f4bf4fc81d",
+      "corpus_position": 1662,
+      "parent_vector_index": 1662,
+      "text_sha256": "cd59eaeb782150949e6177b0175237963505bee1d78c0a9aec7d4414eada79aa",
+      "character_count": 841,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 35,
+      "chunk_id": "0bb62cdf7be2eb9d:48",
+      "document_id": "0bb62cdf7be2eb9d",
+      "corpus_position": 48,
+      "parent_vector_index": 48,
+      "text_sha256": "d45eac79495703be561e067c8da744fcfc0fa586e5d420b1a1ce38db6483d3a5",
+      "character_count": 880,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 36,
+      "chunk_id": "7c0059b4861a99a7:41",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1355,
+      "parent_vector_index": 1355,
+      "text_sha256": "69e9e1d4f83b315cf3d934237f67d5875f6df27fc076d86269ddaa854884e34d",
+      "character_count": 599,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 37,
+      "chunk_id": "606d3883253df045:260",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1287,
+      "parent_vector_index": 1287,
+      "text_sha256": "b619837f21e4c48a4def394a28bf66f8a3f1e345185beabc9abeb4cbca49d7af",
+      "character_count": 755,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 38,
+      "chunk_id": "eabb38f4bf4fc81d:58",
+      "document_id": "eabb38f4bf4fc81d",
+      "corpus_position": 1648,
+      "parent_vector_index": 1648,
+      "text_sha256": "614ec165f463d1a1dd8df3de1cd60af02b58df0d0be234be4ed8708e4ecdc575",
+      "character_count": 879,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 39,
+      "chunk_id": "36b6b8be924bad5a:260",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 376,
+      "parent_vector_index": 376,
+      "text_sha256": "7fcb05850ae228c4f192180bacd410ca3dd962ad3780a942a1fd9367aea3db3e",
+      "character_count": 668,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 40,
+      "chunk_id": "53802a4f79933bae:57",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 904,
+      "parent_vector_index": 904,
+      "text_sha256": "79366127e9aa3e1d922a06e8e2ec719070974b57a9801fd902a9c62e01bcca75",
+      "character_count": 849,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 41,
+      "chunk_id": "606d3883253df045:265",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1292,
+      "parent_vector_index": 1292,
+      "text_sha256": "b9231f4b3eb8f05a744b77d5b809f828ea314e201c771d14e4e73b69cd324303",
+      "character_count": 759,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 42,
+      "chunk_id": "4582761a1616bdd6:90",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 730,
+      "parent_vector_index": 730,
+      "text_sha256": "d8e297fb73f34586d7c504f30bf0d8795f7f95f13574ab0f668278cb0922e62c",
+      "character_count": 641,
+      "selection_group": "length_stratum_2",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 43,
+      "chunk_id": "7c0059b4861a99a7:76",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1390,
+      "parent_vector_index": 1390,
+      "text_sha256": "579d7c737af72e86bfac780aeeccb754957089899f69953791b1037316c49eec",
+      "character_count": 1072,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 44,
+      "chunk_id": "606d3883253df045:206",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1233,
+      "parent_vector_index": 1233,
+      "text_sha256": "dfc57fbaf8a36e6e2a5070d4126a1caa5dc03cedcdba3870a7457ad21bc74b85",
+      "character_count": 1085,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 45,
+      "chunk_id": "53802a4f79933bae:12",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 859,
+      "parent_vector_index": 859,
+      "text_sha256": "d4b23833b46929b208b5d2b72b0e18c48b621354310d0266501d2f8177293daa",
+      "character_count": 972,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 46,
+      "chunk_id": "a0923c9f6b527c9f:23",
+      "document_id": "a0923c9f6b527c9f",
+      "corpus_position": 1503,
+      "parent_vector_index": 1503,
+      "text_sha256": "9ff1f42e62be4a13627d8b0e903664f0228c13f51b2b741c4bf46ce0a6559c39",
+      "character_count": 1253,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 47,
+      "chunk_id": "4582761a1616bdd6:23",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 663,
+      "parent_vector_index": 663,
+      "text_sha256": "b19b89d3ec3de90a7e74df45fafd235b9767e115ad5d6257a36bf1e945be3f92",
+      "character_count": 959,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 48,
+      "chunk_id": "53802a4f79933bae:75",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 922,
+      "parent_vector_index": 922,
+      "text_sha256": "7e047b8ef64e7bdad87d89f44e9f339781943a93bc26242b85fe96d6f218824d",
+      "character_count": 1137,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 49,
+      "chunk_id": "eabb38f4bf4fc81d:23",
+      "document_id": "eabb38f4bf4fc81d",
+      "corpus_position": 1613,
+      "parent_vector_index": 1613,
+      "text_sha256": "c849bf0a3821771991780b8039cb7669898ee743227b363e7ecaf21e38b9e522",
+      "character_count": 1048,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 50,
+      "chunk_id": "0bb62cdf7be2eb9d:46",
+      "document_id": "0bb62cdf7be2eb9d",
+      "corpus_position": 46,
+      "parent_vector_index": 46,
+      "text_sha256": "2ce75a5fdbf7a317928e13a42ccdea39d9f8219e039cd466ee42b95f85877ab1",
+      "character_count": 1167,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 51,
+      "chunk_id": "4582761a1616bdd6:35",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 675,
+      "parent_vector_index": 675,
+      "text_sha256": "ebbd64a7bf4fe70cc6b9a65c4de7988c6265f2b66e2591c5ab2b12c17a575480",
+      "character_count": 925,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 52,
+      "chunk_id": "7c0059b4861a99a7:13",
+      "document_id": "7c0059b4861a99a7",
+      "corpus_position": 1327,
+      "parent_vector_index": 1327,
+      "text_sha256": "10857d95d6e364e282d286351e13642ad6a3e853d8eecbe80c677f748136ca7a",
+      "character_count": 1043,
+      "selection_group": "length_stratum_3",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 53,
+      "chunk_id": "36b6b8be924bad5a:89",
+      "document_id": "36b6b8be924bad5a",
+      "corpus_position": 205,
+      "parent_vector_index": 205,
+      "text_sha256": "d0e9fb34fde61904c8041028d20d7bb9fff037d537be8133d31a1be950edf380",
+      "character_count": 1389,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 54,
+      "chunk_id": "606d3883253df045:195",
+      "document_id": "606d3883253df045",
+      "corpus_position": 1222,
+      "parent_vector_index": 1222,
+      "text_sha256": "93cc7744c4884f1fd11a3756a6567c409f6ea7cba12f1fd20423059b913ac1ec",
+      "character_count": 1323,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 55,
+      "chunk_id": "53802a4f79933bae:63",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 910,
+      "parent_vector_index": 910,
+      "text_sha256": "bf81ecd3d7ef1ccd0bd282387751f9590a82445210db1f4f589485cedf465079",
+      "character_count": 1277,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 56,
+      "chunk_id": "0bb62cdf7be2eb9d:72",
+      "document_id": "0bb62cdf7be2eb9d",
+      "corpus_position": 72,
+      "parent_vector_index": 72,
+      "text_sha256": "d7b070b5412318b263cf9daf4691bf4f9e0a8c8f319e1b019c347f13c42069ab",
+      "character_count": 2377,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 57,
+      "chunk_id": "385eac8794116d02:38",
+      "document_id": "385eac8794116d02",
+      "corpus_position": 591,
+      "parent_vector_index": 591,
+      "text_sha256": "7ed905599a7d32f19bf76d5c26d702e78cd952328bc468a5fd33d22e7c5be588",
+      "character_count": 2820,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 58,
+      "chunk_id": "0bb62cdf7be2eb9d:22",
+      "document_id": "0bb62cdf7be2eb9d",
+      "corpus_position": 22,
+      "parent_vector_index": 22,
+      "text_sha256": "8f59f95ff4d51c6c08c7abf3196a755429e8b9f4b4fbd1b015b020243a512734",
+      "character_count": 1278,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 59,
+      "chunk_id": "53802a4f79933bae:121",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 968,
+      "parent_vector_index": 968,
+      "text_sha256": "bbc62cd08b41c04ce6504a222678121434e0027e8ea9ab8563f22649e4fc7748",
+      "character_count": 1377,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 60,
+      "chunk_id": "53802a4f79933bae:114",
+      "document_id": "53802a4f79933bae",
+      "corpus_position": 961,
+      "parent_vector_index": 961,
+      "text_sha256": "9145d863074a913ff8bbdb9dba2ad956d2da0a22a028cd994219210100f326ba",
+      "character_count": 1392,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 61,
+      "chunk_id": "4582761a1616bdd6:190",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 830,
+      "parent_vector_index": 830,
+      "text_sha256": "6a54f0b58bf3ccc8d734f2c3989edc99d7f62cff2b954976b29c8e6918c5589e",
+      "character_count": 2240,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 62,
+      "chunk_id": "4582761a1616bdd6:94",
+      "document_id": "4582761a1616bdd6",
+      "corpus_position": 734,
+      "parent_vector_index": 734,
+      "text_sha256": "b281d12a93fb1e7489a3523877fef0ef814a12aeb76eaf98cb3e21550cc105b5",
+      "character_count": 1284,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    },
+    {
+      "sample_position": 63,
+      "chunk_id": "ac11f427a96c4cc4:2",
+      "document_id": "ac11f427a96c4cc4",
+      "corpus_position": 1547,
+      "parent_vector_index": 1547,
+      "text_sha256": "4fa5dfaf07b518b43ef9aabd4b7dc8177a986ca9538b49c822cf468cf1015e4e",
+      "character_count": 3563,
+      "selection_group": "length_stratum_4",
+      "semantic_case_ids": []
+    }
+  ],
+  "execution": {
+    "tokenizer_loaded": false,
+    "onnx_session_run_calls": 0,
+    "queries_encoded": 0,
+    "documents_embedded": 0,
+    "vectors_created": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "report_kind": "retrieval_lighter_runtime_stage1_e5_small_v1",
+  "measured_at": "2026-09-03T00:40:13.974889+00:00",
+  "protocol_sha256": "01309083feb769ef99cfe61a0dd94b44b193c772e540bc5740c6f7ac31f5ad39",
+  "stage_0_report_sha256": "5d901b01af8201004adde29119321b60fb82a781b54e93688b22f25d3fde963d",
+  "window_census_report_sha256": "bd32ae3d12bad8d67203f9493da33f2ab0b57ac8ae4616992efdf4fb9745ee25",
+  "stress_manifest_sha256": "1e697579abcdf241d943d9caffa160ed78a301d713ad7ab48e40ef02640fbd12",
+  "candidate": {
+    "candidate_id": "multilingual_e5_small_official_onnx_v1",
+    "model_id": "intfloat/multilingual-e5-small",
+    "model_revision": "03415a4be176a1620747c692ed433219fabc3def",
+    "artifact_path": "test_results/retrieval_lighter_runtime_v1/artifacts/multilingual_e5_small_official_onnx_v1/model.onnx",
+    "artifact_bytes": 470268510,
+    "artifact_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "onnx_inputs": [
+      "input_ids",
+      "attention_mask",
+      "token_type_ids"
+    ],
+    "onnx_output": "last_hidden_state",
+    "embedding_dimension": 384
+  },
+  "attempt": {
+    "started_at": "2026-09-03T00:40:05.711222+00:00",
+    "maximum_runs": 1,
+    "subprocess_wall_ms": 7807.22,
+    "report_persisted_before_outcome_validation": true
+  },
+  "integrity": {
+    "source_before_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "source_after_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "artifact_before_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "artifact_after_sha256": "ca456c06b3a9505ddfd9131408916dd79290368331e7d76bb621f1cba6bc8665",
+    "tokenizer_before_sha256": "dee92e975dc303019bb3c74386f1b7fc6076428a5454c256f74602192c44946b",
+    "tokenizer_after_sha256": "dee92e975dc303019bb3c74386f1b7fc6076428a5454c256f74602192c44946b"
+  },
+  "runtime": {
+    "python_version": "3.10.11",
+    "platform": "Windows-10-10.0.26200-SP0",
+    "user_site_enabled": false,
+    "onnxruntime_version": "1.23.2",
+    "session_providers": [
+      "CPUExecutionProvider"
+    ],
+    "provider_load_ms": 998.062,
+    "warmup_ms": 6.187,
+    "peak_process_rss_mib": 1168.598,
+    "installed_distribution_count": 26
+  },
+  "query": {
+    "timings": [
+      {
+        "ordinal": 1,
+        "case_id": "semantic-mamba-selective-state-zh",
+        "token_count": 33,
+        "duration_ms": 7.134
+      },
+      {
+        "ordinal": 2,
+        "case_id": "semantic-kan-edge-functions-zh",
+        "token_count": 47,
+        "duration_ms": 10.097
+      },
+      {
+        "ordinal": 3,
+        "case_id": "semantic-bitnet-ternary-efficiency-zh",
+        "token_count": 46,
+        "duration_ms": 7.793
+      },
+      {
+        "ordinal": 4,
+        "case_id": "semantic-sam2-streaming-memory-en",
+        "token_count": 47,
+        "duration_ms": 9.61
+      },
+      {
+        "ordinal": 5,
+        "case_id": "semantic-medsam-box-architecture-en",
+        "token_count": 42,
+        "duration_ms": 9.238
+      },
+      {
+        "ordinal": 6,
+        "case_id": "semantic-modernbert-attention-en",
+        "token_count": 47,
+        "duration_ms": 9.517
+      },
+      {
+        "ordinal": 7,
+        "case_id": "semantic-deepseek-r1-zero-boundary-en",
+        "token_count": 54,
+        "duration_ms": 11.704
+      },
+      {
+        "ordinal": 8,
+        "case_id": "semantic-gemma3-vision-tokens-en",
+        "token_count": 51,
+        "duration_ms": 10.403
+      },
+      {
+        "ordinal": 9,
+        "case_id": "semantic-timesfm-probability-zh",
+        "token_count": 45,
+        "duration_ms": 9.065
+      },
+      {
+        "ordinal": 10,
+        "case_id": "semantic-bindgpt-three-roles-zh",
+        "token_count": 45,
+        "duration_ms": 9.551
+      },
+      {
+        "ordinal": 11,
+        "case_id": "semantic-long-context-synthesis-zh",
+        "token_count": 39,
+        "duration_ms": 8.132
+      },
+      {
+        "ordinal": 12,
+        "case_id": "semantic-segmentation-transfer-en",
+        "token_count": 57,
+        "duration_ms": 12.104
+      }
+    ],
+    "truncated_count": 0,
+    "vectors": {
+      "count": 12,
+      "dimension": 384,
+      "minimum_norm": 0.99999994,
+      "maximum_norm": 1.0,
+      "matrix_sha256": "6374e52e225e65333843be7aedfa5683414a60f3465f63b43434e5e54c245eed"
+    }
+  },
+  "document_projection": {
+    "parent_count": 1673,
+    "full_window_count": 2016,
+    "stress_parent_count": 64,
+    "stress_window_count": 74,
+    "truncated_parent_count": 0,
+    "uncovered_content_token_count": 0,
+    "maximum_input_tokens": 453,
+    "encode_ms": 4040.255,
+    "vectors": {
+      "count": 74,
+      "dimension": 384,
+      "minimum_norm": 0.99999988,
+      "maximum_norm": 1.0,
+      "matrix_sha256": "0f48a22907ce4e9a8268c7ffce312b40d6d0bcea297f10828ad65b9fc5ee31b3"
+    },
+    "stress_work": {
+      "item_count": 74,
+      "batch_count": 10,
+      "real_tokens": 20908,
+      "padded_tokens": 22522,
+      "padding_amplification": 1.077195,
+      "attention_work_proxy": 7974466,
+      "peak_padded_tokens": 3624,
+      "oversize_singleton_count": 0,
+      "maximum_observed_tokens": 453
+    },
+    "full_corpus_work": {
+      "item_count": 2016,
+      "batch_count": 252,
+      "real_tokens": 553184,
+      "padded_tokens": 554720,
+      "padding_amplification": 1.002777,
+      "attention_work_proxy": 191409408,
+      "peak_padded_tokens": 3624,
+      "oversize_singleton_count": 0,
+      "maximum_observed_tokens": 453
+    },
+    "projected_full_build_ms": 96977.377,
+    "projected_parent_chunks_per_second": 17.251446
+  },
+  "worker_execution": {
+    "warmup_session_run_calls": 1,
+    "query_session_run_calls": 12,
+    "document_session_run_calls": 10,
+    "query_vector_count": 12,
+    "stress_window_vector_count": 74,
+    "full_corpus_windows_embedded": 0,
+    "quality_evaluations": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "gate": {
+    "checks": {
+      "subprocess_wall_clock": true,
+      "provider_load": true,
+      "warm_query_p95": true,
+      "peak_process_rss": true,
+      "projected_full_build": true,
+      "projected_parent_throughput": true,
+      "query_completion": true,
+      "query_truncation": true,
+      "exact_parent_count": true,
+      "exact_full_window_count": true,
+      "exact_stress_parent_count": true,
+      "exact_stress_window_count": true,
+      "parent_truncation": true,
+      "content_coverage": true,
+      "maximum_input_tokens": true,
+      "query_unit_vectors": true,
+      "stress_unit_vectors": true,
+      "worker_execution_boundary": true,
+      "cpu_provider_only": true,
+      "source_unchanged": true,
+      "artifact_unchanged": true,
+      "tokenizer_unchanged": true
+    },
+    "passes_all": true
+  },
+  "decision": {
+    "status": "passed_stage_1_authorize_single_full_build",
+    "single_full_build_allowed": true,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  },
+  "summary": {
+    "provider_load_ms": 998.062,
+    "query_p50_ms": 9.517,
+    "query_p95_ms": 12.104,
+    "stress_window_encode_ms": 4040.255,
+    "projected_full_build_ms": 96977.377,
+    "projected_parent_chunks_per_second": 17.251446,
+    "peak_process_rss_mib": 1168.598
+  },
+  "result_fingerprint": "0750c32c42c09f8f9613734662ff1e6c3c7bee1169c9341b51e5afed778cd645"
+}

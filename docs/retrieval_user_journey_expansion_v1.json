@@ -1,0 +1,1453 @@
+{
+  "schema_version": 2,
+  "id": "retrieval_user_journey_expansion_v1_chunk_qrels",
+  "curation_status": "frozen_before_any_retrieval_baseline_or_fusion_v3_design",
+  "description": "New library-reading evidence-location qrels authored and labeled from registered local chunks without running a retriever; not an answer-writing evaluation.",
+  "source_fixture": {
+    "path": "docs/retrieval_user_journey_qrel_registry_v1.json",
+    "sha256": "03b581fe48f04ce0340fba1bd0f2d766e8132ecc6968da1d68fe3ac5aa556eb1",
+    "sha256_newlines": "normalized_lf",
+    "benchmark_id": "retrieval_user_journey_expansion_protocol_v1"
+  },
+  "authoring_manifest": {
+    "path": "docs/retrieval_user_journey_authoring_manifest_v1.json",
+    "sha256": "f1dc2cb10b87856f72b58309ee1b78e2386f62b2506f5c64719be14de312eff2"
+  },
+  "label_policy": {
+    "version": 1,
+    "unit": "indexed_chunk",
+    "candidate_boundary": "registered local library documents and evidence-ready chunks",
+    "selection": "direct source inspection independent of retriever ranking; at most three chunks per evidence contract",
+    "grades": {
+      "3": "direct evidence that resolves the requested reading question",
+      "2": "direct partial or contextual evidence needed with another labeled chunk"
+    },
+    "required_audit_fields": [
+      "chunk_id",
+      "doc_id",
+      "grade",
+      "page_start",
+      "page_end",
+      "text_sha256",
+      "evidence_role"
+    ]
+  },
+  "ks": [
+    1,
+    3,
+    5,
+    10,
+    20
+  ],
+  "corpus": {
+    "document_count": 31,
+    "chunk_count": 2251,
+    "fingerprint_algorithm": "sha256(logical_doc_id,chunk_id,text_sha256,page_span)",
+    "fingerprint": "20ad35d505d2936dbd80e90df6199e4b3d51fdf4cf8872a36c9211c5d6c99d9f",
+    "documents": [
+      {
+        "doc_id": "3d-sp-video",
+        "index_doc_id": "a34b2661f87a68d2",
+        "paper_sha256": "",
+        "chunk_count": 31
+      },
+      {
+        "doc_id": "cassi",
+        "index_doc_id": "50f9c165105534b5",
+        "paper_sha256": "",
+        "chunk_count": 57
+      },
+      {
+        "doc_id": "denoising-review",
+        "index_doc_id": "bc9b37581c93be49",
+        "paper_sha256": "",
+        "chunk_count": 61
+      },
+      {
+        "doc_id": "dl-spi-review",
+        "index_doc_id": "5527e0d96aeb608a",
+        "paper_sha256": "",
+        "chunk_count": 82
+      },
+      {
+        "doc_id": "fdm-metamaterials",
+        "index_doc_id": "6b1a3c7c4aa0aaa9",
+        "paper_sha256": "",
+        "chunk_count": 32
+      },
+      {
+        "doc_id": "foveated-spi",
+        "index_doc_id": "aa60f6f8d0cbcaa6",
+        "paper_sha256": "",
+        "chunk_count": 55
+      },
+      {
+        "doc_id": "hsi-fsi",
+        "index_doc_id": "8a29ea79c6633439",
+        "paper_sha256": "",
+        "chunk_count": 149
+      },
+      {
+        "doc_id": "iism",
+        "index_doc_id": "3583e628c41883ee",
+        "paper_sha256": "",
+        "chunk_count": 54
+      },
+      {
+        "doc_id": "perovskite-laser",
+        "index_doc_id": "5b48741ab08dbad8",
+        "paper_sha256": "",
+        "chunk_count": 57
+      },
+      {
+        "doc_id": "pidl-single-photon",
+        "index_doc_id": "f986970932c37441",
+        "paper_sha256": "",
+        "chunk_count": 105
+      },
+      {
+        "doc_id": "piln",
+        "index_doc_id": "aad10fa9972c8a2c",
+        "paper_sha256": "",
+        "chunk_count": 27
+      },
+      {
+        "doc_id": "qclfm",
+        "index_doc_id": "831f8c559642fe39",
+        "paper_sha256": "",
+        "chunk_count": 45
+      },
+      {
+        "doc_id": "rt-spi-supp",
+        "index_doc_id": "3c702d1a300625d2",
+        "paper_sha256": "",
+        "chunk_count": 4
+      },
+      {
+        "doc_id": "s2ism",
+        "index_doc_id": "b10afc967fb55e1b",
+        "paper_sha256": "",
+        "chunk_count": 71
+      },
+      {
+        "doc_id": "scigs",
+        "index_doc_id": "32490abae33df8c9",
+        "paper_sha256": "",
+        "chunk_count": 104
+      },
+      {
+        "doc_id": "scinerf",
+        "index_doc_id": "7f6b9404bccea454",
+        "paper_sha256": "",
+        "chunk_count": 104
+      },
+      {
+        "doc_id": "seq-cs",
+        "index_doc_id": "6117def890d573f9",
+        "paper_sha256": "",
+        "chunk_count": 25
+      },
+      {
+        "doc_id": "simple-baselines",
+        "index_doc_id": "fae405527c4ab80e",
+        "paper_sha256": "",
+        "chunk_count": 142
+      },
+      {
+        "doc_id": "spd-review",
+        "index_doc_id": "ba919188ff49c763",
+        "paper_sha256": "",
+        "chunk_count": 110
+      },
+      {
+        "doc_id": "sph-biological",
+        "index_doc_id": "11b5152564f8b679",
+        "paper_sha256": "",
+        "chunk_count": 73
+      },
+      {
+        "doc_id": "spi-prospects",
+        "index_doc_id": "7846a2dbb8e31f4a",
+        "paper_sha256": "",
+        "chunk_count": 37
+      },
+      {
+        "doc_id": "visual-perception",
+        "index_doc_id": "7c042cc84da037c6",
+        "paper_sha256": "",
+        "chunk_count": 45
+      },
+      {
+        "doc_id": "background:12d3dafe5e149b77",
+        "index_doc_id": "12d3dafe5e149b77",
+        "paper_sha256": "",
+        "chunk_count": 92,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:2a53d946acae115e",
+        "index_doc_id": "2a53d946acae115e",
+        "paper_sha256": "",
+        "chunk_count": 53,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:5de6843c26123e60",
+        "index_doc_id": "5de6843c26123e60",
+        "paper_sha256": "",
+        "chunk_count": 144,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:6e125bbe01292572",
+        "index_doc_id": "6e125bbe01292572",
+        "paper_sha256": "",
+        "chunk_count": 44,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:76f57e5ce4ad3e06",
+        "index_doc_id": "76f57e5ce4ad3e06",
+        "paper_sha256": "",
+        "chunk_count": 103,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:a678b5bb61394454",
+        "index_doc_id": "a678b5bb61394454",
+        "paper_sha256": "",
+        "chunk_count": 115,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:a91f5c2895199749",
+        "index_doc_id": "a91f5c2895199749",
+        "paper_sha256": "",
+        "chunk_count": 100,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:debadd6aaf815c40",
+        "index_doc_id": "debadd6aaf815c40",
+        "paper_sha256": "",
+        "chunk_count": 87,
+        "role": "background_negative"
+      },
+      {
+        "doc_id": "background:f754fd0b565d54d9",
+        "index_doc_id": "f754fd0b565d54d9",
+        "paper_sha256": "",
+        "chunk_count": 43,
+        "role": "background_negative"
+      }
+    ]
+  },
+  "split": {
+    "algorithm": "ascending_sha256(seed:locale:case_id)_within_locale",
+    "seed": "pizaya-user-journey-holdout-v1",
+    "calibration_case_ids": [
+      "journey-cassi-vs-fourier-measurement-encoding",
+      "journey-compensation-combined-degradation-boundary",
+      "journey-dualscale-large-image-mechanism",
+      "journey-dualscale-resolution-results",
+      "journey-fashionmnist-mnist-boundary",
+      "journey-hyperspectral-prior-transfer-boundary",
+      "journey-kuzushiji-modern-ocr-boundary",
+      "journey-nafnet-vs-classical-denoising-evidence",
+      "journey-piln-vs-pidl-supervision",
+      "journey-primal-dual-operator-exchange",
+      "journey-realtime-spi-frame-input",
+      "journey-s2ism-vs-iism-information-source"
+    ],
+    "holdout_case_ids": [
+      "journey-istanet-benchmark-protocol",
+      "journey-istanet-phase-physics",
+      "journey-perovskite-device-figure-location",
+      "journey-primal-dual-ct-protocol",
+      "journey-super-subnyquist-sampling-results",
+      "journey-visual-redundancy-figure-location"
+    ],
+    "calibration_case_count": 12,
+    "holdout_case_count": 6,
+    "holdout_allowed_for_tuning": false
+  },
+  "retriever_executed_during_authoring_or_labeling": false,
+  "answer_generation_evaluated": false,
+  "cases": [
+    {
+      "id": "journey-istanet-phase-physics",
+      "query": "ISTA-Net 的一个网络阶段怎样对应传统 ISTA 的梯度更新和稀疏变换步骤？我想找到网络结构仍然保留成像物理的证据。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_mechanism",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_mechanism"
+      ],
+      "query_scope": "locate the mechanism that maps an iterative reconstruction algorithm into network phases",
+      "primary_doc_id": "background:12d3dafe5e149b77",
+      "scope_doc_ids": [
+        "background:12d3dafe5e149b77"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-istanet-phase-physics",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "istanet-data-fidelity-gradient",
+          "doc_id": "background:12d3dafe5e149b77",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "12d3dafe5e149b77:23"
+          ]
+        },
+        {
+          "id": "istanet-learned-sparse-proximal",
+          "doc_id": "background:12d3dafe5e149b77",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "12d3dafe5e149b77:28"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "12d3dafe5e149b77:23",
+          "grade": 3,
+          "doc_id": "background:12d3dafe5e149b77",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "istanet-data-fidelity-gradient"
+          ],
+          "text_sha256": "dabf71852a19a05d8e7efefe40ca9d322c53ea5af3e6dbf157e2c26ca49beca3",
+          "evidence_role": "data_fidelity_gradient_module"
+        },
+        {
+          "chunk_id": "12d3dafe5e149b77:28",
+          "grade": 3,
+          "doc_id": "background:12d3dafe5e149b77",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "istanet-learned-sparse-proximal"
+          ],
+          "text_sha256": "071cd5acce3a9a1dba28299b682b4b83d60fae075433f138d21f92ddf26d4f02",
+          "evidence_role": "learned_sparse_transform_and_threshold"
+        }
+      ],
+      "relevance": {
+        "12d3dafe5e149b77:23": 3,
+        "12d3dafe5e149b77:28": 3
+      }
+    },
+    {
+      "id": "journey-primal-dual-operator-exchange",
+      "query": "How do the learned primal and dual updates exchange information through the forward operator instead of behaving like an image-only post-processing network?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_mechanism",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_mechanism"
+      ],
+      "query_scope": "find how measurement physics participates in learned primal-dual updates",
+      "primary_doc_id": "background:debadd6aaf815c40",
+      "scope_doc_ids": [
+        "background:debadd6aaf815c40"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-primal-dual-operator-exchange",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "primal-dual-forward-adjoint-updates",
+          "doc_id": "background:debadd6aaf815c40",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "debadd6aaf815c40:22"
+          ]
+        },
+        {
+          "id": "primal-dual-not-postprocessing",
+          "doc_id": "background:debadd6aaf815c40",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "debadd6aaf815c40:12"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "debadd6aaf815c40:12",
+          "grade": 2,
+          "doc_id": "background:debadd6aaf815c40",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "primal-dual-not-postprocessing"
+          ],
+          "text_sha256": "1e4a0a6a629faf0f3d5e5ff668a72792a25928db20e6c51fe1f9eeb2054b7dab",
+          "evidence_role": "model_based_data_and_reconstruction_spaces"
+        },
+        {
+          "chunk_id": "debadd6aaf815c40:22",
+          "grade": 3,
+          "doc_id": "background:debadd6aaf815c40",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "primal-dual-forward-adjoint-updates"
+          ],
+          "text_sha256": "24ba641826efb3e38f18fe4d7908fe8115602f459bb0436fa721585752df3ebd",
+          "evidence_role": "forward_and_adjoint_update_equations"
+        }
+      ],
+      "relevance": {
+        "debadd6aaf815c40:12": 2,
+        "debadd6aaf815c40:22": 3
+      }
+    },
+    {
+      "id": "journey-dualscale-large-image-mechanism",
+      "query": "这篇大尺寸单像素成像方法为什么同时使用两种尺度？请定位局部细节与全局信息在网络中如何汇合的证据。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_mechanism",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_mechanism"
+      ],
+      "query_scope": "locate the dual-scale information-flow mechanism",
+      "primary_doc_id": "background:76f57e5ce4ad3e06",
+      "scope_doc_ids": [
+        "background:76f57e5ce4ad3e06"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-dualscale-large-image-mechanism",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "dualscale-local-global-information-flow",
+          "doc_id": "background:76f57e5ce4ad3e06",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "76f57e5ce4ad3e06:24"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "76f57e5ce4ad3e06:24",
+          "grade": 3,
+          "doc_id": "background:76f57e5ce4ad3e06",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "dualscale-local-global-information-flow"
+          ],
+          "text_sha256": "86ae71b0ce867ff41d32689fd3c6c5fac65317cd6e7688176a9644cac1b87be7",
+          "evidence_role": "dual_scale_spatial_and_channel_attention"
+        }
+      ],
+      "relevance": {
+        "76f57e5ce4ad3e06:24": 3
+      }
+    },
+    {
+      "id": "journey-realtime-spi-frame-input",
+      "query": "What information is presented to the neural network for each single-pixel video frame, and how can it reconstruct in real time without iterative optimization?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_mechanism",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_mechanism"
+      ],
+      "query_scope": "find the per-frame neural reconstruction mechanism",
+      "primary_doc_id": "background:2a53d946acae115e",
+      "scope_doc_ids": [
+        "background:2a53d946acae115e"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-realtime-spi-frame-input",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "realtime-spi-frame-measurement-input",
+          "doc_id": "background:2a53d946acae115e",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "2a53d946acae115e:12"
+          ]
+        },
+        {
+          "id": "realtime-spi-noniterative-runtime",
+          "doc_id": "background:2a53d946acae115e",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "2a53d946acae115e:24"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "2a53d946acae115e:12",
+          "grade": 3,
+          "doc_id": "background:2a53d946acae115e",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "realtime-spi-frame-measurement-input"
+          ],
+          "text_sha256": "03c487e392fabd38c5a1b7e7efece6b7c1ee090db9893c02d879ef938caa1f7b",
+          "evidence_role": "binary_measurements_to_dcan_reconstruction"
+        },
+        {
+          "chunk_id": "2a53d946acae115e:24",
+          "grade": 2,
+          "doc_id": "background:2a53d946acae115e",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "realtime-spi-noniterative-runtime"
+          ],
+          "text_sha256": "b3b1be87b7211add226e7b67846897374dd39351810c79ce7cb00c6734741dd1",
+          "evidence_role": "fast_deterministic_noniterative_solution"
+        }
+      ],
+      "relevance": {
+        "2a53d946acae115e:12": 3,
+        "2a53d946acae115e:24": 2
+      }
+    },
+    {
+      "id": "journey-fashionmnist-mnist-boundary",
+      "query": "Fashion-MNIST 为什么被提出作为 MNIST 的替代基准？我想核对原论文认为旧基准在哪些方面已不能区分算法能力。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_boundary_or_limitation",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_boundary_or_limitation"
+      ],
+      "query_scope": "locate the stated limitations of MNIST and intended benchmark boundary",
+      "primary_doc_id": "background:5de6843c26123e60",
+      "scope_doc_ids": [
+        "background:5de6843c26123e60"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-fashionmnist-mnist-boundary",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "fashionmnist-dropin-and-difficulty",
+          "doc_id": "background:5de6843c26123e60",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "5de6843c26123e60:3"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "5de6843c26123e60:3",
+          "grade": 3,
+          "doc_id": "background:5de6843c26123e60",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "fashionmnist-dropin-and-difficulty"
+          ],
+          "text_sha256": "199e621a795bca48ff89cfe7e495a77471c1538c31b0b7ffe1feded1de6b564b",
+          "evidence_role": "mnist_saturation_and_dropin_design"
+        }
+      ],
+      "relevance": {
+        "5de6843c26123e60:3": 3
+      }
+    },
+    {
+      "id": "journey-kuzushiji-modern-ocr-boundary",
+      "query": "Why does recognition of historical Japanese books require dedicated data, and which properties make ordinary modern-Japanese OCR training material an unreliable substitute?",
+      "locale": "en",
+      "evaluation_focus": "single_paper_boundary_or_limitation",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_boundary_or_limitation"
+      ],
+      "query_scope": "find the domain-shift boundary for historical Japanese recognition",
+      "primary_doc_id": "background:a91f5c2895199749",
+      "scope_doc_ids": [
+        "background:a91f5c2895199749"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-kuzushiji-modern-ocr-boundary",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "kuzushiji-historical-domain-shift",
+          "doc_id": "background:a91f5c2895199749",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "a91f5c2895199749:2"
+          ]
+        },
+        {
+          "id": "kuzushiji-character-variation",
+          "doc_id": "background:a91f5c2895199749",
+          "source_page": 4,
+          "relevant_chunk_ids": [
+            "a91f5c2895199749:10"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a91f5c2895199749:10",
+          "grade": 3,
+          "doc_id": "background:a91f5c2895199749",
+          "page_start": 4,
+          "page_end": 4,
+          "contract_ids": [
+            "kuzushiji-character-variation"
+          ],
+          "text_sha256": "ec6ae08143dbcef6071e7dd96789bcac7d711685894cb8bd4f65b3aff4757b7c",
+          "evidence_role": "many_to_one_variant_kana_distribution"
+        },
+        {
+          "chunk_id": "a91f5c2895199749:2",
+          "grade": 3,
+          "doc_id": "background:a91f5c2895199749",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "kuzushiji-historical-domain-shift"
+          ],
+          "text_sha256": "2342a3a34cc98f57ced3367941c8252bcc20df2475e45e32a9a80c89183535c3",
+          "evidence_role": "historical_script_education_shift"
+        }
+      ],
+      "relevance": {
+        "a91f5c2895199749:10": 3,
+        "a91f5c2895199749:2": 3
+      }
+    },
+    {
+      "id": "journey-compensation-combined-degradation-boundary",
+      "query": "既有补偿方案为什么难以处理多种真实退化叠加？请定位新方法覆盖的噪声、模糊和抖动范围，并核对它是否要求逐项知道退化参数。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_boundary_or_limitation",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_boundary_or_limitation"
+      ],
+      "query_scope": "locate the prior single-factor boundary and the new blind combined-degradation scope",
+      "primary_doc_id": "background:f754fd0b565d54d9",
+      "scope_doc_ids": [
+        "background:f754fd0b565d54d9"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-compensation-error-boundary",
+        "replacement_reason": "The original calibration-stability question had no direct remaining-assumption statement, so it was dropped before retrieval and replaced within the same boundary slot."
+      },
+      "contracts": [
+        {
+          "id": "compensation-prior-single-factor-limit",
+          "doc_id": "background:f754fd0b565d54d9",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "f754fd0b565d54d9:5"
+          ]
+        },
+        {
+          "id": "compensation-blind-parameter-scope",
+          "doc_id": "background:f754fd0b565d54d9",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "f754fd0b565d54d9:1",
+            "f754fd0b565d54d9:25"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "f754fd0b565d54d9:1",
+          "grade": 3,
+          "doc_id": "background:f754fd0b565d54d9",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "compensation-blind-parameter-scope"
+          ],
+          "text_sha256": "cb3ce03fc106179226121e7e1af263fc6ef337be0b8c8ed7258a515aa822b6da",
+          "evidence_role": "blind_compensation_without_degradation_parameters"
+        },
+        {
+          "chunk_id": "f754fd0b565d54d9:25",
+          "grade": 2,
+          "doc_id": "background:f754fd0b565d54d9",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "compensation-blind-parameter-scope"
+          ],
+          "text_sha256": "db73f0e99434e74386a2515ea5e780701c959eb0fca385780952a01a9f94aaf2",
+          "evidence_role": "blur_noise_jitter_and_sampling_scope"
+        },
+        {
+          "chunk_id": "f754fd0b565d54d9:5",
+          "grade": 3,
+          "doc_id": "background:f754fd0b565d54d9",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "compensation-prior-single-factor-limit"
+          ],
+          "text_sha256": "072e32e57d6829545e3462b1e1d256a3d0029d760ab8daccc6c3de8b41153d7a",
+          "evidence_role": "prior_single_factor_and_parameter_limit"
+        }
+      ],
+      "relevance": {
+        "f754fd0b565d54d9:1": 3,
+        "f754fd0b565d54d9:25": 2,
+        "f754fd0b565d54d9:5": 3
+      }
+    },
+    {
+      "id": "journey-hyperspectral-prior-transfer-boundary",
+      "query": "为什么不能把面向普通自然图像的压缩重建网络直接当作高光谱方案？请定位论文关于高维异质结构和真实硬件验证的边界说明。",
+      "locale": "zh",
+      "evaluation_focus": "single_paper_boundary_or_limitation",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "single_paper_boundary_or_limitation"
+      ],
+      "query_scope": "locate the representation and hardware-validation boundary for transferring natural-image networks to HSI",
+      "primary_doc_id": "background:a678b5bb61394454",
+      "scope_doc_ids": [
+        "background:a678b5bb61394454"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-hyperspectral-learned-sensing-boundary",
+        "replacement_reason": "The original joint-sensing calibration question assumed a method the paper did not claim, so it was dropped before retrieval and replaced with the paper's explicit transfer boundary."
+      },
+      "contracts": [
+        {
+          "id": "hyperspectral-natural-image-transfer-limit",
+          "doc_id": "background:a678b5bb61394454",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "a678b5bb61394454:10"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "a678b5bb61394454:10",
+          "grade": 3,
+          "doc_id": "background:a678b5bb61394454",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "hyperspectral-natural-image-transfer-limit"
+          ],
+          "text_sha256": "4ff0ffc98ac58bfc5f54fb5e833393a229d539895ce4e635c2996e14d32b9bc5",
+          "evidence_role": "hsi_heterogeneity_and_hardware_validation_gap"
+        }
+      ],
+      "relevance": {
+        "a678b5bb61394454:10": 3
+      }
+    },
+    {
+      "id": "journey-super-subnyquist-sampling-results",
+      "query": "升序 Hadamard 采样在多低的采样比例下仍做了实验？请定位论文用哪些图像质量指标和对照来支持“超亚奈奎斯特”的结论。",
+      "locale": "zh",
+      "evaluation_focus": "experimental_configuration_or_metric",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "experimental_configuration_or_metric"
+      ],
+      "query_scope": "locate sampling ratios, quality metrics, and experimental controls",
+      "primary_doc_id": "background:6e125bbe01292572",
+      "scope_doc_ids": [
+        "background:6e125bbe01292572"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-super-subnyquist-sampling-results",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "super-subnyquist-low-sampling-result",
+          "doc_id": "background:6e125bbe01292572",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "6e125bbe01292572:1"
+          ]
+        },
+        {
+          "id": "super-subnyquist-quality-measures",
+          "doc_id": "background:6e125bbe01292572",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "6e125bbe01292572:7"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "6e125bbe01292572:1",
+          "grade": 3,
+          "doc_id": "background:6e125bbe01292572",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "super-subnyquist-low-sampling-result"
+          ],
+          "text_sha256": "64b1c05c82c4ad09084515a0f92cd4e08a5d48f7df18d4e04efa812b04892358",
+          "evidence_role": "five_percent_sampling_and_psnr_result"
+        },
+        {
+          "chunk_id": "6e125bbe01292572:7",
+          "grade": 3,
+          "doc_id": "background:6e125bbe01292572",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "super-subnyquist-quality-measures"
+          ],
+          "text_sha256": "f1a974d4080bdd09812a7e28af6d105198d489f8bf1914cca84792711e74cb09",
+          "evidence_role": "rmse_psnr_ssim_evaluation_measures"
+        }
+      ],
+      "relevance": {
+        "6e125bbe01292572:1": 3,
+        "6e125bbe01292572:7": 3
+      }
+    },
+    {
+      "id": "journey-istanet-benchmark-protocol",
+      "query": "On which benchmark images and compression ratios is ISTA-Net evaluated, and which numerical measures are used to compare reconstruction quality?",
+      "locale": "en",
+      "evaluation_focus": "experimental_configuration_or_metric",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "experimental_configuration_or_metric"
+      ],
+      "query_scope": "locate the reconstruction evaluation protocol",
+      "primary_doc_id": "background:12d3dafe5e149b77",
+      "scope_doc_ids": [
+        "background:12d3dafe5e149b77"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-istanet-benchmark-protocol",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "istanet-benchmark-data-ratios-measure",
+          "doc_id": "background:12d3dafe5e149b77",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "12d3dafe5e149b77:34"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "12d3dafe5e149b77:34",
+          "grade": 3,
+          "doc_id": "background:12d3dafe5e149b77",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "istanet-benchmark-data-ratios-measure"
+          ],
+          "text_sha256": "adbacac10f784ee426575d1ad58c9cdb3c1cd341e4c53165c8e3b63abd3a5b1d",
+          "evidence_role": "set11_bsd68_cs_ratios_and_psnr"
+        }
+      ],
+      "relevance": {
+        "12d3dafe5e149b77:34": 3
+      }
+    },
+    {
+      "id": "journey-dualscale-resolution-results",
+      "query": "大尺寸单像素重建实验覆盖了哪些图像分辨率和采样率？请找出速度、显存或重建质量的定量结果。",
+      "locale": "zh",
+      "evaluation_focus": "experimental_configuration_or_metric",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "experimental_configuration_or_metric"
+      ],
+      "query_scope": "locate large-image evaluation settings and quantitative resource or quality results",
+      "primary_doc_id": "background:76f57e5ce4ad3e06",
+      "scope_doc_ids": [
+        "background:76f57e5ce4ad3e06"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-dualscale-resolution-results",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "dualscale-large-resolution-sampling",
+          "doc_id": "background:76f57e5ce4ad3e06",
+          "source_page": 7,
+          "relevant_chunk_ids": [
+            "76f57e5ce4ad3e06:32"
+          ]
+        },
+        {
+          "id": "dualscale-resource-quality-results",
+          "doc_id": "background:76f57e5ce4ad3e06",
+          "source_page": 8,
+          "relevant_chunk_ids": [
+            "76f57e5ce4ad3e06:39"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "76f57e5ce4ad3e06:32",
+          "grade": 3,
+          "doc_id": "background:76f57e5ce4ad3e06",
+          "page_start": 7,
+          "page_end": 7,
+          "contract_ids": [
+            "dualscale-large-resolution-sampling"
+          ],
+          "text_sha256": "c2561957edfcadf2f0be61f530c8955ea51dfcea633f6f5e456d7a341f93f919",
+          "evidence_role": "large_scale_resolution_sampling_and_measurement_count"
+        },
+        {
+          "chunk_id": "76f57e5ce4ad3e06:39",
+          "grade": 3,
+          "doc_id": "background:76f57e5ce4ad3e06",
+          "page_start": 8,
+          "page_end": 8,
+          "contract_ids": [
+            "dualscale-resource-quality-results"
+          ],
+          "text_sha256": "d923b55091a7b6906a897d64d7cb47ca406666c1363d1f64fc8e610dda4f3214",
+          "evidence_role": "memory_inference_time_psnr_and_ssim_table"
+        }
+      ],
+      "relevance": {
+        "76f57e5ce4ad3e06:32": 3,
+        "76f57e5ce4ad3e06:39": 3
+      }
+    },
+    {
+      "id": "journey-primal-dual-ct-protocol",
+      "query": "What CT sampling geometry and training/test data are used to evaluate the learned primal-dual method, and what reconstruction measures are reported?",
+      "locale": "en",
+      "evaluation_focus": "experimental_configuration_or_metric",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "experimental_configuration_or_metric"
+      ],
+      "query_scope": "locate the CT experiment geometry, data, and reported measures",
+      "primary_doc_id": "background:debadd6aaf815c40",
+      "scope_doc_ids": [
+        "background:debadd6aaf815c40"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-primal-dual-ct-protocol",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "primal-dual-ellipse-geometry",
+          "doc_id": "background:debadd6aaf815c40",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "debadd6aaf815c40:27"
+          ]
+        },
+        {
+          "id": "primal-dual-human-ct-geometry",
+          "doc_id": "background:debadd6aaf815c40",
+          "source_page": 5,
+          "relevant_chunk_ids": [
+            "debadd6aaf815c40:28"
+          ]
+        },
+        {
+          "id": "primal-dual-reported-measures",
+          "doc_id": "background:debadd6aaf815c40",
+          "source_page": 7,
+          "relevant_chunk_ids": [
+            "debadd6aaf815c40:39"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "debadd6aaf815c40:27",
+          "grade": 3,
+          "doc_id": "background:debadd6aaf815c40",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "primal-dual-ellipse-geometry"
+          ],
+          "text_sha256": "56ceb5a29fdc1bab4fda7f10f0b890fd23abf0c99609d591c421c54f7a4e98f3",
+          "evidence_role": "ellipse_parallel_beam_and_human_training_data"
+        },
+        {
+          "chunk_id": "debadd6aaf815c40:28",
+          "grade": 3,
+          "doc_id": "background:debadd6aaf815c40",
+          "page_start": 5,
+          "page_end": 5,
+          "contract_ids": [
+            "primal-dual-human-ct-geometry"
+          ],
+          "text_sha256": "38d31f1c578a4d4c1ebf76c73bbbc1411848de1c194ec30dc745419c2cced711",
+          "evidence_role": "human_fan_beam_geometry_and_noise_model"
+        },
+        {
+          "chunk_id": "debadd6aaf815c40:39",
+          "grade": 2,
+          "doc_id": "background:debadd6aaf815c40",
+          "page_start": 7,
+          "page_end": 7,
+          "contract_ids": [
+            "primal-dual-reported-measures"
+          ],
+          "text_sha256": "6ce29feb4beffc7221a75956f0130ffebdf2b9787b6ea252179317449350892e",
+          "evidence_role": "runtime_psnr_and_ssim_measures"
+        }
+      ],
+      "relevance": {
+        "debadd6aaf815c40:27": 3,
+        "debadd6aaf815c40:28": 3,
+        "debadd6aaf815c40:39": 2
+      }
+    },
+    {
+      "id": "journey-nafnet-vs-classical-denoising-evidence",
+      "query": "经典去噪方法依靠显式先验，而 NAFNet 依靠学习结构；两篇论文分别给出什么机制证据来说明噪声被怎样抑制？",
+      "locale": "zh",
+      "evaluation_focus": "cross_paper_evidence_comparison",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "cross_paper_evidence_comparison"
+      ],
+      "query_scope": "compare traceable mechanism evidence for explicit-prior and learned denoising",
+      "primary_doc_id": "simple-baselines",
+      "scope_doc_ids": [
+        "simple-baselines",
+        "denoising-review"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-nafnet-vs-classical-denoising-evidence",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "classical-denoising-explicit-prior",
+          "doc_id": "denoising-review",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "bc9b37581c93be49:9"
+          ]
+        },
+        {
+          "id": "nafnet-learned-gating-mechanism",
+          "doc_id": "simple-baselines",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "fae405527c4ab80e:20"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "bc9b37581c93be49:9",
+          "grade": 3,
+          "doc_id": "denoising-review",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "classical-denoising-explicit-prior"
+          ],
+          "text_sha256": "cb33a3974fd74069be55d1beb3f1641f64b44417f3b26d1d58c04ac1056cdfcb",
+          "evidence_role": "explicit_map_image_prior"
+        },
+        {
+          "chunk_id": "fae405527c4ab80e:20",
+          "grade": 3,
+          "doc_id": "simple-baselines",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "nafnet-learned-gating-mechanism"
+          ],
+          "text_sha256": "0c6611ec4136b287e93612eb7092250b432fffcab14fef6d12f624e2e3ac87bc",
+          "evidence_role": "simplegate_and_simplified_channel_attention"
+        }
+      ],
+      "relevance": {
+        "bc9b37581c93be49:9": 3,
+        "fae405527c4ab80e:20": 3
+      }
+    },
+    {
+      "id": "journey-piln-vs-pidl-supervision",
+      "query": "When clean ground truth is unavailable, how do PILN and the physics-informed single-photon method obtain supervision, and what physical information does each exploit?",
+      "locale": "en",
+      "evaluation_focus": "cross_paper_evidence_comparison",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "cross_paper_evidence_comparison"
+      ],
+      "query_scope": "compare source-backed supervision mechanisms without generating a review narrative",
+      "primary_doc_id": "piln",
+      "scope_doc_ids": [
+        "piln",
+        "pidl-single-photon"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-piln-vs-pidl-supervision",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "piln-measurement-consistency-supervision",
+          "doc_id": "piln",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "aad10fa9972c8a2c:9"
+          ]
+        },
+        {
+          "id": "pidl-physical-synthetic-supervision",
+          "doc_id": "pidl-single-photon",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "f986970932c37441:1"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "aad10fa9972c8a2c:9",
+          "grade": 3,
+          "doc_id": "piln",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "piln-measurement-consistency-supervision"
+          ],
+          "text_sha256": "1c2606619dd67ac98c008ea69a21d4c1318c5dcc04c9ee49056f07bf06e2bbcf",
+          "evidence_role": "measured_intensity_consistency_loss"
+        },
+        {
+          "chunk_id": "f986970932c37441:1",
+          "grade": 3,
+          "doc_id": "pidl-single-photon",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "pidl-physical-synthetic-supervision"
+          ],
+          "text_sha256": "c1a2df729b2a48ccca94f50894b7a179c8f30a0525b55aa987103089ce9f49e1",
+          "evidence_role": "calibrated_noise_model_synthetic_pairs"
+        }
+      ],
+      "relevance": {
+        "aad10fa9972c8a2c:9": 3,
+        "f986970932c37441:1": 3
+      }
+    },
+    {
+      "id": "journey-cassi-vs-fourier-measurement-encoding",
+      "query": "CASSI 和 Fourier 单像素成像怎样把待恢复信息编码进测量？请分别找出色散/掩模与频域图样所起作用的原文证据。",
+      "locale": "zh",
+      "evaluation_focus": "cross_paper_evidence_comparison",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "cross_paper_evidence_comparison"
+      ],
+      "query_scope": "compare physical measurement encoding across two library papers",
+      "primary_doc_id": "hsi-fsi",
+      "scope_doc_ids": [
+        "cassi",
+        "hsi-fsi"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-cassi-vs-fourier-measurement-encoding",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "cassi-dispersive-coded-measurement",
+          "doc_id": "cassi",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "50f9c165105534b5:1"
+          ]
+        },
+        {
+          "id": "fsi-fourier-coefficient-measurement",
+          "doc_id": "hsi-fsi",
+          "source_page": 6,
+          "relevant_chunk_ids": [
+            "8a29ea79c6633439:10"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "50f9c165105534b5:1",
+          "grade": 3,
+          "doc_id": "cassi",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "cassi-dispersive-coded-measurement"
+          ],
+          "text_sha256": "287b66159321d6e1520206a04e47e9cea7511ff7ee0a4f1c54f4268491767711",
+          "evidence_role": "opposed_dispersion_binary_aperture_projection"
+        },
+        {
+          "chunk_id": "8a29ea79c6633439:10",
+          "grade": 3,
+          "doc_id": "hsi-fsi",
+          "page_start": 6,
+          "page_end": 6,
+          "contract_ids": [
+            "fsi-fourier-coefficient-measurement"
+          ],
+          "text_sha256": "0f32a86cf265f072c7c62d5f83a71b7c340a191b182f5ce4a8b469a09c092f55",
+          "evidence_role": "fourier_pattern_inner_product_coefficients"
+        }
+      ],
+      "relevance": {
+        "50f9c165105534b5:1": 3,
+        "8a29ea79c6633439:10": 3
+      }
+    },
+    {
+      "id": "journey-s2ism-vs-iism-information-source",
+      "query": "S2ISM 与 iISM 都改善分辨率和层析能力；请分别定位 S2ISM 利用探测阵列轴向指纹、iISM 利用干涉散射点扩散函数与像素重分配的证据。",
+      "locale": "zh",
+      "evaluation_focus": "cross_paper_evidence_comparison",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "cross_paper_evidence_comparison"
+      ],
+      "query_scope": "compare the distinct measured information used by two microscopy methods",
+      "primary_doc_id": "s2ism",
+      "scope_doc_ids": [
+        "s2ism",
+        "iism"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-s2ism-vs-iism-sectioning",
+        "replacement_reason": "The original wording incorrectly implied interferometric detector ports, so it was dropped before retrieval and replaced with the paper's actual iPSF and APR mechanism."
+      },
+      "contracts": [
+        {
+          "id": "s2ism-axial-detector-fingerprint",
+          "doc_id": "s2ism",
+          "source_page": 3,
+          "relevant_chunk_ids": [
+            "b10afc967fb55e1b:9"
+          ]
+        },
+        {
+          "id": "iism-interferometric-reassignment",
+          "doc_id": "iism",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "3583e628c41883ee:6",
+            "3583e628c41883ee:10"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "3583e628c41883ee:10",
+          "grade": 2,
+          "doc_id": "iism",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "iism-interferometric-reassignment"
+          ],
+          "text_sha256": "13abc1745be45d38ff9bd2091cf238e458f4bd666665cb0a67b8cda176779878",
+          "evidence_role": "reflected_scattered_field_interference"
+        },
+        {
+          "chunk_id": "3583e628c41883ee:6",
+          "grade": 3,
+          "doc_id": "iism",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "iism-interferometric-reassignment"
+          ],
+          "text_sha256": "9ad7bb9d809533d9ac15b5ecad233e1fe5fa5636493d8119ba75072ff9271302",
+          "evidence_role": "coherent_ipsf_adaptive_pixel_reassignment"
+        },
+        {
+          "chunk_id": "b10afc967fb55e1b:9",
+          "grade": 3,
+          "doc_id": "s2ism",
+          "page_start": 3,
+          "page_end": 3,
+          "contract_ids": [
+            "s2ism-axial-detector-fingerprint"
+          ],
+          "text_sha256": "655f9a4ae78ae8db62b5b3c4162a75fe390ced5b6426b576b06786241543dc1f",
+          "evidence_role": "detector_array_axial_fingerprint"
+        }
+      ],
+      "relevance": {
+        "3583e628c41883ee:10": 2,
+        "3583e628c41883ee:6": 3,
+        "b10afc967fb55e1b:9": 3
+      }
+    },
+    {
+      "id": "journey-visual-redundancy-figure-location",
+      "query": "请定位用猜色游戏说明视觉冗余的图 1，并核对示例中的网格规模、颜色数量和随机猜测的错误基准。",
+      "locale": "zh",
+      "evaluation_focus": "equation_figure_or_table_location",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "equation_figure_or_table_location"
+      ],
+      "query_scope": "locate the visual-redundancy demonstration figure and its quantitative setup",
+      "primary_doc_id": "visual-perception",
+      "scope_doc_ids": [
+        "visual-perception"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-visual-information-equation-location",
+        "replacement_reason": "The original bandwidth-time equation was not present in the registered paper, so it was dropped before retrieval and replaced with a directly verifiable figure-location task."
+      },
+      "contracts": [
+        {
+          "id": "visual-redundancy-figure",
+          "doc_id": "visual-perception",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "7c042cc84da037c6:3"
+          ]
+        },
+        {
+          "id": "visual-redundancy-guessing-setup",
+          "doc_id": "visual-perception",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "7c042cc84da037c6:4"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "7c042cc84da037c6:3",
+          "grade": 3,
+          "doc_id": "visual-perception",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "visual-redundancy-figure"
+          ],
+          "text_sha256": "4589c2c31ab9303318dea973cd6da0978a5014823bf80b62cc5c6fe1cf0e1315",
+          "evidence_role": "figure_one_redundant_visual_stimulation"
+        },
+        {
+          "chunk_id": "7c042cc84da037c6:4",
+          "grade": 3,
+          "doc_id": "visual-perception",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "visual-redundancy-guessing-setup"
+          ],
+          "text_sha256": "7dfbb5dc49c9388c00bd70b5488a82f1946c7e6e964e2789e13e4bbd278fa941",
+          "evidence_role": "grid_colors_and_chance_error_count"
+        }
+      ],
+      "relevance": {
+        "7c042cc84da037c6:3": 3,
+        "7c042cc84da037c6:4": 3
+      }
+    },
+    {
+      "id": "journey-perovskite-device-figure-location",
+      "query": "请定位展示双腔钙钛矿激光器层结构与两个光学模态耦合路径的图，并核对图注标出的关键器件层。",
+      "locale": "zh",
+      "evaluation_focus": "equation_figure_or_table_location",
+      "coverage_tags": [
+        "user_journey_expansion",
+        "equation_figure_or_table_location"
+      ],
+      "query_scope": "locate a device-structure figure and its source-backed layer annotations",
+      "primary_doc_id": "perovskite-laser",
+      "scope_doc_ids": [
+        "perovskite-laser"
+      ],
+      "authoring_lineage": {
+        "authoring_case_id": "journey-perovskite-device-figure-location",
+        "replacement_reason": ""
+      },
+      "contracts": [
+        {
+          "id": "perovskite-dual-cavity-figure",
+          "doc_id": "perovskite-laser",
+          "source_page": 1,
+          "relevant_chunk_ids": [
+            "5b48741ab08dbad8:4"
+          ]
+        },
+        {
+          "id": "perovskite-device-layers",
+          "doc_id": "perovskite-laser",
+          "source_page": 2,
+          "relevant_chunk_ids": [
+            "5b48741ab08dbad8:6"
+          ]
+        }
+      ],
+      "labels": [
+        {
+          "chunk_id": "5b48741ab08dbad8:4",
+          "grade": 3,
+          "doc_id": "perovskite-laser",
+          "page_start": 1,
+          "page_end": 1,
+          "contract_ids": [
+            "perovskite-dual-cavity-figure"
+          ],
+          "text_sha256": "b920889884f791f862f1b251cfd743fd6bd05ef6c60aaea61373798552698a65",
+          "evidence_role": "figure_one_dual_cavity_structure"
+        },
+        {
+          "chunk_id": "5b48741ab08dbad8:6",
+          "grade": 3,
+          "doc_id": "perovskite-laser",
+          "page_start": 2,
+          "page_end": 2,
+          "contract_ids": [
+            "perovskite-device-layers"
+          ],
+          "text_sha256": "e8a3fde98373dea61d31572a6074142542659a25acc1c793be2ca1aadfcef7bf",
+          "evidence_role": "peled_and_single_crystal_layer_stack"
+        }
+      ],
+      "relevance": {
+        "5b48741ab08dbad8:4": 3,
+        "5b48741ab08dbad8:6": 3
+      }
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "protocol_id": "retrieval_cpu_padding_diagnostic_v1",
+  "status": "frozen_before_tokenizer_load",
+  "frozen_at": "2026-09-03",
+  "purpose": "Measure how much fixed document-order batch padding amplified the rejected native CPU Qwen full-index workload, without loading the model or creating vectors.",
+  "parent": {
+    "report_path": "docs/retrieval_cpu_full_index_feasibility_v1.json",
+    "report_sha256": "866e2abb58566cb0f569e5eb4c3dca20e6f7764d60793dd68c2ea4e8f85f282a",
+    "result_fingerprint": "3085c4ed8cf73b2e68fa071b569610ef1812902c726f1af7b6e91e7ddaae00af",
+    "decision": "rejected_cpu_full_index_runtime",
+    "full_build_ms": 4952500.783,
+    "peak_process_rss_mib": 15751.07,
+    "max_observed_tokens": 4712
+  },
+  "corpus": {
+    "runtime_db_argument_required": true,
+    "tree_sha256": "deb60a97bdfc50b0273de07ebe1c775352ffb2c5e4adeb3e925d48f7f25cafaf",
+    "document_count": 10,
+    "chunk_count": 1673
+  },
+  "tokenizer": {
+    "model_id": "Qwen/Qwen3-Embedding-0.6B",
+    "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+    "local_files_only": true,
+    "trust_remote_code": false,
+    "add_special_tokens": true,
+    "maximum_effective_length": 8192,
+    "model_load_allowed": false,
+    "embedding_allowed": false
+  },
+  "strategies": [
+    {
+      "id": "document_order_fixed_8",
+      "sort_within_document": false,
+      "maximum_batch_size": 8,
+      "maximum_padded_tokens_per_batch": null,
+      "oversize_singleton": false
+    },
+    {
+      "id": "length_bucketed_fixed_8",
+      "sort_within_document": true,
+      "maximum_batch_size": 8,
+      "maximum_padded_tokens_per_batch": null,
+      "oversize_singleton": false
+    },
+    {
+      "id": "length_bucketed_token_budget_4096",
+      "sort_within_document": true,
+      "maximum_batch_size": 8,
+      "maximum_padded_tokens_per_batch": 4096,
+      "oversize_singleton": true
+    }
+  ],
+  "branch_gate": {
+    "candidate_strategy": "length_bucketed_token_budget_4096",
+    "minimum_attention_work_proxy_speedup": 4.0,
+    "minimum_peak_padded_tokens_reduction": 0.5,
+    "maximum_projected_build_ms_for_bounded_followup": 900000.0,
+    "pass_decision": "bounded_length_aware_qwen_sample_allowed",
+    "reject_decision": "skip_native_qwen_and_screen_lighter_runtime"
+  },
+  "execution": {
+    "report_path": "docs/retrieval_cpu_padding_diagnostic_v1.json",
+    "maximum_runs": 1,
+    "queries_encoded": 0,
+    "documents_embedded": 0,
+    "vectors_created": 0,
+    "product_enabled": false,
+    "ordinary_user_surface_exposed": false
+  }
+}

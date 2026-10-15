@@ -326,6 +326,11 @@ def test_paper_guide_requested_heading_hints_include_figure_targets():
     assert "panel" in [item.lower() for item in hints]
 
 
+def test_generic_method_question_does_not_impose_methods_section_boundary():
+    assert _paper_guide_requested_heading_hints("What does each method parallelize?") == []
+    assert "methods" in _paper_guide_requested_heading_hints("From the Methods section only, what is the setup?")
+
+
 def test_paper_guide_requested_heading_hints_include_literal_section_title():
     hints = _paper_guide_requested_heading_hints(
         "In the 'How a single-pixel camera works' section only, what trade-off do the authors describe?"
@@ -498,6 +503,12 @@ def test_build_paper_guide_citation_grounding_block_formats_doc_scoped_candidate
     assert "refs=34, 35" in block
     assert "heading=Methods > APR" in block
     assert "cue=RVT [34]" in block
+
+
+def test_imaging_formula_explanation_does_not_route_to_figure():
+    question = "SCINeRF 的 SCI 前向成像公式到底表达了什么？请逐项解释压缩图像、虚拟帧、二值掩模和噪声，并说明这个公式为什么能进入 NeRF 的联合优化。"
+    assert _paper_guide_prompt_family(question) == "equation"
+    assert _paper_guide_prompt_family("解释图 2 中的公式") == "figure_walkthrough"
 
 
 def test_requested_figure_number_falls_back_to_answer_hit_anchor_target():

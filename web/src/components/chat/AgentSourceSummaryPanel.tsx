@@ -25,13 +25,17 @@ export function AgentSourceSummaryPanel({
 
   return (
     <>
-      <AgentTraceSummaryStats labels={labels} viewModel={viewModel} showInternalDetails={showInternalDetails} />
+      {showInternalDetails ? (
+        <AgentTraceSummaryStats labels={labels} viewModel={viewModel} showInternalDetails />
+      ) : null}
       <AgentEvidenceMatrix
         labels={labels}
         rows={evidenceMatrix}
         subtaskCount={showInternalDetails ? subtaskCount : 0}
       />
-      <AgentUnsupportedClaims labels={labels} claims={unsupportedClaimRows} />
+      {showInternalDetails ? (
+        <AgentUnsupportedClaims labels={labels} claims={unsupportedClaimRows} />
+      ) : null}
       <AgentTraceReferenceSection
         labels={labels}
         references={references}

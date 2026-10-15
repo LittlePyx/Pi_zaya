@@ -30,6 +30,22 @@ export const RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS = new Set([
 ])
 const EVIDENCE_MAINTENANCE_VERSION = 3
 
+export type ResearchNoteEvidenceResolutionMode = 'system_auto' | 'user_decision' | 'source_boundary'
+
+export function researchNoteEvidenceResolutionMode(
+  link: Pick<ResearchNoteSourceLink, 'evidence_baseline_check'>,
+): ResearchNoteEvidenceResolutionMode {
+  const check = link.evidence_baseline_check
+  const storedMode = String(check?.resolution_mode || '')
+  if (storedMode === 'user_decision' || storedMode === 'source_boundary' || storedMode === 'system_auto') {
+    return storedMode
+  }
+  const reason = String(check?.reason || '')
+  if (check?.terminal || RESEARCH_NOTE_EVIDENCE_SYSTEM_TERMINAL_REASONS.has(reason)) return 'source_boundary'
+  if (RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(reason)) return 'user_decision'
+  return 'system_auto'
+}
+
 function localMaintenanceLinks(sourceState: ResearchNoteSourceState | null | undefined) {
   const links = Array.isArray(sourceState?.links) ? sourceState.links : []
   return links.filter(link => (
@@ -64,7 +80,11 @@ export function researchNoteEvidenceReviewIssues(
     const check = link.evidence_baseline_check
     const status = String(check?.status || '')
     const reason = String(check?.reason || '').trim()
-    if (status !== 'skipped' || !RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(reason)) return []
+    if (
+      status !== 'skipped'
+      || researchNoteEvidenceResolutionMode(link) !== 'user_decision'
+      || !RESEARCH_NOTE_EVIDENCE_USER_DECISION_REASONS.has(reason)
+    ) return []
     return [{
       sourceIndex,
       status,

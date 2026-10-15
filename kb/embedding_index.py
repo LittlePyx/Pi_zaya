@@ -294,8 +294,6 @@ def _snapshot_from_db(db_dir: Path) -> _CorpusSnapshot:
         chunk_records=chunk_records,
         documents=tuple(documents),
     )
-
-
 def _provider_descriptor(provider: EmbeddingProvider) -> EmbeddingProviderDescriptor:
     descriptor = getattr(provider, "descriptor", None)
     if not isinstance(descriptor, EmbeddingProviderDescriptor):

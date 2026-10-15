@@ -8,6 +8,7 @@ def test_generate_body_keeps_agent_mode_disabled_by_default():
     body = GenerateBody(conv_id="conv-1", prompt="What is the method?")
 
     assert body.agent_mode is False
+    assert body.retrieval_mode == "bm25"
 
 
 def test_generate_body_accepts_agent_mode_without_requiring_it():
@@ -16,10 +17,16 @@ def test_generate_body_accepts_agent_mode_without_requiring_it():
     assert body.agent_mode is True
 
 
+def test_generation_user_meta_normalizes_unknown_retrieval_mode_to_bm25():
+    meta = _generation_user_meta(None, "library", False, retrieval_mode="future-mode")
+
+    assert meta["retrieval_mode"] == "bm25"
+
+
 def test_generation_user_meta_omits_agent_fields_by_default():
     meta = _generation_user_meta(None, "library", False)
 
-    assert meta == {"query_scope": "library"}
+    assert meta == {"query_scope": "library", "retrieval_mode": "bm25"}
 
 
 def test_generation_user_meta_records_explicit_agent_request():
