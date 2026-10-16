@@ -14,7 +14,8 @@ from pathlib import Path
 from urllib.parse import quote
 
 import requests
-from kb.source_passage_evidence import claim_bound_candidates, claim_occurrence_matches
+from kb.source_passage_evidence import claim_bound_candidates, claim_occurrence_matches, claim_passage_concepts_covered
+from kb.citation_sentences import citation_sentence_context
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.citation_card import compose_citation_card
@@ -6116,6 +6117,9 @@ def _annotate_inpaper_citations_with_hover_meta(
             answer_claim = ""
             if int(token_start) >= 0:
                 answer_claim = _citation_context_line(token_start=int(token_start), token_end=int(token_end))
+                if any(slot.get("passage_bound_claims") for slot in plan_system_a_slots):
+                    offset = int(context_offset or 0) if context_line else 0
+                    answer_claim = citation_sentence_context(str(context_line or seg), offset + int(token_start), offset + int(token_end))
             claim_sig = _anchor_token(_system_a_fp_text(answer_claim, max_len=220)) if answer_claim else ""
             base_skey = f"{int(n)}|{sp.lower()}"
             skey = f"{base_skey}|claim:{claim_sig}" if claim_sig else base_skey
@@ -6923,6 +6927,10 @@ def _annotate_inpaper_citations_with_hover_meta(
                 evidence_quote=evidence_quote,
                 source_name=src_name,
             )
+            if any(s.get("passage_bound_claims") for s in plan_system_a_slots) and not claim_passage_concepts_covered(
+                answer_claim, str(binding_meta.get("citation_plan_full_evidence_quote") or evidence_quote),
+            ):
+                binding = {**binding, "suppress_link": True, "reason": "Selected passage lacks the stated statistical condition."}
             equation_source_note = re.search(
                 r"(?i)(?:\u5f0f\s*\(?\s*(\d+)\s*\)?|"
                 r"equation\s*\(?\s*(\d+)\s*\)?)"

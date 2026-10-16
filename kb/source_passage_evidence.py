@@ -3,6 +3,13 @@ from __future__ import annotations
 import re
 
 
+def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
+    """A general statistical summary does not establish conditional/zero means."""
+    concepts = (r"zero[- ]mean|零均值", r"\bconditional\s+(?:expect\w*|mean)\b|条件(?:期望|均值)",
+                r"\bunconditional\s+(?:expect\w*|mean)\b|无条件(?:期望|均值)")
+    return all(not re.search(c, claim, re.I) or re.search(c, evidence, re.I) for c in concepts)
+
+
 def claim_occurrence_matches(claim: str, bound_claims: list[str]) -> bool:
     def key(value: str) -> str:
         value = re.sub(r"\[\d{1,4}\](?:\([^\n)]*\))?", "", str(value or ""))

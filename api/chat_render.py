@@ -8,7 +8,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from api.claim_passage_plan import message_citation_plan as _message_citation_plan, prepare_claim_passage_plan
+from api.claim_passage_plan import message_citation_plan as _message_citation_plan, prepare_claim_passage_render
 
 from api.message_render_contract import (
     build_render_cache_payload as _contract_build_render_cache_payload,
@@ -159,7 +159,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 62
+_RENDER_CACHE_SCHEMA_VERSION = 65
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -16826,7 +16826,7 @@ def enrich_messages_with_reference_render(
         raw_ref_pack_dict = raw_ref_pack if isinstance(raw_ref_pack, dict) else None
         if local_evidence_actions_allowed is False:
             raw_ref_pack_dict = None
-        rec = prepare_claim_passage_plan(rec, raw_ref_pack_dict, render_source)
+        rec, render_source = prepare_claim_passage_render(rec, raw_ref_pack_dict, render_source)
         input_ref_sig = _raw_reference_render_cache_input_signature(raw_ref_pack_dict)
         message_citation_plan = _message_citation_plan(rec)
         if local_evidence_actions_allowed is False:

@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.citation_sentences import citation_sentence_context
 from kb.source_passage_evidence import claim_bound_candidates
 
 
@@ -253,14 +254,7 @@ def _linked_answer_claims_by_source(markdown: str, rows: list[dict]) -> dict[str
 
 def _citation_claim_context(markdown: str, start: int, end: int) -> str:
     text = str(markdown or "")
-    left = max((text.rfind(mark, 0, start) for mark in ("。", "！", "？", "!", "?", ";", "；", "\n", ".")), default=-1)
-    right_candidates = [
-        position
-        for mark in ("。", "！", "？", "!", "?", ";", "；", "\n", ".")
-        if (position := text.find(mark, end)) >= 0
-    ]
-    right = min(right_candidates) + 1 if right_candidates else len(text)
-    claim = text[left + 1 : right]
+    claim = citation_sentence_context(text, start, end)
     claim = _ANSWER_CITATION_LINK_RE.sub(" ", claim)
     claim = re.sub(r"!\[([^\]]*)\]\([^)]*\)", r"\1", claim)
     claim = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", claim)

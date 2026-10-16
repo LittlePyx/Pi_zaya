@@ -69,19 +69,56 @@ def architecture_relation_covered(claim: str, evidence: str) -> bool:
 
 def noisy_target_relation_covered(claim: str, evidence: str) -> bool:
     """Preserve the direction of the noisy-target conditional-mean condition."""
+    input_replacement = r"(?:替换|污染|替代|更换).{0,10}(?:训练)?输入|(?:replac(?:e[sd]?|ing)|corrupt(?:s|ing)?)\s+(?:the\s+)?(?:training\s+)?inputs?"
     if not (
-        re.search(r"条件期望|conditional\s+expect", claim, re.I)
-        and re.search(r"目标|target", claim, re.I)
+        re.search(r"条件期望|\bconditional\s+expect|\bunconditional\s+expect", claim, re.I)
+        and (re.search(r"目标|target", claim, re.I) or re.search(input_replacement, claim, re.I))
     ):
         return True
+    # A number in a section heading cannot establish the loss function, and
+    # an unrelated numeric fact cannot establish the mean of target noise.
+    def loss_ids(text: str) -> set[str]:
+        return set(re.findall(r"\bL\s*(\d+)\b", re.sub(r"[$_{}]", " ", text), re.I))
+
+    if not loss_ids(claim) <= loss_ids(evidence):
+        return False
+    mean_pattern = r"(?:noise\s+with\s+mean|mean\s*(?:of|=)?|均值(?:为|等于|是|=))\s*(-?\d+(?:\.\d+)?)"
+    means = {float(m) for m in re.findall(mean_pattern, evidence, re.I)}
+    if re.search(r"zero[- ]mean|零均值", evidence, re.I):
+        means.add(0.0)
+    if not {float(m) for m in re.findall(mean_pattern, claim, re.I)} <= means:
+        return False
+    if re.search(input_replacement, claim, re.I):
+        # Mentioning corrupted inputs does not move a target-replacement
+        # theorem's condition onto those inputs.
+        if re.search(r"input[- ]conditioned\s+target\s+distributions", evidence, re.I) or not re.search(input_replacement, evidence, re.I):
+            return False
+    if re.search(r"无条件期望|\bunconditional\s+expect", claim, re.I) and not re.search(r"无条件期望|\bunconditional\s+expect", evidence, re.I):
+        return False
+    if re.search(r"target[- ]conditioned\s+input\s+distributions", evidence, re.I):
+        return False
+    learned_en = r"(?:(?:the\s+)?(?:optimal\s+)?(?:network\s+)?parameters|(?:the\s+)?learned\s+(?:mapping|function)|what\s+the\s+network\s+learns)"
+    learned_zh = r"(?:最优(?:网络)?参数|网络参数|最优解|(?:网络)?(?:学到|所学)(?:的)?(?:映射|内容|东西))"
+    outcome_change = (
+        rf"\bchang(?:e[sd]?|ing)\s+{learned_en}\b|\b{learned_en}\s+(?:(?:will|would)\s+)?chang(?:e[sd]?|ing)\b|"
+        rf"改变(?:了)?{learned_zh}|{learned_zh}(?:会|将|发生)?改变"
+    )
+    changes = any(
+        not re.search(r"(?:\b(?:not|without|cannot|never)|不(?:会)?|未|没有)\s*$", claim[:m.start()], re.I)
+        for m in re.finditer(outcome_change, claim, re.I)
+    )
+    if changes and re.search(r"without\s+changing|unchanged|不改变|不变", evidence, re.I):
+        return False
     claim_same = bool(re.search(r"相同|不变|等于|same|unchanged|equal", claim, re.I))
     claim_different = bool(re.search(r"不同|改变|different|changed?", claim, re.I))
     evidence_same = bool(
         re.search(r"same\s+conditional\s+expected\s+values|相同.{0,24}条件期望|条件期望.{0,24}相同", evidence, re.I)
-    )
+    ) and not bool(re.search(r"not\s+(?:the\s+)?same\s+conditional|不相同.{0,12}条件期望|条件期望.{0,12}不相同", evidence, re.I))
     evidence_different = bool(
         re.search(r"different\s+conditional\s+expected\s+values|不同.{0,24}条件期望|条件期望.{0,24}不同", evidence, re.I)
     )
+    if re.search(r"条件期望.{0,8}(?:不同|不相同|不一致|不等)|(?:不同|不相同|不一致).{0,8}条件期望|different\s+conditional\s+expect", claim, re.I):
+        return evidence_different
     if claim_same:
         if not evidence_same:
             return False
