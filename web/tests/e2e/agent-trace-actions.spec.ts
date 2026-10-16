@@ -1954,6 +1954,9 @@ test('reader locate result reporting hook preserves success and failure payloads
 test('reader locate status view model derives badges and decision text', async ({ page }) => {
   const result = await readerLocateStatusViewModelSmoke(page)
 
+  expect(result.phraseBadge).toMatchObject({ label: 'Exact phrase', tone: 'success' })
+  expect(result.failedPhraseBadge).toMatchObject({ label: 'Unresolved', tone: 'danger' })
+
   expect(result.unresolved.decisionText).toBe('')
   expect(result.unresolved.locateBadges).toMatchObject([
     { key: 'mode', label: 'Strict', tone: 'accent', title: 'Strict title' },

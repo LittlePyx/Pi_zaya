@@ -9,6 +9,8 @@ import {
 export interface ReaderLocateStatusViewModelSmokeResult {
   exactCanReturn: boolean
   exactBadge: ReaderLocateMetaBadge | null
+  phraseBadge: ReaderLocateMetaBadge | null
+  failedPhraseBadge: ReaderLocateMetaBadge | null
   fallbackBlock: ReaderLocateStatusViewModel
   manualSwitch: ReaderLocateStatusViewModel
   quiet: ReaderLocateStatusViewModel
@@ -105,9 +107,24 @@ export function runReaderLocateStatusViewModelSmoke(): ReaderLocateStatusViewMod
     statusTextFull: 'Evidence block matched, but exact inline phrase was not found.',
     strictLocate: true,
   })
+  const phraseInput = {
+    activeAnchorKind: 'figure', activeHeadingPath: '', activeHitLevel: 'exact',
+    S: labels, statusTextFull: 'Exact phrase matched', strictLocate: true,
+    locateResult: {
+      locateRequestId: 1, sourcePath: 'paper.en.md', status: 'exact' as const,
+      precision: 'phrase' as const, ok: true, repairable: false, strictLocate: true,
+      hint: 'Exact phrase matched', reason: 'Exact phrase matched',
+    },
+  }
+  const phraseBadge = buildReaderLocateResultBadge(phraseInput)
+  const failedPhraseBadge = buildReaderLocateResultBadge({
+    ...phraseInput, locateResult: { ...phraseInput.locateResult, status: 'failed', ok: false },
+  })
   return {
     exactCanReturn: readerLocateBadgesHaveReturnTarget(exactBadge ? [exactBadge] : []),
     exactBadge,
+    phraseBadge,
+    failedPhraseBadge,
     fallbackBlock,
     manualSwitch,
     quiet,

@@ -11,7 +11,7 @@ import {
 } from './mockAppShell'
 
 const STRICT_LOCATE_LABEL_RE = /^(Strict locate|Evidence locate|证据定位)$/
-const EXACT_TARGET_LABEL_RE = /^(Exact target|精确命中)$/
+const EXACT_PHRASE_LABEL_RE = /^(Exact phrase|短语精确命中)$/
 const SECTION_ONLY_LABEL_RE = /^(Section only|仅到章节)$/
 const UNRESOLVED_LABEL_RE = /^(Unresolved|未定位)$/
 const AUTO_SWITCHED_LABEL_RE = /^(Auto-switched|已自动切换)$/
@@ -146,7 +146,7 @@ async function selectText(page: Page, startText: string, endText?: string) {
 test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await openHarness(page, 'strict-quote')
   await expect(page.getByTestId('reader-locate-mode')).toHaveText(STRICT_LOCATE_LABEL_RE)
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_TARGET_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_PHRASE_LABEL_RE)
   await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"ok": true')
@@ -252,7 +252,7 @@ test('structured fallback switches to the resolved alternative instead of re-ran
 
 test('strict exact locate automatically recovers a unique quote when the saved identity is missing', async ({ page }) => {
   await openHarness(page, 'strict-missing-exact')
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_TARGET_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_PHRASE_LABEL_RE)
   await expect(page.getByTestId('reader-locate-resolution')).toHaveAttribute('title', /Exact (?:source )?phrase/i)
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"status": "exact"')
   await expect(page.getByTestId('reader-locate-result-json')).toContainText('"blockId": "quote-1"')

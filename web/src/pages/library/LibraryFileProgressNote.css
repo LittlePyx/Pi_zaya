@@ -13,6 +13,16 @@
   margin-top: 8px;
 }
 
+.kb-lib-file-result-history {
+  margin-top: 3px;
+  color: var(--muted-text);
+  font-size: 12px;
+}
+
+.kb-lib-file-result-history summary {
+  cursor: pointer;
+}
+
 .kb-lib-file-result-note {
   width: fit-content;
   max-width: 100%;

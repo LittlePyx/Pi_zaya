@@ -1,6 +1,7 @@
 import { Button, Dropdown } from 'antd'
 import { DeleteOutlined, MoreOutlined, ReloadOutlined, StopOutlined } from '@ant-design/icons'
 import type { LibraryFileItem } from '../../api/library'
+import { conversionFailureIsHistorical } from './libraryPageUtils'
 import './LibraryFileActions.css'
 
 type LibraryFileActionsProps = {
@@ -37,7 +38,8 @@ export function LibraryFileActions({
   const recoveryAvailable = item.task_state === 'interrupted'
   const conversionCancelling = item.conversion_stage === 'cancelling'
   const retryExhausted = Boolean(item.conversion_quality?.conversion_report?.retry_exhausted)
-  const retryAction = conversionBusy || retryExhausted ? '' : String(item.last_conversion?.retry_action || '')
+  const retryAction = conversionBusy || retryExhausted || conversionFailureIsHistorical(item, S)
+    ? '' : String(item.last_conversion?.retry_action || '')
 
   return (
     <div className={`kb-lib-file-actions${showPrimaryConvertAction ? ' has-convert' : ' is-compact'}`}>

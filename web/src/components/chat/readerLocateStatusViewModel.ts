@@ -90,6 +90,15 @@ export function buildReaderLocateResultBadge({
       }
     }
     if (actualStatus === 'exact') {
+      if (locateResult?.precision === 'phrase') {
+        return {
+          key: 'result',
+          label: S.reader_locate_exact_phrase || 'Exact phrase',
+          title,
+          tone: 'success',
+          testId: 'reader-locate-resolution',
+        }
+      }
       const boundAnchor = ['equation', 'figure', 'inline_formula'].includes(anchorKind)
       return {
         key: 'result',

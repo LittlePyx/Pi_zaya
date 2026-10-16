@@ -140,6 +140,11 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
             if not source_slots:
                 continue
             supported_slots = [slot for slot in source_slots if _slot_supports(local_claim, slot)]
+            excerpt_slots = [slot for slot in supported_slots if _support_score(local_claim, str(slot.get("evidence_quote") or "")) >= 5 and _supports(
+                local_claim, str(slot.get("evidence_quote") or ""),
+                str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""))]
+            if len(excerpt_slots) == 1:
+                supported_slots = excerpt_slots
             if supported_slots:
                 unique_secondary = (
                     len(supported_slots) == 1 and supported_slots[0] is not source_slots[0]
