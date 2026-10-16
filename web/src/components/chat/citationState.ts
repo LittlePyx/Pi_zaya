@@ -1,3 +1,5 @@
+import { cleanCitationDisplayText } from './citationDisplayText'
+export { cleanCitationDisplayText } from './citationDisplayText'
 import {
   isSystemBArticleSummarySource,
   isSystemBContextSummarySource,
@@ -192,35 +194,6 @@ function asText(value: unknown): string {
   return ''
 }
 
-export function cleanCitationDisplayText(value: string): string {
-  return String(value || '')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/(?:\$\s*)?\^\{\s*\[[\d,\-\s;]+\]\s*\}(?:\s*\$)?/g, ' ')
-    .replace(/\\textsuperscript\{\s*\[[^\]\n]{1,80}\]\s*\}/gi, ' ')
-    .replace(/\\(?:cite|citep|citet|citealp|upcite)\s*\{[^}\n]{1,200}\}/gi, ' ')
-    .replace(/\[\[?\s*(?:CITE|SUPPORT)\s*:[^\]\n]{1,200}\]?\]?/gi, ' ')
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    .replace(/^\s{0,3}>\s?/gm, '')
-    .replace(/^\s{0,3}[-*+]\s+/gm, '')
-    .replace(/^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*)+\|?\s*$/gm, ' ')
-    .replace(/^\s*\|/gm, '')
-    .replace(/\|\s*$/gm, '')
-    .replace(/\s*\|\s*/g, ' ')
-    .replace(/\$([^$\n]{1,160})\$/g, '$1')
-    .replace(/!\[[^\]]*]\([^)]+\)/g, ' ')
-    .replace(/\[([^\]]+)]\([^)]+\)/g, '$1')
-    .replace(/`([^`]+)`/g, '$1')
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/~~([^~]+)~~/g, '$1')
-    .replace(/\\(?=\s|[,;])/g, ' ')
-    .replace(/(^|\s)#{1,6}\s+/g, ' ')
-    .replace(/\s*\|\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .replace(/\s+([,.;:!?，。；：！？])/g, '$1')
-    .trim()
-    .replace(/^(?:\.{2,}|\u2026)+\s*/, '')
-}
 
 export function normalizeShelfItemKind(value: string | null | undefined): ShelfItemKind {
   const key = String(value || '')

@@ -36,10 +36,38 @@ test('reader source literals keep conditional bars and math delimiters', () => {
   const literal = String.raw`input-conditioned p(y | x), ||x|| and $L_2$ retain \mathcal{J}.`
   const detail = normalizeCiteDetail({
     anchor: 'source-math', source_path: 'paper.en.md',
-    evidence_quote: literal, reader_evidence_quote: literal,
+    evidence_quote: literal, reader_evidence_quote: literal, card_display_contract_version: 2,
   })
   expect(detail?.readerEvidenceQuote).toBe(literal)
-  expect(detail?.evidenceQuote).not.toContain('|')
+  expect(detail?.evidenceQuote).toBe(literal)
+})
+
+test('card display preserves math and still removes table and prose separators', () => {
+  const literals = [
+    'input-conditioned p ( y | x ) has the same conditional expected values.',
+    'The objective is ||f(x) - x||_2^2 and |x| is bounded.',
+    String.raw`The loss $L_2 = \|f(x)-x\|^2$ retains $\mathcal{J}$ and $x_i^2$.`,
+    String.raw`Use \(P(Y=y \mid X=x)\) and \[\mathbb{E}[x_i^2]\].`,
+    'P(Y=y | X=x) and E[y | x] retain conditioning.',
+    '||x||',
+    String.raw`\gamma = \frac{1}{nm} \sum_{ij} |W_{ij}|. \tag{3}`,
+  ]
+  for (const literal of literals) {
+    expect(cleanCitationDisplayText(literal)).toBe(literal)
+    expect(cleanCitationDisplayText(cleanCitationDisplayText(literal))).toBe(literal)
+    const detail = normalizeCiteDetail({ anchor: 'math', evidence_quote: literal, card_evidence: literal, card_display_contract_version: 2 })
+    expect(detail?.evidenceQuote).toBe(literal)
+    expect(detail?.cardEvidence).toBe(literal)
+  }
+  for (const [raw, expected] of [
+    ['| Method | Score |\n| :--- | ---: |\n| A | 2 |', 'Method Score A 2'],
+    ['|Method|Score|\n|---|---|\n|A|2|', 'Method Score A 2'],
+    ['Method | Score', 'Method Score'],
+    ['$DMD$ modulation uses $p$ frequencies.', 'DMD modulation uses p frequencies.'],
+    ['Options (red | blue) are alternatives.', 'Options (red blue) are alternatives.'],
+    ['| loss | formula |\n| --- | --- |\n| L2 | $||x||_2^2$ |', 'loss formula L2 $||x||_2^2$'],
+    ['**Bound** p(y | x) [[CITE:ref-1:2]]', 'Bound p(y | x)'],
+  ]) expect(cleanCitationDisplayText(raw)).toBe(expected)
 })
 
 function shelfItem(meta: Record<string, unknown>): CiteShelfItem {

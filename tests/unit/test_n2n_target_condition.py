@@ -145,6 +145,7 @@ def test_condition_card_keeps_both_conditional_mean_and_target_noise_clauses(tmp
     assert cards[0]["page_start"] == 2
     assert "same conditional expected values" in cards[0]["evidence_quote"]
     assert "training targets" in cards[0]["evidence_quote"]
+    assert "y | x" in cards[0]["evidence_quote"]
     assert "y | x" in cards[0]["reader_evidence_quote"]
     assert cards[0]["anchor_kind"] == "paragraph"
     from api.routers.references import _overlay_refs_payload_with_answer_citations

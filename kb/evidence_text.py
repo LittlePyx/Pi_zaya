@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from kb.evidence_math_display import protect_display_math
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.source_blocks import normalize_inline_markdown
 
@@ -99,26 +100,10 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     raw = str(value or "")
     if not raw:
         return ""
-    tex_absolute_values: list[str] = []
-
-    def protect_tex_absolute_value(match: re.Match[str]) -> str:
-        inner = str(match.group(1) or "")
-        # Markdown table cells normally contain padding around their pipes.
-        # Compact TeX absolute values such as ``|W_{ij}|`` do not, and losing
-        # those delimiters changes the mathematical evidence itself.
-        if (
-            inner != inner.strip()
-            or "$" in inner
-            or not re.search(r"(?:[_^{}]|\\[A-Za-z]+)", inner)
-        ):
-            return match.group(0)
-        token = f"KB_TEX_ABS_{len(tex_absolute_values)}_TOKEN"
-        tex_absolute_values.append(match.group(0))
-        return token
-
-    raw = re.sub(r"\|([^|\r\n]{1,80})\|", protect_tex_absolute_value, raw)
     raw = re.sub(r"<!--[\s\S]*?-->", " ", raw)
     raw = _TEX_INLINE_CITATION_RE.sub(" ", raw)
+    raw = re.sub(r"\[\[?\s*(?:CITE|SUPPORT|SID)\s*:[^\]\n]{1,200}\]?\]?", " ", raw, flags=re.I)
+    raw, restore_math = protect_display_math(raw)
     raw = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", raw)
     raw = re.sub(r"(?m)^\s{0,3}>\s?", "", raw)
     raw = re.sub(r"(?m)^\s{0,3}[-*+]\s+", "", raw)
@@ -133,8 +118,7 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     text = re.sub(r"\\(?=\s|[,;])", " ", text)
     text = re.sub(r"(^|\s)#{1,6}\s+", " ", text)
     text = re.sub(r"\s*\|\s*", " ", text)
-    for index, absolute_value in enumerate(tex_absolute_values):
-        text = text.replace(f"KB_TEX_ABS_{index}_TOKEN", absolute_value)
+    text = restore_math(text)
     text = re.sub(r"\s+", " ", text).strip()
     text = re.sub(r"^(?:\.{2,}|…)+\s*", "", text)
     if len(text) <= max_len:

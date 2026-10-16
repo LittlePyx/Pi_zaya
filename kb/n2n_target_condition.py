@@ -76,8 +76,11 @@ def attach_target_condition_slot(plan: dict, hits: list[dict]) -> dict:
             meta = hit.get("meta") or {}
             if _source(meta.get("source_path")) != _source(path):
                 continue
-            for row in meta.get("source_passages") or []:
-                if not row.get("direct_question_evidence"):
+            for row in meta.get("source_passages") or [{**meta, "text": hit.get("text")}]:
+                selected_direct = meta.get("direct_question_evidence") and all(
+                    row.get(key) == meta.get(key) for key in ("block_id", "anchor_id", "page_start")
+                )
+                if not (row.get("direct_question_evidence") or selected_direct):
                     continue
                 block = _verified_block(path, row)
                 body = str((block or {}).get("raw_text") or "")
@@ -88,9 +91,13 @@ def attach_target_condition_slot(plan: dict, hits: list[dict]) -> dict:
                                  and _source(s.get("source_path")) == _source(path)
                                  and s.get("block_id") == row.get("block_id")), None)
                 if existing is not None:
+                    if any(existing.get(key) and existing[key] != block.get(key)
+                           for key in ("anchor_id", "page_start", "page_end", "heading_path")):
+                        continue
                     # A long converted paragraph can contain interleaved prose.
                     # Show the exact relation, retaining page-local audit text.
                     existing["evidence_quote"] = quote
+                    existing["source_evidence_quotes"] = [body]
                     existing["anchor_kind"] = block.get("kind")
                     existing["source_passage_bundle"] = True
                     existing["compound_same_page_evidence"] = True
