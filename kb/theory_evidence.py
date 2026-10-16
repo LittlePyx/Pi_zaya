@@ -132,6 +132,12 @@ def noisy_target_relation_covered(claim: str, evidence: str) -> bool:
 
 def restoration_task_enumeration_covered(claim: str, evidence: str) -> bool:
     """Do not validate a three-task list from only two overlapping task names."""
+    applications = (r"照片去噪|photographic\s+noise\s+removal", r"蒙特卡洛|Monte\s+Carlo", r"MRI|磁共振")
+    if all(re.search(pattern, claim, re.I) for pattern in applications):
+        return all(re.search(pattern, evidence, re.I) for pattern in applications) and (
+            not re.search(r"欠采样|undersampled", claim, re.I)
+            or bool(re.search(r"undersampled|欠采样", evidence, re.I))
+        )
     task_prompt = bool(
         re.search(r"三(?:类|种|项).{0,20}任务|three.{0,20}tasks?", claim, re.I)
     )

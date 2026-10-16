@@ -64,7 +64,7 @@ function linkedConversationIdFromSearch(search: string) {
   const params = new URLSearchParams(search)
   for (const key of LINKED_CONVERSATION_QUERY_KEYS) {
     const value = String(params.get(key) || '').trim()
-    if (value) return value
+    if (/^[A-Za-z0-9_-]+$/.test(value)) return value
   }
   return ''
 }
@@ -404,10 +404,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const hasTextApiKey = useSettingsStore((s) => s.hasTextApiKey)
   const visionUsesTextFallback = useSettingsStore((s) => s.visionUsesTextFallback)
   const showInternalSettingsTools = internalSettingsToolsVisible()
-  const sidebarConversationIds = useMemo(() => new Set([
-    ...rootConversations.map((conversation) => conversation.id),
-    ...Object.values(projectConversations).flat().map((conversation) => conversation.id),
-  ]), [projectConversations, rootConversations])
 
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
@@ -469,7 +465,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (loc.pathname !== '/') return
     const linkedConversationId = linkedConversationIdFromSearch(loc.search)
     if (!linkedConversationId) return
-    if (!sidebarConversationIds.has(linkedConversationId)) return
+    // selectConversation fetches metadata for IDs outside the sidebar window.
     if (activeConvId !== linkedConversationId) {
       void selectConv(linkedConversationId)
     }
@@ -477,7 +473,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
     if (nextSearch !== loc.search) {
       nav({ pathname: '/', search: nextSearch }, { replace: true })
     }
-  }, [activeConvId, loc.pathname, loc.search, nav, selectConv, sidebarConversationIds])
+  }, [activeConvId, loc.pathname, loc.search, nav, selectConv])
 
   useEffect(() => {
     if (loc.pathname !== '/' || !activeConvId) return

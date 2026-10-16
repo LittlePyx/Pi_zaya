@@ -3,6 +3,16 @@ from __future__ import annotations
 import re
 
 
+def citation_plan_locator_quote(locator_slot: dict, slots: list[dict]) -> str:
+    located = {
+        (s.get("block_id") or s.get("blockId"), s.get("anchor_id") or s.get("anchorId"))
+        for s in slots if s.get("block_id") or s.get("blockId") or s.get("anchor_id") or s.get("anchorId")
+    }
+    if len(located) > 1:
+        return str(locator_slot.get("evidence_quote") or locator_slot.get("evidenceQuote") or "").strip()
+    return "\n".join(dict.fromkeys(str(s.get("evidence_quote") or s.get("evidenceQuote") or "").strip() for s in slots))
+
+
 def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
     """A general statistical summary does not establish conditional/zero means."""
     concepts = (r"zero[- ]mean|零均值", r"\bconditional\s+(?:expect\w*|mean)\b|条件(?:期望|均值)",

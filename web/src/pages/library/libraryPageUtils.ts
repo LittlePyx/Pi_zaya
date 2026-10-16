@@ -856,6 +856,14 @@ export function conversionSourceReadiness(item: LibraryFileItem, S: Record<strin
   }
 }
 
+export function conversionFailureIsHistorical(item: LibraryFileItem, S: Record<string, string>): boolean {
+  if (item.task_state !== 'idle' || item.index_state !== 'ready' || item.index_ready !== true) return false
+  if (!['quality_blocked', 'index_failed'].includes(String(item.last_conversion?.outcome || ''))) return false
+  if (hasConversionQualityIssue(item)) return false
+  const readiness = conversionSourceReadiness(item, S)
+  return readiness.kind === 'ready' || readiness.kind === 'autofixed'
+}
+
 export function conversionQualityScore(quality?: ConversionQualitySummary | null) {
   const value = Number(quality?.score || 0)
   return Number.isFinite(value) ? Math.max(0, Math.min(100, Math.round(value))) : 0

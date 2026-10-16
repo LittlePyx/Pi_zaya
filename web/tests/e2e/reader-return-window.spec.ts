@@ -150,7 +150,7 @@ test('standalone reader automatically recovers a stale exact locator without a d
 
   await page.goto(`/reader/session/${SESSION_ID}?conversation=${CONV_ID}`)
 
-  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(/^(Exact target|精确命中)$/)
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(/^(Exact phrase|短语精确命中)$/)
   await expect(page.locator('.kb-reader-focus')).toContainText(
     'SCI compresses a short video into one coded measurement.',
   )

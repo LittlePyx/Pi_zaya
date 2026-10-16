@@ -12,7 +12,7 @@ from kb.evidence_term_mapping import (
 )
 from kb.source_blocks import normalize_inline_markdown
 from kb.claim_polarity_guard import claim_polarity_conflicts
-
+from kb.training_information_relation import training_information_relation_covered
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
     (
@@ -215,7 +215,7 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
         and restoration_task_enumeration_covered(claim_text, evidence_text)
         and training_pair_requirement_covered(claim_text, evidence_text)
         and signal_noise_assumptions_covered(claim_text, evidence_text)
-        and not any(
+        and training_information_relation_covered(claim_text, evidence_text) and not any(
         claim_pattern.search(claim_text) and not evidence_pattern.search(evidence_text)
         for claim_pattern, evidence_pattern in _EXPLICIT_CLAIM_RELATION_REQUIREMENTS
         )

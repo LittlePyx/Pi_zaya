@@ -1,7 +1,7 @@
 from __future__ import annotations
 from kb.reference_origin_binding import origin_sentence_score, origin_topic_identifier
 from kb.citation_marker_context import numeric_marker_is_content, strip_citation_offset, strip_citation_decoration
-from kb.source_passage_evidence import bind_source_passage_primary
+from kb.source_passage_evidence import bind_source_passage_primary, citation_plan_locator_quote
 from kb.direct_question_evidence import attach_direct_source_evidence
 from kb.denoising_quality_boundary import (
     complete_denoising_quality_boundary,
@@ -429,7 +429,7 @@ def _claim_evidence_hits_with_citation_plan(
                 bool(str(slot.get("heading_path") or slot.get("headingPath") or "").strip()),
             ),
         )
-        evidence_text = "\n".join(part for part in evidence_parts if part)
+        evidence_text = citation_plan_locator_quote(locator_slot, matched_slots)
         heading_path = str(
             locator_slot.get("heading_path") or locator_slot.get("headingPath") or ""
         ).strip()

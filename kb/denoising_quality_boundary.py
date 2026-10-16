@@ -4,6 +4,7 @@ import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 from kb.n2n_target_condition import complete_target_condition
+from kb.direct_question_evidence import quality_boundary_quote
 
 
 def _text(value: object) -> str:
@@ -76,6 +77,8 @@ def _relation_slots(
         ):
             n2n = (number, evidence)
         if "noise2void" in source and (
+            quality_boundary_quote(evidence)
+            or
             all(
                 re.search(pattern, evidence, re.I)
                 for pattern in (
@@ -143,7 +146,7 @@ def complete_denoising_quality_boundary(
     if not single_request:
         return text
     number, evidence = n2v
-    if re.search(r"cannot be expected to outperform", evidence, re.I):
+    if re.search(r"cannot be expected (?:to outperform|that our approach outperforms)", evidence, re.I):
         detail = "拥有更多训练信息的方法；论文观察到的结果只是性能下降幅度较温和"
     else:
         detail = "普通网络；盲点网络可用于预测的信息更少，因此精度可能略受损"

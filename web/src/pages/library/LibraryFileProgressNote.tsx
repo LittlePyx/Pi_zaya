@@ -1,7 +1,7 @@
 import { Progress, Tooltip, Typography } from 'antd'
 import type { LibraryFileItem } from '../../api/library'
 import { useT } from '../../i18n'
-import { conversionStageLabel, derivePageProgress, formatSeconds, runningPagesLabel } from './libraryPageUtils'
+import { conversionFailureIsHistorical, conversionStageLabel, derivePageProgress, formatSeconds, runningPagesLabel } from './libraryPageUtils'
 import './LibraryFileProgressNote.css'
 
 const { Text } = Typography
@@ -71,6 +71,16 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
   const resultTitle = result
     ? [resultLabel, String(result.detail || result.message || '').trim()].filter(Boolean).join('\n')
     : ''
+  const historical = conversionFailureIsHistorical(item, S)
+  const resultContent = result && resultLabel ? (
+    <Tooltip title={resultTitle} placement="bottomLeft">
+      <div className={`kb-lib-file-result-note is-${result.outcome}`} data-testid="library-conversion-result">
+        <Text type={resultType} className="text-xs">
+          {[resultLabel, recoveryCacheLabel, recoveryBlockedLabel, resultDuration, resultTime].filter(Boolean).join(' · ')}
+        </Text>
+      </div>
+    </Tooltip>
+  ) : null
 
   return (
     <>
@@ -97,18 +107,12 @@ export function LibraryFileProgressNote({ item }: LibraryFileProgressNoteProps) 
           ) : null}
         </div>
       ) : null}
-      {result && resultLabel ? (
-        <Tooltip title={resultTitle} placement="bottomLeft">
-          <div
-            className={`kb-lib-file-result-note is-${result.outcome}`}
-            data-testid="library-conversion-result"
-          >
-            <Text type={resultType} className="text-xs">
-              {[resultLabel, recoveryCacheLabel, recoveryBlockedLabel, resultDuration, resultTime].filter(Boolean).join(' · ')}
-            </Text>
-          </div>
-        </Tooltip>
-      ) : null}
+      {historical ? (
+        <details className="kb-lib-file-result-history" data-testid="library-conversion-history">
+          <summary>{S.lib_conversion_result_history_ready}</summary>
+          {resultContent}
+        </details>
+      ) : resultContent}
     </>
   )
 }

@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from difflib import SequenceMatcher
 from pathlib import Path
-from kb.direct_question_evidence import prioritize_direct_question_hits, requests_direct_question_evidence
+from kb.direct_question_evidence import prioritize_direct_question_hits, requests_direct_question_evidence, selected_source_evidence_prompt
 from kb.source_grounded_fallback import (
     build_exact_relation_grounded_fallback as _build_exact_relation_grounded_fallback,
     build_provider_failure_grounded_fallback as _build_provider_failure_grounded_fallback,
@@ -6723,7 +6723,7 @@ def _gen_worker(session_id: str, task_id: str) -> None:
             selected_research_context_evidence_hits = _selected_research_context_evidence_hits(
                 selected_research_context_items,
                 max_hits=min(8, max(1, len(selected_research_context_items) * 2)),
-                prompt="\n".join([str(prompt or retrieval_prompt or ""), *list(query_variants or [])[1:]]),
+                prompt=selected_source_evidence_prompt(str(prompt or retrieval_prompt or ""), list(query_variants or [])),
                 db_dir=db_dir,
             )
             if selected_research_context_evidence_hits:

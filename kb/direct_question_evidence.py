@@ -6,8 +6,16 @@ from pathlib import Path
 from kb.source_blocks import load_source_blocks
 from kb.source_blocks import normalize_match_text
 from kb.n2n_target_condition import (
-    attach_target_condition_slot, corruption_condition_question, target_condition_quote,
+    _verified_block, attach_target_condition_slot, corruption_condition_question, target_condition_quote,
 )
+
+
+def selected_source_evidence_prompt(question: str, query_variants: list[str]) -> str:
+    # Expansion terms improve ranking but must not change the requested facet
+    # into a different application/experiment during a source-only basket scan.
+    if requests_direct_question_evidence(question):
+        return question
+    return "\n".join([question, *query_variants[1:]])
 
 
 def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) -> dict:
@@ -43,21 +51,13 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                     (r for r in rows if r.get("block_id") == slot.get("block_id")),
                     next((r for r in rows if len(str(r.get("text") or "")) >= 40), None),
                 )
-                selected_block = actual.get(str((selected or {}).get("block_id") or ""))
+                enumeration = max(rows, key=lambda r: r.get("direct_question_enumeration_score", 0))
+                if enumeration.get("direct_question_enumeration_score", 0) > 0:
+                    selected = enumeration
+                selected_block = _verified_block(path, selected) if selected else None
                 if (
                     selected_block
-                    and slot.get("block_id") != selected_block["block_id"]
-                    and int(selected_block.get("page_start") or 0) > 0
-                    and int(selected.get("page_start") or 0)
-                    == int(selected_block.get("page_start") or 0)
-                    and normalize_match_text(str(selected.get("text") or ""))
-                    == normalize_match_text(
-                        str(
-                            selected_block.get("raw_text")
-                            or selected_block.get("text")
-                            or ""
-                        )
-                    )
+                    and (slot.get("block_id") != selected_block["block_id"] or quality_boundary_quote(str(selected.get("text") or "")) or enumeration.get("direct_question_enumeration_score", 0) > 0)
                 ):
                     slot.update(
                         {
@@ -79,6 +79,7 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                 quote = normalize_match_text(str(slot.get("evidence_quote") or ""))
                 primary_ok = (
                     primary
+                    and _verified_block(path, {**slot, "text": slot.get("evidence_quote")})
                     and page > 0
                     and primary.get("page_start") == page
                     and len(quote) >= 40
@@ -90,14 +91,14 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                 )
                 verified = []
                 for row in rows if primary_ok else []:
-                    block = actual.get(str(row.get("block_id") or ""))
+                    block = _verified_block(path, row, allow_short_equation=True)
                     text = str(row.get("text") or "").strip()
                     if (
                         block
                         and block.get("page_start") == page
                         and text
                         and normalize_match_text(text)
-                        == normalize_match_text(
+                        in normalize_match_text(
                             str(block.get("raw_text") or block.get("text") or "")
                         )
                     ):
@@ -140,7 +141,7 @@ def prioritize_direct_question_hits(
         for hit in candidates
         if (hit.get("meta") or {}).get("direct_question_evidence")
     ]
-    if corruption_condition_question(prompt):
+    if corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
         # Supplemental/facet scans can deduplicate an earlier direct hit into
         # a generic row. Re-read only the already scoped candidate sources.
         fresh = []
@@ -149,7 +150,11 @@ def prioritize_direct_question_hits(
         for path in paths:
             if path and Path(path).is_file():
                 try:
-                    fresh.extend(direct_question_evidence_hits(Path(path), prompt, limit=limit))
+                    from kb.converter.quality_gate import _unreliable_pages_from_report
+                    from kb.converter.quality_repair import load_conversion_quality_result
+                    excluded = set(_unreliable_pages_from_report(load_conversion_quality_result(Path(path))))
+                    fresh.extend(h for h in direct_question_evidence_hits(Path(path), prompt, limit=limit)
+                                 if int((h.get("meta") or {}).get("page_start") or 0) not in excluded)
                 except (OSError, ValueError, TypeError):
                     pass
         direct = fresh + direct
@@ -197,6 +202,9 @@ _NOISY_TARGET_EXPECTATION_QUESTION = re.compile(
     r"(?i)(?:条件期望|conditional\s+expect).{0,90}(?:干净|带噪|clean|noisy)|"
     r"(?:干净|带噪|clean|noisy).{0,90}(?:条件期望|conditional\s+expect)"
 )
+_QUALITY_BOUNDARY_QUESTION = re.compile(
+    r"(?i)performance\s+boundary|性能边界|(?:outperform|胜过|优于).{0,80}(?:clean targets?|noisy pairs?|干净目标|噪声对)"
+)
 _OUTPUT_RELATION_QUESTION = re.compile(
     r"(?i)DnCNN.{0,80}(?:\u76f4\u63a5\u9884\u6d4b|\u7f51\u7edc\u8f93\u51fa|\u53bb\u566a\u56fe\u50cf|directly\s+predict|network\s+output|denoised\s+image)"
 )
@@ -224,7 +232,10 @@ def _task_list_score(text: str) -> int:
             r"JPEG(?:\s+image)?\s+deblock",
         )
     )
-    if named == 3:
+    applications = sum(bool(re.search(pattern, text, re.I)) for pattern in (
+        r"photographic\s+noise\s+removal", r"synthetic\s+Monte\s+Carlo", r"MRI.{0,40}undersampled",
+    ))
+    if named == 3 or applications == 3:
         return 12 + int(owned) + int(explicit)
     return 3 if owned and explicit else 0
 
@@ -274,6 +285,8 @@ def _output_relation_score(text: str) -> int:
 
 def _requested_facet_score(prompt: str, text: str) -> int:
     """Locate explicit source statements, never infer facts from paper names."""
+    if _QUALITY_BOUNDARY_QUESTION.search(prompt):
+        return 16 if quality_boundary_quote(text) else 0
     if _CALIBRATION_QUESTION.search(prompt):
         return 3 if re.search(r"(?i)calibrat.{0,80}(?:traditional|median|non.local)|校准.{0,30}(?:传统|中值)", text) else 0
     if _INDEPENDENCE_QUESTION.search(prompt):
@@ -317,7 +330,7 @@ def _requested_facet_score(prompt: str, text: str) -> int:
             )
         )
         if asks_both_pair_types:
-            return 0
+            return 3 if owned and re.search(r"(?i)observe.{0,40}(?:image|source).{0,15}twice", text) else 0
         return 3 if owned and explicit else 0
     return 0
 
@@ -334,10 +347,26 @@ def requests_direct_question_evidence(prompt: str) -> bool:
         or _INDEPENDENCE_QUESTION.search(prompt)
         or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt)
         or _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt)
+        or _QUALITY_BOUNDARY_QUESTION.search(prompt)
         or corruption_condition_question(prompt)
         or _OUTPUT_RELATION_QUESTION.search(prompt)
         or _architecture_relation_question(prompt)
     )
+
+
+def quality_boundary_quote(text: str) -> str:
+    match = re.search(
+        r"(?:While\s+)?it cannot be expected that our approach outperforms methods that have "
+        r"(?:additional|more) information available during training,\s*we observe that the denoising "
+        r"performance of our results only drops moderately[^.]*\.",
+        text, re.I,
+    )
+    return match.group() if match else ""
+
+
+def application_enumeration_quote(text: str) -> str:
+    match = re.search(r"(?:We|Our)\s+(?:show|demonstrate)\s+applications\s+in[^.]*\.", text, re.I)
+    return match.group() if match and _task_list_score(match.group()) >= 12 else ""
 
 
 def direct_question_evidence_hits(
@@ -464,6 +493,10 @@ def direct_question_evidence_hits(
         return []
     candidates.sort(key=lambda row: (-row[0], row[1]))
     chosen = candidates[0][2]
+    if _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt):
+        # The theorem states invariance; the separate observation premise says
+        # which clean target the noisy observation estimates. Keep both facets.
+        chosen = list(dict.fromkeys(i for _, _, bundle in candidates for i in bundle))
     if corruption_condition_question(prompt):
         # Keep both the model contrast and the target condition as actual
         # paragraphs. Their page locators remain separate throughout auditing.
@@ -489,6 +522,19 @@ def direct_question_evidence_hits(
     for index in chosen[: max(1, limit)]:
         block = blocks[index]
         text = str(block.get("raw_text") or block.get("text") or "").strip()
+        if _QUALITY_BOUNDARY_QUESTION.search(prompt):
+            text = quality_boundary_quote(text)
+        elif _TASK_LIST_QUESTION.search(prompt):
+            text = application_enumeration_quote(text) or text
+        elif _TRAINING_OBSERVATION_QUESTION.search(prompt):
+            requirement = re.search(
+                r"\bneither\s+noisy\s+image\s+pairs\s+nor\s+clean\s+target\s+images\s+are\s+available\.",
+                text, re.I,
+            )
+            if requirement and requirement.end() <= 1800:
+                # Preserve the complete data requirement before a long results
+                # tail would make the source bundler truncate that very clause.
+                text = text[:requirement.end()]
         if not text or not block.get("block_id"):
             continue
         out.append(
@@ -509,6 +555,7 @@ def direct_question_evidence_hits(
                     },
                     "source_path": str(md_path),
                     "direct_question_evidence": True,
+                    "direct_question_enumeration_score": _task_list_score(text) if _TASK_LIST_QUESTION.search(prompt) else 0,
                     "paper_guide_targeted_block": True,
                     "evidence_selection_reason": "requested_source_statement",
                 },

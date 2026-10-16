@@ -1,5 +1,6 @@
 import type { Message } from '../../api/chat'
 import { getMessageAgentSourceSummary, getMessageAnswerContract } from './messageTraceUtils'
+import { hasIndependentlyBoundLocalCitations } from './messageBoundCitationPolicy'
 
 export interface MessageEvidenceActionPolicy {
   allowLocalCitations: boolean
@@ -86,7 +87,8 @@ function failedQualityPolicy(message: Message): MessageEvidenceActionPolicy | nu
 
 export function messageEvidenceActionPolicy(message: Message): MessageEvidenceActionPolicy {
   const failed = failedQualityPolicy(message)
-  if (failed) return failed
+  const retainBoundCards = failed?.reason === 'quality_failed' && hasIndependentlyBoundLocalCitations(message)
+  if (failed && !retainBoundCards) return failed
 
   const contract = record(getMessageAnswerContract(message))
   const contractSummary = record(contract.source_summary ?? contract.sourceSummary)
@@ -119,6 +121,16 @@ export function messageEvidenceActionPolicy(message: Message): MessageEvidenceAc
       allowLooseLocalLocate: false,
       allowResearchNote: false,
       reason: 'external',
+    }
+  }
+
+  if (retainBoundCards) {
+    return {
+      allowLocalCitations: true,
+      allowStructuredLocalLocate: false,
+      allowLooseLocalLocate: false,
+      allowResearchNote: false,
+      reason: 'quality_failed',
     }
   }
 

@@ -10,6 +10,7 @@ from kb.inpaper_citation_grounding import (
     extract_candidate_ref_nums_from_hits,
 )
 from kb.citation_plan import build_citation_plan, build_citation_plan_prompt_block
+from kb.direct_question_evidence import attach_direct_source_evidence
 from kb.paper_guide_citation_surfacing import (
     _collect_paper_guide_candidate_refs_by_source,
 )
@@ -617,6 +618,7 @@ def _prepare_paper_guide_prompt_context(
                 reference_opportunities=paper_guide_reference_opportunities,
                 retrieval_queries=[retrieval_prompt, used_query, *list(query_variants or [])],
             )
+    citation_plan = attach_direct_source_evidence(citation_plan, answer_hits)
     citation_plan_block = build_citation_plan_prompt_block(citation_plan)
     paper_guide_contracts_seed = {}
     if paper_guide_mode:

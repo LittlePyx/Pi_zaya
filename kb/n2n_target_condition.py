@@ -33,7 +33,9 @@ def _source(value: object) -> str:
     return re.sub(r"/+", "/", str(value or "").replace("\\", "/")).casefold()
 
 
-def _verified_block(path: str, row: dict) -> dict | None:
+def _verified_block(path: str, row: dict, *, allow_short_equation: bool = False) -> dict | None:
+    if row.get("source_path") and _source(row["source_path"]) != _source(path):
+        return None
     try:
         block = next(
             (b for b in load_source_blocks(Path(path)) if b["block_id"] == row.get("block_id")),
@@ -45,7 +47,10 @@ def _verified_block(path: str, row: dict) -> dict | None:
             and block.get("page_start") == row.get("page_start")
             and all(not row.get(key) or row[key] == block.get(key)
                     for key in ("anchor_id", "page_end", "heading_path"))
-            and len(quote) >= 40
+            and (len(quote) >= 40 or (
+                allow_short_equation and block.get("kind") == "equation"
+                and quote == normalize_match_text(str(block.get("raw_text") or block.get("text") or ""))
+            ))
             and quote in normalize_match_text(str(block.get("raw_text") or block.get("text") or ""))
         ):
             return block
@@ -61,6 +66,14 @@ def _corruption_summary_quote(text: str) -> str:
         re.sub(r"\s+", " ", text), re.I,
     )
     return match.group() if match else ""
+
+
+def _clean_target_observation_quote(text: str) -> str:
+    if re.search(r"expectation of the corrupted input data is the clean target", text, re.I) and re.search(
+        r"we can dispose of the clean targets entirely, as long as we are able to observe each source image twice", text, re.I,
+    ):
+        return text.strip()
+    return ""
 
 
 def attach_target_condition_slot(plan: dict, hits: list[dict]) -> dict:
@@ -84,7 +97,7 @@ def attach_target_condition_slot(plan: dict, hits: list[dict]) -> dict:
                     continue
                 block = _verified_block(path, row)
                 body = str((block or {}).get("raw_text") or "")
-                quote = target_condition_quote(body) or _corruption_summary_quote(body)
+                quote = target_condition_quote(body) or _corruption_summary_quote(body) or _clean_target_observation_quote(body)
                 if not quote:
                     continue
                 existing = next((s for s in slots if isinstance(s, dict)

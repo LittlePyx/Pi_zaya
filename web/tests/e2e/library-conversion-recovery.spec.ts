@@ -189,3 +189,52 @@ test('interrupted conversions require an explicit click and offer cache-aware re
   await expect.poll(() => backend.resumeAllCalls()).toBe(1)
   await expect(page.getByTestId('library-conversion-recovery')).toHaveCount(0)
 })
+
+for (const scenario of ['ready', 'blocked', 'stale', 'confirmed', 'source-warning', 'replacement-failed'] as const) {
+  test(`conversion history respects current source readiness: ${scenario}`, async ({ page }) => {
+    await installRecoveryBackend(page)
+    const ready = ['ready', 'confirmed', 'source-warning', 'replacement-failed'].includes(scenario)
+    await page.route('**/api/library/files**', async route => {
+      await fulfillJson(route, {
+        items: [{
+          name: 'history.pdf', path: 'C:/Pi_zaya/data/pdfs/history.pdf', sha1: 'history',
+          md_exists: true, md_path: 'C:/Pi_zaya/data/markdown/history.en.md', md_folder: 'C:/Pi_zaya/data/markdown',
+          index_state: ready ? 'ready' : scenario === 'blocked' ? 'quality_blocked' : 'index_stale',
+          index_ready: ready, index_status: scenario === 'confirmed' ? 'quality_degraded' : 'ready',
+          quality_gate: scenario === 'confirmed' ? { indexable: true, override_applied: true } : {},
+          conversion_quality: scenario === 'blocked' ? {
+            status: 'review', conversion_report: { needs_reconvert: true },
+          } : scenario === 'source-warning' ? {
+            has_review_issue: true, conversion_report: { remaining_issue_codes: ['source_text_loss'] },
+          } : null,
+          category: 'converted', task_state: 'idle', status: 'converted', replace_task: false,
+          queue_pos: 0, cur_page_done: 0, cur_page_total: 0, conversion_stage: '',
+          last_conversion: {
+            task_id: 'old-attempt', name: 'history.pdf', outcome: scenario === 'replacement-failed' ? 'conversion_failed' : 'quality_blocked',
+            operation: 'conversion', retry_action: 'reconvert', message: 'Original task failure retained.',
+            detail: 'Original task failure retained.', finished_at: 20, duration_s: 10,
+          },
+          paper_category: '', reading_status: '', note: '', user_tags: [], has_suggestions: false, suggested_tags: [],
+        }],
+        counts: { total_view: 1, total_all: 1, converted: 1, pending: 0, queued: 0, running: 0, recoverable: 0 },
+        scope: '200', queue: { running: false, active_tasks: [], recoverable_count: 0 },
+      })
+    })
+    await page.goto('/library')
+    if (scenario === 'ready') {
+      const history = page.getByTestId('library-conversion-history')
+      await expect(history).toContainText('currently ready for Q&A')
+      await expect(page.getByTestId('library-conversion-result')).not.toBeVisible()
+      await expect(page.getByTestId('library-retry-conversion')).toHaveCount(0)
+      await history.locator('summary').click()
+      await expect(page.getByTestId('library-conversion-result')).toBeVisible()
+      await expect(page.getByTestId('library-conversion-result')).toContainText('Quality checks blocked indexing')
+      await page.getByTestId('library-conversion-result').hover()
+      await expect(page.getByRole('tooltip')).toContainText('Original task failure retained.')
+    } else {
+      await expect(page.getByTestId('library-conversion-history')).toHaveCount(0)
+      await expect(page.getByTestId('library-conversion-result')).toBeVisible()
+      await expect(page.getByTestId('library-retry-conversion')).toBeVisible()
+    }
+  })
+}
