@@ -247,3 +247,39 @@ def test_application_rescue_uses_original_question_and_respects_excluded_pages(t
     else:
         assert result[0]["meta"]["page_start"] == 1
         assert "undersampled" in result[0]["text"]
+
+
+@pytest.mark.parametrize('same_block', [False, True])
+def test_explicit_application_list_promotes_its_own_locator_over_existing_discussion(tmp_path, same_block):
+    from kb.direct_question_evidence import attach_direct_source_evidence
+    from kb.source_blocks import load_source_blocks
+    from kb.paper_guide_answer_selection import _merge_same_source_answer_hits
+
+    path = tmp_path / 'paper.en.md'
+    direct = 'We show applications in photographic noise removal, denoising of synthetic Monte Carlo images, and reconstruction of MRI scans from undersampled inputs.'
+    broad = 'There are several situations in low-light photography, physically-based image synthesis, and magnetic resonance imaging. Our demonstrations remove the need to collect clean data.'
+    intro = 'We apply basic statistical reasoning to reconstruction without clean exemplars. arXiv:1803.04189v1 [cs.LG] 12 Mar 2018 '
+    path.write_text('<!-- kb_page: 1 -->\n' + intro + direct + '\n<!-- kb_page: 8 -->\n' + broad, encoding='utf8')
+    prompt = '本文展示了哪三种不同类型的数据恢复应用？'
+    hits = direct_question_evidence_hits(path, prompt)
+    old = load_source_blocks(path)[0 if same_block else 1]
+    hits.append({'text': broad, 'meta': {**old, 'source_path': str(path), 'direct_question_evidence': True}})
+    merged = _merge_same_source_answer_hits(hits)
+    plan = attach_direct_source_evidence({'slots': [{**old, 'preferred_system': 'system_a', 'source_path': str(path), 'candidate_hits': [1], 'evidence_quote': old['raw_text']}]}, merged)
+    assert plan['slots'][0]['page_start'] == 1
+    assert plan['slots'][0]['evidence_quote'] == direct
+    assert plan['slots'][0]['block_id'] == hits[0]['meta']['block_id']
+
+
+@pytest.mark.parametrize('source', [
+    'There are several situations in low-light photography, physically-based image synthesis, and magnetic resonance imaging.',
+    'We show photographic noise removal and reconstruction of MRI scans from undersampled inputs.',
+    'We show photographic noise removal, denoising of synthetic Monte Carlo images, and reconstruction of MRI scans.',
+])
+def test_application_enumeration_rejects_broad_or_incomplete_source(source):
+    from kb.claim_evidence_runtime import _support_score
+    from kb.evidence_binding import assess_system_a_hit_binding
+
+    claim = '本文展示了三种应用：照片去噪、合成蒙特卡洛图像去噪、从欠采样输入重建MRI。'
+    assert _support_score(claim, source) == 0
+    assert assess_system_a_hit_binding(answer_claim=claim, hit={'text': source}, meta={}, heading='', evidence_quote=source, source_name='')['suppress_link']

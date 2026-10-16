@@ -159,7 +159,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 70
+_RENDER_CACHE_SCHEMA_VERSION = 71
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:

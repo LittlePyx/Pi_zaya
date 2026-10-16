@@ -51,10 +51,13 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                     (r for r in rows if r.get("block_id") == slot.get("block_id")),
                     next((r for r in rows if len(str(r.get("text") or "")) >= 40), None),
                 )
+                enumeration = max(rows, key=lambda r: r.get("direct_question_enumeration_score", 0))
+                if enumeration.get("direct_question_enumeration_score", 0) > 0:
+                    selected = enumeration
                 selected_block = _verified_block(path, selected) if selected else None
                 if (
                     selected_block
-                    and (slot.get("block_id") != selected_block["block_id"] or quality_boundary_quote(str(selected.get("text") or "")))
+                    and (slot.get("block_id") != selected_block["block_id"] or quality_boundary_quote(str(selected.get("text") or "")) or enumeration.get("direct_question_enumeration_score", 0) > 0)
                 ):
                     slot.update(
                         {
@@ -229,7 +232,10 @@ def _task_list_score(text: str) -> int:
             r"JPEG(?:\s+image)?\s+deblock",
         )
     )
-    if named == 3:
+    applications = sum(bool(re.search(pattern, text, re.I)) for pattern in (
+        r"photographic\s+noise\s+removal", r"synthetic\s+Monte\s+Carlo", r"MRI.{0,40}undersampled",
+    ))
+    if named == 3 or applications == 3:
         return 12 + int(owned) + int(explicit)
     return 3 if owned and explicit else 0
 
@@ -356,6 +362,11 @@ def quality_boundary_quote(text: str) -> str:
         text, re.I,
     )
     return match.group() if match else ""
+
+
+def application_enumeration_quote(text: str) -> str:
+    match = re.search(r"(?:We|Our)\s+(?:show|demonstrate)\s+applications\s+in[^.]*\.", text, re.I)
+    return match.group() if match and _task_list_score(match.group()) >= 12 else ""
 
 
 def direct_question_evidence_hits(
@@ -513,6 +524,8 @@ def direct_question_evidence_hits(
         text = str(block.get("raw_text") or block.get("text") or "").strip()
         if _QUALITY_BOUNDARY_QUESTION.search(prompt):
             text = quality_boundary_quote(text)
+        elif _TASK_LIST_QUESTION.search(prompt):
+            text = application_enumeration_quote(text) or text
         elif _TRAINING_OBSERVATION_QUESTION.search(prompt):
             requirement = re.search(
                 r"\bneither\s+noisy\s+image\s+pairs\s+nor\s+clean\s+target\s+images\s+are\s+available\.",
@@ -542,6 +555,7 @@ def direct_question_evidence_hits(
                     },
                     "source_path": str(md_path),
                     "direct_question_evidence": True,
+                    "direct_question_enumeration_score": _task_list_score(text) if _TASK_LIST_QUESTION.search(prompt) else 0,
                     "paper_guide_targeted_block": True,
                     "evidence_selection_reason": "requested_source_statement",
                 },

@@ -1662,6 +1662,55 @@ test('message evidence policy blocks false local actions for external and failed
   })
 })
 
+test('format-incomplete answers retain only independently audited packet card actions', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-trace-clean-answer')
+  const result = await page.evaluate(async () => {
+    const { messageEvidenceActionPolicy } = await import('/src/components/chat/messageEvidencePolicy.ts')
+    const evidence = 'We can dispense with clean targets if each source image can be observed twice.'
+    const slot = { source_path: 'C:/papers/one.md', block_id: 'block-1', anchor_id: 'p-1',
+      page_start: 2, page_end: 2, heading_path: 'Training', strict_locate: true, evidence_quote: evidence }
+    const seed = {
+      id: 41, role: 'assistant', content: 'A source-backed answer [1];',
+      meta: {
+        agent_source_summary: { kind: 'local_kb' },
+        answer_quality: { minimum_ok: false, incomplete_fragment: true, contract_enabled: false,
+          has_hits: true, claim_evidence: { minimum_ok: true }, citation_plan: { slots: [slot] } },
+        paper_guide_contracts: { render_packet: { rendered_body: 'A source-backed answer [1](#bound-1);',
+          cite_details: [{ ...slot, num: 1, anchor: 'bound-1', is_inpaper: false,
+            citation_route: 'system_a', binding_status: 'grounded' }] } },
+      },
+    }
+    const valid = messageEvidenceActionPolicy(seed as never)
+    const mutations = [
+      (m: typeof seed) => { m.meta.answer_quality.has_hits = false },
+      (m: typeof seed) => { m.meta.answer_quality.incomplete_fragment = false },
+      (m: typeof seed) => { m.meta.answer_quality.contract_enabled = true },
+      (m: typeof seed) => { m.meta.answer_quality.claim_evidence.minimum_ok = false },
+      (m: typeof seed) => { m.meta.agent_source_summary.kind = 'external_not_kb' },
+      (m: typeof seed) => { m.meta.answer_quality.citation_plan.slots = [] },
+      (m: typeof seed) => { m.meta.paper_guide_contracts.render_packet.cite_details = [] },
+      ...['source_path', 'block_id', 'anchor_id', 'heading_path', 'evidence_quote', 'binding_status'].map(key =>
+        (m: typeof seed) => { Object.assign(m.meta.paper_guide_contracts.render_packet.cite_details[0], { [key]: 'different' }) }),
+      (m: typeof seed) => { m.meta.paper_guide_contracts.render_packet.cite_details[0].page_start = 3 },
+      (m: typeof seed) => { m.meta.paper_guide_contracts.render_packet.cite_details[0].strict_locate = false },
+      (m: typeof seed) => { m.meta.paper_guide_contracts.render_packet.cite_details[0].is_inpaper = true },
+      (m: typeof seed) => { Object.assign(m.meta, { answer_contract: { quality: { minimum_ok: false } } }) },
+      (m: typeof seed) => { Object.assign(m.meta, { claim_evidence: { minimum_ok: false } }) },
+      (m: typeof seed) => { Object.assign(m.meta.answer_quality, { resolution_status: 'insufficient_evidence' }) },
+    ]
+    return { valid, rejected: mutations.map(mutate => {
+      const m = structuredClone(seed); mutate(m)
+      return messageEvidenceActionPolicy(m as never)
+    }) }
+  })
+  expect(result.valid).toEqual({ allowLocalCitations: true, allowStructuredLocalLocate: false,
+    allowLooseLocalLocate: false, allowResearchNote: false, reason: 'quality_failed' })
+  for (const rejected of result.rejected) {
+    expect(rejected.allowLocalCitations).toBe(false)
+    expect(rejected.allowResearchNote).toBe(false)
+  }
+})
+
 test('evidence drawer view model dedupes cards and derives compact source detail', async ({ page }) => {
   const drawer = await evidenceDrawerViewModel(page, {
     sourceNotice: {
