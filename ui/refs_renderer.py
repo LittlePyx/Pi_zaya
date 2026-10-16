@@ -16,6 +16,7 @@ from urllib.parse import quote
 import requests
 from kb.source_passage_evidence import claim_bound_candidates, claim_occurrence_matches, claim_passage_concepts_covered
 from kb.citation_sentences import citation_sentence_context
+from kb.citation_marker_context import numeric_marker_is_content
 
 from kb.citation_meta import extract_first_doi, fetch_best_crossref_meta
 from kb.citation_card import compose_citation_card
@@ -7179,6 +7180,8 @@ def _annotate_inpaper_citations_with_hover_meta(
 
         def _repl_any(m: re.Match) -> str:
             raw = str(m.group(0) or "")
+            if numeric_marker_is_content(m.string, m.start()):
+                return raw
             spec = str(m.group(1) or "").strip()
             nums = _parse_int_set(spec)[:40]
             if not nums:

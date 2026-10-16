@@ -1,5 +1,8 @@
 # Noise2Noise 同篇跨页条件的逐句引用绑定
 
+后续r37 DnCNN范围题缺卡的确定性修复、原24题r40复测及全部新增失败见
+[DnCNN区间引用链路](DNCNN_RANGE_CITATION_20261016.md)。下面r36/r37历史指标和失败保持原样。
+
 ## 原失败与定位
 
 本轮延续 r35，处理 `hybrid_local / n2n-corruption-model` 条件句共用第8页卡片、缺第2页直接卡片。
