@@ -44,3 +44,17 @@ def test_existing_claim_repair_does_not_rebind_an_opposite_claim_to_same_evidenc
     )
     text = result[0] if isinstance(result, tuple) else result.get("answer", "")
     assert "discards all previous" not in text
+
+
+@pytest.mark.parametrize("claim,evidence,conflict", [
+    ("DnCNN requires estimating the test image noise level.", "DnCNN denoises it without estimating its noise level.", True),
+    ("DnCNN denoises without estimating its noise level.", "DnCNN requires estimating the noise level.", True),
+    ("DnCNN does not require estimating the noise level.", "DnCNN denoises without estimating its noise level.", False),
+    ("DnCNN can estimate the test image noise level.", "DnCNN denoises without estimating its noise level.", False),
+    ("DnCNN requires estimating the noise level.", "Training uses noisy images from a wide range of noise levels.", False),
+    ("DnCNN requires estimating the noise level.", "The system works without estimating camera motion.", False),
+])
+def test_explicit_estimation_requirement_direction(claim, evidence, conflict):
+    assert claim_polarity_conflicts(claim, evidence) is conflict
+    if conflict:
+        assert _support_score(claim, evidence) == 0

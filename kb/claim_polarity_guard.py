@@ -12,6 +12,7 @@ _ACTIONS = {
     "training": (r"train(?:s|ed|ing)?|fine-tun(?:e|es|ed|ing)", r"freez(?:e|es|ing)|frozen|fix(?:es|ed|ing)?"),
     "filter": (r"filter(?:s|ed|ing)?", r""),
     "direction": (r"increas(?:e|es|ed|ing)|improv(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|higher", r"decreas(?:e|es|ed|ing)|reduc(?:e|es|ed|ing)|lower"),
+    "required_estimation": (r"estimat(?:e|es|ed|ing)", r""),
 }
 _ZH_ALIASES = (
     ("视觉编码器", "vision encoder"), ("语言模型", "language model"),
@@ -58,6 +59,8 @@ def _facts(text: str) -> list[_ActionFact]:
                 if polarity is None:
                     continue
                 prefix = words[max(0, index - 3):index]
+                if kind == "required_estimation" and not set(prefix) & {"without", "require", "requires", "required", "need", "needs", "must"}:
+                    continue  # Optional estimation is not contradicted by denoising without it.
                 # "not only" is additive, not a negation of this action.
                 negated = any(token in {"not", "cannot", "never", "without"} for token in prefix) and prefix[-2:] != ["not", "only"]
                 if negated:
