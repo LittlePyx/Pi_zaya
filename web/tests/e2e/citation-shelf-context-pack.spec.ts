@@ -285,6 +285,51 @@ test('pagehide cannot flush an open stale empty shelf over restored backend evid
   expect(backend.getBibliometricsPayloads().every((payload) => payload.allow_model_calls === false)).toBe(true)
 })
 
+test('a conversation deep link loads an existing answer outside the sidebar window', async ({ page }) => {
+  await installBackend(page)
+  await page.route('**/api/sidebar**', route => fulfillJson(route, { projects: [], root_conversations: [], project_conversations: {} }))
+  await page.route(/\/api\/conversations(?:\?.*)?$/, route => fulfillJson(route, []))
+  const creates: string[] = []
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/api\/(?:conversations|chat)(?:\?|$)/.test(new URL(request.url()).pathname)) creates.push(request.url())
+  })
+  await page.goto('/?conversation=conv-context-pack')
+  await expect(page.locator('.kb-msg-bubble-assistant')).toContainText('The baseline reference is available')
+  await expect(page).toHaveURL(/conversation=conv-context-pack/)
+  expect(creates).toEqual([])
+})
+
+test('an unavailable conversation deep link does not loop or create a conversation', async ({ page }) => {
+  await installBackend(page)
+  let lookups = 0
+  let creates = 0
+  await page.route('**/api/conversations/missing-history', async route => {
+    lookups += 1
+    await route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"Not found"}' })
+  })
+  await page.route('**/api/conversations/missing-history/messages**', route => route.fulfill({ status: 404, contentType: 'application/json', body: '{"detail":"Not found"}' }))
+  page.on('request', request => {
+    if (request.method() === 'POST' && /\/api\/(?:conversations|chat)$/.test(new URL(request.url()).pathname)) creates += 1
+  })
+  await page.goto('/?conversation=missing-history')
+  await expect.poll(() => lookups).toBe(1)
+  await expect(page.locator('.kb-msg-bubble-assistant')).toHaveCount(0)
+  await page.waitForTimeout(500)
+  expect(lookups).toBe(1)
+  expect(creates).toBe(0)
+})
+
+test('conversation deep links reject route fragments', async ({ page }) => {
+  await installBackend(page)
+  const requests: string[] = []
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.startsWith('/api/conversations/')) requests.push(request.url())
+  })
+  await page.goto('/?conversation=..%2Fsettings')
+  await expect(page.locator('.kb-sider-search-input')).toBeVisible()
+  expect(requests).toEqual([])
+})
+
 test('selected citation shelf items are sent as next-turn prompt context', async ({ page }) => {
   test.setTimeout(60_000)
   const backend = await installBackend(page)
