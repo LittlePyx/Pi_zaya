@@ -241,6 +241,8 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"重建速度|采集速度|速度|加速|更快", ("speed", "fast", "faster", "acquisition")),
     (r"泛化", ("generalization", "generalize")),
     (r"训练", ("training", "train")),
+    (r"(?:更多|额外)(?:的)?训练信息", ("additional", "information")),
+    (r"胜过|优于", ("outperform", "outperforms", "outperforming")),
     (r"过拟合", ("overfitting", "overfit")),
     (r"可解释", ("interpretability", "interpretable")),
     (r"测量次数|测量", ("measurement", "measurements")),
