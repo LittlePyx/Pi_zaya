@@ -20,6 +20,7 @@ import { restoreShelfItems } from '../components/chat/citeShelfStorage'
 import { useChatPerfSnapshot } from '../components/chat/useChatPerfSnapshot'
 import { useExternalSupplementMode } from '../components/chat/useExternalSupplementMode'
 import { useLocalSemanticRetrieval } from '../components/chat/useLocalSemanticRetrieval'
+import { useConversationLocaleRefresh } from '../components/chat/useConversationLocaleRefresh'
 import { resolveQueryScope, useChatSendFlow } from '../components/chat/useChatSendFlow'
 import { useChatTimeline } from '../components/chat/useChatTimeline'
 import { useChatUploadFlow } from '../components/chat/useChatUploadFlow'
@@ -152,9 +153,6 @@ export default function ChatPage() {
   } | null>(null)
   const [projectGapId, setProjectGapId] = useState('')
   const eventTokenRef = useRef(1)
-  const localeRefreshKeyRef = useRef(
-    `${settings.uiLocale}:${settings.refsCardLocale}:${settings.localePreferencesRevision}`,
-  )
   const timelineScrollRestoreTopRef = useRef<number | null>(null)
   const projectStatusId = useMemo(
     () => String(new URLSearchParams(location.search).get('project_status') || '').trim(),
@@ -486,20 +484,7 @@ export default function ChatPage() {
     shelfProjectScope,
   ])
 
-  useEffect(() => {
-    const nextKey = `${settings.uiLocale}:${settings.refsCardLocale}:${settings.localePreferencesRevision}`
-    if (!settings.loaded || localeRefreshKeyRef.current === nextKey) return
-    localeRefreshKeyRef.current = nextKey
-    if (!activeConvId) return
-    void refreshActiveConversationLocale()
-  }, [
-    activeConvId,
-    refreshActiveConversationLocale,
-    settings.loaded,
-    settings.localePreferencesRevision,
-    settings.refsCardLocale,
-    settings.uiLocale,
-  ])
+  useConversationLocaleRefresh(activeConvId, conversationLoading, settings, refreshActiveConversationLocale)
 
   useEffect(() => {
     const convId = String(activeConvId || '').trim()
