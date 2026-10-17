@@ -20,6 +20,7 @@ interface AssistantMessageNoticesProps {
   provenanceModeLabel: string
   S: Record<string, string>
   onOpenEvidence?: (sourceNotice: AnswerSourceNoticeViewModel) => void
+  localEvidenceCount?: number
 }
 
 interface ProvenanceModeDebugWindow {
@@ -129,12 +130,14 @@ export function AssistantMessageNotices({
   provenanceModeLabel,
   S,
   onOpenEvidence,
+  localEvidenceCount = 0,
 }: AssistantMessageNoticesProps) {
   const viewModel = buildAssistantMessageNoticeViewModel({
     message,
     lowConfidenceMeta,
     provenanceModeLabel,
     showProvenanceModeLabel: shouldShowProvenanceModeLabel(),
+    localEvidenceCount,
     S,
   })
   const sourceNoticeViewModel = viewModel.sourceNoticeViewModel

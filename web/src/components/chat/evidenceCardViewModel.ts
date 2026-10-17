@@ -98,7 +98,10 @@ export function buildEvidenceCardViewModel(
     detail.answerClaim,
     detail.cardTakeaway,
   )
-  const evidence = cleanFirst(
+  const literalSource = detail.citationRoute === 'system_a' && detail.evidenceSource === 'verified_source_excerpt'
+  const evidence = literalSource
+    ? String(detail.cardEvidence || detail.evidenceQuote || evidenceSection?.text || '')
+    : cleanFirst(
     options.evidenceOverride,
     evidenceSection?.text,
     detail.cardEvidence,
@@ -151,7 +154,7 @@ export function buildEvidenceCardViewModel(
     detail.cardSupportLabel,
     'Support',
   )
-  const evidencePreview = previewEvidenceText(evidence, options.evidenceLimit ?? 260)
+  const evidencePreview = literalSource ? evidence : previewEvidenceText(evidence, options.evidenceLimit ?? 260)
 
   return {
     label,

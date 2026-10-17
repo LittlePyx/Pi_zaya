@@ -31,6 +31,32 @@ import { restoreShelfItems } from '../../src/components/chat/citeShelfStorage'
 import type { ReaderLocateResult } from '../../src/components/chat/reader/readerTypes'
 import { prepareRefsPanelHits } from '../../src/components/refs/refsPanelDisplay'
 import { selectLocalizedRefCardText } from '../../src/components/refs/refCardCopy'
+import { buildEvidenceCardViewModel } from '../../src/components/chat/evidenceCardViewModel'
+import { buildSystemAEvidenceCardModel } from '../../src/components/chat/citationPopoverSystemA'
+
+test('verified source excerpts keep the full literal in popovers and the evidence drawer', () => {
+  const literal = String.raw`**Source** $\sigma\in[0,55]$ and $\mathbb{E}[y\mid x]$ remain literal.`
+    + '\n' + 'A continuous source passage retains its context and punctuation. '.repeat(14).trimEnd()
+  expect(literal.length).toBeGreaterThan(520)
+  const detail = normalizeCiteDetail({
+    anchor: 'source-excerpt', source_path: 'paper.en.md', citation_route: 'system_a',
+    evidence_source: 'verified_source_excerpt', evidence_quote: literal, card_evidence: literal,
+    card_display_contract_version: 2,
+  })!
+  const drawer = buildEvidenceCardViewModel(detail, { evidenceLimit: 320 })
+  expect(drawer.evidencePreview).toBe(literal)
+  expect(drawer.isEvidenceExcerpt).toBe(false)
+  const popover = buildSystemAEvidenceCardModel({
+    detail, S: { cite_answer_point: 'Claim', cite_evidence_focus: 'Focus', cite_original_evidence: 'Source', cite_reliability: 'Support' },
+    isSystemB: false, cardTakeaway: '', cardTakeawayLabel: '', cardClaimLabel: '',
+    cardEvidenceLabel: 'Source', cardSupportLabel: '', cardQualityFlags: [], cardWarning: '',
+    hasBindingState: false, supportText: '',
+  })
+  expect(popover.contentCard.evidencePreview).toBe(literal)
+  expect(popover.contentCard.isEvidenceExcerpt).toBe(false)
+  const legacy = buildEvidenceCardViewModel({ ...detail, evidenceSource: 'legacy' }, { evidenceLimit: 320 })
+  expect(legacy.evidencePreview.length).toBeLessThan(literal.length)
+})
 
 test('reader source literals keep conditional bars and math delimiters', () => {
   const literal = String.raw`input-conditioned p(y | x), ||x|| and $L_2$ retain \mathcal{J}.`

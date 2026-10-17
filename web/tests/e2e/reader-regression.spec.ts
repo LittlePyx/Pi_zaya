@@ -153,6 +153,37 @@ test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
 })
 
+test('reader keeps its bound evidence focus after the interface locale rerenders', async ({ page }) => {
+  await openHarness(page, 'strict-quote')
+  const focus = page.locator('.kb-reader-focus[data-kb-block-id="quote-1"]')
+  await expect(focus).toBeVisible()
+  await page.evaluate(async () => {
+    const { useSettingsStore } = await import('/src/stores/settingsStore.ts')
+    const state = useSettingsStore.getState()
+    useSettingsStore.setState({ uiLocale: state.uiLocale === 'en' ? 'zh' : 'en' })
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  await expect(focus).toBeVisible()
+  await expect(focus).toContainText('SCI compresses a short video into one coded measurement.')
+  await page.getByTestId('reader-return-evidence').click()
+  await expect(focus).toBeInViewport()
+})
+
+test('reader locale rerender cannot restore an unverified stale identity', async ({ page }) => {
+  await openHarness(page, 'strict-stale-unverified')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(UNRESOLVED_LABEL_RE)
+  await page.evaluate(async () => {
+    const { useSettingsStore } = await import('/src/stores/settingsStore.ts')
+    const state = useSettingsStore.getState()
+    useSettingsStore.setState({ uiLocale: state.uiLocale === 'en' ? 'zh' : 'en' })
+    await new Promise(requestAnimationFrame)
+    await new Promise(requestAnimationFrame)
+  })
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(UNRESOLVED_LABEL_RE)
+  await expect(page.locator('.kb-reader-focus')).toHaveCount(0)
+})
+
 test('reader clears rendered markdown when the source payload becomes empty', async ({ page }) => {
   await openHarness(page, 'strict-quote')
   await expect(page.getByTestId('reader-content')).toContainText('Fixture Paper')

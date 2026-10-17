@@ -1296,6 +1296,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
     'libraryMatchTitle',
     'libraryMatchDoi',
   ] as const) {
+    if (!detail.isInpaper && detail.evidenceSource === 'verified_source_excerpt'
+      && (key === 'evidenceQuote' || key === 'cardEvidence')) continue
     detail[key] = cleanCitationDisplayText(detail[key])
   }
   for (const key of [
@@ -1310,11 +1312,8 @@ export function normalizeCiteDetail(value: unknown): CiteDetail | null {
       && !detail.isInpaper
       && detail.cardDisplayContractVersion >= 2
     if (key === 'readerEvidenceQuote' || isContractOwnedSystemAEvidence) {
-      // Reader evidence is the continuous source passage used for exact
-      // highlighting, while the evidence fields on a v2 System-A card are
-      // already a validated, display-ready evidence window. The sentence picker below intentionally
-      // compacts legacy text and can drop a later step from the same mechanism.
-      // Reader literals bypass display cleanup; preserve their math symbols.
+      // Reader literals and v2 System-A evidence bypass the legacy sentence
+      // picker, which can remove a later step of the cited mechanism.
       continue
     }
     if (key === 'summaryLine' && isArticleSummaryTextSource(detail.summarySource)) {

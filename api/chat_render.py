@@ -9,6 +9,7 @@ import re
 from functools import lru_cache
 from pathlib import Path
 from api.claim_passage_plan import message_citation_plan as _message_citation_plan, prepare_claim_passage_render
+from api.source_card_contract import prepare_source_card_message, refresh_source_citation_cards
 
 from api.message_render_contract import (
     build_render_cache_payload as _contract_build_render_cache_payload,
@@ -159,7 +160,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 71
+_RENDER_CACHE_SCHEMA_VERSION = 86
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -4253,11 +4254,7 @@ def _refresh_visible_citation_card_contracts(
 ) -> list[dict]:
     """Synchronize visible card fields after evidence and locator refinement."""
 
-    return [
-        refresh_citation_card_contract(dict(item), locale=render_locale)
-        for item in list(cite_details or [])
-        if isinstance(item, dict)
-    ]
+    return refresh_source_citation_cards(cite_details, render_locale=render_locale)
 
 
 _READING_COVERAGE_BRIDGES: tuple[tuple[re.Pattern[str], tuple[str, ...]], ...] = (
@@ -16794,7 +16791,7 @@ def enrich_messages_with_reference_render(
         default=-1,
     )
     for idx, msg in enumerate(messages or []):
-        rec = dict(msg or {})
+        rec = prepare_source_card_message(msg)
         role = str(rec.get("role") or "")
         content = str(rec.get("content") or "")
         local_evidence_actions_allowed = _message_local_evidence_actions_allowed(rec)

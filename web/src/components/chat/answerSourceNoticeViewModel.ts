@@ -243,6 +243,7 @@ export function dedupeEvidenceDrawerDetails(details: CiteDetail[]): CiteDetail[]
 
 export function sourcePolicyLine(sourceNotice: AnswerSourceNoticeViewModel | null, S: Record<string, string> = {}): string {
   if (!sourceNotice) return ''
+  if (sourceNotice.kind === 'local_evidence_cards') return S.evidence_local_sources_heading || 'Local evidence sources'
   if (sourceNotice.externalSourceKind === 'web') {
     return sourceNotice.usesLocalKnowledgeBase
       ? S.evidence_source_policy_local_web || 'Library citations are local evidence; linked web sources are separate external background.'

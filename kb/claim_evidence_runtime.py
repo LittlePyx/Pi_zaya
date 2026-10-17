@@ -6,6 +6,7 @@ from typing import Any
 from kb.claim_polarity_guard import claim_polarity_conflicts, has_checkable_action_fact
 from kb.imaging_equation_binding import has_masked_frame_sum
 from kb.citation_marker_context import strip_citation_decoration
+from kb.invariant_input_role import clarify_supported_input_role
 from kb.theory_evidence import (
     drop_conflicting_source_equations, normalize_supported_variance_relation, protect_source_equations,
 )
@@ -940,7 +941,8 @@ def _enforce_named_source_section_citations(
 
         rebuilt: list[str] = []
         changed = False
-        for segment in segments:
+        tail_dropped = False
+        for segment_index, segment in enumerate(segments):
             citations = [
                 int(match.group(1))
                 for match in _NUMERIC_CITATION_RE.finditer(segment)
@@ -985,6 +987,7 @@ def _enforce_named_source_section_citations(
                     }
                 )
                 changed = True
+                tail_dropped = segment_index == len(segments) - 1
                 continue
 
             unique_citations = list(dict.fromkeys(citations))
@@ -1017,7 +1020,8 @@ def _enforce_named_source_section_citations(
             continue
         joiner = "" if _ZH_RE.search("".join(rebuilt)) else " "
         leading = raw_line[: len(raw_line) - len(raw_line.lstrip())]
-        output_lines.append(f"{leading}{prefix}{joiner.join(rebuilt)}")
+        joined = _join_pruned_claim_segments(segments, rebuilt) if tail_dropped else joiner.join(rebuilt)
+        output_lines.append(f"{leading}{prefix}{joined}")
     return "\n".join(output_lines), repairs, dropped
 
 
@@ -3512,6 +3516,7 @@ def audit_and_repair_claim_evidence(
         eligible_hits,
         prompt=prompt,
     )
+    repaired, clarified_input_roles = clarify_supported_input_role(repaired, eligible_hits)
     repaired = _renumber_ordered_lists(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]
@@ -3585,6 +3590,8 @@ def audit_and_repair_claim_evidence(
         "added_requested_facet_boundaries": int(requested_facet_boundary_count),
         "minimum_ok": not uncited and not mismatches,
     }
+    if clarified_input_roles:
+        meta["clarified_input_roles"] = clarified_input_roles
     if repairs:
         meta["repairs"] = repairs[:8]
     if rebound_repairs:

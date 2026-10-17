@@ -81,8 +81,79 @@ def _slot_supports(claim: str, slot: dict) -> bool:
     passage = _verified_passage({**slot, "text": slot.get("evidence_quote")}, str(slot.get("source_path") or ""))
     if slot.get("block_id") and not passage:
         return False
+    if slot.get("evidence_selection_reason") == "claim_source_passage":
+        return bool(passage) and _passage_supports(claim, passage, str(slot.get("source_name") or ""))
     quote = passage["source_block_text"] if passage else str(slot.get("evidence_quote") or "")
     return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""))
+
+
+def _declared_source_passages(slot: dict) -> list[dict]:
+    """Complete omitted fields on explicitly retrieved, identified passages.
+
+    Revalidate the parent and the child's text, block, anchor and declared page;
+    never replace conflicting fields or search for a different occurrence.
+    """
+    source = str(slot.get("source_path") or "")
+    if slot.get("source_passage_bundle") is not True or not _verified_passage(
+        {**slot, "text": slot.get("evidence_quote")}, source
+    ):
+        return []
+    path = Path(source)
+    if not path.is_file():
+        from api.reference_ui import _resolve_source_md_path
+        path = _resolve_source_md_path(source)
+    if path is None:
+        return []
+    blocks = {str(b["block_id"]): b for b in load_source_blocks_cached(path)}
+    result = []
+    for raw in slot.get("direct_source_evidence") or []:
+        if not isinstance(raw, dict) or not all(raw.get(k) for k in ("block_id", "anchor_id", "page_start")):
+            continue
+        block = blocks.get(str(raw["block_id"]))
+        if not block:
+            continue
+        completed = {**{k: block[k] for k in ("heading_path", "page_end")}, **raw}
+        passage = _verified_passage(completed, source)
+        if passage:
+            result.append(passage)
+    return result
+
+
+def _retrieved_passages(slots: list[dict], hits: list[dict], source: str) -> dict[str, dict]:
+    identity = _canonical_source_path_identity(source)
+    result = {}
+    for hit in hits:
+        if not isinstance(hit, dict):
+            continue
+        meta = hit.get("meta") or {}
+        if _canonical_source_path_identity(str(meta.get("source_path") or "")) != identity:
+            continue
+        for raw in meta.get("source_passages") or []:
+            if isinstance(raw, dict) and (passage := _verified_passage(raw, source)):
+                result[str(passage["block_id"])] = passage
+    for slot in slots:
+        for passage in _declared_source_passages(slot):
+            result[str(passage["block_id"])] = passage
+    return result
+
+
+def _passage_slot(parent: dict, passage: dict, number: int) -> dict:
+    return {
+        "claim_type": "paper_evidence", "preferred_system": "system_a",
+        "source_path": parent["source_path"], "source_name": parent.get("source_name", ""),
+        "candidate_hits": [number], "evidence_quote": passage["text"],
+        "citation_plan_full_evidence_quote": passage["source_block_text"],
+        **{key: passage.get(key) for key in ("heading_path", "page_start", "page_end", "block_id", "anchor_id")},
+        "anchor_kind": passage["anchor_kind"], "strict_locate": True,
+        "source_passage_bundle": True, "evidence_selection_reason": "claim_source_passage",
+    }
+
+
+def _passage_supports(claim: str, passage: dict, source_name: str) -> bool:
+    # Keep source ownership checks while requiring the body to meet the
+    # existing score independently of titles and section headings.
+    text = passage["text"]
+    return _support_score(claim, text) >= 5 and _supports(claim, text, "", source_name)
 
 
 def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) -> dict:
@@ -160,37 +231,16 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
                         slot["passage_bound_claims"] = [*claims, local_claim]
                         added = True
                 continue
-            candidates = {}
-            for hit in hits:
-                meta = hit.get("meta") or {}
-                if _canonical_source_path_identity(str(meta.get("source_path") or "")) != identity:
-                    continue
-                for raw in meta.get("source_passages") or []:
-                    if not isinstance(raw, dict):
-                        continue
-                    passage = _verified_passage(raw, str(meta.get("source_path") or ""))
-                    if not passage or not _supports(local_claim, passage["text"],
-                                                    str(passage.get("heading_path") or ""),
-                                                    str(meta.get("source_name") or "")):
-                        continue
-                    candidates[str(passage["block_id"])] = passage
+            # A related heading cannot make an unrelated body support a claim.
+            candidates = {key: passage for key, passage in _retrieved_passages(
+                source_slots, hits, str(source_slots[0]["source_path"])
+            ).items() if _passage_supports(local_claim, passage, str(source_slots[0].get("source_name") or ""))}
             # Multiple physically different matches are ambiguous; never pick
             # a page by retrieval order or turn a namesake paper into evidence.
             if len(candidates) != 1:
                 continue
             passage = next(iter(candidates.values()))
-            slots.append({
-                "claim_type": "paper_evidence", "preferred_system": "system_a",
-                "source_path": source_slots[0]["source_path"],
-                "source_name": source_slots[0].get("source_name", ""),
-                "candidate_hits": [number], "evidence_quote": passage["text"],
-                "citation_plan_full_evidence_quote": passage["source_block_text"],
-                **{key: passage.get(key) for key in ("heading_path", "page_start", "page_end", "block_id", "anchor_id")},
-                "anchor_kind": passage["anchor_kind"], "strict_locate": True,
-                "source_passage_bundle": True,
-                "evidence_selection_reason": "claim_source_passage",
-                "passage_bound_claims": [local_claim],
-            })
+            slots.append({**_passage_slot(source_slots[0], passage, number), "passage_bound_claims": [local_claim]})
             added = True
     if not added:
         return rec
@@ -232,14 +282,23 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
             continue
         source = str(canonical[number-1])
         verified = []
+        source_slots = []
         for slot in slots:
             if str(slot.get('preferred_system') or 'system_a').lower() != 'system_a':
                 continue
             if _canonical_source_path_identity(str(slot.get('source_path') or '')) != _canonical_source_path_identity(source):
                 continue
+            source_slots.append(slot)
             passage = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
             if passage:
                 verified.append((slot, passage))
+        if source_slots:
+            existing = {p['block_id'] for _, p in verified}
+            # Distribution requires the existing plan's declared children.
+            # A raw retrieval hit cannot revive a missing/stale planned slot.
+            for block_id, passage in _retrieved_passages(source_slots, [], source).items():
+                if block_id not in existing:
+                    verified.append((_passage_slot(source_slots[0], passage, number), passage))
         if len({p['block_id'] for _, p in verified}) < 2:
             continue
         for start, end in citation_sentence_spans(text):
@@ -248,13 +307,13 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
                 continue
             losses = set(re.findall(r'\bL\s*(\d+)\b', claim, re.I))
             matches = [(slot, p) for slot, p in verified
-                       if losses <= set(re.findall(r'\bL\s*(\d+)\b', p['source_block_text'], re.I)) and _supports(
-                claim, p['source_block_text'], str(slot.get('heading_path') or ''),
-                str(slot.get('source_name') or ''),
-            )]
+                       if losses <= set(re.findall(r'\bL\s*(\d+)\b', p['source_block_text'], re.I))
+                       and _slot_supports(claim, slot)]
             if len({p['block_id'] for _, p in matches}) != 1:
                 continue
             slot, _ = matches[0]
+            if not any(s is slot for s in slots):
+                slots.append(slot)
             # Binding stores the precise sentence, not the whole paragraph.
             slot['passage_bound_claims'] = list(dict.fromkeys([*slot.get('passage_bound_claims', []), claim]))
             insertions.append((paragraph.start()+end, f' [{number}]'))
