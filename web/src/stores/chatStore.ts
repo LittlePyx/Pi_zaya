@@ -1932,12 +1932,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
     const fetchStartedAt = nowMs()
     try {
-      const conv = cachedConv || await chatApi.getConversation(convId).catch(() => null)
-      const paperGuideMode = (conv || cachedConv)?.mode === 'paper_guide'
-      const pageResult = await getMessagesPageWithFallback(convId, {
-        limit: MESSAGE_PAGE_SIZE,
-        renderPacketOnly: paperGuideMode ? true : undefined,
-      })
+      const [conv, pageResult] = await Promise.all([
+        cachedConv || chatApi.getConversation(convId).catch(() => null),
+        getMessagesPageWithFallback(convId, { limit: MESSAGE_PAGE_SIZE,
+          renderPacketOnly: cachedConv?.mode === 'paper_guide' ? true : undefined }),
+      ]) // Without cached metadata, the server selects the stored conversation mode.
       pushConversationOpenPhase({
         ts: Date.now(),
         convId,

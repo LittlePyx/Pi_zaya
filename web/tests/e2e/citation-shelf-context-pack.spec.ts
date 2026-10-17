@@ -70,6 +70,7 @@ async function installBackend(
     initialShelfItems?: Array<Record<string, unknown>>
     initialShelfOpen?: boolean
     initialShelfRevision?: number
+    settingsGate?: Promise<void>
   } = {},
 ) {
   let created = true
@@ -102,6 +103,7 @@ async function installBackend(
   })
 
   await page.route('**/api/settings', async (route) => {
+    await options.settingsGate
     await fulfillJson(route, {
       model: 'test-text-model',
       base_url: '',
@@ -297,6 +299,74 @@ test('a conversation deep link loads an existing answer outside the sidebar wind
   await expect(page.locator('.kb-msg-bubble-assistant')).toContainText('The baseline reference is available')
   await expect(page).toHaveURL(/conversation=conv-context-pack/)
   expect(creates).toEqual([])
+})
+
+for (const mode of ['normal', 'paper_guide']) {
+  test(`a cold ${mode} conversation fetches messages while metadata is pending`, async ({ page }) => {
+    await installBackend(page)
+    await page.route('**/api/sidebar**', route => fulfillJson(route, { projects: [], root_conversations: [], project_conversations: {} }))
+    let releaseMetadata = () => {}
+    const metadataGate = new Promise<void>(resolve => { releaseMetadata = resolve })
+    const messageQueries: string[] = []
+    await page.route('**/api/conversations/conv-context-pack', async route => {
+      await metadataGate
+      await fulfillJson(route, { ...CONVERSATION, mode })
+    })
+    await page.route('**/api/conversations/conv-context-pack/messages_page**', async route => {
+      messageQueries.push(new URL(route.request().url()).search)
+      await fulfillJson(route, { messages: EXISTING_MESSAGES, has_more_before: false, oldest_loaded_id: 1, newest_loaded_id: 2 })
+    })
+    await page.goto('/?conversation=conv-context-pack')
+    try {
+      await expect.poll(() => messageQueries.length).toBe(1)
+      // The server selects its stored conversation mode before metadata arrives.
+      expect(new URLSearchParams(messageQueries[0]).has('render_packet_only')).toBe(false)
+    } finally {
+      releaseMetadata()
+    }
+    await expect(page.locator('.kb-msg-bubble-assistant')).toContainText('The baseline reference is available')
+    expect(messageQueries).toHaveLength(1)
+  })
+}
+
+test('initial settings hydration shares the conversation load and a later locale change waits for it', async ({ page }) => {
+  let releaseSettings = () => {}
+  let releaseMetadata = () => {}
+  const settingsGate = new Promise<void>(resolve => { releaseSettings = resolve })
+  const metadataGate = new Promise<void>(resolve => { releaseMetadata = resolve })
+  await installBackend(page, { settingsGate })
+  await page.route('**/api/sidebar**', route => fulfillJson(route, { projects: [], root_conversations: [], project_conversations: {} }))
+  await page.route('**/api/conversations/conv-context-pack', async route => {
+    await metadataGate
+    await fulfillJson(route, CONVERSATION)
+  })
+  let messageRequests = 0
+  await page.route('**/api/conversations/conv-context-pack/messages_page**', async route => {
+    messageRequests += 1
+    releaseSettings()
+    await fulfillJson(route, { messages: EXISTING_MESSAGES, has_more_before: false, oldest_loaded_id: 1, newest_loaded_id: 2 })
+  })
+  await page.goto('/?conversation=conv-context-pack')
+  try {
+    await expect.poll(() => page.evaluate(async () => {
+      const { useSettingsStore } = await import('/src/stores/settingsStore.ts')
+      return useSettingsStore.getState().loaded
+    })).toBe(true)
+    await page.evaluate(async () => { await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame) })
+    expect(messageRequests).toBe(1)
+    await page.evaluate(async () => {
+      const { useSettingsStore } = await import('/src/stores/settingsStore.ts')
+      const state = useSettingsStore.getState()
+      useSettingsStore.setState({ uiLocale: 'zh', refsCardLocale: 'zh', localePreferencesRevision: state.localePreferencesRevision + 1 })
+      await new Promise(requestAnimationFrame); await new Promise(requestAnimationFrame)
+    })
+    expect(messageRequests).toBe(1)
+  } finally {
+    releaseSettings()
+    releaseMetadata()
+  }
+  await expect(page.locator('.kb-msg-bubble-assistant')).toContainText('The baseline reference is available')
+  await expect.poll(() => messageRequests).toBe(2)
 })
 
 test('an unavailable conversation deep link does not loop or create a conversation', async ({ page }) => {
