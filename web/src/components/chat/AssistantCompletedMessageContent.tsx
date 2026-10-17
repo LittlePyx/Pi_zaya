@@ -1,6 +1,6 @@
 import type { MouseEvent } from 'react'
 import type { Message } from '../../api/chat'
-import type { AnswerSourceNoticeViewModel } from './answerSourceNoticeViewModel'
+import { dedupeEvidenceDrawerDetails, type AnswerSourceNoticeViewModel } from './answerSourceNoticeViewModel'
 import { AssistantMessageNotices } from './AssistantMessageNotices'
 import type { CiteDetail } from './citationState'
 import { MarkdownRenderer } from './MarkdownRenderer'
@@ -40,6 +40,7 @@ export function AssistantCompletedMessageContent({
     <>
       <AssistantMessageNotices
         message={message}
+        localEvidenceCount={dedupeEvidenceDrawerDetails(citeDetails).filter((detail) => !detail.isInpaper && detail.sourcePath).length}
         lowConfidenceMeta={lowConfidenceMeta}
         provenanceModeLabel={provenanceModeLabel}
         onOpenEvidence={onOpenEvidence}

@@ -2,6 +2,25 @@ import { expect, test } from '@playwright/test'
 
 const INTERNAL_ROUTE_READY_TIMEOUT_MS = 15_000
 
+test('completed legacy answer exposes its bound evidence without source-summary metadata', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=system-a-citation-popover')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('system-a-citation-popover', { timeout: INTERNAL_ROUTE_READY_TIMEOUT_MS })
+  await page.getByTestId('assistant-source-notice').click()
+  const drawer = page.getByTestId('evidence-drawer')
+  await expect(drawer).toBeVisible()
+  await expect(drawer.getByTestId('evidence-drawer-item')).toHaveCount(1)
+  await expect(drawer.locator('blockquote')).toContainText('NeRF transfers the pixels')
+  await drawer.getByTestId('evidence-open-source').click()
+  await expect(page.getByTestId('message-list-open-payload')).toContainText('"blockId": "p-method-1"')
+})
+
+test('an empty atomic packet cannot expose stale legacy cards through an evidence entry', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=render-packet-empty-citations')
+  await expect(page.getByTestId('message-list-test-scenario')).toContainText('render-packet-empty-citations', { timeout: INTERNAL_ROUTE_READY_TIMEOUT_MS })
+  await expect(page.getByTestId('assistant-source-notice')).toHaveCount(0)
+  await expect(page.getByTestId('evidence-drawer')).toHaveCount(0)
+})
+
 test('completed answer keeps source notice outside Markdown and citations interactive', async ({ page }) => {
   await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')
   await expect(page.getByTestId('message-list-test-scenario')).toContainText(

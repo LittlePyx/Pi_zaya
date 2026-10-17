@@ -13,6 +13,36 @@ EVIDENCE = (
 )
 
 
+@pytest.mark.parametrize('label', ['range', 'range is', 'interval'])
+def test_repeated_interval_without_of_keeps_literal_values_and_existing_source(render, label):
+    answer = (
+        r'DnCNN uses the noise interval $\sigma\in[0,55]$. '
+        f'The Gaussian denoising training {label} [0,55]. '
+        'DnCNN can denoise a test image without estimating its noise level [1].'
+    )
+    body, cards = render(answer)
+    assert body.count('[0,55]') == 2
+    assert '[1](#kb-cite-' in body
+    assert cards
+    assert all(card['source_path'] == 'papers/dncnn.en.md' for card in cards)
+
+
+@pytest.mark.parametrize('claim', [
+    'DnCNN is trained with noise levels from the range [0,99] [1].',
+    'Noise2Self is trained with noise levels from the range [0,55] [1].',
+    'DnCNN requires estimating the test image noise level for the range [0,55] [1].',
+])
+def test_bare_interval_cannot_grant_support_to_wrong_facts(render, claim):
+    test_interval_protection_does_not_grant_support_to_wrong_facts(render, claim)
+
+
+def test_zero_start_data_pair_cannot_become_a_document_one_citation(render):
+    body, cards = render('DnCNN achieves 99 dB accuracy outside [0,1].')
+    assert not cards
+    assert '[1](#' not in body
+    assert '[0,1]' in body
+
+
 @pytest.fixture
 def render(monkeypatch):
     monkeypatch.setattr(refs_renderer, '_is_temp_source_path', lambda path: False)

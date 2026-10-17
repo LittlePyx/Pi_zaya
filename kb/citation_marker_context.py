@@ -18,6 +18,14 @@ def numeric_marker_is_content(text: str, start: int) -> bool:
     prefix = text[max(0, start - 96) : start]
     if re.search(r"(?:\\in|∈|range\s+of)\s*$", prefix, re.I):
         return True
+    # Bare groups can mix invalid zero with valid source IDs. A pair needs
+    # an interval cue; a noun such as "noise level" can precede a real cite.
+    if re.search(
+        r"(?:\b(?:range|interval)(?:\s+(?:of|is))?|\b(?:outside|inside|within|between)|"
+        r"(?:范围|区间)(?:为|是)?)\s*[:：]?\s*$",
+        prefix, re.I,
+    ) and re.match(r"\[\s*[+-]?\d+(?:\.\d+)?\s*,\s*[+-]?\d+(?:\.\d+)?\s*\]", text[start:]):
+        return True
     return False
 
 

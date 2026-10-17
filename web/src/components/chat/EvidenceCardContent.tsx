@@ -44,7 +44,7 @@ export function EvidenceCardContent({
               <span className="kb-cite-pop-section-title">{card.evidenceLabel}</span>
               {card.isEvidenceExcerpt ? <span className="kb-cite-pop-section-hint">{excerptLabel}</span> : null}
             </div>
-            <blockquote>{card.evidencePreview}</blockquote>
+            <blockquote style={{ whiteSpace: 'pre-wrap' }}>{card.evidencePreview}</blockquote>
           </div>
         ) : null}
         {showSupport ? (
@@ -74,7 +74,7 @@ export function EvidenceCardContent({
       {showEvidence ? (
         <div className="kb-evidence-block">
           <div className="kb-evidence-block-label">{card.evidenceLabel}</div>
-          <blockquote>{card.evidencePreview}</blockquote>
+          <blockquote style={{ whiteSpace: 'pre-wrap' }}>{card.evidencePreview}</blockquote>
         </div>
       ) : null}
       {showLocation || showSupport ? (

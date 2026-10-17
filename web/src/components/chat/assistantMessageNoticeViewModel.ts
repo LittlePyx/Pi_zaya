@@ -22,12 +22,14 @@ export function buildAssistantMessageNoticeViewModel({
   provenanceModeLabel,
   showProvenanceModeLabel,
   S,
+  localEvidenceCount = 0,
 }: {
   message: Message
   lowConfidenceMeta: LowConfidenceMetaLite | null
   provenanceModeLabel: string
   showProvenanceModeLabel: boolean
   S: Record<string, string>
+  localEvidenceCount?: number
 }): AssistantMessageNoticeViewModel {
   const noticeText = getMessageNoticeValue(message) || ''
   const isSourceNotice = Boolean(noticeText && isAssistantSourceNoticeText(noticeText))
@@ -37,7 +39,14 @@ export function buildAssistantMessageNoticeViewModel({
     fallbackNoticeText: noticeText,
     allowFallbackNotice: isSourceNotice,
     S,
-  })
+  }) || (localEvidenceCount > 0 ? {
+    label: `${S.msg_evidence_label || 'Evidence'} · ${localEvidenceCount}`,
+    title: S.evidence_local_sources_heading || 'Local evidence sources',
+    kind: 'local_evidence_cards',
+    usesLocalKnowledgeBase: true,
+    usesExternalModel: false,
+    requiresUserNotice: false,
+  } : null)
   const legacySourceNoticeText = !sourceNoticeViewModel && isSourceNotice ? noticeText : ''
   const plainNoticeText = noticeText && !isSourceNotice ? noticeText : ''
   const showLowConfidence = Boolean(lowConfidenceMeta)

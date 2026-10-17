@@ -1089,22 +1089,27 @@ def _system_a_fact_quantities(value: str) -> frozenset[tuple[str, str, str]]:
         "twelve": "12",
     }
     number_word_pattern = "|".join(number_words)
-    for word in re.findall(
+    for word_match in re.finditer(
         rf"(?<![A-Za-z-])(?:{number_word_pattern})(?![A-Za-z-])",
-        surface.lower(),
+        surface,
+        re.IGNORECASE,
     ):
-        normalized = number_words.get(word)
+        normalized = number_words.get(word_match.group(0).lower())
         if normalized is None:
             continue
-        word_match = re.search(
-            rf"(?<![A-Za-z-]){re.escape(word)}(?![A-Za-z-])",
-            surface,
-            re.IGNORECASE,
-        )
         unit = ""
         if word_match:
             continuation = surface[word_match.end() : word_match.end() + 72]
-            continuation = re.split(r"[.!?;。！？；]", continuation, maxsplit=1)[0]
+            # A count belongs to its own noun phrase. In "a single model is
+            # trained on noisy images", images cannot become "1 image". Stop
+            # at another head noun or a clause/preposition boundary, and audit
+            # each occurrence separately ("one image and one frame").
+            continuation = re.split(
+                r"[.!?;。！？；]|\b(?:models?|networks?|algorithms?|systems?|"
+                r"is|are|was|were|has|have|uses?|process(?:es)?|trains?|"
+                r"on|of|for|from|with|by|in|to|and|or|but|which|that)\b",
+                continuation, maxsplit=1, flags=re.IGNORECASE,
+            )[0]
             count_unit = re.search(
                 r"(?i)\b(detectors?|images?|frames?|patterns?|measurements?)\b",
                 continuation,

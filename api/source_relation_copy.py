@@ -101,6 +101,15 @@ _COMPOUND_RELATIONS = (
         "独立且均值为零的像素噪声允许选择每个坐标的单元素集作为分组。",
         "单元素分组的选择明确依赖逐像素独立和零均值两个条件，不能把这一例子推广到任意相关或有偏噪声。",
     ),
+    (
+        (
+            r"expectation\s+of\s+the\s+corrupted\s+input\s+data\s+is\s+the\s+clean\s+target",
+            r"dispose\s+of\s+the\s+clean\s+targets\s+entirely",
+            r"as\s+long\s+as\s+we\s+are\s+able\s+to\s+observe\s+each\s+source\s+image\s+twice",
+        ),
+        "当含噪输入的期望等于干净目标时，可省去干净目标，但每张源图像仍须观测两次。",
+        "该条件关系明确保留了重复观测的数据采集要求，核对训练数据时还须同时检查含噪输入的期望条件。",
+    ),
 )
 
 

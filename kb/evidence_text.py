@@ -425,7 +425,17 @@ def split_evidence_sentences(value: str) -> list[str]:
     text = str(value or "").strip()
     if not text:
         return []
-    return [part.strip() for part in _SENTENCE_SPLIT_RE.split(text) if part.strip()]
+    parts = []
+    start = 0
+    for boundary in _SENTENCE_SPLIT_RE.finditer(text):
+        # A reference label belongs to its sentence. Splitting after Eq./Fig.
+        # makes the numeric fragment look unusable and silently drops it.
+        if re.search(r"\b(?:eqs?|figs?)\.$", text[:boundary.start()], re.I):
+            continue
+        parts.append(text[start:boundary.start()].strip())
+        start = boundary.end()
+    parts.append(text[start:].strip())
+    return [part for part in parts if part]
 
 
 def looks_fragmentary_sentence(value: str) -> bool:

@@ -117,36 +117,51 @@ export function useReaderLocateEngine({
 
   useEffect(() => {
     if (!open || !drawerReady || !markdown) return
-    const sticky = stickyLocateHighlightRef.current
-    if (!sticky) return
     const root = contentRef.current
     if (!root) return
+    let raf = 0
+    const restoreStickyFocus = (scroll = false) => {
+      const sticky = stickyLocateHighlightRef.current
+      if (!sticky || !root.isConnected) return
+      const target = resolveStickyHighlightTarget(root, readerBlocks, sticky)
+      if (!target) return
+      const focusedBlock = closestReadableBlock(target) || target
+      if (focusedBlock.classList.contains('kb-reader-focus')) return
 
-    clearReaderFocusClasses(root)
-    const target = resolveStickyHighlightTarget(root, readerBlocks, sticky)
-    if (!target) return
-    const focusedBlock = closestReadableBlock(target) || target
-    focusedBlock.classList.add('kb-reader-focus')
-    const inlineFormulaTarget = sticky.anchorKind === 'inline_formula'
-      ? resolveInlineFormulaTarget(focusedBlock, sticky.highlightSeed)
-      : null
-    if (inlineFormulaTarget && inlineFormulaTarget !== focusedBlock) {
-      inlineFormulaTarget.classList.add('kb-reader-focus-secondary')
-    }
-    resolveRelatedTargetNodes(root, readerBlocks, sticky.relatedBlockIds || [], focusedBlock)
-      .forEach((node) => node.classList.add('kb-reader-focus-secondary'))
-    if (sticky.highlightQueries.length > 0 && !root.querySelector('.kb-reader-inline-hit')) {
-      for (const query of sticky.highlightQueries) {
-        const hit = highlightExactTextInContainer(focusedBlock, query)
-        if (hit) break
+      clearReaderFocusClasses(root)
+      focusedBlock.classList.add('kb-reader-focus')
+      const inlineFormulaTarget = sticky.anchorKind === 'inline_formula'
+        ? resolveInlineFormulaTarget(focusedBlock, sticky.highlightSeed)
+        : null
+      if (inlineFormulaTarget && inlineFormulaTarget !== focusedBlock) {
+        inlineFormulaTarget.classList.add('kb-reader-focus-secondary')
       }
+      resolveRelatedTargetNodes(root, readerBlocks, sticky.relatedBlockIds || [], focusedBlock)
+        .forEach((node) => node.classList.add('kb-reader-focus-secondary'))
+      if (sticky.highlightQueries.length > 0 && !root.querySelector('.kb-reader-inline-hit')) {
+        for (const query of sticky.highlightQueries) {
+          const hit = highlightExactTextInContainer(focusedBlock, query)
+          if (hit) break
+        }
+      }
+      const scrollTarget = inlineFormulaTarget || focusedBlock
+      if (scroll) raf = window.requestAnimationFrame(() => {
+        if (!root.isConnected || !scrollTarget.isConnected) return
+        scrollReaderTargetIntoView(root, scrollTarget)
+      })
     }
-    const scrollTarget = inlineFormulaTarget || focusedBlock
-    const raf = window.requestAnimationFrame(() => {
-      if (!root.isConnected || !scrollTarget.isConnected) return
-      scrollReaderTargetIntoView(root, scrollTarget)
+    restoreStickyFocus(true)
+    // Markdown children can remount after locale/settings hydration without
+    // changing the source. Reapply only the verified sticky identity; avoid
+    // moving the reader's viewport or reacting to our own highlight edits.
+    const observer = new MutationObserver(() => {
+      if (!stickyLocateHighlightRef.current || root.querySelector('.kb-reader-focus')) return
+      window.cancelAnimationFrame(raf)
+      raf = window.requestAnimationFrame(() => restoreStickyFocus())
     })
+    observer.observe(root, { childList: true, subtree: true })
     return () => {
+      observer.disconnect()
       window.cancelAnimationFrame(raf)
     }
   }, [
@@ -155,6 +170,8 @@ export function useReaderLocateEngine({
     markdown,
     readerBlocks,
     equationBindingReady,
+    sourcePath,
+    locateRequestId,
     contentRef,
   ])
 

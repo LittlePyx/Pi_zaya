@@ -97,7 +97,9 @@ export function buildSystemAEvidenceCardModel({
   const takeawayText = !isSystemB && cardTakeaway && !substantiallySame(cardTakeaway, evidenceText)
     ? cardTakeaway
     : ''
-  const evidencePreviewText = evidencePreview(evidenceText, SYSTEM_A_EVIDENCE_PREVIEW_LIMIT)
+  const evidencePreviewText = detail.evidenceSource === 'verified_source_excerpt'
+    ? evidenceText
+    : evidencePreview(evidenceText, SYSTEM_A_EVIDENCE_PREVIEW_LIMIT)
   const hasReviewRisk = Boolean(
     hasBindingState
     || cardWarning
