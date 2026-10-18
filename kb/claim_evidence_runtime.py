@@ -639,6 +639,7 @@ def _meaningful_numbers(text: str) -> list[str]:
 
 def _is_epistemic_retrieval_limit(plain: str) -> bool:
     """Recognize complete, nonnumeric limits on what retrieved evidence proves."""
+    plain = re.sub(r"^结论[：:]\s*", "", plain)
     return bool(
         (re.fullmatch(
             r"(?:(?:这|此)(?:只能|仅能|仅)(?:说明|表明)(?:所引|当前引用|当前检索)"
@@ -648,9 +649,11 @@ def _is_epistemic_retrieval_limit(plain: str) -> bool:
             r"(?:没有|不存在)[^，,。；;!?]{1,32}[。.]?",
             plain,
         ) or re.fullmatch(
-            r"(?:仅凭|仅依据|依据|根据)?(?:当前|本轮)(?:引用|检索)(?:到的)?"
-            r"(?:片段|证据|窗口|结果)[，,]?\s*"
-            r"(?:无法|不能|不足以)(?:确认|确定|断言|证明|支持|提供|给出)"
+            r"(?:仅凭|仅依据|依据|根据)?(?:(?:当前|本轮)(?:引用|检索)(?:到的)?"
+            r"(?:片段|证据|窗口|结果|内容)|"
+            r"(?:所选|这些|上述|这[一二三四五六七八九十两几]+篇)(?:论文|文献)(?:的)?"
+            r"检索(?:片段|证据|窗口|结果|内容))[，,]?\s*"
+            r"(?:无法|不能|不足以|不)(?:确认|确定|断言|证明|支持|提供|给出)"
             r"[^，,。；;!?]{1,64}"
             r"(?:[，,](?:因此|因而|也)?(?:无法|不能|不足以)"
             r"(?:确认|确定|断言|证明|支持|提供|给出)[^，,。；;!?]{1,64})?[。.]?",
@@ -677,6 +680,9 @@ def _is_high_risk_claim(unit: str) -> bool:
         return False
     if re.search(r"[?？]\s*$", plain):
         return False
+    # Reading advice cannot turn an unverified inability into a non-factual aside.
+    if re.search(r"(?:不(?:能|会)?|无法)(?:提供|给出)", plain):
+        return True
     if re.match(r"^(?:这|these\b).{0,80}(?:建议|recommend)", plain, flags=re.IGNORECASE):
         return False
     if re.search(r"(?:搭配|一起)(?:读|阅读)", plain, flags=re.IGNORECASE):

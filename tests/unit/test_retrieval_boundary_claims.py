@@ -66,3 +66,27 @@ def test_scoped_modal_prefix_does_not_license_an_affirmative_tail() -> None:
     repaired, meta = _strict(answer)
     assert not repaired
     assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+@pytest.mark.parametrize(("answer", "retained"), [
+    ("这两篇去噪论文只能作为方法背景，不能提供该试验数据。", ""),
+    ("建议另外查找研究；这篇论文无法提供该试验数据。", "建议另外查找研究。"),
+    ("阅读建议：该论文不能给出患者人数。", ""),
+    ("当前选中的两篇去噪论文本身不提供该证据。", ""),
+])
+def test_reading_advice_cannot_assert_unverified_paper_inability(answer: str, retained: str) -> None:
+    repaired, meta = _strict(answer)
+    assert repaired == retained
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+@pytest.mark.parametrize("answer", [
+    "结论：仅依据这两篇论文的检索内容，无法给出所问临床试验数据。",
+    "仅凭所选文献的检索片段，不能提供该试验患者人数。",
+    "当前检索内容无法给出所问试验结果。",
+    "当前检索片段不提供所问试验结果。",
+])
+def test_retrieval_content_inability_keeps_its_explicit_scope(answer: str) -> None:
+    repaired, meta = _strict(answer)
+    assert repaired == answer
+    assert meta["dropped_unsupported_unplanned_claims"] == 0
