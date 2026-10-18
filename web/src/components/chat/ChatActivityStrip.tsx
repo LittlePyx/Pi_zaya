@@ -18,7 +18,6 @@ export function ChatActivityStrip({
   debugSnapshot: ChatPerfSnapshot
   labels: Record<string, string>
 }) {
-  if (!debugEnabled && items.length <= 0) return null
   return (
     <div className="kb-chat-activity-shell">
       <div className="kb-chat-activity-strip" data-testid="chat-activity-strip" aria-live="polite">

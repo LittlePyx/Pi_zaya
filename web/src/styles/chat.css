@@ -13,17 +13,20 @@
 
 .kb-chat-activity-strip {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
   max-width: 80rem;
-  min-height: 26px;
+  /* Background tasks must not move a control between pointer down and up. */
+  height: 34px;
+  overflow-x: auto;
   margin: 0 auto;
 }
 
 .kb-chat-activity-pill,
 .kb-chat-debug-strip {
   display: inline-flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 6px;
   min-width: 0;
