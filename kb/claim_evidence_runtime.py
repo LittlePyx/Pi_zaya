@@ -337,7 +337,8 @@ def _split_claim_segments(value: str) -> list[str]:
         protected,
     )
     parts = re.split(
-        r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)\]]\.)\s+(?=[A-Z\u4e00-\u9fff])",
+        r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)\]]\.)\s+(?=[A-Z\u4e00-\u9fff])|"
+        r"(?<=[A-Za-z0-9\)\]]\.\*\*)\s+(?=[A-Z\u4e00-\u9fff])",
         protected,
     )
     restored: list[str] = []
@@ -653,11 +654,20 @@ def _is_epistemic_retrieval_limit(plain: str) -> bool:
             r"(?:片段|证据|窗口|结果|内容)|"
             r"(?:所选|这些|上述|这[一二三四五六七八九十两几]+篇)(?:论文|文献)(?:的)?"
             r"检索(?:片段|证据|窗口|结果|内容))[，,]?\s*"
-            r"(?:无法|不能|不足以|不)(?:确认|确定|断言|证明|支持|提供|给出)"
+            r"(?:(?:无法|不能|不足以|不)(?:确认|确定|断言|证明|支持|提供|给出)|"
+            r"找不到|未找到|未检索到)"
             r"[^，,。；;!?]{1,64}"
             r"(?:[，,](?:因此|因而|也)?(?:无法|不能|不足以)"
             r"(?:确认|确定|断言|证明|支持|提供|给出)[^，,。；;!?]{1,64})?[。.]?",
             plain,
+        ) or re.fullmatch(
+            r"(?:the\s+)?(?:current|selected)\s+(?:(?:retrieved|cited)\s+)?"
+            r"(?:evidence|snippets?|excerpts?|passages?)\s+"
+            r"(?:cannot|can't|can\s+not|does\s+not|do\s+not)\s+"
+            r"(?:establish|confirm|determine|prove|support|provide|show)\s+"
+            r"[^.!?;,]{1,280}\.?",
+            plain,
+            flags=re.IGNORECASE,
         ))
         and not _meaningful_numbers(plain)
     )

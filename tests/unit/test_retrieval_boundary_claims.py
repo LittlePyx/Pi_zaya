@@ -90,3 +90,48 @@ def test_retrieval_content_inability_keeps_its_explicit_scope(answer: str) -> No
     repaired, meta = _strict(answer)
     assert repaired == answer
     assert meta["dropped_unsupported_unplanned_claims"] == 0
+
+
+@pytest.mark.parametrize("answer", [
+    "结论：仅依据这两篇论文的检索内容，找不到它们共同参与的同一项随机临床试验，因此无法给出患者人数或诊断敏感度差值。",
+    "当前检索片段未找到该实验，因此无法给出试验人数。",
+    "当前检索片段未检索到所问对照试验。",
+])
+def test_failed_evidence_search_is_not_full_paper_nonexistence(answer: str) -> None:
+    repaired, meta = _strict(answer)
+    assert repaired == answer
+    assert meta["dropped_unsupported_unplanned_claims"] == 0
+
+
+@pytest.mark.parametrize("answer", [
+    "仅依据这两篇论文的检索内容，找不到该试验，但作者报告了120名患者。",
+    "当前检索片段未找到该试验，证明这两篇论文不存在该试验。",
+    "当前检索片段未找到120名患者的试验。",
+])
+def test_search_limit_cannot_assert_experiment_numbers_or_nonexistence(answer: str) -> None:
+    repaired, meta = _strict(answer)
+    assert not repaired
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+def test_bold_english_evidence_limit_survives_unsupported_following_sentence() -> None:
+    boundary = (
+        "**The current retrieved evidence cannot establish a universal ranking that "
+        "Self2Self is always more accurate than Noisier2Noise across every noise "
+        "distribution and every image.**"
+    )
+    answer = boundary + " The experiment reports 120 patients."
+    repaired, meta = _strict(answer)
+    assert repaired == boundary
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
+
+
+@pytest.mark.parametrize("suffix", [
+    ", but the experiment reports 120 patients.",
+    "; the experiment reports 120 patients.",
+])
+def test_english_evidence_limit_does_not_license_patient_numbers(suffix: str) -> None:
+    answer = "The current retrieved evidence cannot confirm a clinical trial" + suffix
+    repaired, meta = _strict(answer)
+    assert "120" not in repaired
+    assert meta["dropped_unsupported_unplanned_claims"] == 1
