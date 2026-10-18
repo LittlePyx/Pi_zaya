@@ -1,6 +1,12 @@
 import type { ReaderDocBlock } from '../../../api/references'
 import { mixedEquationProse, mixedProseText } from './readerAstIdentity'
 
+export function mixedProseHighlightSeed(target: HTMLElement, quote: string): string {
+  return target.getAttribute('data-kb-source-prose') === '1'
+    ? mixedProseText(quote.split('$$')[0])
+    : quote
+}
+
 export function resolveMixedEquationProseTarget(root: HTMLElement, block: ReaderDocBlock | null, quote: string): HTMLElement | null {
   if (!block || block.kind !== 'equation' || !block.block_id || !block.anchor_id) return null
   const prefix = mixedEquationProse(String(block.raw_text || block.text || ''))

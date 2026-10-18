@@ -13,6 +13,27 @@ test('mixed equation source identity requires its complete prose and actual sour
   expect(mixedEquationProseMatches(node, { ...item, token: { text: '$$R(f)=Q(f)+V$$' } })).toBe(false)
 })
 
+test('verified mixed-source prose highlights its complete visible phrase across emphasis', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')
+  const result = await page.evaluate(async () => {
+    const { resolveDirectTargetNode, buildHighlightQueries, highlightExactTextInContainer } = await import('/src/components/chat/reader/readerDomUtils.ts')
+    const { mixedProseHighlightSeed } = await import('/src/components/chat/reader/mixedEquationTarget.ts')
+    const prose = 'Proposition 9. Assume independent observations with zero mean noise.'
+    const source = '**Proposition 9.** Assume independent observations with zero mean noise.\n$$R(f)=Q(f)+V$$'
+    const root = document.createElement('article')
+    root.innerHTML = '<p data-kb-source-prose="1" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9"><strong>Proposition 9.</strong> Assume independent observations with zero mean noise.</p><div class="katex-display" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9">R(f)=Q(f)+V</div>'
+    document.body.append(root)
+    const block = { block_id: 'mixed-9', anchor_id: 'eq-9', kind: 'equation', raw_text: source, text: source }
+    const target = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: source }).target!
+    const seed = mixedProseHighlightSeed(target, source)
+    const hit = buildHighlightQueries(seed, { anchorKind: 'paragraph' }).map((query) => highlightExactTextInContainer(target, query)).find(Boolean)
+    const changed = highlightExactTextInContainer(target, seed.replace('zero mean', 'nonzero mean'))
+    const math = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: '$$R(f)=Q(f)+V$$' }).target!
+    return { proseTarget: target.tagName === 'P', exact: hit?.textContent === prose, changedRejected: !changed, mathPreserved: mixedProseHighlightSeed(math, '$$R(f)=Q(f)+V$$') === '$$R(f)=Q(f)+V$$' }
+  })
+  expect(result).toEqual({ proseTarget: true, exact: true, changedRejected: true, mathPreserved: true })
+})
+
 test('literal evidence selection keeps native clipboard newlines and partial selections', async ({ page }) => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
   await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')

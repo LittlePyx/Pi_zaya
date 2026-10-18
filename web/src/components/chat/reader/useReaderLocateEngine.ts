@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import type { ReaderDocBlock } from '../../../api/references'
+import { mixedProseHighlightSeed } from './mixedEquationTarget'
 import type {
   ReaderLocateCandidate,
   ReaderLocateResult,
@@ -705,7 +706,7 @@ export function useReaderLocateEngine({
         ? Math.floor(Number(activeAnchorNumber || readerBlockHint?.number || 0))
         : 0
       let nextLocateHint = ''
-      const highlightSeed = String(activeHighlightSnippet || activeFocusSnippet || readerBlockHint?.text || '').trim()
+      const highlightSeed = mixedProseHighlightSeed(target, String(activeHighlightSnippet || activeFocusSnippet || readerBlockHint?.text || '').trim())
       const highlightQueries = buildHighlightQueries(highlightSeed, {
         anchorKind: anchorKindForLocate,
         anchorNumber: anchorNumberForLocate,
