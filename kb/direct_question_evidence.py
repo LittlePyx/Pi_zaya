@@ -3,8 +3,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from kb.source_blocks import load_source_blocks
-from kb.source_blocks import normalize_match_text
+from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
+from kb.citation_sentences import citation_sentence_spans
+from kb.source_question_facets import requests_comparison_facets, requests_source_facets, source_facet_quote, source_facet_score
 from kb.n2n_target_condition import (
     _verified_block, attach_target_condition_slot, corruption_condition_question, target_condition_quote,
 )
@@ -19,10 +20,10 @@ def selected_source_evidence_prompt(question: str, query_variants: list[str]) ->
 
 
 def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) -> dict:
-    """Carry verified page-local statement blocks into the existing audit quotes.
+    """Carry verified statement and method passages into existing audit quotes.
 
     Keep the primary card's quote and locator unchanged. Supplementary blocks
-    retain their own locators, and are never borrowed from another page/paper.
+    retain their own locators; another page never inherits the primary locator.
     """
     result = dict(plan or {}) if isinstance(plan, dict) else {}
     sources: dict[str, list[dict]] = {}
@@ -95,7 +96,7 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                     text = str(row.get("text") or "").strip()
                     if (
                         block
-                        and block.get("page_start") == page
+                        and (block.get("page_start") == page or row.get("direct_question_method_facet_score", 0) > 0)
                         and text
                         and normalize_match_text(text)
                         in normalize_match_text(
@@ -107,7 +108,7 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                                 "text": text,
                                 "block_id": block["block_id"],
                                 "anchor_id": block.get("anchor_id"),
-                                "page_start": page,
+                                **{k: block.get(k) for k in ("page_start", "page_end", "heading_path")},
                                 "source_path": path,
                             }
                         )
@@ -116,6 +117,9 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                     # later reference enrichment cannot replace this locator.
                     slot["evidence_selection_reason"] = "prompt_contract_block"
                     slot["strict_locate"] = True
+                    if any(r.get("direct_question_method_facet_score", 0) > 0 for r in rows):
+                        slot["source_passage_bundle"] = True
+                        slot["direct_method_facets"] = True
                     slot["source_evidence_quotes"] = list(
                         dict.fromkeys(
                             [
@@ -141,7 +145,7 @@ def prioritize_direct_question_hits(
         for hit in candidates
         if (hit.get("meta") or {}).get("direct_question_evidence")
     ]
-    if corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
+    if requests_comparison_facets(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
         # Supplemental/facet scans can deduplicate an earlier direct hit into
         # a generic row. Re-read only the already scoped candidate sources.
         fresh = []
@@ -171,12 +175,40 @@ def prioritize_direct_question_hits(
         if key not in seen:
             seen.add(key)
             out.append(hit)
+    # A direct statement and its nearby equations can fill the entire budget.
+    # Retain the other selected source's evidence before adding more context.
+    groups: dict[str, list[dict]] = {}
+    for hit in out:
+        groups.setdefault(str((hit.get("meta") or {}).get("source_path") or ""), []).append(hit)
+    if len(groups) > 1:
+        balanced = []
+        for group in groups.values():
+            if group and len(balanced) < limit:
+                balanced.append(group.pop(0))
+        while len(balanced) < limit and any(groups.values()):
+            # After each source has its primary evidence, cover separately
+            # requested method relations before optional theorem context.
+            preferred = [group for group in groups.values() if group and
+                         (group[0].get("meta") or {}).get("direct_question_method_facet_score", 0) > 0]
+            for group in preferred or groups.values():
+                if group and len(balanced) < limit:
+                    balanced.append(group.pop(0))
+        return balanced
     return out[:limit]
 
 
 _STATEMENT = re.compile(
     r"(?i)(proposition|theorem|lemma|definition|命题|定理|引理|定义)\s*(\d+)"
 )
+_EQUATION_QUERY = re.compile(
+    r"(?i)(?:\b(?:equations?|eqs?\.?|formulas?)|公式|方程|等式)\s*"
+    r"([（(]?\d{1,4}[)）]?(?:\s*(?:and|与|和|及|,|，)\s*[（(]?\d{1,4}[)）]?){0,3})"
+)
+
+
+def _requested_equation_numbers(prompt: str) -> set[int]:
+    return {int(n) for match in _EQUATION_QUERY.finditer(prompt)
+            for n in re.findall(r"\d+", match[1]) if int(n) > 0}
 _INTERVAL_QUESTION = re.compile(
     r"(?i)(?:noise.{0,45}(?:interval|range)|(?:interval|range).{0,45}noise|噪声.{0,20}(?:范围|区间))"
 )
@@ -285,6 +317,9 @@ def _output_relation_score(text: str) -> int:
 
 def _requested_facet_score(prompt: str, text: str) -> int:
     """Locate explicit source statements, never infer facts from paper names."""
+    method_facet = source_facet_score(prompt, text)
+    if method_facet:
+        return method_facet
     if _QUALITY_BOUNDARY_QUESTION.search(prompt):
         return 16 if quality_boundary_quote(text) else 0
     if _CALIBRATION_QUESTION.search(prompt):
@@ -338,6 +373,8 @@ def _requested_facet_score(prompt: str, text: str) -> int:
 def requests_direct_question_evidence(prompt: str) -> bool:
     return bool(
         _STATEMENT.search(prompt)
+        or _requested_equation_numbers(prompt)
+        or requests_source_facets(prompt)
         or _INTERVAL_QUESTION.search(prompt)
         or _VARIANCE_QUESTION.search(prompt)
         or _TASK_LIST_QUESTION.search(prompt)
@@ -377,6 +414,24 @@ def direct_question_evidence_hits(
         return []
     blocks = list(load_source_blocks(md_path))
     statement = _STATEMENT.search(prompt)
+    aliases = {"命题": "proposition", "定理": "theorem", "引理": "lemma", "定义": "definition"}
+
+    def matches_statement(text: str) -> bool:
+        label = _STATEMENT.match(normalize_match_text(text))
+        return bool(label and statement and label[2] == statement[2]
+                    and aliases.get(label[1].lower(), label[1].lower())
+                    == aliases.get(statement[1].lower(), statement[1].lower()))
+
+    # A comparison may request a numbered statement from one paper and an
+    # independent method facet from another. Missing numbers still grant no
+    # statement evidence; only the separately requested literal facet is read.
+    if statement and requests_comparison_facets(prompt) and not any(
+        b.get("kind") not in {"heading", "figure", "code"}
+        and "reference" not in str(b.get("heading_path") or "").lower()
+        and matches_statement(str(b.get("raw_text") or b.get("text") or "")) for b in blocks
+    ):
+        statement = None
+    equation_numbers = _requested_equation_numbers(prompt)
     requested_pages = {
         int(a or b) for a, b in re.findall(r"第\s*(\d+)\s*页|\bpage\s+(\d+)\b", prompt, re.I)
     }
@@ -385,39 +440,44 @@ def direct_question_evidence_hits(
     for index, block in enumerate(blocks):
         text = str(block.get("raw_text") or block.get("text") or "")
         if (
-            block.get("kind") in {"heading", "figure"}
+            block.get("kind") in {"heading", "figure", "code"}
             or "reference" in str(block.get("heading_path") or "").lower()
             or (len(requested_pages) == 1 and block.get("page_start") not in requested_pages)
         ):
             continue
         selected = [index]
         if statement:
-            label = _STATEMENT.match(text.strip())
-            aliases = {
-                "命题": "proposition",
-                "定理": "theorem",
-                "引理": "lemma",
-                "定义": "definition",
-            }
-            if (
-                not label
-                or aliases.get(label[1].lower(), label[1].lower())
-                != aliases.get(statement[1].lower(), statement[1].lower())
-                or label[2] != statement[2]
-            ):
+            if not matches_statement(text):
                 continue
             for following in range(index + 1, min(len(blocks), index + 7)):
                 row = blocks[following]
                 if (
-                    row.get("kind") == "heading"
+                    row.get("kind") in {"heading", "code"}
                     or row.get("page_start") != block.get("page_start")
                     or _STATEMENT.match(
-                        str(row.get("raw_text") or row.get("text") or "").strip()
+                        normalize_match_text(str(row.get("raw_text") or row.get("text") or ""))
                     )
                 ):
                     break
                 if row.get("kind") != "figure":
                     selected.append(following)
+        elif equation_numbers:
+            if block.get("kind") != "equation" or extract_equation_number(text) not in equation_numbers:
+                continue
+            if index > 0:
+                before = blocks[index - 1]
+                if before.get("kind") == "paragraph" and before.get("page_start") == block.get("page_start"):
+                    selected.insert(0, index - 1)
+            for following in range(index + 1, min(len(blocks), index + 4)):
+                row = blocks[following]
+                raw = str(row.get("raw_text") or row.get("text") or "")
+                if (row.get("page_start") != block.get("page_start")
+                    or row.get("kind") in {"heading", "code", "figure"}
+                    or _STATEMENT.match(normalize_match_text(raw))):
+                    break
+                if row.get("kind") == "equation" and extract_equation_number(raw) not in equation_numbers:
+                    break
+                selected.append(following)
         elif _SINGLETON_QUESTION.search(prompt):
             if not re.search(r"\bsingletons?\b", text, re.I) or "=" not in text:
                 continue
@@ -493,6 +553,15 @@ def direct_question_evidence_hits(
         return []
     candidates.sort(key=lambda row: (-row[0], row[1]))
     chosen = candidates[0][2]
+    if requests_source_facets(prompt) and not statement and not equation_numbers:
+        chosen = list(dict.fromkeys(i for _, _, bundle in candidates for i in bundle))
+    if equation_numbers and not statement:
+        chosen = sorted({i for _, _, bundle in candidates for i in bundle})
+        equations = [i for i in chosen if blocks[i].get("kind") == "equation"]
+        context = [i for i in chosen if i not in equations]
+        context.sort(key=lambda i: (-len(query_words & set(re.findall(
+            r"[a-z]{4,}", str(blocks[i].get("raw_text") or "").lower()))), i))
+        chosen = (context[:1] + equations + context[1:]) if len(equations) < limit else equations
     if _NOISY_TARGET_EXPECTATION_QUESTION.search(prompt):
         # The theorem states invariance; the separate observation premise says
         # which clean target the noisy observation estimates. Keep both facets.
@@ -522,8 +591,14 @@ def direct_question_evidence_hits(
     for index in chosen[: max(1, limit)]:
         block = blocks[index]
         text = str(block.get("raw_text") or block.get("text") or "").strip()
+        method_facet = source_facet_score(prompt, text) if not statement and not equation_numbers else 0
+        if method_facet:
+            text = source_facet_quote(prompt, text)
         if _QUALITY_BOUNDARY_QUESTION.search(prompt):
             text = quality_boundary_quote(text)
+        elif _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
+            text = next((text[start:end].strip() for start, end in citation_sentence_spans(text)
+                         if _requested_facet_score(prompt, text[start:end]) >= 16), text)
         elif _TASK_LIST_QUESTION.search(prompt):
             text = application_enumeration_quote(text) or text
         elif _TRAINING_OBSERVATION_QUESTION.search(prompt):
@@ -555,6 +630,7 @@ def direct_question_evidence_hits(
                     },
                     "source_path": str(md_path),
                     "direct_question_evidence": True,
+                    "direct_question_method_facet_score": method_facet,
                     "direct_question_enumeration_score": _task_list_score(text) if _TASK_LIST_QUESTION.search(prompt) else 0,
                     "paper_guide_targeted_block": True,
                     "evidence_selection_reason": "requested_source_statement",

@@ -1,4 +1,47 @@
 import { expect, test } from '@playwright/test'
+import { copyLiteralEvidenceSelection } from '../../src/components/chat/literalEvidenceClipboard'
+import { mixedEquationProseMatches } from '../../src/components/chat/reader/readerAstIdentity'
+
+test('mixed equation source identity requires its complete prose and actual source line range', () => {
+  const prose = 'Proposition 9. Assume independent observations with zero mean noise.'
+  const item = { kind: 'equation', token: { text: `**Proposition 9.** Assume independent observations with zero mean noise.\n$$R(f)=Q(f)+V$$` }, lineStart: 7, lineEnd: 10 }
+  const node = { value: prose, position: { start: { line: 7 }, end: { line: 7 } } }
+  expect(mixedEquationProseMatches(node, item)).toBe(true)
+  expect(mixedEquationProseMatches({ ...node, value: prose.replace('zero mean', 'nonzero mean') }, item)).toBe(false)
+  expect(mixedEquationProseMatches({ ...node, position: { start: { line: 17 }, end: { line: 17 } } }, item)).toBe(false)
+  expect(mixedEquationProseMatches(node, { ...item, kind: 'paragraph' })).toBe(false)
+  expect(mixedEquationProseMatches(node, { ...item, token: { text: '$$R(f)=Q(f)+V$$' } })).toBe(false)
+})
+
+test('literal evidence selection keeps native clipboard newlines and partial selections', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')
+  const literal = '**Proposition 9.** Assume independent observations.\n$$\nR(f)=Q(f)+V\n$$'
+  await page.evaluate(({ literal, handler }) => {
+    const quote = document.createElement('blockquote')
+    quote.id = 'literal-copy-regression'
+    quote.style.whiteSpace = 'pre-wrap'
+    quote.textContent = literal
+    quote.addEventListener('copy', (0, eval)(`(${handler})`))
+    document.body.append(quote)
+    const range = document.createRange()
+    range.selectNodeContents(quote)
+    getSelection()?.removeAllRanges()
+    getSelection()?.addRange(range)
+  }, { literal, handler: copyLiteralEvidenceSelection.toString() })
+  await page.keyboard.press('Control+c')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(literal)
+  await page.evaluate(() => {
+    const quote = document.getElementById('literal-copy-regression')!
+    const range = document.createRange()
+    range.setStart(quote.firstChild!, 19)
+    range.setEnd(quote.firstChild!, quote.textContent!.length)
+    getSelection()?.removeAllRanges()
+    getSelection()?.addRange(range)
+  })
+  await page.keyboard.press('Control+c')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(literal.slice(19))
+})
 import {
   citationFormats,
   cleanCitationDisplayText,

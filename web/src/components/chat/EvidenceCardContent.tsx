@@ -1,4 +1,5 @@
 import type { EvidenceCardViewModel } from './evidenceCardViewModel'
+import { LiteralEvidenceQuote } from './LiteralEvidenceQuote'
 
 type EvidenceCardContentVariant = 'drawer' | 'citation-system-a'
 
@@ -44,7 +45,7 @@ export function EvidenceCardContent({
               <span className="kb-cite-pop-section-title">{card.evidenceLabel}</span>
               {card.isEvidenceExcerpt ? <span className="kb-cite-pop-section-hint">{excerptLabel}</span> : null}
             </div>
-            <blockquote style={{ whiteSpace: 'pre-wrap' }}>{card.evidencePreview}</blockquote>
+            <LiteralEvidenceQuote>{card.evidencePreview}</LiteralEvidenceQuote>
           </div>
         ) : null}
         {showSupport ? (
@@ -74,7 +75,7 @@ export function EvidenceCardContent({
       {showEvidence ? (
         <div className="kb-evidence-block">
           <div className="kb-evidence-block-label">{card.evidenceLabel}</div>
-          <blockquote style={{ whiteSpace: 'pre-wrap' }}>{card.evidencePreview}</blockquote>
+          <LiteralEvidenceQuote>{card.evidencePreview}</LiteralEvidenceQuote>
         </div>
       ) : null}
       {showLocation || showSupport ? (

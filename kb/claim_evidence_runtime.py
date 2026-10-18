@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from kb.explicit_noise_relations import iid_relation_covered
+
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -245,6 +247,7 @@ _STOPWORDS = {
 }
 
 _CONCEPT_GROUPS = (
+    ("i.i.d.", "independent and identically distributed", "independently and identically distributed", "独立同分布"),
     (
         "physical noise model",
         "real-world physical noise model",
@@ -861,7 +864,7 @@ def _explicit_per_source_evidence_request(prompt: str, *, source_count: int) -> 
     explicit_comparison = bool(
         count >= 2
         and re.search(
-            r"(?:对比|比较|区别|差异|不要.{0,24}混|"
+            r"(?:对比|比较|区别|差异|分别.{0,12}(?:指出|说明|给出|引用)|不要.{0,24}混|"
             r"\bcompare\b|\bcontrast\b|\bdiffer(?:ence|ent)\b|"
             r"\bdo\s+not\s+(?:mix|conflate)\b)",
             surface,
@@ -898,10 +901,9 @@ def _enforce_named_source_section_citations(
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """Bind explicitly named paper claims to each paper's own hit.
 
-    This pass is intentionally limited to comparisons that request evidence for
-    at least four papers. It prevents a semantically plausible sentence under
-    one paper heading or in the cross-paper synthesis from borrowing a citation
-    belonging to another paper.
+    Explicit comparisons and per-paper requests retain each named source's
+    evidence. Bold headings use the full support threshold; naming a paper
+    cannot grant support to an unsupported fact or another paper's result.
     """
 
     source_count = sum(1 for hit in answer_hits if hit)
@@ -913,14 +915,18 @@ def _enforce_named_source_section_citations(
     dropped: list[dict[str, Any]] = []
     in_fence = False
     section_hit_index = 0
+    bold_section = False
     for raw_line in str(answer or "").splitlines():
         stripped = raw_line.strip()
         if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
             output_lines.append(raw_line)
             continue
-        if _HEADING_RE.match(stripped):
+        if not in_fence and (_HEADING_RE.match(stripped) or re.fullmatch(r"\*\*[^*\n]{1,160}\*\*(?:\s*\[\d{1,5}\])*", stripped)):
+            bold_section = stripped.startswith("**")
             section_hit_index = _section_source_hit_index(stripped, answer_hits)
+            if bold_section and len(_mentioned_source_hit_indexes(stripped, answer_hits)) != 1:
+                section_hit_index = 0
             output_lines.append(raw_line)
             continue
         if (
@@ -972,7 +978,7 @@ def _enforce_named_source_section_citations(
             }
             required_score = (
                 min(3, max(1, int(min_support_score)))
-                if section_hit_index > 0
+                if section_hit_index > 0 and not bold_section
                 else max(1, int(min_support_score))
             )
             if any(score < required_score for score in scores.values()):
@@ -1176,6 +1182,8 @@ def _support_score(
     evidence_text = str(evidence or "")
     evidence_norm = re.sub(r"\s+", " ", evidence_text).lower()
     if not claim_plain or not evidence_norm:
+        return 0
+    if not iid_relation_covered(claim_plain, evidence_text):
         return 0
     if method_identity_conflicts(claim_plain, evidence_text):
         return 0

@@ -226,6 +226,10 @@ def prepare_markdown_for_index(
     should_attempt_repair = action_before_repair == "autofix" or (
         action_before_repair == "reconvert"
         and bool({"missing_images", "source_page_text_corruption"}.intersection(issue_codes_before_repair))
+    ) or (
+        "out_of_order_sections" in issue_codes_before_repair
+        and source_pdf_path is not None
+        and Path(source_pdf_path).is_file()
     )
     if bool(auto_repair) and should_attempt_repair:
         try:

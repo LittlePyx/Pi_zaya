@@ -406,6 +406,7 @@ export function useReaderLocateEngine({
         blockId: activeBlockId,
         anchorId: activeAnchorId,
         anchorKind: activeAnchorKind,
+        evidenceQuote: activeHighlightSnippet || activeFocusSnippet,
       })
       let target: HTMLElement | null = directResolved.target
       let headingTarget: HTMLElement | null = null
@@ -697,7 +698,9 @@ export function useReaderLocateEngine({
         return
       }
 
-      const anchorKindForLocate = String(activeAnchorKind || readerBlockHint?.kind || '').trim().toLowerCase()
+      const anchorKindForLocate = target.getAttribute('data-kb-source-prose') === '1'
+        ? 'paragraph'
+        : String(activeAnchorKind || readerBlockHint?.kind || '').trim().toLowerCase()
       const anchorNumberForLocate = Number.isFinite(Number(activeAnchorNumber || readerBlockHint?.number || 0))
         ? Math.floor(Number(activeAnchorNumber || readerBlockHint?.number || 0))
         : 0

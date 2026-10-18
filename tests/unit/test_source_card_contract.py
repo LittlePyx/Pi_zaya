@@ -14,6 +14,35 @@ FIRST = "The network inherits the properties of the loss function during neural 
 SECOND = "The loss recovers the mean of the targets, including their conditional expected values."
 
 
+def test_bold_statement_card_restores_literal_markup_and_every_evidence_projection(tmp_path):
+    from api.source_card_contract import refresh_source_citation_cards
+    raw = '**Lemma 9.** Assume independent observations of zero mean. The expected loss equals\n$$\nR(f)=Q(f)+V.\n$$'
+    path = tmp_path / 'bold.md'
+    path.write_text('<!-- kb_page: 3 -->\n## Theory\n\n' + raw + '\n', encoding='utf8')
+    block = next(b for b in load_source_blocks_cached(path) if 'Lemma 9' in b['raw_text'])
+    quote = ' '.join(raw.replace('**', '').split())
+    card = {**block, 'citation_route':'system_a', 'source_path':str(path),
+            'evidence_quote':quote, 'raw':quote, 'card_evidence':quote, 'binding_status':'grounded'}
+    result = refresh_source_citation_cards([card], render_locale='en')[0]
+    assert result['evidence_quote'] == raw
+    assert result['card_evidence'] == raw
+    assert next(s['text'] for s in result['card_view']['sections'] if s['id']=='evidence') == raw
+    assert all(result[k] == block[k] for k in ('block_id','anchor_id','page_start','page_end','heading_path'))
+
+
+@pytest.mark.parametrize('raw,quote', [
+    ('**Lemma 9.** This method does **not** require paired observations for its training.',
+     'Lemma 9. This method does require paired observations for its training.'),
+    ('**Lemma 9.** The validated mathematical expression is $$R(f)=a**2+b**2$$.',
+     'Lemma 9. The validated mathematical expression is $$R(f)=a 2+b 2$$.'),
+    ('**Lemma 9.** The measurement variance is divided by the number of samples.',
+     'Lemma 9. The measurement variance is multiplied by the number of samples.'),
+])
+def test_emphasis_restoration_cannot_drop_negation_math_or_change_relations(raw,quote):
+    from kb.source_excerpt import literal_excerpt
+    assert not literal_excerpt({'raw_text':raw,'kind':'equation'},quote)
+
+
 def _card(tmp_path, quote=FIRST):
     path = tmp_path / "paper.en.md"
     path.write_text(

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from api.method_relation_copy import method_relation_copy
+
 
 # These translations require the relation in the evidence body. Paper titles,
 # generated summaries and retrieval scores must never trigger factual copy.
@@ -115,6 +117,9 @@ _COMPOUND_RELATIONS = (
 
 def source_relation_copy(evidence: str) -> tuple[str, str] | None:
     surface = re.sub(r"\s+", " ", evidence).strip()
+    method_copy = method_relation_copy(surface)
+    if method_copy:
+        return method_copy
     for index, (patterns, summary, why) in enumerate(_COMPOUND_RELATIONS):
         if not all(re.search(pattern, surface, re.I) for pattern in patterns):
             continue

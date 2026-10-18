@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from kb.citation_marker_context import numeric_marker_is_content
+from kb.citation_table_context import cited_table_cell_span
 
 
 def citation_sentence_spans(text: str) -> list[tuple[int, int]]:
@@ -31,6 +32,10 @@ def citation_sentence_spans(text: str) -> list[tuple[int, int]]:
 
 
 def citation_sentence_context(text: str, start: int, end: int) -> str:
+    cell = cited_table_cell_span(text,start,end)
+    if cell:
+        left,right = cell
+        return citation_sentence_context(text[left:right],start-left,end-left)
     left, right = next(((a, b) for a, b in citation_sentence_spans(text)
                         if a <= start < b and end <= b), (0, len(text)))
     return text[left:right].strip()

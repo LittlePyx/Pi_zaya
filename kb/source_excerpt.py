@@ -46,9 +46,26 @@ def literal_excerpt(block: dict, quote: str) -> str:
     Returned text is copied from the source, including its math and punctuation.
     """
     raw = str(block.get("raw_text") or "")
+    exact = _literal_excerpt(raw, quote, raw)
+    if exact or block.get("kind") == "code":
+        return exact
+    # A prose finisher may remove paired bold delimiters. Restore source bytes
+    # through an offset-preserving surface; no words or math are discarded.
+    protected = [m.span() for m in re.finditer(r"\$\$.*?\$\$|\$[^$\n]+\$|`+.*?`+", raw, re.S)]
+    surface = list(raw)
+    for match in re.finditer(r"(?<![\w\\])\*\*([^*\n]+)\*\*(?!\w)", raw):
+        if any(match.start() < end and match.end() > start for start, end in protected):
+            continue
+        for index in (match.start(), match.start()+1, match.end()-2, match.end()-1):
+            surface[index] = " "
+    visible = "".join(surface)
+    return _literal_excerpt(raw, quote, visible) if visible != raw else ""
+
+
+def _literal_excerpt(raw: str, quote: str, surface: str) -> str:
     # Collapsing whitespace gives offsets back into the original source. It
     # does not discard math, punctuation, citations, negation or numbers.
-    tokens = list(re.finditer(r"\S+", raw))
+    tokens = list(re.finditer(r"\S+", surface))
     flat = " ".join(t[0] for t in tokens)
     offsets = [
         i
@@ -72,5 +89,10 @@ def literal_excerpt(block: dict, quote: str) -> str:
         # Finish the source sentence instead of printing synthetic ellipsis.
         boundary = re.search(r"[.!?。！？](?=\s|$)", flat[end:])
         end = end + boundary.end() if boundary else len(flat)
-    result = raw[offsets[start] : offsets[end - 1] + 1].strip()
+    first, last = offsets[start], offsets[end - 1] + 1
+    if raw[first-2:first] == "**" and surface[first-2:first] == "  ":
+        first -= 2
+    if raw[last:last+2] == "**" and surface[last:last+2] == "  ":
+        last += 2
+    result = raw[first:last].strip()
     return result if len(result) >= 40 else ""

@@ -297,7 +297,9 @@ def protect_source_equations(answer: str, hits: list[dict]) -> tuple[str, dict[s
             return match[0]
         token = f"<!-- source_equation_{len(protected)} -->"
         protected[token] = "$$" + match[1] + "$$" + f"\n\n原文等式 / Source equation [{number}]."
-        return token
+        # Keep the opaque marker on its own line. Inline prose citation repair
+        # can split the exclamation mark in an HTML comment and prevent restore.
+        return f"\n\n{token}\n\n"
 
     # Finalization can run twice. Consume our previous external source note
     # together with the equation so a recheck cannot duplicate it.

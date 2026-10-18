@@ -6,6 +6,7 @@ from pathlib import Path
 from api.citation_display_registry import _canonical_source_path_identity, _citation_claim_context
 from kb.citation_marker_context import numeric_marker_is_content
 from kb.citation_sentences import citation_sentence_spans
+from kb.citation_table_context import cited_table_cell_claims
 from kb.claim_evidence_runtime import _claim_units, _support_score
 from kb.evidence_binding import assess_system_a_hit_binding
 from kb.evidence_term_mapping import evidence_alignment_tokens, specific_method_identities
@@ -196,7 +197,7 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
             added = True
         elif not full and slot.pop("citation_plan_full_evidence_quote", None) is not None:
             added = True
-    for claim in _claim_units(answer):
+    for claim in [*_claim_units(answer), *cited_table_cell_claims(answer)]:
         for marker in re.finditer(r"(?<!\[)\[(\d{1,4})\](?!\])", claim):
             if numeric_marker_is_content(claim, marker.start()):
                 continue

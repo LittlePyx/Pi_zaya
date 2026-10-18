@@ -232,6 +232,21 @@ def test_equation_requires_selected_evidence_and_allowed_citation():
         assert equation not in answer
 
 
+def test_inline_display_equation_survives_sentence_citation_repair():
+    source = "The expected loss is the same as that of " + SOURCE_EQUATION
+    answer = "Source-grounded detail: " + " ".join(source.split()) + " [1]."
+    for _ in range(2):
+        answer, _ = audit_and_repair_claim_evidence(
+            answer, [hit(source)], allowed_citation_numbers={1},
+            drop_unsupported_unplanned_claims=True,
+            drop_unsupported_high_risk_claims=True,
+            enforce_user_visible_binding=True,
+        )
+        assert "source_equation_" not in answer
+        assert "E ∥ f(x) - x ∥ 2" in answer
+        assert answer.count("Source equation [1]") == 1
+
+
 def test_equation_number_is_presentation_but_its_operands_are_not():
     from kb.theory_evidence import protect_source_equations
 

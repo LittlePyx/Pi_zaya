@@ -10,6 +10,7 @@ from typing import Any, Mapping, Sequence
 from kb.config import CITATION_OFFSET
 from kb.evidence_text import looks_bibliography_entry_context
 from kb.evidence_term_mapping import evidence_alignment_tokens
+from kb.method_facet_prompt import method_facet_prompt_instructions, method_facet_prompt_quote
 from kb.paper_guide_retrieval_runtime import (
     _paper_guide_requested_relation_anchors,
     _paper_guide_semantic_query_terms,
@@ -6026,6 +6027,7 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
             3,
             f"- whole answer coverage target: SystemA={int(budget.get('system_a') or 0)}, SystemB={int(budget.get('system_b') or 0)}",
         )
+    lines.extend(method_facet_prompt_instructions(slots[:6]))
     for idx, slot in enumerate(slots[:6], start=1):
         preferred = str(slot.get("preferred_system") or "").strip() or "system_a"
         topic = _compact_text(slot.get("topic"), max_len=120) or "evidence"
@@ -6047,9 +6049,7 @@ def build_citation_plan_prompt_block(plan: Mapping[str, Any] | None) -> str:
         heading = _compact_text(slot.get("heading_path"), max_len=100)
         if heading:
             parts.append(f"heading={heading}")
-        # All intents need the bounded source passage: a 160-character preview
-        # can cut off the condition itself when it is absent from the DOC body.
-        quote = _compact_text(slot.get("evidence_quote"), max_len=720)
+        quote = method_facet_prompt_quote(slot) if slot.get("direct_method_facets") else _compact_text(slot.get("evidence_quote"), max_len=720)
         if quote:
             parts.append(f"evidence={quote}")
         lines.append("- " + " | ".join(parts))

@@ -47,7 +47,8 @@ from .tables import (
     repair_detached_markdown_table_rows_document,
 )
 from .text_utils import _normalize_text, contains_only_detached_accent_mojibake, normalize_detached_accents
-from kb.inpaper_citation_grounding import iter_inpaper_numeric_citations, parse_ref_num_set
+from .reference_citation_diagnostics import plausible_reference_citation_indices as _plausible_reference_citation_indices
+from .pdf_heading_fragments import demote_fraction_heading_fragments
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -258,7 +259,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 16
+CONVERSION_QUALITY_RULES_VERSION = 17
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 
 
@@ -1585,6 +1586,7 @@ def _demote_source_proven_nonheading_numbered_headings(
     if fitz is None or pdf_path is None or not pdf_path.is_file():
         return text, False
 
+    text, fraction_changed = demote_fraction_heading_fragments(text, pdf_path)
     lines = text.splitlines()
     current_page = 0
     candidates: list[dict[str, Any]] = []
@@ -1614,7 +1616,7 @@ def _demote_source_proven_nonheading_numbered_headings(
             }
         )
     if len(candidates) < 3:
-        return text, False
+        return text, fraction_changed
 
     numbers = [int(item["number"]) for item in candidates]
     violating_indices: set[int] = set()
@@ -1633,7 +1635,7 @@ def _demote_source_proven_nonheading_numbered_headings(
             violating_indices.add(index)
         lowest = min(lowest, number)
     if not violating_indices:
-        return text, False
+        return text, fraction_changed
 
     def _matching_line_size(page: Any, title_key: str) -> float:
         best = 0.0
@@ -1672,13 +1674,13 @@ def _demote_source_proven_nonheading_numbered_headings(
         finally:
             doc.close()
     except Exception:
-        return text, False
+        return text, fraction_changed
     if not matched_sizes:
-        return text, False
+        return text, fraction_changed
 
     reference_size = max(matched_sizes)
     if reference_size < 7.0:
-        return text, False
+        return text, fraction_changed
     changed = False
     for index in sorted(violating_indices):
         item = candidates[index]
@@ -1691,7 +1693,7 @@ def _demote_source_proven_nonheading_numbered_headings(
     fixed = "\n".join(lines)
     if text.endswith("\n"):
         fixed += "\n"
-    return fixed, changed and fixed != text
+    return fixed, fraction_changed or (changed and fixed != text)
 
 
 _NUMERIC_ONLY_HEADING_RE = re.compile(
@@ -3346,32 +3348,6 @@ def _source_page_anchor_alignment_quality(text: str, pdf_path: Path | None) -> d
         "source_page_anchor_issues": deduped[:20],
         "source_page_anchor_alignment_threshold": PAGE_ALIGNMENT_ANCHOR_DRIFT_CHARS,
     }
-
-
-_NON_CITATION_NUMERIC_ARRAY_CONTEXT_RE = re.compile(
-    r"(?:channels?|heads?|blocks?|dimensions?|sizes?|resolutions?|widths?|depths?|"
-    r"batch\s+sizes?|sequence\s+lengths?|kernel\s+sizes?|strides?|values?)"
-    r"\s+(?:are|is|=)\s*$",
-    re.IGNORECASE,
-)
-
-
-def _plausible_reference_citation_indices(body: str) -> set[int]:
-    """Return numeric citations while excluding explicit parameter arrays.
-
-    This filter is deliberately local to reference-completeness diagnostics;
-    it does not change retrieval or citation grounding.  Architecture prose
-    such as ``number of channels are [48,96,192,384]`` otherwise makes a
-    complete 109-entry bibliography look truncated.
-    """
-
-    cited: set[int] = set()
-    for spec, start, _end, _style in iter_inpaper_numeric_citations(body):
-        prefix = str(body or "")[max(0, int(start) - 96):int(start)]
-        if _NON_CITATION_NUMERIC_ARRAY_CONTEXT_RE.search(prefix) or re.search(r"(?:\\in|∈|range\s+of)\s*$", prefix, re.I):
-            continue
-        cited.update(parse_ref_num_set(spec, max_items=256))
-    return cited
 
 
 def _reference_index_truncated(text: str, metrics: dict[str, Any]) -> bool:
