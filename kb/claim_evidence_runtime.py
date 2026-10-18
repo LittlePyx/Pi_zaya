@@ -51,7 +51,7 @@ _ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9-]{1,12}\b")
 _EN_TERM_RE = re.compile(r"\b[a-z][a-z0-9-]{3,}\b", flags=re.IGNORECASE)
 _RISK_RE = re.compile(
     r"(?:表明|证明|达到|提升|提高|降低|优于|劣于|导致|使(?:得)?|通过|采用|使用|利用|构建|引入|"
-    r"包含|纳入|建模|训练|验证|报告|实现|解决|决定|影响|正交(?:的|组合)|权衡|局限|限制|没有|未(?:提供|说明|显示|报告|验证|讨论)|"
+    r"包含|纳入|建模|训练|验证|报告|实现|解决|决定|影响|正交(?:的|组合)|权衡|局限|限制|没有|不存在|未(?:提供|说明|显示|报告|验证|讨论)|"
     r"\b(?:show(?:s|ed)?|demonstrat(?:e|es|ed)|achiev(?:e|es|ed)|improv(?:e|es|ed)|reduc(?:e|es|ed)|"
     r"outperform(?:s|ed)?|caus(?:e|es|ed)|use(?:s|d)?|employ(?:s|ed)?|introduc(?:e|es|ed)|"
     r"include(?:s|d)?|model(?:s|ed)?|train(?:s|ed)?|validat(?:e|es|ed)|report(?:s|ed)?|"
@@ -637,10 +637,39 @@ def _meaningful_numbers(text: str) -> list[str]:
     )
 
 
+def _is_epistemic_retrieval_limit(plain: str) -> bool:
+    """Recognize complete, nonnumeric limits on what retrieved evidence proves."""
+    return bool(
+        (re.fullmatch(
+            r"(?:(?:这|此)(?:只能|仅能|仅)(?:说明|表明)(?:所引|当前引用|当前检索)"
+            r"(?:的)?(?:片段|证据)(?:不支持|不足以支持|不能证明)"
+            r"[^，,。；;!?]{1,32}[，,])?"
+            r"不能(?:据此)?断言[^，,。；;!?]{0,24}全文(?:完全)?"
+            r"(?:没有|不存在)[^，,。；;!?]{1,32}[。.]?",
+            plain,
+        ) or re.fullmatch(
+            r"(?:仅凭|仅依据|依据|根据)?(?:当前|本轮)(?:引用|检索)(?:到的)?"
+            r"(?:片段|证据|窗口|结果)[，,]?\s*"
+            r"(?:无法|不能|不足以)(?:确认|确定|断言|证明|支持|提供|给出)"
+            r"[^，,。；;!?]{1,64}"
+            r"(?:[，,](?:因此|因而|也)?(?:无法|不能|不足以)"
+            r"(?:确认|确定|断言|证明|支持|提供|给出)[^，,。；;!?]{1,64})?[。.]?",
+            plain,
+        ))
+        and not _meaningful_numbers(plain)
+    )
+
+
 def _is_high_risk_claim(unit: str) -> bool:
     plain = _plain_claim(unit)
+    # A short absence assertion must not bypass grounding on the length guard.
+    if re.match(r"^(?:结论[：:]\s*)?(?:没有|不存在)(?:这|该|此)(?:一)?(?:项|个|种|类)", plain) or (
+        len(plain) < 12 and "不存在" in plain
+    ):
+        return True
     if (
         len(plain) < 12
+        or _is_epistemic_retrieval_limit(plain)
         or _BOUNDARY_RE.search(plain)
         or _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain)
         or _INFERENCE_RE.search(plain)
@@ -880,6 +909,7 @@ def _strict_section_factual_candidate(segment: str) -> bool:
         return False
     if (
         _BOUNDARY_RE.search(plain)
+        or _is_epistemic_retrieval_limit(plain)
         or _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain)
         or _INFERENCE_RE.search(plain)
         or _NON_FACTUAL_GUIDANCE_RE.search(plain)

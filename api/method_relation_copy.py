@@ -47,6 +47,17 @@ _RULES = (
         "将网络输出加倍，再减去网络输入，以恢复干净图像的估计。",
         "该段直接给出输出加倍、减去输入的校正方向；噪声同分布等适用条件仍须连同前文读取。",
     ),
+    (
+        (r"Blue bars denote the PSNR results of individual inferences, and red curves denote the cumulative average PSNR",),
+        "蓝色柱形表示单次推理的 PSNR，红色曲线表示累计平均 PSNR。",
+        "图注给出两种结果的展示方式，可用于核对柱形和曲线的统计口径；不能将单次推理与累计平均混为同一个量。",
+    ),
+    (
+        (r"we train on the Color BSD68 dataset",
+         r"Our reported values for Noise2Void should therefore be regarded as a lower bound on that method['’]s potential"),
+        "摘录提及 Color BSD68 训练集，并将所报 Noise2Void 结果视为该方法潜在表现的下界。",
+        "这里的下界限定的是 Noise2Void 的报告结果，不是性能上界；训练集对应哪个方法还应连同前文核对。",
+    ),
 )
 _NEGATION = re.compile(r"\b(?:not|never|cannot|false\w*|incorrect\w*|untrue|fail\w*)\b|不能|并非|不等于", re.I)
 

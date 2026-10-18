@@ -5,6 +5,47 @@ import pytest
 from api.source_relation_copy import source_relation_copy
 
 
+@pytest.mark.parametrize("evidence,term", [
+    ("Blue bars denote the PSNR results of individual inferences, and red curves denote the cumulative average PSNR.", "累计平均"),
+    ("We train on the Color BSD68 dataset to match the experimental design. Our reported values for Noise2Void should therefore be regarded as a lower bound on that method's potential.", "Noise2Void"),
+])
+def test_experiment_copy_requires_the_complete_source_relation(evidence: str, term: str) -> None:
+    copy = source_relation_copy(evidence)
+    assert copy is not None
+    assert term in copy[0]
+    assert len(copy[1]) >= 12
+
+
+@pytest.mark.parametrize("evidence", [
+    "Red bars denote the PSNR results of individual inferences, and blue curves denote the cumulative average PSNR.",
+    "Blue bars denote the PSNR results of individual inferences.",
+    "It is false that blue bars denote the PSNR results of individual inferences, and red curves denote the cumulative average PSNR.",
+    "We train on the Color BSD68 dataset. Our reported values for Noise2Void are an upper bound on that method's potential.",
+    "Our reported values for Noise2Void should therefore be regarded as a lower bound on that method's potential.",
+])
+def test_experiment_copy_cannot_borrow_missing_or_reversed_source_facts(evidence: str) -> None:
+    assert source_relation_copy(evidence) is None
+
+
+def test_new_metric_copy_keeps_existing_method_relation_priority() -> None:
+    evidence = (
+        "Assume the noise components are independent and of zero mean. "
+        "Blue bars denote the PSNR results of individual inferences, "
+        "and red curves denote the cumulative average PSNR."
+    )
+    assert "独立" in source_relation_copy(evidence)[0]
+
+
+def test_clipped_training_subject_is_not_assigned_to_the_later_named_baseline() -> None:
+    copy = source_relation_copy(
+        "We train on the Color BSD68 dataset. Our reported values for Noise2Void "
+        "should therefore be regarded as a lower bound on that method's potential."
+    )
+    assert copy is not None
+    assert "Color BSD68 上训练 Noise2Void" not in copy[0]
+    assert "Noise2Void 基线的训练集" not in copy[1]
+
+
 PHASE = 'This paper shows that using dropout in both training and test is very effective on boosting the performance when training a denoising NN on only an input noisy image. The main reason is that it can effectively reduce the variance of the prediction.'
 CORRELATION = 'We also allow spatially correlated noise models, which are problematic for other methods. On the other hand, we require the ability to sample from the noise distribution, which the other methods do not.'
 CORRECTION = "We can therefore recover an estimate of the clean image by doubling our network's output and subtracting its input."
