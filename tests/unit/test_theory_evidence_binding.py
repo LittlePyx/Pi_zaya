@@ -25,6 +25,53 @@ CONDITION_CLAIM = (
     "of its complement conditional on y."
 )
 
+PIXEL_ASSUMPTIONS = (
+    "In this work we make two simple statistical assumptions: (i) the signal s "
+    "is not pixel-wise independent, (ii) the noise n is conditionally pixel-wise "
+    "independent given the signal s."
+)
+
+
+@pytest.mark.parametrize("symbol", ["s", "$s$"])
+def test_given_signal_condition_is_not_a_signal_independence_assertion(symbol):
+    claim = (
+        f"噪声 n 在给定信号 {symbol} 的条件下是逐像素独立的"
+        "（conditionally pixel-wise independent given s）——即噪声在像素间没有条件相关性。"
+    )
+    assert _support_score(claim, PIXEL_ASSUMPTIONS) >= 5
+    assert not binding(claim, PIXEL_ASSUMPTIONS)["suppress_link"]
+    answer, _ = audit_and_repair_claim_evidence(
+        "两条假设：\n\n" + claim + " [1]", [hit(PIXEL_ASSUMPTIONS)],
+        allowed_citation_numbers={1}, drop_unsupported_unplanned_claims=True,
+        drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True,
+    )
+    assert f"给定信号 {symbol} 的条件下" in answer
+    assert "[1]" in answer
+
+
+@pytest.mark.parametrize("claim, source", [
+    ("噪声 n 在给定信号 t 的条件下是逐像素独立的。", PIXEL_ASSUMPTIONS),
+    ("信号 s 是逐像素独立的。", PIXEL_ASSUMPTIONS),
+    ("噪声 n 在给定信号 s 的条件下不是逐像素独立的。", PIXEL_ASSUMPTIONS),
+    ("噪声 n 在给定信号 s 的条件下是逐像素独立的。", "The signal s is not pixel-wise independent."),
+    ("噪声 n 在给定信号 s 的条件下是逐像素独立的。", "The noise n is pixel-wise independent."),
+    ("噪声 n 在给定信号 s 的条件下是逐像素独立的。", PIXEL_ASSUMPTIONS.replace("given the signal s", "given the signal t")),
+    ("噪声 n 在给定信号 s 的条件下是逐像素独立的。", PIXEL_ASSUMPTIONS.replace("noise n is conditionally", "noise n is not conditionally")),
+    ("噪声 n 在给定信号 s 的条件下是逐像素独立的。", PIXEL_ASSUMPTIONS.replace("given the signal s", "given the signal t") + " An unrelated measurement is given the signal s."),
+])
+def test_given_signal_scope_cannot_borrow_an_opposite_or_different_condition(claim, source):
+    assert _support_score(claim, source) == 0
+    assert binding(claim, source)["suppress_link"]
+
+
+@pytest.mark.parametrize("claim", [
+    "噪声在像素间没有条件相关性。",
+    "噪声 n 在给定信号 s 的条件下是逐像素独立的，即噪声在像素间存在条件相关性。",
+    "噪声 n 在给定信号 s 的条件下是逐像素独立的，即噪声在像素间没有条件相关性，并利用像素之间的相关性去噪。",
+])
+def test_conditional_noise_qualifier_cannot_grant_positive_correlation_support(claim):
+    assert binding(claim, PIXEL_ASSUMPTIONS)["suppress_link"]
+
 
 def hit(text, name="Theory"):
     return {"text": text, "meta": {
