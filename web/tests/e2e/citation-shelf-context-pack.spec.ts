@@ -400,6 +400,50 @@ test('conversation deep links reject route fragments', async ({ page }) => {
   expect(requests).toEqual([])
 })
 
+test('a receipt click survives basket maintenance finishing between pointer down and up', async ({ page }) => {
+  await installBackend(page)
+  let releaseMaintenance = () => {}
+  const maintenanceGate = new Promise<void>(resolve => { releaseMaintenance = resolve })
+  for (const endpoint of ['reader-locators/maintain', 'metadata/repair']) {
+    await page.route(`**/api/references/shelf/${endpoint}`, async route => {
+      await maintenanceGate
+      await fulfillJson(route, { items: [] })
+    })
+  }
+  await page.route('**/api/conversations/conv-context-pack/messages_page**', route => fulfillJson(route, {
+    messages: [EXISTING_MESSAGES[0], {
+      ...EXISTING_MESSAGES[1],
+      meta: { paper_guide_contracts: { selected_research_context: {
+        version: 1, id: 'receipt-click', source: 'citation_shelf', createdAt: 1,
+        conversationId: CONVERSATION.id,
+        items: [{ ...SHELF_ITEM, kind: 'reference', refNum: 12, excerpt: SHELF_ITEM.shelfExcerpt }],
+      } } },
+    }],
+    has_more_before: false, oldest_loaded_id: 1, newest_loaded_id: 2,
+  }))
+  await page.goto('/?conversation=conv-context-pack')
+  const toggle = page.getByTestId('research-context-receipt-toggle')
+  try {
+    await expect(toggle).toBeVisible()
+    await expect(page.getByTestId('chat-activity-shelf')).toBeVisible()
+    const box = await toggle.boundingBox()
+    expect(box).not.toBeNull()
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2)
+    await page.mouse.down()
+    releaseMaintenance()
+    await expect(page.getByTestId('chat-activity-shelf')).toHaveCount(0)
+    await page.mouse.up()
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+    await expect(page.getByTestId('research-context-receipt-item')).toContainText(SHELF_ITEM.title)
+    // Keyboard activation still toggles the same receipt after the task ends.
+    await toggle.press('Enter')
+    await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+  } finally {
+    releaseMaintenance()
+    await page.mouse.up()
+  }
+})
+
 test('selected citation shelf items are sent as next-turn prompt context', async ({ page }) => {
   test.setTimeout(60_000)
   const backend = await installBackend(page)

@@ -79,7 +79,7 @@ async function fulfillJson(route: Route, body: unknown) {
 }
 
 async function installMockBackend(page: Page, options: { messagesPageDelayMs?: number; hideConversationFromList?: boolean } = {}) {
-  let renderPacketOnlyPageLoads = 0
+  const messagePageFlags: Array<string | null> = []
 
   await installAppShellMocks(page, {
     rootConversations: options.hideConversationFromList ? [] : [conversation],
@@ -143,7 +143,9 @@ async function installMockBackend(page: Page, options: { messagesPageDelayMs?: n
 
   await page.route(`**/api/conversations/${CONV_ID}/messages_page**`, async (route) => {
     const url = new URL(route.request().url())
-    if (url.searchParams.get('render_packet_only') === '1') renderPacketOnlyPageLoads += 1
+    // Cold navigation starts messages before metadata arrives. An absent flag
+    // lets the server select its stored paper-guide mode; 0 must not override it.
+    messagePageFlags.push(url.searchParams.get('render_packet_only'))
     if (options.messagesPageDelayMs && options.messagesPageDelayMs > 0) {
       await new Promise((resolve) => {
         setTimeout(resolve, options.messagesPageDelayMs)
@@ -190,7 +192,7 @@ async function installMockBackend(page: Page, options: { messagesPageDelayMs?: n
   })
 
   return {
-    renderPacketOnlyPageLoads: () => renderPacketOnlyPageLoads,
+    messagePageFlags: () => [...messagePageFlags],
   }
 }
 
@@ -207,11 +209,13 @@ test('paper guide keeps empty render-packet cite details authoritative across re
 
   await page.goto('/')
   await openConversationAndExpectPacketBodyWithoutSrcChip(page)
-  expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(1)
+  expect(backend.messagePageFlags()).toHaveLength(1)
+  expect(backend.messagePageFlags()).not.toContain('0')
 
   await page.reload()
   await openConversationAndExpectPacketBodyWithoutSrcChip(page)
-  expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(2)
+  expect(backend.messagePageFlags()).toHaveLength(2)
+  expect(backend.messagePageFlags()).not.toContain('0')
 })
 
 test('paper guide direct URL restore does not revive top-level cites outside the render packet', async ({ page }) => {
@@ -223,7 +227,8 @@ test('paper guide direct URL restore does not revive top-level cites outside the
   await expect(page.getByRole('radio', { name: '本文' })).toBeChecked()
   await expect(page.locator('body')).toContainText('The claim is supported by the fixture evidence')
   await expect(page.locator('.kb-cite-chip')).toHaveCount(0)
-  expect(backend.renderPacketOnlyPageLoads()).toBeGreaterThanOrEqual(1)
+  expect(backend.messagePageFlags()).toHaveLength(1)
+  expect(backend.messagePageFlags()).not.toContain('0')
 })
 
 test('chat activity strip exposes slow conversation loading and opt-in perf status', async ({ page }) => {

@@ -13,6 +13,8 @@ from kb.evidence_term_mapping import (
 from kb.source_blocks import normalize_inline_markdown
 from kb.claim_polarity_guard import claim_polarity_conflicts
 from kb.training_information_relation import training_information_relation_covered
+from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered
+from kb.theory_evidence import conditional_noise_domain_surface
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
     (
@@ -208,7 +210,8 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
     )
 
     return (
-        variance_relation_covered(claim_text, evidence_text)
+        iid_relation_covered(claim_text, evidence_text)
+        and variance_relation_covered(claim_text, evidence_text)
         and measurement_conditions_covered(claim_text, evidence_text)
         and architecture_relation_covered(claim_text, evidence_text)
         and noisy_target_relation_covered(claim_text, evidence_text)
@@ -600,6 +603,8 @@ def _system_a_domain_terms(text: str) -> frozenset[str]:
 def _system_a_keyword_terms(text: str, *, limit: int = 18) -> set[str]:
     raw = str(text or "")
     out: set[str] = set()
+    if re.search(IID_PATTERN, raw, re.I):
+        out.update(("independent", "identically", "distributed"))
     for token in re.findall(r"[A-Za-z][A-Za-z0-9+.-]{2,}", raw):
         t = token.strip().lower().strip(".-")
         if not t or t in _SYSTEM_A_TOKEN_STOPWORDS:
@@ -1600,7 +1605,7 @@ def assess_system_a_hit_binding(
             "missing_terms": [],
         }
     if canonical_answer_evidence or verified_prompt_contract or prompt_aligned_plan_evidence:
-        fast_claim_domains = _system_a_domain_terms(claim)
+        fast_claim_domains = _system_a_domain_terms(conditional_noise_domain_surface(claim, evidence_body_surface))
         fast_evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
         fast_body_domain_overlap = fast_claim_domains & fast_evidence_body_domains
         fast_missing_strong_terms = (
@@ -1729,7 +1734,7 @@ def assess_system_a_hit_binding(
                 ),
                 "missing_terms": [],
             }
-    claim_domains = _system_a_domain_terms(claim)
+    claim_domains = _system_a_domain_terms(conditional_noise_domain_surface(claim, evidence_body_surface))
     evidence_domains = _system_a_domain_terms(evidence_surface)
     evidence_body_domains = _system_a_domain_terms(evidence_body_surface)
     domain_overlap = claim_domains & evidence_domains

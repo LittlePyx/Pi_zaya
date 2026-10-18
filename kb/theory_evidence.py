@@ -169,6 +169,36 @@ def training_pair_requirement_covered(claim: str, evidence: str) -> bool:
     )
 
 
+def _noise_given_signal_variables(evidence: str) -> list[str]:
+    return re.findall(
+        r"\bnoise\s+(?:\$?[A-Za-z]\$?\s+)?(?:is\s+)?conditionally\s+"
+        r"pixel[- ]wise\s+independent\s+given\s+(?:the\s+)?(?:true\s+)?signal\b"
+        r"(?:\s*\$?([A-Za-z])\b\$?)?", evidence, re.I,
+    )
+
+
+def _signal_subject_surface(claim: str, evidence: str) -> str:
+    variables = _noise_given_signal_variables(evidence)
+    if not variables:
+        return claim
+    # The verified conditioning object is not the subject of independence.
+    return re.sub(
+        r"(?:在)?给定(?:真实)?信号(?:\s*\$?([A-Za-z])\b\$?)?\s*(?:的条件下|条件下|之后|后|时)",
+        lambda m: " " if not m[1] or m[1] in variables else m[0], claim,
+    )
+
+
+def conditional_noise_domain_surface(claim: str, evidence: str) -> str:
+    """Keep a verified negative noise qualifier out of positive-domain tags."""
+    if (
+        _signal_subject_surface(claim, evidence) != claim
+        and re.search(r"噪声.{0,40}给定.{0,24}的条件下是逐像素独立", claim)
+        and signal_noise_assumptions_covered(claim, evidence)
+    ):
+        return re.sub(r"噪声\s*(?:\$?[A-Za-z]\$?\s*)?在像素(?:间|之间)没有条件相关性", " ", claim)
+    return claim
+
+
 def signal_noise_assumptions_covered(claim: str, evidence: str) -> bool:
     """Keep the signal and noise pixel-independence directions distinct."""
     evidence_signal_not = bool(
@@ -181,9 +211,10 @@ def signal_noise_assumptions_covered(claim: str, evidence: str) -> bool:
             re.I,
         )
     )
-    if re.search(r"(?:真实)?信号.{0,24}逐像素.{0,8}独立|signal.{0,30}pixel[- ]wise\s+independent", claim, re.I):
+    signal_subject_surface = _signal_subject_surface(claim, evidence)
+    if re.search(r"(?:真实)?信号.{0,24}逐像素.{0,8}独立|signal.{0,30}pixel[- ]wise\s+independent", signal_subject_surface, re.I):
         claim_signal_not = bool(
-            re.search(r"(?:真实)?信号.{0,24}(?:不是|并非|不).{0,12}逐像素.{0,8}独立|signal.{0,30}not\s+pixel[- ]wise\s+independent", claim, re.I)
+            re.search(r"(?:真实)?信号.{0,24}(?:不是|并非|不).{0,12}逐像素.{0,8}独立|signal.{0,30}not\s+pixel[- ]wise\s+independent", signal_subject_surface, re.I)
         )
         if claim_signal_not != evidence_signal_not:
             return False
@@ -297,7 +328,9 @@ def protect_source_equations(answer: str, hits: list[dict]) -> tuple[str, dict[s
             return match[0]
         token = f"<!-- source_equation_{len(protected)} -->"
         protected[token] = "$$" + match[1] + "$$" + f"\n\n原文等式 / Source equation [{number}]."
-        return token
+        # Keep the opaque marker on its own line. Inline prose citation repair
+        # can split the exclamation mark in an HTML comment and prevent restore.
+        return f"\n\n{token}\n\n"
 
     # Finalization can run twice. Consume our previous external source note
     # together with the equation so a recheck cannot duplicate it.

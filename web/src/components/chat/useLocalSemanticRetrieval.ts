@@ -63,11 +63,23 @@ export function useLocalSemanticRetrieval() {
   const polling = publicState === 'preparing' || publicState === 'removing'
   useEffect(() => {
     if (!polling) return undefined
+    let active = true
+    let pending = false
     const timer = window.setInterval(() => {
-      void refresh().catch(() => {})
+      if (pending) return
+      pending = true
+      void retrievalApi.getLocalSemanticComponent()
+        .then((next) => {
+          if (active) setStatus(next)
+        })
+        .catch(() => {})
+        .finally(() => { pending = false })
     }, 700)
-    return () => window.clearInterval(timer)
-  }, [polling, refresh])
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [polling])
 
   const run = useCallback(async (
     operation: () => Promise<LocalSemanticComponentResponse>,

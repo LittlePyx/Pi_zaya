@@ -51,6 +51,7 @@ export function resolveReaderReturnToEvidenceTarget(
     blockId: resultBlockId,
     anchorId: resultAnchorId,
     anchorKind: resultAnchorKind,
+    evidenceQuote: seed,
   })
   return closestReadableBlock(direct.target) || direct.target || resolveStickyHighlightTarget(root, readerBlocks, {
     blockId: resultBlockId,

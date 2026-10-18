@@ -14,6 +14,58 @@ FIRST = "The network inherits the properties of the loss function during neural 
 SECOND = "The loss recovers the mean of the targets, including their conditional expected values."
 
 
+def test_internal_preview_cannot_stitch_across_an_abbreviated_source_condition(tmp_path):
+    from api.source_card_contract import _verified_reader_excerpt, refresh_source_citation_cards
+    raw='While we require only single noisy images vs. paired images for training, we require a known noise model vs. blind denoising. Another method requires a noise estimate but no training data. A third method does not require a noise model but requires independent noise.'
+    path=tmp_path/'scope.md';path.write_text('<!-- kb_page: 6 -->\n## Comparison\n\n'+raw,encoding='utf8')
+    block=next(b for b in load_source_blocks_cached(path) if b['kind']=='paragraph')
+    stitched='While we require only single noisy images vs. Another method requires a noise estimate but no training data. … A third method does not require a noise model but requires independent noise.'
+    slot={**block,'source_path':str(path),'evidence_quote':stitched,'reader_evidence_quote':raw,
+          'evidence_source':'citation_plan_claim_window','reader_evidence_source':'citation_plan_located_block',
+          'answer_claim':raw,'citation_route':'system_a','binding_status':'grounded'}
+    assert stitched not in raw
+    assert _verified_reader_excerpt(slot)[1]==raw
+    assert 'known noise model vs. blind denoising' in _verified_reader_excerpt(slot)[1]
+    for field in ('block_id','anchor_id','heading_path','page_start','page_end','source_path'):
+        bad={**slot,field:99 if field.startswith('page_') else 'different'}
+        assert _verified_reader_excerpt(bad) is None
+    bad={**slot,'reader_evidence_quote':raw.replace('does not require','does require')}
+    assert _verified_reader_excerpt(bad) is None
+    assert _verified_reader_excerpt({**slot,'reader_evidence_source':'unverified'}) is None
+    assert _verified_reader_excerpt({**slot,'answer_claim':'The measurement variance is multiplied by one hundred samples.'}) is None
+    valid=raw[:raw.index('Another method')].strip()
+    assert refresh_source_citation_cards([{**slot,'evidence_quote':valid}])[0]['evidence_quote']==valid
+
+
+def test_bold_statement_card_restores_literal_markup_and_every_evidence_projection(tmp_path):
+    from api.source_card_contract import refresh_source_citation_cards
+    raw = '**Lemma 9.** Assume independent observations of zero mean. The expected loss equals\n$$\nR(f)=Q(f)+V.\n$$'
+    path = tmp_path / 'bold.md'
+    path.write_text('<!-- kb_page: 3 -->\n## Theory\n\n' + raw + '\n', encoding='utf8')
+    block = next(b for b in load_source_blocks_cached(path) if 'Lemma 9' in b['raw_text'])
+    quote = ' '.join(raw.replace('**', '').split())
+    card = {**block, 'citation_route':'system_a', 'source_path':str(path),
+            'evidence_quote':quote, 'raw':quote, 'card_evidence':quote, 'binding_status':'grounded'}
+    result = refresh_source_citation_cards([card], render_locale='en')[0]
+    assert result['evidence_quote'] == raw
+    assert result['card_evidence'] == raw
+    assert next(s['text'] for s in result['card_view']['sections'] if s['id']=='evidence') == raw
+    assert all(result[k] == block[k] for k in ('block_id','anchor_id','page_start','page_end','heading_path'))
+
+
+@pytest.mark.parametrize('raw,quote', [
+    ('**Lemma 9.** This method does **not** require paired observations for its training.',
+     'Lemma 9. This method does require paired observations for its training.'),
+    ('**Lemma 9.** The validated mathematical expression is $$R(f)=a**2+b**2$$.',
+     'Lemma 9. The validated mathematical expression is $$R(f)=a 2+b 2$$.'),
+    ('**Lemma 9.** The measurement variance is divided by the number of samples.',
+     'Lemma 9. The measurement variance is multiplied by the number of samples.'),
+])
+def test_emphasis_restoration_cannot_drop_negation_math_or_change_relations(raw,quote):
+    from kb.source_excerpt import literal_excerpt
+    assert not literal_excerpt({'raw_text':raw,'kind':'equation'},quote)
+
+
 def _card(tmp_path, quote=FIRST):
     path = tmp_path / "paper.en.md"
     path.write_text(

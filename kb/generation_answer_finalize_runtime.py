@@ -10629,7 +10629,7 @@ def _finalize_generation_answer(
         prompt_family=sanitize_paper_guide_family,
     )
     requested_paper_count = extract_requested_paper_count(prompt_for_user or prompt)
-    if requested_paper_count is not None:
+    if requested_paper_count is not None and (single_paper_pick_prompt or multi_paper_list_prompt):
         actual_paper_count = (
             1
             if single_paper_pick_prompt and str(answer or "").strip()

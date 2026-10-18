@@ -6,9 +6,9 @@ import re
 import uuid
 from collections.abc import Iterable
 from decimal import Decimal, DecimalException, InvalidOperation
-from difflib import SequenceMatcher
 from pathlib import Path
 
+from kb.provenance_similarity import provenance_similarity
 from kb.paper_guide_contracts import _normalize_paper_guide_support_resolution
 from kb.paper_guide_structured_index_runtime import (
     extract_figure_scope_from_text,
@@ -2063,7 +2063,7 @@ def _formula_char_similarity(a: str, b: str) -> float:
     if (not x) or (not y):
         return 0.0
     try:
-        return float(SequenceMatcher(None, x, y).ratio())
+        return provenance_similarity(x, y)
     except Exception:
         return 0.0
 
@@ -2478,11 +2478,10 @@ def _best_evidence_quote_match(segment_text: str, block: dict | None) -> tuple[s
         if snippet:
             try:
                 score += 0.22 * float(
-                    SequenceMatcher(
-                        None,
+                    provenance_similarity(
                         normalize_match_text(segment_text)[:420],
                         normalize_match_text(snippet)[:420],
-                    ).ratio()
+                    )
                 )
             except Exception:
                 pass
@@ -2505,7 +2504,7 @@ def _best_evidence_quote_match(segment_text: str, block: dict | None) -> tuple[s
             score += 0.82
         score += _text_token_overlap_score(segment_text, sent)
         try:
-            score += 0.28 * float(SequenceMatcher(None, segment_key[:420], sent_norm[:420]).ratio())
+            score += 0.28 * provenance_similarity(segment_key[:420], sent_norm[:420])
         except Exception:
             pass
         if has_equation_signal(sent):
@@ -2520,11 +2519,10 @@ def _best_evidence_quote_match(segment_text: str, block: dict | None) -> tuple[s
     fallback_score = _text_token_overlap_score(segment_text, fallback)
     try:
         fallback_score += 0.18 * float(
-            SequenceMatcher(
-                None,
+            provenance_similarity(
                 normalize_match_text(segment_text)[:420],
                 normalize_match_text(fallback)[:420],
-            ).ratio()
+            )
         )
     except Exception:
         pass
@@ -2598,11 +2596,10 @@ def _block_support_metrics(segment_text: str, block: dict | None) -> dict[str, f
     block_ratio = 0.0
     try:
         block_ratio = float(
-            SequenceMatcher(
-                None,
+            provenance_similarity(
                 normalize_match_text(segment_text)[:420],
                 normalize_match_text(block_text)[:420],
-            ).ratio()
+            )
         )
     except Exception:
         block_ratio = 0.0
@@ -3806,7 +3803,7 @@ def _quote_binding_score(needle: str, block: dict | None) -> tuple[float, str, i
     score += 0.92 * float(quote_score)
     score += 0.52 * _text_token_overlap_score(probe, block_text)
     try:
-        score += 0.34 * float(SequenceMatcher(None, probe_norm[:520], block_norm[:520]).ratio())
+        score += 0.34 * provenance_similarity(probe_norm[:520], block_norm[:520])
     except Exception:
         pass
 

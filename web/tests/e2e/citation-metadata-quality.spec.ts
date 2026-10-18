@@ -1,4 +1,68 @@
 import { expect, test } from '@playwright/test'
+import { copyLiteralEvidenceSelection } from '../../src/components/chat/literalEvidenceClipboard'
+import { mixedEquationProseMatches } from '../../src/components/chat/reader/readerAstIdentity'
+
+test('mixed equation source identity requires its complete prose and actual source line range', () => {
+  const prose = 'Proposition 9. Assume independent observations with zero mean noise.'
+  const item = { kind: 'equation', token: { text: `**Proposition 9.** Assume independent observations with zero mean noise.\n$$R(f)=Q(f)+V$$` }, lineStart: 7, lineEnd: 10 }
+  const node = { value: prose, position: { start: { line: 7 }, end: { line: 7 } } }
+  expect(mixedEquationProseMatches(node, item)).toBe(true)
+  expect(mixedEquationProseMatches({ ...node, value: prose.replace('zero mean', 'nonzero mean') }, item)).toBe(false)
+  expect(mixedEquationProseMatches({ ...node, position: { start: { line: 17 }, end: { line: 17 } } }, item)).toBe(false)
+  expect(mixedEquationProseMatches(node, { ...item, kind: 'paragraph' })).toBe(false)
+  expect(mixedEquationProseMatches(node, { ...item, token: { text: '$$R(f)=Q(f)+V$$' } })).toBe(false)
+})
+
+test('verified mixed-source prose highlights its complete visible phrase across emphasis', async ({ page }) => {
+  await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')
+  const result = await page.evaluate(async () => {
+    const { resolveDirectTargetNode, buildHighlightQueries, highlightExactTextInContainer } = await import('/src/components/chat/reader/readerDomUtils.ts')
+    const { mixedProseHighlightSeed } = await import('/src/components/chat/reader/mixedEquationTarget.ts')
+    const prose = 'Proposition 9. Assume independent observations with zero mean noise.'
+    const source = '**Proposition 9.** Assume independent observations with zero mean noise.\n$$R(f)=Q(f)+V$$'
+    const root = document.createElement('article')
+    root.innerHTML = '<p data-kb-source-prose="1" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9"><strong>Proposition 9.</strong> Assume independent observations with zero mean noise.</p><div class="katex-display" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9">R(f)=Q(f)+V</div>'
+    document.body.append(root)
+    const block = { block_id: 'mixed-9', anchor_id: 'eq-9', kind: 'equation', raw_text: source, text: source }
+    const target = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: source }).target!
+    const seed = mixedProseHighlightSeed(target, source)
+    const hit = buildHighlightQueries(seed, { anchorKind: 'paragraph' }).map((query) => highlightExactTextInContainer(target, query)).find(Boolean)
+    const changed = highlightExactTextInContainer(target, seed.replace('zero mean', 'nonzero mean'))
+    const math = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: '$$R(f)=Q(f)+V$$' }).target!
+    return { proseTarget: target.tagName === 'P', exact: hit?.textContent === prose, changedRejected: !changed, mathPreserved: mixedProseHighlightSeed(math, '$$R(f)=Q(f)+V$$') === '$$R(f)=Q(f)+V$$' }
+  })
+  expect(result).toEqual({ proseTarget: true, exact: true, changedRejected: true, mathPreserved: true })
+})
+
+test('literal evidence selection keeps native clipboard newlines and partial selections', async ({ page }) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page.goto('/__message_list_test__?scenario=agent-answer-contract-source-precedence')
+  const literal = '**Proposition 9.** Assume independent observations.\n$$\nR(f)=Q(f)+V\n$$'
+  await page.evaluate(({ literal, handler }) => {
+    const quote = document.createElement('blockquote')
+    quote.id = 'literal-copy-regression'
+    quote.style.whiteSpace = 'pre-wrap'
+    quote.textContent = literal
+    quote.addEventListener('copy', (0, eval)(`(${handler})`))
+    document.body.append(quote)
+    const range = document.createRange()
+    range.selectNodeContents(quote)
+    getSelection()?.removeAllRanges()
+    getSelection()?.addRange(range)
+  }, { literal, handler: copyLiteralEvidenceSelection.toString() })
+  await page.keyboard.press('Control+c')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(literal)
+  await page.evaluate(() => {
+    const quote = document.getElementById('literal-copy-regression')!
+    const range = document.createRange()
+    range.setStart(quote.firstChild!, 19)
+    range.setEnd(quote.firstChild!, quote.textContent!.length)
+    getSelection()?.removeAllRanges()
+    getSelection()?.addRange(range)
+  })
+  await page.keyboard.press('Control+c')
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(literal.slice(19))
+})
 import {
   citationFormats,
   cleanCitationDisplayText,

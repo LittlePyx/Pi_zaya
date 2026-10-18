@@ -242,6 +242,37 @@ async function openPaper(page: Page) {
   await expect(page.getByTestId('chat-local-retrieval-control')).toBeVisible()
 }
 
+for (const state of ['preparing', 'removing'] as const) {
+  test(`${state} polling keeps one request in flight and resumes after completion`, async ({ page }) => {
+    await installBackend(page, state)
+    let calls = 0
+    let holdPoll = false
+    let release = () => {}
+    const held = new Promise<void>((resolve) => { release = resolve })
+    await page.route('**/api/retrieval/local-component', async (route) => {
+      if (!holdPoll) return fulfillJson(route, lifecyclePayload(state))
+      calls += 1
+      if (calls === 1) {
+        await held
+        if (state === 'removing') return route.fulfill({ status: 503, body: 'temporary failure' })
+        return fulfillJson(route, lifecyclePayload(state))
+      }
+      return fulfillJson(route, lifecyclePayload('ready'))
+    })
+    await openPaper(page)
+    holdPoll = true
+    await expect.poll(() => calls).toBe(1)
+    // Hold the request across three unchanged 700 ms polling intervals.
+    await page.waitForTimeout(2_100)
+    expect(calls).toBe(1)
+    release()
+    await expect.poll(() => calls).toBe(2)
+    await expect(page.getByTestId('chat-local-retrieval-control')).toContainText('BM25')
+    await page.getByTestId('chat-local-retrieval-control').click()
+    await expect(page.getByRole('menuitem', { name: /本地语义检索/ })).toBeEnabled()
+  })
+}
+
 test('semantic indexing shows completed work rather than an archive percentage', async ({ page }) => {
   await installBackend(page, 'preparing', { indexing: true })
   await page.goto(`/?conversation=${CONV_ID}`)

@@ -19,6 +19,25 @@ from kb.citation_marker_context import numeric_marker_is_content
 _SOURCE_EXCERPT_MAX_LEN = 1800
 
 
+def _verified_reader_excerpt(detail: dict) -> tuple[dict, str] | None:
+    """Recover only the already located plan passage after preview resolution fails."""
+    if detail.get("evidence_source") != "citation_plan_claim_window" or detail.get("reader_evidence_source") != "citation_plan_located_block":
+        return None
+    if not all(detail.get(k) for k in (
+        "source_path", "block_id", "anchor_id", "heading_path", "page_start", "page_end",
+    )):
+        return None
+    blocks = scoped_source_blocks(detail)
+    if len(blocks) != 1 or any(str(detail.get(k)) != str(blocks[0].get(k)) for k in (
+        "block_id", "anchor_id", "heading_path", "page_start", "page_end",
+    )):
+        return None
+    quote = literal_excerpt(blocks[0], str(detail.get("reader_evidence_quote") or ""))
+    if quote and len(quote) <= _SOURCE_EXCERPT_MAX_LEN and _supports(str(detail.get("answer_claim") or ""), quote, "", ""):
+        return blocks[0], quote
+    return None
+
+
 def _split_compound_sources(
     slots: list[dict], answer: str, canonical: list
 ) -> tuple[list[dict], list[dict]]:
@@ -261,7 +280,7 @@ def _source_excerpt(detail: dict) -> tuple[dict, str] | None:
             block, excerpt = candidates[0]
             if _supports(claim, excerpt, "", ""):
                 return block, excerpt
-    return None
+    return _verified_reader_excerpt(detail)
 
 
 def refresh_source_citation_cards(

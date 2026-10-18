@@ -13,6 +13,7 @@ import rehypeKatex from 'rehype-katex'
 import rehypeHighlight from 'rehype-highlight'
 import { citationInlineLabel, type CiteDetail } from './citationState'
 import type { ReaderDocAnchor, ReaderDocBlock } from '../../api/references'
+import { readerNodeLineRange as _nodeLineRange, readerNodeText as _readerNodeText, mixedEquationProseMatches } from './reader/readerAstIdentity'
 
 const TABLE_SEPARATOR_RE = /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*:?-{2,}:?\s*\|?\s*$/
 const TABLE_ROW_RE = /^\s*\|?.+\|.+\|?\s*$/
@@ -897,6 +898,7 @@ interface ReaderAnchorToken {
   headingPath?: string
   text?: string
   number?: number
+  mixedEquationProse?: boolean
 }
 
 interface ReaderAnchorAllocator {
@@ -1490,30 +1492,6 @@ function createReaderAnchorAllocator(
   }
 }
 
-function _nodeLineRange(node: unknown): { start: number; end: number } | null {
-  const rec = (node || {}) as {
-    position?: {
-      start?: { line?: number }
-      end?: { line?: number }
-    }
-  }
-  const start = Number(rec.position?.start?.line || 0)
-  const endRaw = Number(rec.position?.end?.line || 0)
-  if (!Number.isFinite(start) || start <= 0) return null
-  const end = Number.isFinite(endRaw) && endRaw > 0 ? Math.max(start, endRaw) : start
-  return { start: Math.floor(start), end: Math.floor(end) }
-}
-
-function _readerNodeText(node: unknown): string {
-  if (!node || typeof node !== 'object') return ''
-  const rec = node as { value?: unknown; children?: unknown[] }
-  const own = typeof rec.value === 'string' ? rec.value : ''
-  const childText = Array.isArray(rec.children)
-    ? rec.children.map((child) => _readerNodeText(child)).filter(Boolean).join(' ')
-    : ''
-  return `${own} ${childText}`.replace(/\s+/g, ' ').trim()
-}
-
 function _readerTextTokenCounts(text: string): Map<string, number> {
   const counts = new Map<string, number>()
   const tokens = String(text || '').toLowerCase().match(/[a-z][a-z0-9+_-]{1,}|[+-]?(?:\d+(?:\.\d+)?|\.\d+)/g) || []
@@ -1573,6 +1551,7 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
           number: Number.isFinite(Number(row?.number || 0)) ? Math.floor(Number(row?.number || 0)) : undefined,
         },
         kind,
+        rawSource: String(row?.raw_text || row?.text || ''),
         lineStart: Math.floor(lineStart),
         lineEnd: Math.floor(lineEnd),
         span: Math.max(1, Math.floor(lineEnd - lineStart + 1)),
@@ -1585,6 +1564,8 @@ function createReaderBlockResolver(readerBlocks: ReaderDocBlock[] | undefined): 
     pick: (node: unknown, kinds: string[]) => {
       const range = _nodeLineRange(node)
       const preferred = new Set((kinds || []).map((k) => normalizeReaderAnchorKind(k)))
+      const mixed = preferred.has('paragraph') ? list.filter((item) => mixedEquationProseMatches(node, item)) : []
+      if (mixed.length === 1) return { ...mixed[0].token, kind: 'paragraph', mixedEquationProse: true }
       const eligible = preferred.size > 0
         ? list.filter((item) => preferred.has(item.kind))
         : list
@@ -1654,6 +1635,7 @@ function readerAnchorAttrs(anchor: ReaderAnchorToken | null): Record<string, str
     'data-kb-anchor-kind': anchor.kind,
   }
   if (anchor.blockId) attrs['data-kb-block-id'] = anchor.blockId
+  if (anchor.mixedEquationProse) attrs['data-kb-source-prose'] = '1'
   if (Number.isFinite(Number(anchor.number || 0)) && Number(anchor.number || 0) > 0) {
     attrs['data-kb-anchor-number'] = String(Math.floor(Number(anchor.number || 0)))
   }

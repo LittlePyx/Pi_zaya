@@ -1,0 +1,776 @@
+{
+  "schemaVersion": 1,
+  "id": "independent_single_image_20261018_v1",
+  "authorship": "Agent-authored from pinned CVPR PDFs before the first product run. New questions and papers relative to the original 24; not an external blind benchmark or human labels.",
+  "protocol": "Freeze fixture and PDF SHA256 before import and answer generation. Keep original 24 untouched. Preserve first-run failures. Same model, top K 6, max tokens 1200 and evidence gates in BM25 and explicitly enabled selected-paper/basket hybrid. No ranking tuning from these results. Automated contracts, physical passage checks and agent semantic review are separate.",
+  "dbRoot": ".tmp/independent93/markdown",
+  "docs": [
+    {
+      "id": "self2self",
+      "dir": "self2self",
+      "file": "self2self",
+      "title": "Self2Self With Dropout: Learning Self-Supervised Denoising From Single Image",
+      "pdfUrl": "https://openaccess.thecvf.com/content_CVPR_2020/papers/Quan_Self2Self_With_Dropout_Learning_Self-Supervised_Denoising_From_Single_Image_CVPR_2020_paper.pdf",
+      "pdfSha256": "31c0882aade8d643dabd95a6a9e2aa7ffc6f26b9de03a4c828984088579563f2"
+    },
+    {
+      "id": "noisier2noise",
+      "dir": "noisier2noise",
+      "file": "noisier2noise",
+      "title": "Noisier2Noise: Learning to Denoise From Unpaired Noisy Data",
+      "pdfUrl": "https://openaccess.thecvf.com/content_CVPR_2020/papers/Moran_Noisier2Noise_Learning_to_Denoise_From_Unpaired_Noisy_Data_CVPR_2020_paper.pdf",
+      "pdfSha256": "faebb1bc3d737bb5fa8d723e25d16e912be5aa75e02898809304412d4f1d3f9d"
+    }
+  ],
+  "cases": [
+    {
+      "id": "s2s-training-data",
+      "docIds": [
+        "self2self"
+      ],
+      "queryScope": "current_paper",
+      "question": "What images does Self2Self actually train on, and how does it obtain multiple training instances without an external clean/noisy dataset?",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            1,
+            2,
+            4
+          ],
+          "fact": "Uses the input noisy image alone; Bernoulli masks generate instances and complementary targets."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "self2self"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "single",
+            "one"
+          ],
+          [
+            "noisy"
+          ],
+          [
+            "Bernoulli"
+          ],
+          [
+            "sampling",
+            "sampled",
+            "mask"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "s2s-training-data-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "Bernoulli"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "s2s-test-dropout",
+      "docIds": [
+        "self2self"
+      ],
+      "queryScope": "current_paper",
+      "question": "Self2Self 的 dropout 只用于训练吗？测试时如何组合多次预测，作者希望降低哪一类误差？",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            1,
+            2,
+            5
+          ],
+          "fact": "Keeps dropout during testing and averages multiple predictions to reduce variance."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "self2self"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "测试",
+            "推理"
+          ],
+          [
+            "dropout"
+          ],
+          [
+            "平均"
+          ],
+          [
+            "方差"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "s2s-test-dropout-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "dropout",
+              "variance"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "s2s-loss-mask",
+      "docIds": [
+        "self2self"
+      ],
+      "queryScope": "current_paper",
+      "question": "In Self2Self Equations (6) and (7), is the training loss measured on visible input pixels or on pixels excluded by the Bernoulli mask? Explain why this avoids the identity mapping.",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            4
+          ],
+          "fact": "Complementary target and masked loss use excluded pixels; the same visible value cannot be copied."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "self2self"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "masked",
+            "excluded",
+            "missing"
+          ],
+          [
+            "loss"
+          ],
+          [
+            "identity"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "s2s-loss-mask-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "loss",
+              "masked"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "s2s-proposition-assumptions",
+      "docIds": [
+        "self2self"
+      ],
+      "queryScope": "current_paper",
+      "question": "Self2Self 命题1将自监督损失联系到干净图像损失时，对噪声分量和均值分别要求什么？它们是 dropout 自动保证的吗？",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            4
+          ],
+          "fact": "The proposition assumes independent noise components with zero mean; dropout does not establish the physical noise assumptions."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "self2self"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "独立"
+          ],
+          [
+            "零均值",
+            "均值为零",
+            "均值为0"
+          ],
+          [
+            "假设",
+            "前提",
+            "要求"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "s2s-proposition-assumptions-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "independent",
+              "zero mean"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "noisier-noise-model",
+      "docIds": [
+        "noisier2noise"
+      ],
+      "queryScope": "current_paper",
+      "question": "Noisier2Noise 不需要干净或配对的噪声训练图像，是否也不需要噪声模型？请说明每个训练样本需要的观测和额外先验。",
+      "sourceBasis": {
+        "noisier2noise": {
+          "pages": [
+            1,
+            2,
+            3
+          ],
+          "fact": "One noisy realization per training sample plus a known statistical noise distribution from which additional noise can be sampled."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "noisier2noise"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "噪声模型",
+            "噪声分布"
+          ],
+          [
+            "采样"
+          ],
+          [
+            "单",
+            "一次",
+            "一个"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "noisier-noise-model-1",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "noise",
+              "distribution"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "noisier-input-target",
+      "docIds": [
+        "noisier2noise"
+      ],
+      "queryScope": "current_paper",
+      "question": "For the standard additive Noisier2Noise procedure, distinguish the network input Z from its training target Y. Is the target the unseen clean image X?",
+      "sourceBasis": {
+        "noisier2noise": {
+          "pages": [
+            3
+          ],
+          "fact": "Input adds synthetic M to observed Y; target remains singly noisy Y, not unobserved X."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "noisier2noise"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "input"
+          ],
+          [
+            "target"
+          ],
+          [
+            "noisy"
+          ],
+          [
+            "synthetic",
+            "additional"
+          ],
+          [
+            "not",
+            "rather than"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "noisier-input-target-1",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "predict",
+              "input"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "noisier-output-correction",
+      "docIds": [
+        "noisier2noise"
+      ],
+      "queryScope": "current_paper",
+      "question": "In standard Noisier2Noise with identically distributed additive noise samples, how is the clean estimate recovered from the raw network output and input? State which quantity is doubled and which is subtracted.",
+      "sourceBasis": {
+        "noisier2noise": {
+          "pages": [
+            3,
+            4
+          ],
+          "fact": "Double the network prediction of conditional Y and subtract the doubly noisy input Z; the raw prediction retains noise."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "noisier2noise"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "doubl",
+            "twice",
+            "2"
+          ],
+          [
+            "output",
+            "prediction"
+          ],
+          [
+            "subtract",
+            "minus",
+            "-"
+          ],
+          [
+            "input",
+            "Z"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "noisier-output-correction-1",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "doubling",
+              "subtracting"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "noisier-correlated-noise",
+      "docIds": [
+        "noisier2noise"
+      ],
+      "queryScope": "current_paper",
+      "question": "Noisier2Noise 是否被限制为像素间独立的白噪声？它对空间相关噪声的适用性仍依赖什么能力？",
+      "sourceBasis": {
+        "noisier2noise": {
+          "pages": [
+            1,
+            2
+          ],
+          "fact": "Supports spatially correlated noise provided the required noise distribution can be sampled."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "noisier2noise"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "空间",
+            "相关"
+          ],
+          [
+            "噪声分布",
+            "噪声模型"
+          ],
+          [
+            "采样"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "noisier-correlated-noise-1",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "spatially",
+              "correlated"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pair-training-requirements",
+      "docIds": [
+        "self2self",
+        "noisier2noise"
+      ],
+      "queryScope": "basket",
+      "question": "Compare Self2Self and Noisier2Noise training requirements using each paper's own method: which constructs Bernoulli-masked instances of the very image being denoised, and which adds sampled noise from a statistical noise model?",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            1,
+            2,
+            4
+          ],
+          "fact": "Bernoulli sampling of the input image itself."
+        },
+        "noisier2noise": {
+          "pages": [
+            1,
+            3
+          ],
+          "fact": "Adds sampled synthetic noise to the noisy training observation; requires a noise model."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "self2self",
+          "noisier2noise"
+        ],
+        "minCitationDocCount": 2,
+        "requiredAnswerTermGroups": [
+          [
+            "Self2Self"
+          ],
+          [
+            "Noisier2Noise"
+          ],
+          [
+            "Bernoulli"
+          ],
+          [
+            "noise model",
+            "noise distribution"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "pair-training-requirements-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "Bernoulli"
+            ]
+          },
+          {
+            "id": "pair-training-requirements-2",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "noise",
+              "distribution"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "pair-noise-independence",
+      "docIds": [
+        "self2self",
+        "noisier2noise"
+      ],
+      "queryScope": "basket",
+      "question": "比较两篇自己的理论条件：Self2Self 命题1要求噪声分量独立且零均值，而 Noisier2Noise 可处理空间相关噪声，这是否矛盾？请区分同一幅图内分量的关系与额外生成噪声的关系，分别给出原文依据。",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            4
+          ],
+          "fact": "Assumes independent zero-mean components in Proposition 1."
+        },
+        "noisier2noise": {
+          "pages": [
+            2,
+            3
+          ],
+          "fact": "Allows spatial correlation within a realization; M and N are independently sampled from the same noise distribution in the standard derivation."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "self2self",
+          "noisier2noise"
+        ],
+        "minCitationDocCount": 2,
+        "requiredAnswerTermGroups": [
+          [
+            "Self2Self"
+          ],
+          [
+            "Noisier2Noise"
+          ],
+          [
+            "独立"
+          ],
+          [
+            "相关"
+          ],
+          [
+            "零均值",
+            "均值为零"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "pair-noise-independence-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "independent",
+              "zero mean"
+            ]
+          },
+          {
+            "id": "pair-noise-independence-2",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "spatially",
+              "correlated"
+            ]
+          },
+          {
+            "id": "pair-noise-independence-3",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "i.i.d."
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "negative-omit-correction",
+      "docIds": [
+        "noisier2noise"
+      ],
+      "queryScope": "current_paper",
+      "question": "A colleague says the standard Noisier2Noise network directly outputs the clean image, so the correction step can simply be removed without changing the derivation. Does the paper support that statement?",
+      "sourceBasis": {
+        "noisier2noise": {
+          "pages": [
+            3,
+            4
+          ],
+          "fact": "Reject the claim: the raw output is still noisy; the derivation requires output doubling and input subtraction."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "noisier2noise"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "not",
+            "no",
+            "incorrect",
+            "false"
+          ],
+          [
+            "correction"
+          ],
+          [
+            "noisy",
+            "noise"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "negative-omit-correction-1",
+            "docId": "noisier2noise",
+            "route": "system_a",
+            "evidenceTerms": [
+              "raw output",
+              "noisy"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "negative-arbitrary-correlation",
+      "docIds": [
+        "self2self"
+      ],
+      "queryScope": "current_paper",
+      "question": "Self2Self 只使用一张图像，是否因此可以从命题1推出它对任意空间相关且非零均值的噪声都成立？请核对命题假设，不能用实验效果代替理论条件。",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            4
+          ],
+          "fact": "Reject arbitrary correlated nonzero-mean generalization; the proposition assumes independent zero-mean components."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "self2self"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "不能",
+            "不成立",
+            "不支持",
+            "无法",
+            "并不"
+          ],
+          [
+            "独立"
+          ],
+          [
+            "零均值",
+            "均值为零"
+          ]
+        ],
+        "claimEvidenceContracts": [
+          {
+            "id": "negative-arbitrary-correlation-1",
+            "docId": "self2self",
+            "route": "system_a",
+            "evidenceTerms": [
+              "independent",
+              "zero mean"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "unsupported-clinical-trial",
+      "docIds": [
+        "self2self",
+        "noisier2noise"
+      ],
+      "queryScope": "basket",
+      "question": "仅依据这两篇论文，给出它们在同一项随机临床试验中的患者人数和诊断敏感度差值。如果没有这项试验，不要用图像 PSNR 或自行假设的数字代替。",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "fact": "No joint randomized clinical trial or corresponding patient-level sensitivity comparison is reported."
+        },
+        "noisier2noise": {
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "fact": "No joint randomized clinical trial or corresponding patient-level sensitivity comparison is reported."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredAnswerTermGroups": [
+          [
+            "没有",
+            "未报告",
+            "未提供",
+            "未找到",
+            "无法",
+            "不足",
+            "不能"
+          ]
+        ],
+        "insufficientEvidenceReview": true
+      }
+    },
+    {
+      "id": "unsupported-universal-ranking",
+      "docIds": [
+        "self2self",
+        "noisier2noise"
+      ],
+      "queryScope": "basket",
+      "question": "Do these two papers establish a universal ranking that Self2Self is always more accurate than Noisier2Noise for every noise distribution and every image? If the selected sources cannot establish that, state the evidence boundary instead of inventing a head-to-head result.",
+      "sourceBasis": {
+        "self2self": {
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "fact": "Finite reported experiments do not establish the requested universal head-to-head ranking."
+        },
+        "noisier2noise": {
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9
+          ],
+          "fact": "Finite reported experiments do not establish the requested universal head-to-head ranking."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredAnswerTermGroups": [
+          [
+            "not",
+            "cannot",
+            "no evidence",
+            "insufficient",
+            "doesn't",
+            "do not"
+          ]
+        ],
+        "insufficientEvidenceReview": true
+      }
+    }
+  ],
+  "forbiddenPhrases": []
+}

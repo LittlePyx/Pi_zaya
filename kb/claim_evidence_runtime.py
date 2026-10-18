@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from kb.explicit_noise_relations import iid_relation_covered
+
 import re
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -49,7 +51,7 @@ _ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9-]{1,12}\b")
 _EN_TERM_RE = re.compile(r"\b[a-z][a-z0-9-]{3,}\b", flags=re.IGNORECASE)
 _RISK_RE = re.compile(
     r"(?:表明|证明|达到|提升|提高|降低|优于|劣于|导致|使(?:得)?|通过|采用|使用|利用|构建|引入|"
-    r"包含|纳入|建模|训练|验证|报告|实现|解决|决定|影响|正交(?:的|组合)|权衡|局限|限制|没有|未(?:提供|说明|显示|报告|验证|讨论)|"
+    r"包含|纳入|建模|训练|验证|报告|实现|解决|决定|影响|正交(?:的|组合)|权衡|局限|限制|没有|不存在|未(?:提供|说明|显示|报告|验证|讨论)|"
     r"\b(?:show(?:s|ed)?|demonstrat(?:e|es|ed)|achiev(?:e|es|ed)|improv(?:e|es|ed)|reduc(?:e|es|ed)|"
     r"outperform(?:s|ed)?|caus(?:e|es|ed)|use(?:s|d)?|employ(?:s|ed)?|introduc(?:e|es|ed)|"
     r"include(?:s|d)?|model(?:s|ed)?|train(?:s|ed)?|validat(?:e|es|ed)|report(?:s|ed)?|"
@@ -245,6 +247,7 @@ _STOPWORDS = {
 }
 
 _CONCEPT_GROUPS = (
+    ("i.i.d.", "independent and identically distributed", "independently and identically distributed", "独立同分布"),
     (
         "physical noise model",
         "real-world physical noise model",
@@ -334,7 +337,8 @@ def _split_claim_segments(value: str) -> list[str]:
         protected,
     )
     parts = re.split(
-        r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)\]]\.)\s+(?=[A-Z\u4e00-\u9fff])",
+        r"(?<=[。！？!?；;])\s*|(?<=[A-Za-z0-9\)\]]\.)\s+(?=[A-Z\u4e00-\u9fff])|"
+        r"(?<=[A-Za-z0-9\)\]]\.\*\*)\s+(?=[A-Z\u4e00-\u9fff])",
         protected,
     )
     restored: list[str] = []
@@ -634,10 +638,51 @@ def _meaningful_numbers(text: str) -> list[str]:
     )
 
 
+def _is_epistemic_retrieval_limit(plain: str) -> bool:
+    """Recognize complete, nonnumeric limits on what retrieved evidence proves."""
+    plain = re.sub(r"^结论[：:]\s*", "", plain)
+    return bool(
+        (re.fullmatch(
+            r"(?:(?:这|此)(?:只能|仅能|仅)(?:说明|表明)(?:所引|当前引用|当前检索)"
+            r"(?:的)?(?:片段|证据)(?:不支持|不足以支持|不能证明)"
+            r"[^，,。；;!?]{1,32}[，,])?"
+            r"不能(?:据此)?断言[^，,。；;!?]{0,24}全文(?:完全)?"
+            r"(?:没有|不存在)[^，,。；;!?]{1,32}[。.]?",
+            plain,
+        ) or re.fullmatch(
+            r"(?:仅凭|仅依据|依据|根据)?(?:(?:当前|本轮)(?:引用|检索)(?:到的)?"
+            r"(?:片段|证据|窗口|结果|内容)|"
+            r"(?:所选|这些|上述|这[一二三四五六七八九十两几]+篇)(?:论文|文献)(?:的)?"
+            r"检索(?:片段|证据|窗口|结果|内容))[，,]?\s*"
+            r"(?:(?:无法|不能|不足以|不)(?:确认|确定|断言|证明|支持|提供|给出)|"
+            r"找不到|未找到|未检索到)"
+            r"[^，,。；;!?]{1,64}"
+            r"(?:[，,](?:因此|因而|也)?(?:无法|不能|不足以)"
+            r"(?:确认|确定|断言|证明|支持|提供|给出)[^，,。；;!?]{1,64})?[。.]?",
+            plain,
+        ) or re.fullmatch(
+            r"(?:the\s+)?(?:current|selected)\s+(?:(?:retrieved|cited)\s+)?"
+            r"(?:evidence|snippets?|excerpts?|passages?)\s+"
+            r"(?:cannot|can't|can\s+not|does\s+not|do\s+not)\s+"
+            r"(?:establish|confirm|determine|prove|support|provide|show)\s+"
+            r"[^.!?;,]{1,280}\.?",
+            plain,
+            flags=re.IGNORECASE,
+        ))
+        and not _meaningful_numbers(plain)
+    )
+
+
 def _is_high_risk_claim(unit: str) -> bool:
     plain = _plain_claim(unit)
+    # A short absence assertion must not bypass grounding on the length guard.
+    if re.match(r"^(?:结论[：:]\s*)?(?:没有|不存在)(?:这|该|此)(?:一)?(?:项|个|种|类)", plain) or (
+        len(plain) < 12 and "不存在" in plain
+    ):
+        return True
     if (
         len(plain) < 12
+        or _is_epistemic_retrieval_limit(plain)
         or _BOUNDARY_RE.search(plain)
         or _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain)
         or _INFERENCE_RE.search(plain)
@@ -645,6 +690,9 @@ def _is_high_risk_claim(unit: str) -> bool:
         return False
     if re.search(r"[?？]\s*$", plain):
         return False
+    # Reading advice cannot turn an unverified inability into a non-factual aside.
+    if re.search(r"(?:不(?:能|会)?|无法)(?:提供|给出)", plain):
+        return True
     if re.match(r"^(?:这|these\b).{0,80}(?:建议|recommend)", plain, flags=re.IGNORECASE):
         return False
     if re.search(r"(?:搭配|一起)(?:读|阅读)", plain, flags=re.IGNORECASE):
@@ -861,7 +909,7 @@ def _explicit_per_source_evidence_request(prompt: str, *, source_count: int) -> 
     explicit_comparison = bool(
         count >= 2
         and re.search(
-            r"(?:对比|比较|区别|差异|不要.{0,24}混|"
+            r"(?:对比|比较|区别|差异|分别.{0,12}(?:指出|说明|给出|引用)|不要.{0,24}混|"
             r"\bcompare\b|\bcontrast\b|\bdiffer(?:ence|ent)\b|"
             r"\bdo\s+not\s+(?:mix|conflate)\b)",
             surface,
@@ -877,6 +925,7 @@ def _strict_section_factual_candidate(segment: str) -> bool:
         return False
     if (
         _BOUNDARY_RE.search(plain)
+        or _is_epistemic_retrieval_limit(plain)
         or _EXPLICIT_RETRIEVAL_BOUNDARY_RE.search(plain)
         or _INFERENCE_RE.search(plain)
         or _NON_FACTUAL_GUIDANCE_RE.search(plain)
@@ -898,10 +947,9 @@ def _enforce_named_source_section_citations(
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """Bind explicitly named paper claims to each paper's own hit.
 
-    This pass is intentionally limited to comparisons that request evidence for
-    at least four papers. It prevents a semantically plausible sentence under
-    one paper heading or in the cross-paper synthesis from borrowing a citation
-    belonging to another paper.
+    Explicit comparisons and per-paper requests retain each named source's
+    evidence. Bold headings use the full support threshold; naming a paper
+    cannot grant support to an unsupported fact or another paper's result.
     """
 
     source_count = sum(1 for hit in answer_hits if hit)
@@ -913,14 +961,18 @@ def _enforce_named_source_section_citations(
     dropped: list[dict[str, Any]] = []
     in_fence = False
     section_hit_index = 0
+    bold_section = False
     for raw_line in str(answer or "").splitlines():
         stripped = raw_line.strip()
         if stripped.startswith(("```", "~~~")):
             in_fence = not in_fence
             output_lines.append(raw_line)
             continue
-        if _HEADING_RE.match(stripped):
+        if not in_fence and (_HEADING_RE.match(stripped) or re.fullmatch(r"\*\*[^*\n]{1,160}\*\*(?:\s*\[\d{1,5}\])*", stripped)):
+            bold_section = stripped.startswith("**")
             section_hit_index = _section_source_hit_index(stripped, answer_hits)
+            if bold_section and len(_mentioned_source_hit_indexes(stripped, answer_hits)) != 1:
+                section_hit_index = 0
             output_lines.append(raw_line)
             continue
         if (
@@ -972,7 +1024,7 @@ def _enforce_named_source_section_citations(
             }
             required_score = (
                 min(3, max(1, int(min_support_score)))
-                if section_hit_index > 0
+                if section_hit_index > 0 and not bold_section
                 else max(1, int(min_support_score))
             )
             if any(score < required_score for score in scores.values()):
@@ -1176,6 +1228,8 @@ def _support_score(
     evidence_text = str(evidence or "")
     evidence_norm = re.sub(r"\s+", " ", evidence_text).lower()
     if not claim_plain or not evidence_norm:
+        return 0
+    if not iid_relation_covered(claim_plain, evidence_text):
         return 0
     if method_identity_conflicts(claim_plain, evidence_text):
         return 0

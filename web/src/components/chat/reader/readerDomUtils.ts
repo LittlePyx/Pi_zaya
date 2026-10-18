@@ -1,4 +1,5 @@
 import type { ReaderDocBlock } from '../../../api/references'
+import { resolveMixedEquationProseTarget } from './mixedEquationTarget'
 import type { ReaderLocateCandidate } from './readerTypes'
 
 export interface ReaderSelectionState {
@@ -1011,6 +1012,7 @@ export function resolveStickyHighlightTarget(
     blockId: sticky.blockId,
     anchorId: sticky.anchorId,
     anchorKind: sticky.anchorKind,
+    evidenceQuote: sticky.highlightSeed,
   })
   if (direct.target) return direct.target
   if (sticky.strictLocate) return null
@@ -1205,7 +1207,7 @@ export function resolveInlineFormulaTarget(container: HTMLElement | null, seed: 
 export function resolveDirectTargetNode(
   root: HTMLElement,
   readerBlocks: ReaderDocBlock[],
-  opts: { blockId?: string; anchorId?: string; anchorKind?: string },
+  opts: { blockId?: string; anchorId?: string; anchorKind?: string; evidenceQuote?: string },
 ): DirectTargetResult {
   const blockId = String(opts?.blockId || '').trim()
   const anchorId = String(opts?.anchorId || '').trim()
@@ -1223,6 +1225,8 @@ export function resolveDirectTargetNode(
     return null
   })()
   const preferEquation = anchorKind === 'equation' || String(hintBlock?.kind || '').trim().toLowerCase() === 'equation'
+  const prose = resolveMixedEquationProseTarget(root, hintBlock, String(opts?.evidenceQuote || ''))
+  if (prose) return { target: prose, hintBlock }
   let target: HTMLElement | null = null
   if (preferEquation) {
     target = resolveVisibleEquationTarget(root, {
