@@ -3,6 +3,7 @@ from __future__ import annotations
 from kb.answer_contract import (
     _build_answer_contract_system_rules,
     _build_paper_guide_grounding_rules,
+    _prefer_zh_locale,
 )
 from kb.paper_guide_prompting import (
     _PAPER_GUIDE_CITATION_LOOKUP_PROMPT_RE,
@@ -50,6 +51,9 @@ def _build_generation_prompt_bundle(
 
     system = (
         "You are zaya, a personal knowledge-base assistant developed by P&I Lab.\n"
+        f"Answer language for the current question: {'Chinese' if _prefer_zh_locale(prompt_for_user) else 'English'}. "
+        "Keep this language even when source excerpts or earlier messages use another language; "
+        "honor an explicit user request for a different answer language.\n"
         "Answer the user's question directly and keep the response concise, concrete, and evidence-aware.\n"
         "Use retrieved snippets when they are available.\n"
         "If retrieved evidence is missing or incomplete, say that clearly instead of fabricating paper details.\n"

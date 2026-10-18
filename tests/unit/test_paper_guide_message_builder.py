@@ -24,6 +24,7 @@ def test_build_generation_prompt_bundle_adds_abstract_rule_for_citeless_family()
     )
 
     assert "Paper-guide abstract rule:" in out["system"]
+    assert "Answer language for the current question: Chinese." in out["system"]
     assert "Research answer plan:" not in out["system"]
     assert "Question:\n把摘要原文给出并翻译" in out["user"]
     assert "Retrieved context (with deep-read supplements):" in out["user"]
@@ -55,6 +56,7 @@ def test_normal_prompt_bundle_adds_user_facing_quality_protocol_with_hits():
 
     system = out["system"]
     assert "Product boundary:" in system
+    assert "Answer language for the current question: English." in system
     assert "Do not draft, rewrite, polish" in system
     assert "return an evidence map with source locations and gaps" in system
     assert out["research_answer_plan"] == "compare"
