@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,7 @@ def _strip_leading_markdown_heading_lines(value: str) -> str:
     return "\n".join(lines[idx:]).lstrip() if idx else text
 
 
-def clean_display_text(value: Any, *, max_len: int = 520) -> str:
+def _clean_display_text_uncached(value: Any, *, max_len: int = 520) -> str:
     raw = str(value or "")
     if not raw:
         return ""
@@ -124,6 +125,19 @@ def clean_display_text(value: Any, *, max_len: int = 520) -> str:
     if len(text) <= max_len:
         return text
     return text[: max(0, max_len - 1)].rstrip() + "..."
+
+
+@lru_cache(maxsize=2048)
+def _clean_display_text_cached(value: str, max_len: int) -> str:
+    return _clean_display_text_uncached(value, max_len=max_len)
+
+
+def clean_display_text(value: Any, *, max_len: int = 520) -> str:
+    raw = str(value or "")
+    # Cache only this pure string transformation, never a support decision.
+    if len(raw) > 2000 or type(max_len) is not int:
+        return _clean_display_text_uncached(raw, max_len=max_len)
+    return _clean_display_text_cached(raw, max_len)
 
 
 def finish_evidence_text(value: Any, *, max_len: int = 520) -> str:
