@@ -14,6 +14,29 @@ FIRST = "The network inherits the properties of the loss function during neural 
 SECOND = "The loss recovers the mean of the targets, including their conditional expected values."
 
 
+def test_internal_preview_cannot_stitch_across_an_abbreviated_source_condition(tmp_path):
+    from api.source_card_contract import _verified_reader_excerpt, refresh_source_citation_cards
+    raw='While we require only single noisy images vs. paired images for training, we require a known noise model vs. blind denoising. Another method requires a noise estimate but no training data. A third method does not require a noise model but requires independent noise.'
+    path=tmp_path/'scope.md';path.write_text('<!-- kb_page: 6 -->\n## Comparison\n\n'+raw,encoding='utf8')
+    block=next(b for b in load_source_blocks_cached(path) if b['kind']=='paragraph')
+    stitched='While we require only single noisy images vs. Another method requires a noise estimate but no training data. … A third method does not require a noise model but requires independent noise.'
+    slot={**block,'source_path':str(path),'evidence_quote':stitched,'reader_evidence_quote':raw,
+          'evidence_source':'citation_plan_claim_window','reader_evidence_source':'citation_plan_located_block',
+          'answer_claim':raw,'citation_route':'system_a','binding_status':'grounded'}
+    assert stitched not in raw
+    assert _verified_reader_excerpt(slot)[1]==raw
+    assert 'known noise model vs. blind denoising' in _verified_reader_excerpt(slot)[1]
+    for field in ('block_id','anchor_id','heading_path','page_start','page_end','source_path'):
+        bad={**slot,field:99 if field.startswith('page_') else 'different'}
+        assert _verified_reader_excerpt(bad) is None
+    bad={**slot,'reader_evidence_quote':raw.replace('does not require','does require')}
+    assert _verified_reader_excerpt(bad) is None
+    assert _verified_reader_excerpt({**slot,'reader_evidence_source':'unverified'}) is None
+    assert _verified_reader_excerpt({**slot,'answer_claim':'The measurement variance is multiplied by one hundred samples.'}) is None
+    valid=raw[:raw.index('Another method')].strip()
+    assert refresh_source_citation_cards([{**slot,'evidence_quote':valid}])[0]['evidence_quote']==valid
+
+
 def test_bold_statement_card_restores_literal_markup_and_every_evidence_projection(tmp_path):
     from api.source_card_contract import refresh_source_citation_cards
     raw = '**Lemma 9.** Assume independent observations of zero mean. The expected loss equals\n$$\nR(f)=Q(f)+V.\n$$'
