@@ -64,6 +64,13 @@ def iid_relation_covered(claim: str, evidence: str) -> bool:
         return False
     compatibility = bool(component and re.search(r'噪声样本|noise\s+samples?', claim, re.I) and _COMPATIBILITY.search(claim))
     samples = bool(re.search(r'独立|independen', claim, re.I) and re.search(r'额外|合成|synthetic', claim, re.I) and re.search(r'噪声|noise|samples?', claim, re.I)) or bool(re.search(r'(?:two|both)\s+(?:i\.\s*i\.\s*d\.\s+)?(?:noise\s+)?samples|两个?[^。；;]{0,24}噪声样本', claim, re.I))
+    if samples and original and generated:
+        surface = re.sub(r'\\(?:boldsymbol|mathbf|mathcal|mathrm)\s*\{([A-Z])\}', r'\1', claim)
+        names = set(re.findall(r'(?<![A-Za-z0-9_])([A-Z])(?![A-Za-z0-9_])', re.sub(IID_PATTERN, '', surface, flags=re.I)))
+        if len(names) >= 2 and any(not re.search(rf'(?<![A-Za-z0-9_]){re.escape(name)}(?![A-Za-z0-9_])', evidence) for name in names):
+            return False
+    if samples and re.search(r'和的一半|half\s+of\s+(?:their|the)\s+sum|half[- ]sum', claim, re.I) and not re.search(r'\bhalf\b|一半|/\s*2\b|\\frac\s*\{1\}\s*\{2\}', evidence, re.I):
+        return False
     if (samples or compatibility) and not _sample_independence_statement(evidence):
         return False
     if compatibility and not any(_positive_scoped(evidence, m) for m in _COMPATIBILITY.finditer(evidence)):
@@ -94,6 +101,27 @@ def iid_relation_covered(claim: str, evidence: str) -> bool:
             continue
         return True
     return False
+
+
+def signal_dependency_covered(claim: str, evidence: str) -> bool:
+    """Keep signal dependence separate from the accompanying noise premise."""
+    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定)\s*){0,4}(?:相关|依赖)|\bsignal\s+(?:is\s+)?correlated', claim, re.I)
+    if not requested or not re.search(r'噪声[^。；;]{0,30}独立|noise[^.;]{0,40}independent', claim, re.I):
+        return True
+    pattern = (r'\bsignal\s*,?\s*(?:however\s*,?\s*)?(?:is\s+assumed\s+to\s+contain\s+(?:statistical\s+)?dependencies|'
+               r'(?:exhibits?|contains?|has)\s+(?:some\s+|complex\s+|statistical\s+)*(?:dependencies|correlation)|'
+               r'(?:is\s+)?(?:spatially\s+)?correlated|is\s+not\s+pixel[- ]wise\s+independent)|'
+               r'信号(?:(?:中|具有|有|存在|的|统计|一定)\s*){0,4}(?:相关|依赖)')
+    return any(not _negated_relation_context(evidence, m) for m in re.finditer(pattern, evidence, re.I))
+
+
+def white_noise_restriction_covered(claim: str, evidence: str) -> bool:
+    """A permitted noise type does not establish an exclusive restriction."""
+    pattern = (r'\b(?:(?:limited|restricted)\s+to|only\s+(?:supports?|handles?|works\s+with|applies\s+to|applicable\s+to))\s+'
+               r'[^,.;。；\n]{0,55}\b(?:white\s+noise|independent\s+noise)|'
+               r'(?:仅|只能|只)(?:适用|支持|处理)[^，,。.;\n]{0,35}(?:白噪声|独立噪声)')
+    requested = any(not _negated_relation_context(claim, m) for m in re.finditer(pattern, claim, re.I))
+    return not requested or any(not _negated_relation_context(evidence, m) for m in re.finditer(pattern, evidence, re.I))
 
 
 def raw_output_noise_covered(claim: str, evidence: str) -> bool:

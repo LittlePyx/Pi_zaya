@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from kb.citation_marker_context import numeric_marker_is_content
-from kb.evidence_term_mapping import specific_method_identities
+from kb.evidence_term_mapping import specific_method_identities, _METHOD_IDENTITY_EQUIVALENTS
 
 
 def explicit_owned_comparison_clause(claim: str, source_name: str) -> str:
@@ -28,3 +28,17 @@ def explicit_owned_comparison_clause(claim: str, source_name: str) -> str:
         return claim
     matches = [part for part, names in zip(parts, identities) if owner & names]
     return matches[0] if len(matches) == 1 else claim
+
+
+def owned_source_body_claim(claim: str, source_name: str) -> str:
+    """Exclude only this verified source's name/known alias from body scoring."""
+    claim = explicit_owned_comparison_clause(claim, source_name)
+    owner = str(source_name).replace('\\', '/').rsplit('/', 1)[-1].split(':', 1)[0].strip()
+    owner = re.sub(r'(?:\.en|\.md|\.pdf)+$', '', owner, flags=re.I).lower()
+    if not re.fullmatch(r'[a-z][a-z0-9]+', owner):
+        return claim
+    names = {owner}
+    for equivalents in _METHOD_IDENTITY_EQUIVALENTS:
+        if owner in equivalents:
+            names.update(equivalents)
+    return re.sub(r'(?<![A-Za-z0-9])(?:' + '|'.join(re.escape(n) for n in names) + r')(?![A-Za-z0-9])', '', claim, flags=re.I)

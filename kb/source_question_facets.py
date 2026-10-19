@@ -17,7 +17,7 @@ _DROPOUT_PHASE = re.compile(
 
 
 def _additive_training_pair_question(prompt: str) -> bool:
-    return bool(re.search(r"additive|加性", prompt, re.I)
+    return bool(re.search(r"additive|加性", prompt, re.I) and not re.search(r"non[- ]?additive|非加性", prompt, re.I)
                 and re.search(r"\binput\b|输入", prompt, re.I)
                 and re.search(r"\btarget\b|目标", prompt, re.I))
 
@@ -95,6 +95,12 @@ def sample_relation_priority(prompt: str, text: str) -> int:
     return int(bool(_CORRELATED.search(text)))
 
 
+def _caption_training_pair(text: str) -> bool:
+    return bool(re.search(r'Figure\s+\d+', text, re.I)
+                and re.search(r'singly[- ]noisy\s+realization.{0,70}training\s+target', text, re.I)
+                and re.search(r'doubly[- ]noisy\s+realization.{0,70}input\s+to\s+(?:the|our)\s+network', text, re.I))
+
+
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
     if requests_comparison_boundary(prompt) and comparison_caution_quote(text):
@@ -104,6 +110,8 @@ def source_facet_score(prompt: str, text: str) -> int:
     if sample_relation_priority(prompt, text) == 2:
         return 18
     if _additive_training_pair_question(prompt):
+        if _caption_training_pair(text):
+            return 18
         if re.search(r"^(?:We\s+)?train\s+the\s+network\s+to\s+predict\s+[A-Z]\s+given\s+[A-Z]\s+as\s+input", text):
             return 20
         if re.search(r"additional\s+synthetic\s+noise\s+sample", text, re.I) and re.search(r"known", text, re.I):
@@ -151,7 +159,7 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
-    if requested_method_premise_priority(prompt, text) or (_additive_training_pair_question(prompt) and _known_noise_training_premise(text)):
+    if requested_method_premise_priority(prompt, text) or (_additive_training_pair_question(prompt) and (_known_noise_training_premise(text) or _caption_training_pair(text))):
         return text
     if not source_facet_score(prompt, text):
         return text

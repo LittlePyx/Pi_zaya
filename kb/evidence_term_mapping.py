@@ -130,6 +130,7 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"像素邻域", ("pixel", "neighborhood")),
     (r"条件独立", ("conditional", "independent", "independence")),
     (r"独立", ("independent", "independence")),
+    (r"信号(?:(?:中|具有|有|存在|的|统计|一定)\s*){0,4}(?:相关|依赖)", ("signal", "statistical", "dependencies")),
     (r"真实信号", ("true", "signal")),
     (r"特征组", ("groups", "features")),
     (r"预测", ("predict", "predictions")),

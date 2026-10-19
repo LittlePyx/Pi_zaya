@@ -177,6 +177,28 @@ def _split_compound_sources(
     return result, retired
 
 
+def _repair_located_message_plan(message: dict) -> dict:
+    """Follow verified structural receipts even on a retained failed answer.
+
+    This derives only source coordinates and an explicit reading quotation;
+    every historical quality flag and the stored answer stay unchanged.
+    """
+    meta = message.get('meta') or {}
+    quality = meta.get('answer_quality') or {}
+    plan = quality.get('citation_plan')
+    if message.get('role') != 'assistant' or not isinstance(plan, dict):
+        return message
+    paths = list(meta.get('canonical_hit_paths') or [])
+    repaired = relocate_repaired_source_plan(plan, paths)
+    repaired = bind_refusal_context_excerpt(str(message.get('content') or ''), repaired, paths)
+    if repaired == plan:
+        return message
+    meta = dict(meta)
+    for key in ('answer_quality', 'paper_guide_contracts'):
+        meta[key] = {**dict(meta.get(key) or {}), 'citation_plan': repaired}
+    return {**message, 'meta': meta}
+
+
 def prepare_source_card_message(message: dict) -> dict:
     """Resolve page-only plans before binding both complete and partial answers.
 
@@ -185,7 +207,7 @@ def prepare_source_card_message(message: dict) -> dict:
     unique block of its own canonical source. Located plans may follow only
     an exact PDF-proven repair receipt before all ordinary support checks.
     """
-    rec = dict(message or {})
+    rec = _repair_located_message_plan(dict(message or {}))
     meta = dict(rec["meta"]) if isinstance(rec.get("meta"), dict) else {}
     quality = (
         dict(meta["answer_quality"])
@@ -206,10 +228,6 @@ def prepare_source_card_message(message: dict) -> dict:
     plan = quality.get("citation_plan")
     if not isinstance(plan, dict):
         return rec
-    repaired_plan = relocate_repaired_source_plan(plan, list(meta.get("canonical_hit_paths") or []))
-    context_plan = bind_refusal_context_excerpt(str(rec.get('content') or ''), repaired_plan, list(meta.get('canonical_hit_paths') or []))
-    context_changed = context_plan != plan
-    plan = context_plan
     partial = (
         quality.get("minimum_ok") is False
         and quality.get("incomplete_fragment") is True
@@ -223,7 +241,7 @@ def prepare_source_card_message(message: dict) -> dict:
         plan.get("slots") or [], str(rec.get("content") or ""), paths
     )
     slots = []
-    changed = bool(retired) or context_changed
+    changed = bool(retired)
     for original in originals:
         slot = dict(original) if isinstance(original, dict) else original
         if (

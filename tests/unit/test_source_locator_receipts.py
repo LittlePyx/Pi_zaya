@@ -59,6 +59,42 @@ def test_pdf_proven_join_derives_current_full_locators_without_mutating_the_plan
     assert relocate_repaired_source_plan(result, [str(md)]) == result
 
 
+def test_shifted_unchanged_long_paragraph_keeps_its_bounded_literal_and_failed_flags(tmp_path, monkeypatch):
+    from api.source_card_contract import prepare_source_card_message
+
+    pdf, md, before, _, _ = fixture(tmp_path, monkeypatch)
+    quote = 'It is important to note that these methods make different assumptions about the task, and thus direct comparison may be misleading.'
+    long = ('The experiment describes the available training observations. ' * 40) + quote
+    before += '\n\n## Comparison\n\n' + long
+    md.write_text(before, encoding='utf8')
+    old = next(b for b in load_source_blocks(md) if b['raw_text'] == long)
+    slot = {**{k: old[k] for k in ('block_id','anchor_id','heading_path','page_start','page_end')},
+            'source_path': str(md), 'evidence_quote': quote, 'candidate_hits': [1], 'preferred_system': 'system_a'}
+    fixed, changed = recover_inline_prose_fragments(before, pdf)
+    assert changed
+    write_pdf_prose_repair(md, before, fixed, pdf)
+    plan = {'slots': [slot]}
+    moved = relocate_repaired_source_plan(plan, [str(md)])
+    assert moved != plan and moved['slots'][0]['evidence_quote'] == quote
+    assert _verified_passage({**moved['slots'][0], 'text': quote}, str(md))
+    quality = {'has_hits': True, 'minimum_ok': False, 'paper_count_ok': False,
+               'claim_evidence': {'minimum_ok': False}, 'citation_plan': plan}
+    message = {'role': 'assistant', 'content': 'The retrieved evidence cannot establish a universal ranking.\n\nChecked source excerpt (reading context)\n\n> ' + quote + ' [1]',
+               'meta': {'answer_quality': quality, 'canonical_hit_paths': [str(md)]}}
+    original = copy.deepcopy(message)
+    derived = prepare_source_card_message(message)
+    assert message == original and derived['content'] == message['content']
+    assert derived['meta']['answer_quality']['minimum_ok'] is False
+    assert derived['meta']['answer_quality']['paper_count_ok'] is False
+    assert derived['meta']['answer_quality']['claim_evidence']['minimum_ok'] is False
+    current = derived['meta']['answer_quality']['citation_plan']['slots'][0]
+    assert current['evidence_quote'] == quote and current['passage_bound_claims'] == [quote]
+    assert _verified_passage({**current, 'text': quote}, str(md))
+    assert 'canonical_evidence_contract_grounded' not in current
+    bad = copy.deepcopy(plan); bad['slots'][0]['anchor_id'] = 'wrong'
+    assert relocate_repaired_source_plan(bad, [str(md)]) == bad
+
+
 @pytest.mark.parametrize('failure', ['missing', 'current', 'pdf', 'before', 'after_hash', 'kind', 'source', 'pdf_root',
                                      'block_id', 'anchor_id', 'heading_path', 'page_start', 'page_end',
                                      'variable', 'operator', 'case', 'index', 'canonical'])

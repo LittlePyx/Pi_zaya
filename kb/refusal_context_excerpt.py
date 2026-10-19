@@ -116,15 +116,19 @@ def bind_refusal_context_excerpt(answer: str, plan: dict, paths: list[str]) -> d
     if not _bounded(answer) or not any(label in answer for label in _LABELS):
         return plan
     cites = [m for m in _CITE.finditer(answer) if not numeric_marker_is_content(answer, m.start())]
-    if len(cites) != 1:
+    quote_lines = list(re.finditer(r'^> (.+) \[(\d{1,5})\]\s*$', answer, re.M))
+    if len(quote_lines) != 1 or sum(answer.count(label) for label in _LABELS) != 1:
         return plan
-    quote_line = re.search(r'^> (.+) \[(\d{1,5})\]\s*$', answer, re.M)
-    if not quote_line:
-        return plan
+    quote_line = quote_lines[0]
     for number, quote, context in _contexts(plan, paths):
         if quote != quote_line[1] or number != int(quote_line[2]):
             continue
         slots = list(plan.get('slots') or [])
+        if len(cites) > 1:
+            if any(s.get('source_path') == context['source_path'] and s.get('evidence_quote') == quote
+                   and quote in s.get('passage_bound_claims', []) for s in slots):
+                return plan
+            return {**plan, 'slots': [*slots, context]}
         index = next((i for i, slot in enumerate(slots) if slot.get('source_path') == context['source_path'] and str(number) in [str(n) for n in slot.get('candidate_hits', [])]), None)
         if index is None:
             continue

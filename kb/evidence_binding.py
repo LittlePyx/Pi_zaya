@@ -309,7 +309,7 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
         "pixel patch correlation",
         re.compile(
             r"(?i)\bcorrelation\s+between\s+(?:pixels|image\s+patches)\b|"
-            r"像素.{0,8}相关|图像块.{0,8}相关"
+            r"(?:像素|图像块)(?:(?:之间|间|邻域|级|的|具有|存在|一定|空间|统计|局部|有)\s*){0,4}相关"
         ),
     ),
     ("wavelet transform", re.compile(r"(?i)\bwavelet\s+transform\b|小波变换")),

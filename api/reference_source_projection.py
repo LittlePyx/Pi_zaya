@@ -154,3 +154,7 @@ def answer_citation_evidence_quote(detail: dict, *, prompt: str = "") -> str:
     return current
 
 
+def reference_question_facet_priority(prompt: str, quote: str) -> int:
+    from kb.direct_question_evidence import _QUALITY_BOUNDARY_QUESTION, quality_boundary_quote
+
+    return int(bool(_QUALITY_BOUNDARY_QUESTION.search(prompt) and quality_boundary_quote(quote)))

@@ -12,7 +12,8 @@ from kb.evidence_binding import assess_system_a_hit_binding
 from kb.evidence_term_mapping import evidence_alignment_tokens, specific_method_identities
 from kb.source_blocks import load_source_blocks_cached, normalize_match_text
 from kb.source_passage_evidence import claim_passage_concepts_covered
-from kb.claim_source_scope import explicit_owned_comparison_clause
+from kb.claim_source_scope import explicit_owned_comparison_clause, owned_source_body_claim
+from kb.explicit_source_attribution import source_attribution_covered
 
 
 def message_citation_plan(rec: dict | None) -> dict:
@@ -31,6 +32,8 @@ def message_citation_plan(rec: dict | None) -> dict:
 def _supports(claim: str, quote: str, heading: str, source: str, *, binding_meta: dict | None = None) -> bool:
     claim = explicit_owned_comparison_clause(claim, source)
     # Related summary-statistic prose cannot substitute for a target theorem.
+    if not source_attribution_covered(claim, quote, source):
+        return False
     if not claim_passage_concepts_covered(claim, quote):
         return False
     if _support_score(claim, f"{quote}\n{heading}\n{source}") < 5:
@@ -87,7 +90,14 @@ def _slot_supports(claim: str, slot: dict) -> bool:
     if slot.get("evidence_selection_reason") == "claim_source_passage":
         return bool(passage) and _passage_supports(claim, passage, str(slot.get("source_name") or ""))
     quote = passage["text"] if passage else str(slot.get("evidence_quote") or "")
-    return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""))
+    if passage and _support_score(owned_source_body_claim(claim, str(slot.get('source_name') or slot.get('source_path') or '')), quote) < 5:
+        return False
+    proof = {}
+    if passage and slot.get('evidence_selection_reason') in {'prompt_contract_block', 'prompt_aligned_source_sentence'}:
+        proof = {'citation_plan_evidence_selection_reason': slot['evidence_selection_reason'],
+                 'primary_block_id': passage['block_id'], 'primary_anchor_id': passage['anchor_id'],
+                 'page_start': passage['page_start']}
+    return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""), binding_meta=proof)
 
 
 def _declared_source_passages(slot: dict) -> list[dict]:
@@ -160,9 +170,31 @@ def _passage_supports(claim: str, passage: dict, source_name: str) -> bool:
     # "we". Remove only the exact owning paper's name from the body-only check;
     # all remaining actions, objects and other method names still pass both
     # body support and binding gates without help from the heading.
-    owner = Path(source_name).stem.split(":", 1)[0].strip()
-    body_claim = re.sub(rf"(?<![A-Za-z0-9]){re.escape(owner)}(?![A-Za-z0-9])", "", claim, flags=re.I) if owner else claim
+    body_claim = owned_source_body_claim(claim, source_name)
     return _support_score(body_claim, text) >= 5 and _supports(body_claim, text, "", source_name)
+
+
+def _deduplicate_verified_slots(slots: list[dict]) -> list[dict]:
+    """Repeated identical physical evidence is one passage, not ambiguity."""
+    result = []
+    seen = {}
+    for slot in slots:
+        source = str(slot.get('source_path') or '')
+        passage = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
+        key = (_canonical_source_path_identity(source), *(str(slot.get(k) or '') for k in
+               ('block_id','anchor_id','heading_path','page_start','page_end','evidence_quote','evidence_selection_reason')),
+               str(slot.get('preferred_system') or 'system_a'), tuple(slot.get('candidate_hits') or []))
+        previous = seen.get(key) if passage else None
+        same_children = previous is not None and all(previous.get(k) == slot.get(k) for k in ('direct_source_evidence','source_passage_bundle'))
+        claims = list(dict.fromkeys([*(previous or {}).get('passage_bound_claims', []), *slot.get('passage_bound_claims', [])]))
+        if same_children and all(_slot_supports(c, previous) for c in claims):
+            if claims:
+                previous['passage_bound_claims'] = claims
+            continue
+        result.append(slot)
+        if passage:
+            seen[key] = slot
+    return result
 
 
 def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) -> dict:
@@ -179,6 +211,7 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
     hits = [hit for hit in ref_pack.get("hits", []) if isinstance(hit, dict)]
     valid_slots = [slot for slot in slots if not slot.get("passage_bound_claims") or _verified_passage(
         {**slot, "text": slot.get("evidence_quote")}, str(slot.get("source_path") or ""))]
+    valid_slots = _deduplicate_verified_slots(valid_slots)
     added = len(valid_slots) != len(slots)
     slots = valid_slots
     # Older render plans may have created a full-block fallback beside the

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from kb.explicit_noise_relations import iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, raw_output_noise_covered, sampling_ability_covered
+from kb.explicit_noise_relations import signal_dependency_covered, white_noise_restriction_covered, iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, raw_output_noise_covered, sampling_ability_covered
 from kb.claim_source_eligibility import retrieval_limit_claim, omitted_derivation_covered
 from kb.noise_model_prerequisites import noise_model_prerequisites_covered, objective_term_covered
 from kb.explicit_claim_metrics import named_metrics_covered, qualitative_outperformance_covered
@@ -37,6 +37,7 @@ def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
             and noise_augmentation_training_covered(claim, evidence)
             and known_noise_model_covered(claim, evidence)
             and named_synthetic_sample_covered(claim, evidence)
+            and signal_dependency_covered(claim, evidence) and white_noise_restriction_covered(claim, evidence)
             and iid_relation_covered(claim, evidence) and raw_output_noise_covered(claim, evidence)
             and sampling_ability_covered(claim, evidence))
 

@@ -21,52 +21,96 @@ def _receipt_path(path: Path) -> Path:
     return path.with_suffix(path.suffix + '.locator-repair.json')
 
 
-def write_pdf_prose_repair(path: Path, before: str, after: str, pdf_path: Path | None) -> None:
-    """Write the repair, retaining provenance only for exact PDF-proven joins."""
-    from kb.converter.pdf_inline_prose import recover_inline_prose_fragments
-
-    receipt = None
-    if pdf_path and Path(pdf_path).is_file():
-        fixed, changed = recover_inline_prose_fragments(before, pdf_path)
-        if changed and fixed == after:
-            receipt = {'kind': _KIND, 'source_path': str(path.resolve()),
-                       'pdf_path': str(Path(pdf_path).resolve()),
-                       'pdf_sha256': hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest(),
-                       'before_text': before, 'before_sha256': _sha(before),
-                       'after_sha256': _sha(after)}
-    path.write_text(after, encoding='utf8')
-    if receipt is not None:
-        # A partial receipt is rejected on read. A failed write cannot authorize
-        # an old locator because the current content hash must also match.
-        _receipt_path(path).write_text(json.dumps(receipt, ensure_ascii=False), encoding='utf8')
+def _transform(kind: str, before: str, pdf: Path) -> tuple[str, bool]:
+    if kind == _KIND:
+        from kb.converter.pdf_inline_prose import recover_inline_prose_fragments
+        return recover_inline_prose_fragments(before, pdf)
+    if kind == 'pdf_paragraph_structure_v2':
+        from kb.converter.pdf_paragraph_join import recover_pdf_paragraph_structure
+        return recover_pdf_paragraph_structure(before, pdf)
+    return before, False
 
 
-def _verified_transition(path: Path) -> tuple[list[dict], list[dict], str] | None:
-    from kb.converter.pdf_inline_prose import recover_inline_prose_fragments
-
+def _validated_receipt(path: Path, current: str) -> tuple[dict, list[dict]] | None:
     try:
         receipt_path = _receipt_path(path)
         if not receipt_path.is_file() or receipt_path.stat().st_size > 8_000_000:
             return None
         receipt = json.loads(receipt_path.read_text(encoding='utf8'))
-        if receipt.get('kind') != _KIND or Path(receipt['source_path']).resolve() != path.resolve():
+        if not isinstance(receipt, dict) or Path(receipt['source_path']).resolve() != path.resolve():
             return None
         pdf = Path(receipt['pdf_path']).resolve()
         pdf_root = os.environ.get('KB_PDF_DIR')
         if pdf_root and not pdf.is_relative_to(Path(pdf_root).resolve()):
             return None
-        before = receipt['before_text']
-        current = path.read_text(encoding='utf8')
-        if (_sha(before) != receipt['before_sha256'] or _sha(current) != receipt['after_sha256']
-                or hashlib.sha256(pdf.read_bytes()).hexdigest() != receipt['pdf_sha256']):
+        if hashlib.sha256(pdf.read_bytes()).hexdigest() != receipt['pdf_sha256']:
             return None
-        fixed, changed = recover_inline_prose_fragments(before, pdf)
-        if not changed or fixed != current:
+        history = receipt.get('history', [])
+        if not isinstance(history, list):
             return None
-        return (load_source_blocks(path, md_text=before),
-                load_source_blocks(path, md_text=current), _sha(receipt_path.read_text(encoding='utf8')))
+        latest = {k:receipt[k] for k in ('kind','before_text','before_sha256','after_sha256')}
+        rows = [*history, latest]
+        previous = None
+        for row in rows:
+            before = row['before_text']
+            if not isinstance(before, str) or _sha(before) != row['before_sha256'] or (previous is not None and previous != before):
+                return None
+            fixed, changed = _transform(row['kind'], before, pdf)
+            if not changed or _sha(fixed) != row['after_sha256']:
+                return None
+            previous = fixed
+        return (receipt,rows) if previous == current else None
     except (OSError, ValueError, KeyError, TypeError):
         return None
+
+
+def write_pdf_prose_repair(path: Path, before: str, after: str, pdf_path: Path | None) -> None:
+    """Retain each exact PDF-proven structural transition for old citations."""
+    receipt = None
+    if pdf_path and Path(pdf_path).is_file():
+        fixed, changed = _transform('pdf_paragraph_structure_v2',before,Path(pdf_path))
+        if changed and fixed == after:
+            prior = _validated_receipt(path,before)
+            history = prior[1] if prior and Path(prior[0]['pdf_path']).resolve() == Path(pdf_path).resolve() else []
+            receipt = {'kind':'pdf_paragraph_structure_v2', 'source_path':str(path.resolve()),
+                       'pdf_path':str(Path(pdf_path).resolve()),
+                       'pdf_sha256':hashlib.sha256(Path(pdf_path).read_bytes()).hexdigest(),
+                       'before_text':before,'before_sha256':_sha(before),'after_sha256':_sha(after),
+                       'history':history}
+    path.write_text(after,encoding='utf8')
+    if receipt is not None:
+        # Readers validate the complete chain and the current content hash.
+        # Atomic replacement never exposes a partially serialized receipt.
+        import tempfile
+        fd,name = tempfile.mkstemp(prefix=path.name+'.locator-',suffix='.tmp',dir=path.parent)
+        temporary = Path(name)
+        try:
+            with os.fdopen(fd,'w',encoding='utf8') as f:json.dump(receipt,f,ensure_ascii=False)
+            temporary.replace(_receipt_path(path))
+        finally:
+            temporary.unlink(missing_ok=True)
+
+
+def _verified_transition(path: Path) -> list[tuple] | None:
+    try:
+        if not _receipt_path(path).is_file():
+            return None
+        current = path.read_text(encoding='utf8')
+        validated = _validated_receipt(path,current)
+        if not validated:
+            return None
+        _receipt,rows = validated
+        blocks = load_source_blocks(path,md_text=current)
+        receipt_id = _sha(_receipt_path(path).read_text(encoding='utf8'))
+        return [(load_source_blocks(path,md_text=row['before_text']),blocks,receipt_id) for row in rows]
+    except (OSError,ValueError,TypeError):
+        return None
+
+
+def _relocate_over_history(record: dict, source: str, transitions: list[tuple]) -> dict:
+    candidates = [_relocate(record,source,transition) for transition in transitions]
+    candidates = [c for c in candidates if c is not record]
+    return candidates[0] if candidates and all(c == candidates[0] for c in candidates) else record
 
 
 def _flat(text: str) -> str:
@@ -99,6 +143,11 @@ def _relocate(record: dict, source: str, transition: tuple) -> dict:
         return record
     target = targets[0]
     raw = str(target.get('raw_text') or '').strip()
+    if len(raw) > 1800 and _flat(raw) == _flat(str(old.get('raw_text') or '')):
+        # An unchanged later paragraph may only have shifted block numbers.
+        # Keep its existing bounded quotation; never enlarge the quote budget.
+        from kb.source_excerpt import literal_excerpt
+        raw = literal_excerpt(target, literal)
     if not 40 <= len(raw) <= 1800:
         return record
     result = {**record, **{k: target[k] for k in _LOCATOR}, 'anchor_kind': target['kind'], key: raw,
@@ -134,10 +183,10 @@ def relocate_repaired_source_plan(plan: dict, canonical_paths: list[str]) -> dic
         if not transition:
             slots.append(slot)
             continue
-        current = _relocate(slot, source, transition)
+        current = _relocate_over_history(slot, source, transition)
         # Children cannot revive an unverified parent or unrelated source.
         if current is not slot and slot.get('source_passage_bundle') is True:
-            children = [_relocate(c, source, transition) if isinstance(c, dict) else c
+            children = [_relocate_over_history(c, source, transition) if isinstance(c, dict) else c
                         for c in slot.get('direct_source_evidence') or []]
             current = {**current, 'direct_source_evidence': children,
                        'source_evidence_quotes': [c.get('text', '') for c in children if isinstance(c, dict)]}

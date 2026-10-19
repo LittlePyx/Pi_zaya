@@ -48,7 +48,7 @@ from api.reference_card_copy import (
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
 )
-from api.reference_source_projection import answer_citation_evidence_quote, verified_reference_detail
+from api.reference_source_projection import answer_citation_evidence_quote, verified_reference_detail, reference_question_facet_priority
 from api.source_relation_copy import source_relation_copy
 from api.reference_card_quality import attach_refs_pack_polish_contract
 from api.reference_card_locale import _ref_card_user_locale
@@ -123,7 +123,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 86
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 90
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -2244,10 +2244,11 @@ def _overlay_refs_payload_with_answer_citations(
                     return planned
                 return current or planned
 
-            def _reader_score(item: dict) -> tuple[int, int, int, bool, int, str]:
+            def _reader_score(item: dict) -> tuple[int, int, int, int, bool, int, str]:
                 reader_quote = _reader_quote(item)
                 quote_terms = evidence_alignment_tokens(reader_quote)
                 return (
+                    reference_question_facet_priority(prompt, reader_quote),
                     len(reader_prompt_terms & quote_terms),
                     len(reader_claim_terms & quote_terms),
                     int(bool(str(item.get("block_id") or "").strip()))

@@ -5,7 +5,7 @@ import re
 
 _REQUIREMENTS = (
     r'statistical\s+model\s+of\s+(?:the\s+)?noise\s+distribution|噪声分布(?:的)?统计模型',
-    r'(?:single|one)\s+noisy\s+reali[sz]ation|(?:单个|一个)(?:的)?(?:含噪|带噪|噪声)(?:实现|观测)|(?:一份|单次)(?:含噪|带噪)观测',
+    r'(?:single|one)\s+noisy\s+(?:reali[sz]ation|measurements?)|(?:单个|一个)(?:的)?(?:含噪|带噪|噪声)(?:实现|观测)|(?:一份|单次)(?:含噪|带噪)观测',
 )
 
 

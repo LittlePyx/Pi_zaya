@@ -3,6 +3,24 @@ from __future__ import annotations
 import re
 
 
+def _named_training_roles_covered(claim: str, evidence: str) -> bool:
+    description = r'(?:(?i:the|a|an|observed|noisy|singly[- ]noisy|doubly[- ]noisy|unseen|clean|image|observation)\s+){0,7}'
+    variable = r'\$?([A-Z])(?![A-Za-z0-9_])\$?'
+    def roles(text: str, role: str) -> set[str]:
+        prefix = rf'(?i:(?:(?:training|network|regression)\s+)?{role}\s+(?:is|are|=)\s+)'
+        return set(re.findall(prefix + description + variable, text))
+    wanted_targets = roles(claim,'target')
+    source_targets = roles(evidence,'target') | set(re.findall(r'(?i:predict)\s+'+variable+r'\s+(?i:given|from)\b',evidence))
+    if wanted_targets and not wanted_targets <= source_targets:
+        return False
+    wanted_inputs = roles(claim,'input')
+    source_inputs = roles(evidence,'input') | set(re.findall(r'(?i:given)\s+'+variable+r'\s+(?i:as\s+input)\b',evidence))
+    if wanted_inputs and not wanted_inputs <= source_inputs:
+        return False
+    descriptive_input = re.search(r'(?i:network\s+input\s+is\s+(?:the\s+)?(?:doubly[- ]noisy|noisier)\s+image)',claim)
+    return not descriptive_input or bool(re.search(r'\binput\b',evidence,re.I) and re.search(r'doubly[- ]noisy|noisier\s+version',evidence,re.I))
+
+
 def named_equation_covered(claim: str, evidence: str) -> bool:
     """Do not borrow a numbered equation from a different source paragraph."""
     # A figure/table/equation number used merely to locate a numeric result
@@ -19,6 +37,8 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
     Shared mask symbols in a loss do not define the training pair. This only
     checks already written definitions; it supplies no positive entailment.
     """
+    if not _named_training_roles_covered(claim,evidence):
+        return False
     feeding = r'feed\w*[^.;。\n]{0,50}Bernoulli[- ]sampled|fed[^.;。\n]{0,50}Bernoulli[- ]sampled|Bernoulli[- ]sampled[^.;。\n]{0,80}(?:fed|feeding)|伯努利采样[^。；\n]{0,30}(?:送入|输入网络)'
     if re.search(feeding, claim, re.I) and not re.search(feeding, evidence, re.I):
         return False

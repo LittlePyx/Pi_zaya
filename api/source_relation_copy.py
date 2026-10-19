@@ -57,10 +57,10 @@ _COMPOUND_RELATIONS = (
     (
         (
             r"(?:does\s+not\s+require|neither).{0,80}noisy\s+image\s+pairs",
-            r"(?:nor|neither).{0,40}clean\s+target\s+images",
+            r"(?:nor|neither).{0,40}clean\s+target\s+im(?:[-‐‑]\s*)?ages",
         ),
         "Noise2Void 不需要独立带噪图像对，也不需要干净目标图像。",
-        "该段直接界定训练数据需求：可从待去噪的带噪图像本身构造训练样本；两类配对数据均不是前提。",
+        "该段直接界定训练数据需求：独立带噪图像对与干净目标图像这两类配对数据均不是前提；相对性能仍须核对比较段落。",
     ),
     (
         (

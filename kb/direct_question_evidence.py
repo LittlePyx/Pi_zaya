@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from kb.training_observation_scope import scope_training_observation_answer
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
 from kb.claim_source_eligibility import incomplete_source_prose

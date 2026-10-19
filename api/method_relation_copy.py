@@ -99,6 +99,9 @@ _NEGATION = re.compile(r"\b(?:not|never|cannot|false\w*|incorrect\w*|untrue|fail
 
 def method_relation_copy(surface: str) -> tuple[str, str] | None:
     """Translate complete explicit clauses from evidence, retaining premises."""
+    if re.search(r'(?:^|[.!?]\s+)While it cannot be expected that our approach outperforms methods that have additional information available during training(?:,|\.)', surface, re.I):
+        return ('作者不预期该方法胜过训练时拥有额外信息的方法。',
+                '该句明确限定比较条件为训练阶段可用的额外信息，可核对作者对相对性能的预期；不能据此推出所有图像和噪声条件下的普遍排序。')
     for patterns, summary, why in _RULES:
         valid = True
         for pattern in patterns:

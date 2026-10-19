@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from api.claim_passage_plan import _supports, _verified_passage
 from kb.claim_evidence_runtime import _support_score
+from kb.claim_source_scope import owned_source_body_claim
 
 
 def verified_occurrence_candidates(current: dict, candidates: list[dict], claim: str) -> list[dict] | None:
@@ -16,14 +17,14 @@ def verified_occurrence_candidates(current: dict, candidates: list[dict], claim:
     for row in candidates:
         source = str(row.get("source_path") or "")
         passage = _verified_passage({**row, "text": row.get("evidence_quote")}, source)
-        if not passage or _support_score(claim, passage['text']) < 5:
+        if not passage or _support_score(owned_source_body_claim(claim, str(row.get('source_name') or source)), passage['text']) < 5:
             continue
         proof = {}
         if row.get('citation_plan_slot') and row.get('selection_reason') in {'prompt_contract_block', 'prompt_aligned_source_sentence'}:
             proof = {'citation_plan_evidence_selection_reason': row['selection_reason'],
                      'primary_block_id': passage['block_id'], 'primary_anchor_id': passage['anchor_id'],
                      'page_start': passage['page_start']}
-        if _supports(claim, passage["text"], "", str(row.get("source_name") or ""), binding_meta=proof):
+        if _supports(claim, passage["text"], str(passage.get("heading_path") or ""), str(row.get("source_name") or ""), binding_meta=proof):
             result.append(row)
     return result
 
