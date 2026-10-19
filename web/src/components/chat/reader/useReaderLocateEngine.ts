@@ -706,7 +706,7 @@ export function useReaderLocateEngine({
         ? Math.floor(Number(activeAnchorNumber || readerBlockHint?.number || 0))
         : 0
       let nextLocateHint = ''
-      const highlightSeed = mixedProseHighlightSeed(target, String(activeHighlightSnippet || activeFocusSnippet || readerBlockHint?.text || '').trim())
+      const highlightSeed = mixedProseHighlightSeed(target, String(activeHighlightSnippet || activeFocusSnippet || readerBlockHint?.text || '').trim(), root)
       const highlightQueries = buildHighlightQueries(highlightSeed, {
         anchorKind: anchorKindForLocate,
         anchorNumber: anchorNumberForLocate,

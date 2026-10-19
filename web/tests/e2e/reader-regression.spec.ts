@@ -153,6 +153,16 @@ test('strict quote locate keeps the exact phrase target', async ({ page }) => {
   await expect(page.locator('.kb-reader-inline-hit')).toContainText('SCI compresses a short video into one coded measurement.')
 })
 
+test('the reader reports a real phrase match for a complete mixed prose and equation quote', async ({ page }) => {
+  await openHarness(page, 'mixed-complete-equation')
+  const focus = page.locator('.kb-reader-focus[data-kb-block-id="mixed-complete-6"][data-kb-source-prose="1"]')
+  await expect(focus).toBeVisible()
+  await expect(focus).toContainText('denotes the element-wise multiplication and')
+  await expect(page.getByTestId('reader-locate-resolution')).toHaveText(EXACT_PHRASE_LABEL_RE)
+  await expect(page.getByTestId('reader-locate-result-json')).toContainText('"precision": "phrase"')
+  await expect(page.locator('.katex-display[data-kb-block-id="mixed-complete-6"]')).toBeVisible()
+})
+
 test('reader keeps its bound evidence focus after the interface locale rerenders', async ({ page }) => {
   await openHarness(page, 'strict-quote')
   const focus = page.locator('.kb-reader-focus[data-kb-block-id="quote-1"]')

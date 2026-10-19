@@ -28,7 +28,7 @@ def message_citation_plan(rec: dict | None) -> dict:
     return dict(plan) if isinstance(plan, dict) and plan else {}
 
 
-def _supports(claim: str, quote: str, heading: str, source: str) -> bool:
+def _supports(claim: str, quote: str, heading: str, source: str, *, binding_meta: dict | None = None) -> bool:
     claim = explicit_owned_comparison_clause(claim, source)
     # Related summary-statistic prose cannot substitute for a target theorem.
     if not claim_passage_concepts_covered(claim, quote):
@@ -48,7 +48,7 @@ def _supports(claim: str, quote: str, heading: str, source: str) -> bool:
             return False
     binding = assess_system_a_hit_binding(
         answer_claim=claim, hit={"text": quote},
-        meta={"citation_plan_evidence_authoritative": True, "citation_plan_full_evidence_quote": quote},
+        meta={**(binding_meta or {}), "citation_plan_evidence_authoritative": True, "citation_plan_full_evidence_quote": quote},
         heading=heading, evidence_quote=quote, source_name=source,
     )
     return not binding.get("suppress_link", True)

@@ -5,16 +5,17 @@ import re
 from kb.citation_marker_context import numeric_marker_is_content
 from kb.citation_table_context import cited_table_cell_span
 
+_CITATION_TARGET = r'\(\#[^\s)]+(?:\s+"[^"]*")?\)'
 
 def citation_sentence_spans(text: str) -> list[tuple[int, int]]:
     """Keep closing quotes/citations with their sentence and protect abbreviations."""
     boundaries = [0]
-    links = [m.span() for m in re.finditer(r'\[[^\]\n]*\]\([^\n)]*\)', text)]
-    for match in re.finditer(r'[。！？!?；;\n]|,(?=\s*(?:\[\d{1,4}\](?:\(\#[^\n)]*\))?\s*)?\s+with\b)|\.(?=\s|["\u201d\u2019\']|\[|$)', text):
+    links = [m.span() for m in re.finditer(r'\[\d{1,4}\]' + _CITATION_TARGET + r'|\[[^\]\n]*\]\([^\n)]*\)', text)]
+    for match in re.finditer(r'[。！？!?；;\n]|[，,](?=\s*(?:其中|where\b)[^。；;\n]{0,180}(?:表示|定义为|denotes?\b|defined\b))|,(?=\s*(?:\[\d{1,4}\](?:\(\#[^\n)]*\))?\s*)?\s+with\b)|\.(?=\s|["\u201d\u2019\']|\[|$)', text):
         position = match.start()
         if numeric_marker_is_content(text, position) or any(a <= position < b for a, b in links):
             continue
-        if match[0] == ',' and (text[:position].count('(') != text[:position].count(')')
+        if match[0] in ',，' and (text[:position].count('(') != text[:position].count(')')
                                 or text[:position].count('"') % 2):
             continue
         if match[0] == '.' and re.search(
@@ -22,7 +23,7 @@ def citation_sentence_spans(text: str) -> list[tuple[int, int]]:
         ):
             continue
         end = match.end()
-        suffix = re.match(r'''["\u201d\u2019']*(?:\s*\[\d{1,4}\](?:\(\#[^\n)]*\))?)*''', text[end:])
+        suffix = re.match(r'''["\u201d\u2019']*(?:\s*\[\d{1,4}\](?:''' + _CITATION_TARGET + r')?)*', text[end:])
         end += suffix.end()
         if end > boundaries[-1]:
             boundaries.append(end)

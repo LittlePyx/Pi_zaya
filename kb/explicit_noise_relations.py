@@ -5,8 +5,11 @@ from kb.citation_sentences import citation_sentence_spans
 
 
 IID_PATTERN = r"\bi\.\s*i\.\s*d\.|\biid\b|\bindependent(?:ly)?\s+and\s+identically\s+distributed\b|独立同分布"
-_PAIR = re.compile(r"\b([A-Z])\s*(?:,\s*|and\s+|和|与)\s*([A-Z])\b")
+_PAIR = re.compile(r"\b([A-Z])\s*(?:[,，、]\s*|and\s+|和|与)\s*([A-Z])\b")
 _PIXEL_SCOPE = re.compile(r"(?:同一幅|单幅|图内|像素).{0,32}分量|pixel[- ]wise|noise\s+components", re.I)
+_COMPONENT_RELATION = re.compile(r'(?:噪声)?分量[^，,。.;!?]{0,50}独立|独立[^，,。.;!?]{0,25}(?:噪声)?分量|(?:noise\s+)?components?[^,.;!?]{0,50}independen\w*|independen\w*[^,.;!?]{0,25}(?:noise\s+)?components?', re.I)
+_COMPONENT_PREMISE = re.compile(r'noise\s+components?[^,.;!?]{0,50}independen\w*|independen\w*[^,.;!?]{0,25}noise\s+components?|noise\s+(?:(?:to\s+be|is)\s+)?pixel[- ]wise\s+independen\w*|noise\s+is\s+independent\s+conditional|噪声分量[^，,。.;!?]{0,30}独立', re.I)
+_COMPATIBILITY = re.compile(r'同时成立|不矛盾|相容|\bcompatible\b|\bcan\s+(?:both\s+)?hold\s+simultaneously\b|\bcan\s+both\s+hold\b|\bnot\s+mutually\s+exclusive\b', re.I)
 _RAW_NOISE = re.compile(
     r"(?:raw\s+(?:network\s+)?output|uncorrected\s+output)"
     r"(?:\s+of\s+(?:the|our)\s+network)?\s+(?:is|remains?)\s+"
@@ -25,7 +28,46 @@ def _relation_pair(text: str) -> re.Match[str] | None:
     return _PAIR.search(normalized.replace('$', ''))
 
 
+def _positive_scoped(text: str, match: re.Match[str]) -> bool:
+    prefix = re.split(r'[.;。！？\n]|\b(?:but|while|whereas|however|and)\b|但|而', text[:match.start()], flags=re.I)[-1][-80:]
+    own = re.sub(r'\bnot\s+(?:only|mutually\s+exclusive)\b', '', prefix + match[0], flags=re.I)
+    return not re.search(r'\b(?:not|never|cannot|false)\b|并非|不(?:是|要求|需要|独立|相容)|无需|未', own, re.I)
+
+
+def _sample_independence_statement(evidence: str) -> bool:
+    for start, end in citation_sentence_spans(evidence):
+        statement = re.sub(r'\\(?:boldsymbol|mathbf|mathcal|mathrm)\s*\{([A-Z])\}', r'\1', evidence[start:end]).replace('$', '')
+        for relation in re.finditer(IID_PATTERN + r'|\bindependen\w*\b|独立', statement, re.I):
+            if not _positive_scoped(statement, relation):
+                continue
+            if re.search(rf'(?:two|both)\s+(?:(?:{IID_PATTERN})\s+)?(?:noise\s+)?(?:samples|draws)|两个?噪声样本', statement, re.I):
+                return True
+            pair = _PAIR.search(statement)
+            if pair and 0 <= relation.start() - pair.end() <= 64 and not re.search(r'\b(?:but|while|whereas|components?|pixels?)\b|[;；]', statement[pair.end():relation.start()], re.I):
+                return True
+            if re.search(r'original|原始', statement, re.I) and re.search(r'synthetic|合成', statement, re.I) and not re.search(r'components?|分量', statement, re.I):
+                return True
+    return False
+
+
 def iid_relation_covered(claim: str, evidence: str) -> bool:
+    comparison = bool(re.search(r'两篇|前者.*后者|two\s+papers|former.*latter', claim, re.I) and re.search(r'独立|independen', claim, re.I))
+    component = any(_positive_scoped(claim, m) for m in _COMPONENT_RELATION.finditer(claim)) or bool(comparison and re.search(r'分量|components?', claim, re.I))
+    if component and not any(_positive_scoped(evidence, m) for m in _COMPONENT_PREMISE.finditer(evidence)):
+        return False
+    original = re.search(r'(?:原始噪声|原噪声)(?!图像|图片|图|观测)|original\s+noise\b', claim, re.I)
+    generated = re.search(r'(?:额外|合成|生成).{0,5}噪声|(?:synthetic|additional)\s+(?:(?:additional|synthetic|generated|spatially|correlated)\s+){0,3}(?:noise|samples?)\b', claim, re.I)
+    if original and generated and not (
+        (re.search(r'original\s+(?:noise|noisy\s+image)|原始(?:噪声|含噪图像)', evidence, re.I) and re.search(r'synthetic\s+(?:noise\s+)?sample|合成噪声', evidence, re.I))
+        or _sample_independence_statement(evidence)
+    ):
+        return False
+    compatibility = bool(component and re.search(r'噪声样本|noise\s+samples?', claim, re.I) and _COMPATIBILITY.search(claim))
+    samples = bool(re.search(r'独立|independen', claim, re.I) and re.search(r'额外|合成|synthetic', claim, re.I) and re.search(r'噪声|noise|samples?', claim, re.I)) or bool(re.search(r'(?:two|both)\s+(?:i\.\s*i\.\s*d\.\s+)?(?:noise\s+)?samples|两个?[^。；;]{0,24}噪声样本', claim, re.I))
+    if (samples or compatibility) and not _sample_independence_statement(evidence):
+        return False
+    if compatibility and not any(_positive_scoped(evidence, m) for m in _COMPATIBILITY.finditer(evidence)):
+        return False
     requested = re.search(IID_PATTERN, claim, re.I)
     if not requested:
         return True
@@ -67,6 +109,7 @@ def raw_output_noise_covered(claim: str, evidence: str) -> bool:
 def sampling_ability_covered(claim: str, evidence: str) -> bool:
     """Not needing a sampling prior does not establish inability to sample."""
     sampling = r"sampl\w*\s+from\s+(?:(?:the|a|known)\s+){0,2}noise\s+distribution|从噪声分布中?采样"
+    sampling += r"|可采样|能够采样|能采样|\bsampling\s+ability\b"
     if re.search(r'noise|噪声', claim, re.I):
         sampling += r'|从(?:该|此)分布中?采样|从中采样|可采样的噪声分布|noise\s+distribution\s+to\s+sampl\w*\s+from'
     inability = r"不具备.{0,16}(?:能力|这一点)|(?:所)?不具备(?:的)?(?=[。；,，\s\[\]]|$)|无法.{0,25}采样|\b(?:cannot|unable\s+to)\b.{0,45}sampl|\b(?:lack\w*|not\s+(?:have|possess))\b.{0,25}ability"

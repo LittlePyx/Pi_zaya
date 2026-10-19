@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from kb.explicit_noise_relations import iid_relation_covered
+from kb.claim_pruning_format import remove_new_unpaired_bold, repair_pruned_line_emphasis
 from kb.claim_source_eligibility import retrieval_limit_claim
 from kb.citation_sentences import citation_sentence_spans
 from kb.claim_source_scope import explicit_owned_comparison_clause
@@ -1880,7 +1881,7 @@ def _join_pruned_claim_segments(segments: list[str], kept: list[str]) -> str:
     # truncated draft. Never close a semicolon already trailing in the input.
     if kept and segments and kept[-1] != segments[-1]:
         rebuilt = re.sub(r"[;；]$", lambda match: "。" if match[0] == "；" else ".", rebuilt)
-    return rebuilt
+    return remove_new_unpaired_bold(joiner.join(segments), rebuilt)
 
 
 def _strip_unplanned_numeric_citations(
@@ -3826,7 +3827,7 @@ def audit_and_repair_claim_evidence(
         meta["dropped_source_equation_conflicts"] = dropped_equation_conflicts[:8]
     for token, equation in source_equations.items():
         repaired = repaired.replace(token, equation)
-    return repaired, meta
+    return repair_pruned_line_emphasis(answer, repaired), meta
 
 
 def claim_evidence_audit(answer: str) -> dict[str, Any]:
