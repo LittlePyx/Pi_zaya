@@ -49,6 +49,7 @@ from .tables import (
 from .text_utils import _normalize_text, contains_only_detached_accent_mojibake, normalize_detached_accents
 from .reference_citation_diagnostics import plausible_reference_citation_indices as _plausible_reference_citation_indices
 from .pdf_heading_fragments import demote_fraction_heading_fragments
+from .pdf_image_prose import recover_equation_image_prose
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -4830,13 +4831,7 @@ def _bounded_source_prose_edits(
     block_texts: list[str],
     local_segment: str,
 ) -> list[tuple[int, int, str]]:
-    """Build source-backed edits bounded by stable token sequences.
-
-    Only pages already classified with a high-confidence omission are eligible.
-    Individual differences must also have three unchanged tokens on both sides.
-    Replacing the small gap between those anchors preserves Markdown headings,
-    figures, paragraph breaks, and citations outside the damaged phrase.
-    """
+    """Repair high-confidence omissions between three unchanged tokens on each side."""
 
     damage = _source_page_prose_omission_damage(block_texts, local_segment)
     if not bool(damage.get("text_omission")):
@@ -4914,6 +4909,7 @@ def _recover_source_prose_omissions_from_pdf_text(
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if fitz is None or not pdf_path:
         return text, False
+    text, image_prose_changed = recover_equation_image_prose(text, md_path, pdf_path)
     coverage = _source_page_coverage_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
@@ -4921,7 +4917,7 @@ def _recover_source_prose_omissions_from_pdf_text(
         if int(item.get("page") or 0) > 0
     ]
     if not pages:
-        return text, False
+        return text, image_prose_changed
 
     try:
         doc = fitz.open(str(pdf_path))
@@ -4961,7 +4957,7 @@ def _recover_source_prose_omissions_from_pdf_text(
             fixed = fixed[:segment_start] + repaired_segment + fixed[segment_end:]
     finally:
         doc.close()
-    return fixed, fixed != text
+    return fixed, image_prose_changed or fixed != text
 
 
 def _novel_source_recovery_prose(fallback_body: str, current_body: str) -> str:
@@ -5025,17 +5021,12 @@ def _recover_corrupted_source_pages_from_pdf_text(
     md_path: Path,
     source_pdf_path: Path | str | None = None,
 ) -> tuple[str, bool]:
-    """Replace only source-proven corrupted page segments with PDF block text.
-
-    Existing page-local image links are retained so visual evidence remains
-    available, while prose comes from source text blocks sorted by column and
-    vertical position. The caller re-runs the source comparison before accepting
-    the repair.
-    """
+    """Restore source-proven prose while retaining page-local image evidence."""
     text = str(md_text or "")
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if not pdf_path:
         return text, False
+    text, image_prose_changed = recover_equation_image_prose(text, md_path, pdf_path)
     coverage = _source_page_coverage_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
@@ -5043,7 +5034,7 @@ def _recover_corrupted_source_pages_from_pdf_text(
         if int(item.get("page") or 0) > 0
     ]
     if not pages:
-        return text, False
+        return text, image_prose_changed
 
     fixed = text
     for page_no in sorted(set(pages), reverse=True):
@@ -5116,7 +5107,7 @@ def _recover_corrupted_source_pages_from_pdf_text(
             ]
         replacement = "\n\n".join(part for part in replacement_parts if part).strip() + "\n\n"
         fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
-    return fixed, fixed != text
+    return fixed, image_prose_changed or fixed != text
 
 
 def _conversion_retry_attrs(marker: re.Match[str]) -> dict[str, str]:

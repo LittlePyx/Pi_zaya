@@ -110,6 +110,7 @@ from .tables import _is_markdown_table_sane, table_text_to_markdown
 from .block_classifier import _looks_like_math_block, _looks_like_code_block
 from .llm_worker import LLMWorker
 from .post_processing import postprocess_markdown
+from .pdf_image_prose import recover_equation_image_prose
 from .page_math_boundaries import (
     repair_page_display_math_boundaries,
     unclosed_display_math_pages,
@@ -691,6 +692,7 @@ class PDFConverter:
         final_md = normalize_known_superscript_tokens(normalize_detached_accents(final_md))
 
         out_file = save_dir / "output.md"
+        final_md, _ = recover_equation_image_prose(final_md, out_file, doc.name)
         auto_repair_result: dict[str, Any] = {}
         try:
             _conversion_stage("verifying")

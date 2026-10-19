@@ -1,6 +1,16 @@
 import type { ReaderDocBlock } from '../../../api/references'
 import { mixedEquationProse, mixedProseText } from './readerAstIdentity'
 
+function sourceProseText(node: HTMLElement): string {
+  const clone = node.cloneNode(true) as HTMLElement
+  for (const math of clone.querySelectorAll('.katex')) {
+    const source = math.querySelector('annotation[encoding="application/x-tex"]')
+    if (!source) return ''
+    math.replaceWith(document.createTextNode(source.textContent || ''))
+  }
+  return mixedProseText(String(clone.textContent || ''))
+}
+
 export function mixedProseHighlightSeed(target: HTMLElement, quote: string): string {
   return target.getAttribute('data-kb-source-prose') === '1'
     ? mixedProseText(quote.split('$$')[0])
@@ -15,7 +25,7 @@ export function resolveMixedEquationProseTarget(root: HTMLElement, block: Reader
   const candidates = Array.from(root.querySelectorAll<HTMLElement>('[data-kb-source-prose="1"]')).filter((node) => (
     node.getAttribute('data-kb-block-id') === block.block_id
     && node.getAttribute('data-kb-anchor-id') === block.anchor_id
-    && mixedProseText(String(node.textContent || '')).startsWith(prefix)
+    && sourceProseText(node).startsWith(prefix)
   ))
   return candidates.length === 1 ? candidates[0] : null
 }
