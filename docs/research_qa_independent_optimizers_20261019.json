@@ -1,0 +1,472 @@
+{
+  "schemaVersion": 1,
+  "id": "independent_optimizers_20261019_v1",
+  "authorship": "Agent-authored from pinned original PDFs before any product answer; not external blind labels. New optimizer domain, separate from frozen denoising 24 and single-image 14.",
+  "protocol": "Freeze before first generation. Do not change questions, source versions, expectations or thresholds after observing answers. Keep import failures, raw outputs and manual clause audits. Reuse the original evaluator without modification; report automatic, actual hybrid, copy, source blocks, PDF and manual support separately.",
+  "dbRoot": ".tmp/optimizer-reading-20261019/db",
+  "docs": [
+    {
+      "id": "adam",
+      "dir": "adam",
+      "file": "adam",
+      "title": "Adam: A Method for Stochastic Optimization",
+      "pdfUrl": "https://arxiv.org/pdf/1412.6980v9",
+      "pdfSha256": "eab9c73ae2ceda884b94830bda99312254bac4806f6c9f045cbab90721ecda31"
+    },
+    {
+      "id": "adamw",
+      "dir": "adamw",
+      "file": "adamw",
+      "title": "Decoupled Weight Decay Regularization",
+      "pdfUrl": "https://arxiv.org/pdf/1711.05101v3",
+      "pdfSha256": "9d5af48931e773d6983d167e15c06ef594475b751c1f263827f5ed3c7a00d0d8"
+    }
+  ],
+  "cases": [
+    {
+      "id": "adam-moment-roles",
+      "docIds": [
+        "adam"
+      ],
+      "queryScope": "current_paper",
+      "question": "What do the two moment estimates in Adam represent, and how are they used in the parameter update? Distinguish the mean from the second raw moment.",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            2,
+            3
+          ],
+          "fact": "Exponential moving averages estimate the gradient mean and second raw moment; bias-corrected first moment is divided by the square root of the corrected second moment plus epsilon."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adam"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "first",
+            "1st"
+          ],
+          [
+            "second",
+            "2nd"
+          ],
+          [
+            "mean"
+          ],
+          [
+            "raw",
+            "uncentered"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "adam-zero-bias",
+      "docIds": [
+        "adam"
+      ],
+      "queryScope": "current_paper",
+      "question": "Adam 的一阶和二阶矩估计为什么需要初始化偏差校正？请保留零初始化这一原因和两个校正分母的含义。",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            2,
+            3
+          ],
+          "fact": "Zero initialized moving averages are biased toward zero; divide by one minus the corresponding exponential decay rate raised to t."
+        }
+      },
+      "expected": {
+        "renderLocale": "zh",
+        "requiredCitationDocIds": [
+          "adam"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "零",
+            "0"
+          ],
+          [
+            "偏差",
+            "偏置"
+          ],
+          [
+            "校正",
+            "修正"
+          ],
+          [
+            "分母",
+            "除"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "adam-tested-defaults",
+      "docIds": [
+        "adam"
+      ],
+      "queryScope": "current_paper",
+      "question": "Give the four default hyperparameter values stated with Adam Algorithm 1. Does the paper describe these as good settings for tested problems or as a guarantee of optimality on every task?",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            2
+          ],
+          "fact": "Algorithm 1 gives alpha 0.001, beta1 0.9, beta2 0.999, epsilon ten to the minus eight, qualified as good defaults for tested machine learning problems."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adam"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "0.001"
+          ],
+          [
+            "0.9"
+          ],
+          [
+            "0.999"
+          ],
+          [
+            "10^{-8}",
+            "10^-8",
+            "1e-8",
+            "10⁻⁸",
+            "10^{- 8}"
+          ],
+          [
+            "tested"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "adamw-sgd-equivalence",
+      "docIds": [
+        "adamw"
+      ],
+      "queryScope": "current_paper",
+      "question": "Explain Proposition 1: under what optimizer and learning-rate rescaling are weight decay and L2 regularization equivalent? Keep the direction of the rescaling explicit.",
+      "sourceBasis": {
+        "adamw": {
+          "pages": [
+            2
+          ],
+          "fact": "Standard SGD with learning rate alpha and decay lambda equals L2 coefficient lambda divided by alpha; this does not extend unchanged to adaptive gradients."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adamw"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "SGD"
+          ],
+          [
+            "learning rate"
+          ],
+          [
+            "divid",
+            "/",
+            "over"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "adamw-adaptive-decay",
+      "docIds": [
+        "adamw"
+      ],
+      "queryScope": "current_paper",
+      "question": "Why is L2 regularization different from decoupled weight decay for Adam? Explain which gradient is adaptively scaled and what happens to parameters with historically large gradients.",
+      "sourceBasis": {
+        "adamw": {
+          "pages": [
+            1,
+            2,
+            3
+          ],
+          "fact": "L2 regularizer gradient is scaled together with loss gradient; decoupled decay is separate, so large-gradient weights are not relatively underregularized in the same way."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adamw"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "gradient"
+          ],
+          [
+            "regulariz",
+            "regularis"
+          ],
+          [
+            "decay"
+          ],
+          [
+            "large"
+          ],
+          [
+            "less",
+            "smaller",
+            "underregular"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "adamw-relative-error",
+      "docIds": [
+        "adamw"
+      ],
+      "queryScope": "current_paper",
+      "question": "The introduction reports a 15% improvement. Is it a relative test-error improvement or a 15-percentage-point gain? Which two image-recognition datasets and range of training budgets qualify this statement?",
+      "sourceBasis": {
+        "adamw": {
+          "pages": [
+            2
+          ],
+          "fact": "15 percent relative improvement in test error for CIFAR-10 and ImageNet32x32, budgets 100 to 1800 epochs; not an absolute percentage-point gain."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adamw"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "15"
+          ],
+          [
+            "relative"
+          ],
+          [
+            "CIFAR"
+          ],
+          [
+            "ImageNet"
+          ],
+          [
+            "100"
+          ],
+          [
+            "1800"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "pair-adaptation-versus-decay",
+      "docIds": [
+        "adam",
+        "adamw"
+      ],
+      "queryScope": "basket",
+      "question": "Compare the two papers using each paper’s own evidence: what does Adam adapt through its moment estimates, and what does AdamW decouple? Do not treat adaptive learning rates as decoupled regularization.",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            1,
+            2
+          ],
+          "fact": "Adam adapts per-parameter learning rates using gradient first and second moments."
+        },
+        "adamw": {
+          "pages": [
+            2,
+            3
+          ],
+          "fact": "AdamW separates weight decay from the loss-gradient adaptive update."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adam",
+          "adamw"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "moment"
+          ],
+          [
+            "learning rate"
+          ],
+          [
+            "decoupl"
+          ],
+          [
+            "weight decay"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "pair-theory-boundaries",
+      "docIds": [
+        "adam",
+        "adamw"
+      ],
+      "queryScope": "basket",
+      "question": "Do the Adam regret analysis and the AdamW weight-decay equivalence results together guarantee a global optimum for every non-convex neural-network objective? State the framework or assumptions of each paper and the limit of that inference.",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            2,
+            4,
+            5
+          ],
+          "fact": "Regret analysis is framed as online convex optimization with stated boundedness assumptions."
+        },
+        "adamw": {
+          "pages": [
+            2,
+            3,
+            4
+          ],
+          "fact": "Equivalence propositions depend on standard SGD or specified preconditioner assumptions; they are not universal non-convex global optimality results."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adam",
+          "adamw"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "convex"
+          ],
+          [
+            "SGD",
+            "preconditioner"
+          ],
+          [
+            "not",
+            "cannot",
+            "no guarantee"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "negative-bias-direction",
+      "docIds": [
+        "adam"
+      ],
+      "queryScope": "current_paper",
+      "question": "A colleague says Adam corrects initialization bias by multiplying each moment estimate by one minus beta to the power t. Is that the operation in Algorithm 1? Give the actual operation with a direct source.",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            2
+          ],
+          "fact": "The bias corrections divide the moments by one minus beta to power t, rather than multiplying."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adam"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "divid"
+          ],
+          [
+            "bias"
+          ],
+          [
+            "not",
+            "rather than"
+          ]
+        ]
+      }
+    },
+    {
+      "id": "unsupported-a100-energy",
+      "docIds": [
+        "adam",
+        "adamw"
+      ],
+      "queryScope": "basket",
+      "question": "Using only these selected paper passages, give the measured A100 GPU energy consumption in joules for Adam versus AdamW and name the universally more energy-efficient optimizer. If the evidence cannot establish those measurements or a universal ranking, say so instead of substituting training error or invented numbers.",
+      "sourceBasis": {
+        "adam": {
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15
+          ],
+          "fact": "Do not infer A100 joule measurements or universal energy ranking from optimizer descriptions and error curves."
+        },
+        "adamw": {
+          "pages": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19
+          ],
+          "fact": "Do not infer A100 joule measurements or universal energy ranking from the paper experiments."
+        }
+      },
+      "expected": {
+        "renderLocale": "en",
+        "requiredCitationDocIds": [
+          "adam",
+          "adamw"
+        ],
+        "requiredAnswerTermGroups": [
+          [
+            "cannot",
+            "not",
+            "insufficient",
+            "no evidence"
+          ]
+        ],
+        "insufficientEvidenceReview": true
+      }
+    }
+  ],
+  "forbiddenPhrases": []
+}

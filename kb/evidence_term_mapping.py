@@ -106,6 +106,8 @@ def method_identity_conflicts(claim: object, evidence: object) -> bool:
 # English academic source passages. Values intentionally mirror terms commonly
 # written verbatim in papers; they are never used to generate user-facing prose.
 _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"空间相关噪声", ("spatially", "correlated", "noise")),
+    (r"从噪声分布中?采样", ("sample", "noise", "distribution")),
     (r"\bi\.\s*i\.\s*d\.|\biid\b|独立同分布", ("independent", "identically", "distributed")),
     (r"有限(?:数据|样本)", ("finite", "data")),
     (r"方差", ("variance",)),

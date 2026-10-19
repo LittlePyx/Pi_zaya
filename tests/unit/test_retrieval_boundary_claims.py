@@ -12,6 +12,22 @@ def _strict(answer: str) -> tuple[str, dict]:
     )
 
 
+@pytest.mark.parametrize(('opening', 'closing'), [('（', '）'), ('(', ')')])
+def test_pruning_treats_parenthesized_reading_locations_as_a_complete_unit(opening, closing):
+    boundary = '当前检索证据无法确认所问临床试验。'
+    advice = f'若需确认全文是否报告临床验证，建议查阅实验章节{opening}MethodA 第4节；MethodB 第5节及表格{closing}，而不是依赖当前片段。'
+    repaired, _ = _strict(boundary + advice)
+    assert boundary in repaired
+    assert ('MethodB' in repaired) == (advice in repaired)
+    assert repaired.count(opening) == repaired.count(closing)
+
+
+def test_parentheses_do_not_license_unsupported_numeric_claims():
+    repaired, meta = _strict('建议核对实验设置（第一组120名患者；第二组150名患者），该方法敏感度提高80%。')
+    assert not repaired
+    assert meta['dropped_unsupported_unplanned_claims'] == 1
+
+
 @pytest.mark.parametrize("answer", [
     "没有这项随机临床试验。",
     "**没有这项随机临床试验。**",

@@ -327,7 +327,7 @@ def _split_claim_segments(value: str) -> list[str]:
         str(value or ""),
     )
     protected = re.sub(
-        r"(?i)\b(?:nat|commun|fig|eq|et\s+al)\.",
+        r"(?i)\b(?:nat|commun|fig|eq|et\s+al|i\.i\.d)\.",
         lambda match: match.group(0)[:-1] + "<KB_DOT>",
         protected,
     )
@@ -341,8 +341,22 @@ def _split_claim_segments(value: str) -> list[str]:
         r"(?<=[A-Za-z0-9\)\]]\.\*\*)\s+(?=[A-Z\u4e00-\u9fff])",
         protected,
     )
-    restored: list[str] = []
+    # A parenthetical location list belongs to the surrounding sentence.
+    # Pruning half of it would leave an orphaned closing bracket and advice tail.
+    grouped: list[str] = []
+    depth = 0
     for part in parts:
+        if depth and grouped:
+            grouped[-1] += part
+        else:
+            grouped.append(part)
+        for char in part:
+            if char in "(（":
+                depth += 1
+            elif char in ")）":
+                depth = max(0, depth - 1)
+    restored: list[str] = []
+    for part in grouped:
         if not part.strip():
             continue
         value_out = part.replace("<KB_DOT>", ".")
@@ -693,6 +707,11 @@ def _is_high_risk_claim(unit: str) -> bool:
     # Reading advice cannot turn an unverified inability into a non-factual aside.
     if re.search(r"(?:不(?:能|会)?|无法)(?:提供|给出)", plain):
         return True
+    if _meaningful_numbers(re.sub(
+        r"(?:第\s*)?\d+(?:\.\d+)*\s*(?:节|章)|\b(?:sections?|sec\.?)\s+\d+(?:\.\d+)*",
+        "", plain, flags=re.IGNORECASE,
+    )):
+        return True
     if re.match(r"^(?:这|these\b).{0,80}(?:建议|recommend)", plain, flags=re.IGNORECASE):
         return False
     if re.search(r"(?:搭配|一起)(?:读|阅读)", plain, flags=re.IGNORECASE):
@@ -839,7 +858,10 @@ def _mentioned_source_hit_indexes(
 ) -> list[int]:
     """Return unambiguous sources explicitly named in one claim segment."""
 
-    claim_surface = _plain_claim(claim)
+    claim_surface = re.sub(
+        r"(?:\bnot(?:\s+(?:a\s+comparison\s+against|against))?|\brather\s+than|而非|不是)\s+[A-Z][A-Za-z0-9]{3,}\b",
+        "", _plain_claim(claim),
+    )
     claim_tokens = _source_identity_tokens(claim_surface)
     if not claim_tokens:
         return []
@@ -911,7 +933,7 @@ def _explicit_per_source_evidence_request(prompt: str, *, source_count: int) -> 
         and re.search(
             r"(?:对比|比较|区别|差异|分别.{0,12}(?:指出|说明|给出|引用)|不要.{0,24}混|"
             r"\bcompare\b|\bcontrast\b|\bdiffer(?:ence|ent)\b|"
-            r"\bdo\s+not\s+(?:mix|conflate)\b)",
+            r"\bdo\s+not\s+(?:mix|conflate)\b|\brank(?:ing)?\b|排名)",
             surface,
             flags=re.IGNORECASE,
         )
@@ -944,6 +966,7 @@ def _enforce_named_source_section_citations(
     *,
     prompt: str,
     min_support_score: int,
+    inline_only: bool = False,
 ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
     """Bind explicitly named paper claims to each paper's own hit.
 
@@ -979,6 +1002,7 @@ def _enforce_named_source_section_citations(
             in_fence
             or not stripped
             or _TABLE_OR_CODE_RE.match(stripped)
+            or (inline_only and section_hit_index > 0)
         ):
             output_lines.append(raw_line)
             continue
@@ -1002,7 +1026,7 @@ def _enforce_named_source_section_citations(
             ]
             segment_hit_indexes = (
                 [section_hit_index]
-                if section_hit_index > 0
+                if section_hit_index > 0 and not inline_only
                 else _mentioned_source_hit_indexes(segment, answer_hits)
             )
             factual = bool(citations) or _strict_section_factual_candidate(segment)
@@ -3571,6 +3595,12 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
     )
     repaired, clarified_input_roles = clarify_supported_input_role(repaired, eligible_hits)
+    if allow_citation_repairs:
+        repaired, final_source_repairs, final_source_drops = _enforce_named_source_section_citations(
+            repaired, eligible_hits, prompt=prompt, min_support_score=5 if strict_plan else 3, inline_only=True,
+        )
+        section_repairs.extend(final_source_repairs)
+        dropped_section_claims.extend(final_source_drops)
     repaired = _renumber_ordered_lists(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]

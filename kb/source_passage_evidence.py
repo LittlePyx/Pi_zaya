@@ -18,7 +18,9 @@ def citation_plan_locator_quote(locator_slot: dict, slots: list[dict]) -> str:
 def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
     """A general statistical summary does not establish conditional/zero means."""
     concepts = (r"zero[- ]mean|零均值", r"\bconditional\s+(?:expect\w*|mean)\b|条件(?:期望|均值)",
-                r"\bunconditional\s+(?:expect\w*|mean)\b|无条件(?:期望|均值)")
+                r"\bunconditional\s+(?:expect\w*|mean)\b|无条件(?:期望|均值)",
+                r"spatially\s+correlated\s+noise|空间相关噪声",
+                r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样")
     return (all(not re.search(c, claim, re.I) or re.search(c, evidence, re.I) for c in concepts)
             and iid_relation_covered(claim, evidence) and raw_output_noise_covered(claim, evidence))
 

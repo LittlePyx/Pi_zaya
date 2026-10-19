@@ -5,6 +5,11 @@ import re
 
 _RULES = (
     (
+        (r"Given the sum of two i\.\s*i\.\s*d\. noise samples, the best estimate of one of them is half of their sum",),
+        "两份独立同分布噪声样本相加时，其中一份的最佳估计是两者之和的一半。",
+        "该句限定两份噪声样本之间的独立同分布关系，并给出和的一半这一估计；不能推导每份样本内部各分量也独立。",
+    ),
+    (
         (r"original noisy image.{0,100}synthetic sample from the same noise distribution",),
         "原始带噪图像中的噪声与另外合成的噪声样本来自同一噪声分布。",
         "该句区分原始观测与合成样本，并明确二者所用噪声分布相同；不能把允许的分布条件仅归于合成样本。",
@@ -57,6 +62,11 @@ _RULES = (
          r"Our reported values for Noise2Void should therefore be regarded as a lower bound on that method['’]s potential"),
         "摘录提及 Color BSD68 训练集，并将所报 Noise2Void 结果视为该方法潜在表现的下界。",
         "这里的下界限定的是 Noise2Void 的报告结果，不是性能上界；训练集对应哪个方法还应连同前文核对。",
+    ),
+    (
+        (r"^(?:On the other hand,\s*)?we require the ability to sample from the noise distribution",),
+        "作者明确要求能够从噪声分布中采样。",
+        "这句把能够从噪声分布采样列为方法要求，可用于核对训练前提；不应据此推断分布未知时同样适用。",
     ),
 )
 _NEGATION = re.compile(r"\b(?:not|never|cannot|false\w*|incorrect\w*|untrue|fail\w*)\b|不能|并非|不等于", re.I)

@@ -154,7 +154,13 @@ def _passage_supports(claim: str, passage: dict, source_name: str) -> bool:
     # Keep source ownership checks while requiring the body to meet the
     # existing score independently of titles and section headings.
     text = passage["text"]
-    return _support_score(claim, text) >= 5 and _supports(claim, text, "", source_name)
+    # A paragraph may name compared methods but refer to its own method as
+    # "we". Remove only the exact owning paper's name from the body-only check;
+    # all remaining actions, objects and other method names still pass both
+    # body support and binding gates without help from the heading.
+    owner = Path(source_name).stem.split(":", 1)[0].strip()
+    body_claim = re.sub(rf"(?<![A-Za-z0-9]){re.escape(owner)}(?![A-Za-z0-9])", "", claim, flags=re.I) if owner else claim
+    return _support_score(body_claim, text) >= 5 and _supports(body_claim, text, "", source_name)
 
 
 def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) -> dict:
