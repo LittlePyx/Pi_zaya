@@ -13,7 +13,7 @@ async function controlledShelves(page: Page, holdWrites = false) {
   const reads: { project: string; route: Route }[] = []
   const writes: { project: string; items: Record<string, unknown>[]; allow_empty_overwrite?: boolean }[] = []
   const writeResponses: ((override?: Record<string, unknown>) => Promise<void>)[] = []
-  const controls = { failWrites: 0 }
+  const controls = { failWrites: 0, storageOffline: false }
   let revision = 10
   const handle = async (route: Route) => {
     const request = route.request()
@@ -24,8 +24,8 @@ async function controlledShelves(page: Page, holdWrites = false) {
     }
     const body = request.method() === 'PATCH' ? request.postDataJSON() : { items: [], open: false }
     writes.push({ project, ...body })
-    if (controls.failWrites > 0) {
-      controls.failWrites -= 1
+    if (controls.failWrites > 0 || controls.storageOffline) {
+      if (controls.failWrites > 0) controls.failWrites -= 1
       await route.fulfill({ status: 503, json: { detail: 'Temporary storage failure' } })
       return
     }
@@ -272,11 +272,13 @@ test('failed clear survives closing and reopening the page until its empty snaps
   await backend.release(0, [evidence('clear-across-reload')])
   await expect(page.getByTestId('citation-shelf-item')).toHaveCount(1)
   backend.controls.failWrites = 1
+  backend.controls.storageOffline = true
   await page.getByTestId('citation-shelf-clear').click()
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent('pagehide')))
   await expect.poll(() => backend.controls.failWrites).toBe(0)
   expect(await page.evaluate(() => localStorage.getItem('kb_cite_shelf:project:a:pending_mutations:v1'))).toBeTruthy()
   await page.close()
+  backend.controls.storageOffline = false
   const oldReadCount = backend.reads.length
   const reopened = await context.newPage()
   await backend.attach(reopened)
