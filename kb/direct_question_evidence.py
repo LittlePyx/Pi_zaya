@@ -5,7 +5,7 @@ from pathlib import Path
 
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
-from kb.source_question_facets import requests_comparison_facets, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
+from kb.source_question_facets import noise_model_premise_priority, requests_comparison_facets, requests_noise_model_requirement, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
 from kb.n2n_target_condition import (
     _verified_block, attach_target_condition_slot, corruption_condition_question, target_condition_quote,
 )
@@ -145,7 +145,7 @@ def prioritize_direct_question_hits(
         for hit in candidates
         if (hit.get("meta") or {}).get("direct_question_evidence")
     ]
-    if requests_comparison_facets(prompt) or requests_sample_relation_evidence(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
+    if requests_comparison_facets(prompt) or requests_noise_model_requirement(prompt) or requests_sample_relation_evidence(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
         # Supplemental/facet scans can deduplicate an earlier direct hit into
         # a generic row. Re-read only the already scoped candidate sources.
         fresh = []
@@ -199,7 +199,7 @@ def prioritize_direct_question_hits(
 
 def prioritize_selected_source_relation_hits(selected: list[dict], candidates: list[dict], *, limit: int, prompt: str) -> list[dict]:
     """Supplement requested sample relations without displacing other facets."""
-    if not requests_sample_relation_evidence(prompt):
+    if not (requests_sample_relation_evidence(prompt) or requests_noise_model_requirement(prompt)):
         return selected
     return prioritize_direct_question_hits(selected, candidates, limit=limit, prompt=prompt)
 
@@ -560,6 +560,7 @@ def direct_question_evidence_hits(
         return []
     candidates.sort(key=lambda row: (
         -sample_relation_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
+        -noise_model_premise_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
         -row[0], row[1],
     ))
     chosen = candidates[0][2]

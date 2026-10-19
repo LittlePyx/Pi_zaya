@@ -13,7 +13,16 @@ def retrieval_limit_claim(claim: str) -> bool:
         r'(?:the\s+)?(?:(?:current|currently)\s+)?(?:retrieved|cited|selected|provided)\s+'
         r'(?:(?:retrieved|cited|selected|provided)\s+)?(?:evidence|snippets?|excerpts?|passages?)\s+'
         r'(?:cannot|can\x27t|does\s+not|do\s+not|doesn\x27t|don\x27t)\s+'
-        r'(?:establish|confirm|determine|prove|support|provide|show|specify|state|describe|report|give)\b|'
+        r'(?:establish|confirm|determine|prove|support|provide|show|specify|state|describe|detail|report|give)\b|'
+        r'(?:the\s+)?(?:current\s+)?(?:retrieved|cited|selected|provided)\s+'
+        r'(?:evidence|snippets?|excerpts?|passages?)\s+(?:contains?|includes?|reports?)\s+no\b|'
+        r'no\s+(?:retrieved|cited|selected|provided)\s+(?:snippet|excerpt|passage)\s+'
+        r'(?:reports?|shows?|provides?|states?|describes?)\b|'
+        r'(?:that\s+difference\s+alone\s+means|this\s+means)\s+[^.!?]{0,350}?not\s+'
+        r'something\s+(?:these|the\s+(?:retrieved|selected|cited))\s+(?:snippets|excerpts|passages)\s+can\s+'
+        r'(?:demonstrate|show|establish)\b|'
+        r'absence\s+of\s+[^.!?]{0,160}\s+in\s+(?:these|the\s+(?:retrieved|selected|cited))\s+'
+        r'(?:snippets|excerpts|passages)\s+does\s+not\s+(?:prove|establish|show)\b|'
         r'(?:当前|本轮)(?:引用|检索)(?:到的)?(?:证据|片段|内容|结果)'
         r'(?:并)?(?:无法|不能|不足以|未直接|未|没有))', plain, re.I,
     ))

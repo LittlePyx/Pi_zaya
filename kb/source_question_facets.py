@@ -22,6 +22,19 @@ def _additive_training_pair_question(prompt: str) -> bool:
                 and re.search(r"\btarget\b|目标", prompt, re.I))
 
 
+def requests_noise_model_requirement(prompt: str) -> bool:
+    return bool(_NOISE_MODEL.search(prompt) and re.search(r'requir\w*|need\w*|需要|先验', prompt, re.I))
+
+
+def _known_noise_training_premise(text: str) -> bool:
+    return bool(re.search(r'known\s+noise\s+(?:model|distribution)', text, re.I)
+                and re.search(r'(?:draw|sampl)\w*.{0,60}additional\s+synthetic\s+noise\s+sample', text, re.I))
+
+
+def noise_model_premise_priority(prompt: str, text: str) -> int:
+    return int(requests_noise_model_requirement(prompt) and _known_noise_training_premise(text))
+
+
 def requests_source_facets(prompt: str) -> bool:
     return bool(_NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt)
                 or (_CORRECTION.search(prompt) and _OUTPUT.search(prompt))
@@ -55,6 +68,8 @@ def sample_relation_priority(prompt: str, text: str) -> int:
 
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
+    if requests_noise_model_requirement(prompt) and _known_noise_training_premise(text):
+        return 20
     if sample_relation_priority(prompt, text) == 2:
         return 18
     if _additive_training_pair_question(prompt):
@@ -105,6 +120,8 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
+    if requests_noise_model_requirement(prompt) and _known_noise_training_premise(text):
+        return text
     if not source_facet_score(prompt, text):
         return text
     spans = []

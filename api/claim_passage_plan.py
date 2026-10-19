@@ -84,7 +84,7 @@ def _slot_supports(claim: str, slot: dict) -> bool:
         return False
     if slot.get("evidence_selection_reason") == "claim_source_passage":
         return bool(passage) and _passage_supports(claim, passage, str(slot.get("source_name") or ""))
-    quote = passage["source_block_text"] if passage else str(slot.get("evidence_quote") or "")
+    quote = passage["text"] if passage else str(slot.get("evidence_quote") or "")
     return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""))
 
 
@@ -135,6 +135,11 @@ def _retrieved_passages(slots: list[dict], hits: list[dict], source: str) -> dic
     for slot in slots:
         for passage in _declared_source_passages(slot):
             result[str(passage["block_id"])] = passage
+        if _canonical_source_path_identity(str(slot.get('source_path') or '')) != identity:
+            continue
+        parent = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
+        if parent and 40 <= len(parent['source_block_text']) <= 1800:
+            result[str(parent['block_id'])] = {**parent, 'text': parent['source_block_text']}
     return result
 
 
@@ -192,6 +197,8 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
                         and _verified_passage({**s, "text": s.get("evidence_quote")}, str(s.get("source_path") or ""))), None)
         if primary is not None:
             claims = [c for c in slot.get("passage_bound_claims", []) if _slot_supports(c, primary)]
+            if len(claims) != len(slot.get('passage_bound_claims', [])):
+                continue
             primary["passage_bound_claims"] = list(dict.fromkeys([*primary.get("passage_bound_claims", []), *claims]))
             slots.remove(slot)
             added = True

@@ -9,7 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 from kb.claim_polarity_guard import claim_polarity_conflicts, has_checkable_action_fact
 from kb.imaging_equation_binding import has_masked_frame_sum
-from kb.citation_marker_context import strip_citation_decoration
+from kb.citation_marker_context import numeric_marker_is_content, strip_citation_decoration
 from kb.invariant_input_role import clarify_supported_input_role
 from kb.source_blocks import normalize_inline_markdown
 from kb.theory_evidence import (
@@ -1670,9 +1670,16 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
         parts=[];offset=0
         for start,end in citation_sentence_spans(line):
             parts.append(line[offset:start]);unit=line[start:end]
-            if retrieval_limit_claim(_plain_claim(unit)):
-                unit,removed=_NUMERIC_CITATION_RE.subn('',unit);count+=removed
-            parts.append(unit);offset=end
+            links = [m.span() for m in re.finditer(r'\[[^\]\n]*\]\([^\n)]*\)', unit)]
+            colon = next((m for m in re.finditer(r'[:：]', unit) if not numeric_marker_is_content(unit, m.start()) and not any(a <= m.start() < b for a, b in links)), None)
+            prefix, separator, tail = (unit[:colon.start()], colon[0], unit[colon.end():]) if colon else (unit, '', '')
+            bounded_prefix = bool(separator and tail.strip() and _is_epistemic_retrieval_limit(_plain_claim(prefix)))
+            segments = [prefix.rstrip() + ('。\n\n' if separator == '：' else '.\n\n'), tail.lstrip()] if bounded_prefix else [unit]
+            for segment in segments:
+                if retrieval_limit_claim(_plain_claim(segment)):
+                    segment,removed=_NUMERIC_CITATION_RE.subn('',segment);count+=removed
+                parts.append(segment)
+            offset=end
         parts.append(line[offset:]);lines.append(''.join(parts))
     text=''.join(lines)
     # A retrieval-boundary statement describes what the current evidence

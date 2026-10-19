@@ -13,9 +13,11 @@ from kb.evidence_term_mapping import (
 from kb.source_blocks import normalize_inline_markdown
 from kb.claim_polarity_guard import claim_polarity_conflicts
 from kb.training_information_relation import training_information_relation_covered
-from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered, sampling_ability_covered
+from kb.explicit_training_assignments import explicit_training_assignments_covered, noise_augmentation_training_covered
+from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, sampling_ability_covered
 from kb.theory_evidence import conditional_noise_domain_surface
 from kb.claim_source_eligibility import retrieval_limit_claim
+from kb.explicit_claim_metrics import named_metrics_covered, qualitative_outperformance_covered
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
     (
@@ -211,6 +213,11 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
     )
 
     return (
+        named_metrics_covered(claim_text, evidence_text) and qualitative_outperformance_covered(claim_text, evidence_text) and
+        explicit_training_assignments_covered(claim_text, evidence_text) and
+        noise_augmentation_training_covered(claim_text, evidence_text) and
+        known_noise_model_covered(claim_text, evidence_text) and
+        named_synthetic_sample_covered(claim_text, evidence_text) and
         iid_relation_covered(claim_text, evidence_text)
         and sampling_ability_covered(claim_text, evidence_text)
         and variance_relation_covered(claim_text, evidence_text)
@@ -1327,7 +1334,8 @@ def assess_system_a_hit_binding(
     )
     claim_low = claim.lower()
     evidence_body_low = evidence_body_surface.lower()
-    if not explicit_claim_relations_covered(claim, evidence_body_surface) or claim_polarity_conflicts(claim, evidence_body_surface):
+    relation_evidence = plan_binding_evidence or str(evidence_quote or '') or evidence_body_surface
+    if not explicit_claim_relations_covered(claim, relation_evidence) or claim_polarity_conflicts(claim, relation_evidence):
         reason = (
             "回答句加入了原文未支持的因果、操作顺序或动作方向关系，不能绑定到这张证据卡。"
             if _system_a_prefers_zh(claim)

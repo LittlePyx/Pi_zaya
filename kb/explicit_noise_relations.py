@@ -66,13 +66,39 @@ def raw_output_noise_covered(claim: str, evidence: str) -> bool:
 
 def sampling_ability_covered(claim: str, evidence: str) -> bool:
     """Not needing a sampling prior does not establish inability to sample."""
-    sampling = r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样"
-    inability = r"不具备.{0,16}(?:能力|这一点)|无法.{0,25}采样|\b(?:cannot|unable\s+to)\b.{0,45}sampl|\b(?:lack\w*|not\s+(?:have|possess))\b.{0,25}ability"
-    if not (re.search(sampling, claim, re.I) and re.search(inability, claim, re.I)):
+    sampling = r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样|从(?:该|此)分布中?采样|从中采样"
+    inability = r"不具备.{0,16}(?:能力|这一点)|(?:所)?不具备(?:的)?(?=[。；,，\s\[\]]|$)|无法.{0,25}采样|\b(?:cannot|unable\s+to)\b.{0,45}sampl|\b(?:lack\w*|not\s+(?:have|possess))\b.{0,25}ability"
+    if not re.search(sampling, claim, re.I):
         return True
+    if not re.search(inability, claim, re.I):
+        return bool(re.search(sampling + r'|draw\w*[^.;\n]{0,60}(?:synthetic\s+)?noise\s+sample', evidence, re.I))
     return bool(re.search(
         r"\b(?:cannot|unable\s+to)\b[^.;\n]{0,45}sampl|"
         r"\b(?:lack\w*|not\s+(?:have|possess))\s+(?:the\s+)?ability\s+to\s+sampl|"
         r"(?:不具备|没有|缺乏)[^。；\n]{0,30}采样能力|无法从噪声分布中?采样",
         evidence, re.I,
     ))
+
+
+def known_noise_model_covered(claim: str, evidence: str) -> bool:
+    """Sampling ability alone does not explicitly state a known noise model."""
+    scope = bool(re.search(r'noise\s+model|噪声模型', claim, re.I))
+    known = re.compile(r'\bknown(?:,?\s+samplable)?\s+noise\s+(?:model|distribution)|已知(?:的)?噪声(?:模型|分布)' + (r'|\bknown\s+model\b' if scope else ''), re.I)
+
+    def positive(text: str, match: re.Match) -> bool:
+        prefix = re.split(r'\bbut\b|\bhowever\b|但|而', text[:match.start()], flags=re.I)[-1][-32:]
+        return not (re.search(r'(?:does\s+not|not|without|不需要|无需)\s*(?:require\w*\s+)?(?:a\s+)?$', prefix, re.I)
+                    or re.match(r'\s+(?:is\s+)?not\s+(?:required|known)', text[match.end():], re.I))
+
+    return not any(positive(claim, m) for m in known.finditer(claim)) or any(positive(evidence, m) for m in known.finditer(evidence))
+
+
+def named_synthetic_sample_covered(claim: str, evidence: str) -> bool:
+    """A distribution statement about N cannot label N as the synthetic sample."""
+    named = re.findall(r'(?i:synthetic\s+(?:noise\s+)?sample|合成噪声样本)\s*[（(]?\s*\$?([A-Za-z])\s*(?:\\sim|∼|~)', claim)
+    for variable in named:
+        name = re.escape(variable)
+        direct = rf'\b{name}\s+(?i:is\s+(?:a\s+)?synthetic\s+(?:noise\s+)?sample)\b|(?i:synthetic\s+(?:noise\s+)?sample)\s*\$?{name}(?![A-Za-z])'
+        if not re.search(direct, evidence):
+            return False
+    return True
