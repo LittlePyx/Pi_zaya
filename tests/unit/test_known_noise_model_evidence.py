@@ -32,3 +32,6 @@ def test_inserted_sampling_clause_still_requires_the_full_known_distribution_pre
     assert _supports(claim, DEFINITION, '', 'noisier2noise.en.md')
     assert not _supports(claim, 'N is drawn from a known noise distribution.', '', 'noisier2noise.en.md')
     assert not _supports(claim, SAMPLING, '', 'noisier2noise.en.md')
+    short_form = 'Noisier2Noise 需要一个已知、可采样的噪声分布。'
+    assert _supports(short_form, DEFINITION, '', 'noisier2noise.en.md')
+    assert not _supports(short_form, 'N is drawn from a known noise distribution.', '', 'noisier2noise.en.md')

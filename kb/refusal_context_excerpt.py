@@ -86,6 +86,11 @@ def _prune_unverified_context_facts(answer: str, plan: dict, paths: list[str]) -
     for start, end in citation_sentence_spans(answer):
         unit = answer[start:end]
         numbers = [int(m[1]) for m in _CITE.finditer(unit) if not numeric_marker_is_content(answer, start + m.start())]
+        plain = re.sub(r'[*#>]', '', unit).strip()
+        unqualified = re.search(r'(?:论文|文献|文章|研究|\b(?:these|both|the)\s+papers?\b)[^。.!?\n]{0,100}(?:不是|并非|不存在|没有|未报告|\b(?:are|is|do|does)\s+not\b)|^(?:这些|上述内容|these)[^。.!?\n]{0,30}(?:不是|\bare\s+not\b)', plain, re.I)
+        bounded = retrieval_limit_claim(plain) or re.search(r'(?:不能|无法|不足以|not|cannot)[^。.!?\n]{0,35}(?:证明|断言|支持|prove|establish|support)', plain, re.I)
+        if not numbers and unqualified and not bounded and not any(_supports(unit, q, '', source) for candidates in quotes.values() for q, source in candidates):
+            continue
         if not numbers or all(any(_supports(unit, q, '', source) for q, source in quotes.get(number, [])) for number in numbers):
             spans.append(unit)
     return ''.join(spans).strip()

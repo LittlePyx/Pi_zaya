@@ -13,7 +13,7 @@ from kb.evidence_term_mapping import (
 from kb.source_blocks import normalize_inline_markdown
 from kb.claim_polarity_guard import claim_polarity_conflicts
 from kb.training_information_relation import training_information_relation_covered
-from kb.explicit_training_assignments import explicit_training_assignments_covered, noise_augmentation_training_covered
+from kb.explicit_training_assignments import explicit_training_assignments_covered, named_equation_covered, noise_augmentation_training_covered, prediction_average_covered
 from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, sampling_ability_covered
 from kb.theory_evidence import conditional_noise_domain_surface
 from kb.claim_source_eligibility import retrieval_limit_claim
@@ -216,7 +216,7 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
 
     return (
         named_metrics_covered(claim_text, evidence_text) and qualitative_outperformance_covered(claim_text, evidence_text) and
-        explicit_training_assignments_covered(claim_text, evidence_text) and
+        explicit_training_assignments_covered(claim_text, evidence_text) and named_equation_covered(claim_text, evidence_text) and prediction_average_covered(claim_text, evidence_text) and
         noise_augmentation_training_covered(claim_text, evidence_text) and
         known_noise_model_covered(claim_text, evidence_text) and
         named_synthetic_sample_covered(claim_text, evidence_text) and

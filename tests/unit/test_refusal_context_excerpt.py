@@ -71,3 +71,10 @@ def test_bounded_refusal_drops_a_cited_fact_without_a_literal_source_witness(tmp
     result = append_refusal_context_excerpt(BOUNDARY + unsupported, plan, [str(path)])
     assert result.startswith(BOUNDARY) and '900' not in result
     assert '> ' + QUOTE + ' [1]' in result
+
+
+def test_window_limit_does_not_preserve_an_uncited_absolute_paper_classification(tmp_path):
+    path, plan = _fixture(tmp_path)
+    answer = BOUNDARY + '\n\n这两篇论文不是临床试验研究。\n\n这些都不是临床试验数据。\n\n但这不能证明全文一定没有相关内容。'
+    result = append_refusal_context_excerpt(answer, plan, [str(path)])
+    assert '不是临床试验' not in result and '不能证明全文' in result

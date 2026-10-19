@@ -177,7 +177,7 @@ def _split_compound_sources(
 
 
 def prepare_source_card_message(message: dict) -> dict:
-    """Recover physical IDs before the existing incomplete-answer action gate.
+    """Resolve page-only plans before binding both complete and partial answers.
 
     Keep the answer's failure and all semantic/support gates unchanged. A
     page-only plan can qualify only after its entire quote is re-read in one
@@ -224,8 +224,7 @@ def prepare_source_card_message(message: dict) -> dict:
     for original in originals:
         slot = dict(original) if isinstance(original, dict) else original
         if (
-            not partial
-            or not isinstance(slot, dict)
+            not isinstance(slot, dict)
             or slot.get("block_id")
             or slot.get("anchor_id")
             or slot.get("preferred_system", "system_a") != "system_a"

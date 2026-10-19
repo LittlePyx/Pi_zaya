@@ -232,14 +232,14 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
             if len(excerpt_slots) == 1:
                 supported_slots = excerpt_slots
             if supported_slots:
-                unique_secondary = (
-                    len(supported_slots) == 1 and supported_slots[0] is not source_slots[0]
+                unique_verified = (
+                    len(supported_slots) == 1
                     and bool(_verified_passage(
                         {**supported_slots[0], "text": supported_slots[0].get("evidence_quote")},
                         str(supported_slots[0].get("source_path") or ""),
                     ))
                 )
-                if len(supported_slots) == 1 and (unique_secondary or supported_slots[0].get("passage_bound_claims")):
+                if len(supported_slots) == 1 and (unique_verified or supported_slots[0].get("passage_bound_claims")):
                     slot = supported_slots[0]
                     claims = list(slot.get("passage_bound_claims") or [])
                     if local_claim not in claims:

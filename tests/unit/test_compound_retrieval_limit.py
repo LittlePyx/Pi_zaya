@@ -25,3 +25,9 @@ def test_math_code_and_link_colons_are_not_boundary_separators():
         text = '当前检索到的证据无法确定变量 ' + value + ' 的值。'
         result, _ = _scope_absolute_negative_claims(text)
         assert result == text
+
+
+def test_establish_wording_is_a_window_limit_and_still_rejects_claimed_numbers():
+    from kb.claim_evidence_runtime import _answer_starts_with_retrieval_limit
+    assert _answer_starts_with_retrieval_limit('当前检索到的证据无法确立患者人数或诊断敏感度差值。')
+    assert not _answer_starts_with_retrieval_limit('当前检索到的证据无法确立患者人数为900或敏感度差值为98%。')

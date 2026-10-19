@@ -5,7 +5,7 @@ import re
 from kb.explicit_noise_relations import iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, raw_output_noise_covered, sampling_ability_covered
 from kb.claim_source_eligibility import retrieval_limit_claim
 from kb.explicit_claim_metrics import named_metrics_covered, qualitative_outperformance_covered
-from kb.explicit_training_assignments import explicit_training_assignments_covered, noise_augmentation_training_covered
+from kb.explicit_training_assignments import explicit_training_assignments_covered, named_equation_covered, noise_augmentation_training_covered, prediction_average_covered
 
 
 def citation_plan_locator_quote(locator_slot: dict, slots: list[dict]) -> str:
@@ -29,7 +29,7 @@ def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
                 r"spatially\s+correlated\s+noise|空间相关噪声",
                 r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样")
     return (all(not re.search(c, claim, re.I) or re.search(c, evidence, re.I) for c in concepts)
-            and explicit_training_assignments_covered(claim, evidence)
+            and explicit_training_assignments_covered(claim, evidence) and named_equation_covered(claim, evidence) and prediction_average_covered(claim, evidence)
             and noise_augmentation_training_covered(claim, evidence)
             and known_noise_model_covered(claim, evidence)
             and named_synthetic_sample_covered(claim, evidence)

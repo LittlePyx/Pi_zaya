@@ -14,6 +14,8 @@ def test_experiment_noise_levels_do_not_define_an_augmentation_training_recipe()
     assert not _supports(claim, experiment, 'Experiments', 'noisier2noise.en.md')
     assert noise_augmentation_training_covered(claim, source)
     assert not noise_augmentation_training_covered(claim, 'We augment the inputs with additional noise and predict the clean image X.')
+    bare = 'Noisier2Noise 讨论的是在已有噪声图像上叠加合成噪声、让网络预测原始噪声图像的去噪训练方式。'
+    assert not _supports(bare, experiment, '', 'noisier2noise.en.md')
 
 
 def test_psnr_alone_cannot_support_a_psnr_and_ssim_comparison():

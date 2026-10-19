@@ -111,6 +111,7 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"已知(?:的)?噪声分布", ("known", "noise", "distribution")),
     (r"已知(?:的)?噪声模型", ("known", "noise", "model")),
     (r"已知(?:的)?[、，]?(?:且)?(?:可(?:以)?|能(?:够)?)从中采样的噪声分布", ("known", "noise", "distribution", "sample")),
+    (r"已知(?:的)?[、，]?(?:且)?可采样的噪声分布", ("known", "noise", "distribution", "sample")),
     (r"从(?:该|此)分布中?采样", ("sample", "distribution")),
     (r"\bi\.\s*i\.\s*d\.|\biid\b|独立同分布", ("independent", "identically", "distributed")),
     (r"有限(?:数据|样本)", ("finite", "data")),
