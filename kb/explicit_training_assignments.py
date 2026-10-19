@@ -19,6 +19,9 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
     Shared mask symbols in a loss do not define the training pair. This only
     checks already written definitions; it supplies no positive entailment.
     """
+    feeding = r'feed\w*[^.;。\n]{0,50}Bernoulli[- ]sampled|fed[^.;。\n]{0,50}Bernoulli[- ]sampled|Bernoulli[- ]sampled[^.;。\n]{0,80}(?:fed|feeding)|伯努利采样[^。；\n]{0,30}(?:送入|输入网络)'
+    if re.search(feeding, claim, re.I) and not re.search(feeding, evidence, re.I):
+        return False
     if re.search(r'\bloss\b|损失', claim, re.I):
         compact = lambda text: re.sub(r'\s+|_|\\(?:left|right)\b', '', text)
         factors = [compact(m[1]) for m in re.finditer(r'\$([^$\n]+)\$', claim) if re.search(r'1\s*-', m[1]) and not re.search(r':=|=', m[1])]
@@ -36,8 +39,7 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
             a[1] in names and a[2] in names and f':=(1-{a[1]})\\odot{a[2]}' in raw for a in assignments
         ):
             return False
-    if not re.search(r'\b(?:input|target)\b|输入|目标', claim, re.I):
-        return True
+    training_roles = bool(re.search(r'\b(?:input|target)\b|输入|目标', claim, re.I))
 
     def normalized(text: str) -> str:
         # The shared claim surface removes Markdown underscores. Keep the
@@ -45,7 +47,18 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
         text = re.sub(r'\\triangleq\b|≜|:=', '=', text).replace('−', '-')
         return re.sub(r'\s+', '', re.sub(r'\\(?:left|right)\b', '', text)).replace('_', '')
 
-    definitions = [normalized(m[1]) for m in re.finditer(r'(?<!\$)\$([^$\n]+)\$(?!\$)', claim) if re.search(r':=|\\triangleq\b|≜|(?<!=)=(?!=)', m[1])]
+    definitions = []
+    for match in re.finditer(r'(?<!\$)\$([^$\n]+)\$(?!\$)', claim):
+        expression = match[1]
+        operator = re.search(r':=|\\triangleq\b|≜|(?<!=)=(?!=)', expression)
+        if operator is None:
+            continue
+        subject = re.sub(r'\\(?:boldsymbol|mathbf|mathcal)\{([^{}]+)\}', r'\1', expression[:operator.start()])
+        # A declared observation/variable is still a definition without an
+        # "input" or "target" label. Do not treat arbitrary equalities as
+        # definitions or invent algebraic equivalents.
+        if training_roles or operator[0] != '=' or re.fullmatch(r'\s*[A-Za-z](?:_[A-Za-z0-9{}]+)?\s*', subject):
+            definitions.append(normalized(expression))
     definitions.extend(normalized(m[0]) for m in re.finditer(r'\b[A-Z]\s*(?:≜|:=|=)\s*[A-Z](?:\s*[+-]\s*[A-Z])+', claim))
     if not definitions:
         return True

@@ -55,3 +55,15 @@ def test_plain_short_assertions_do_not_expand_into_unneeded_context(tmp_path):
     first = 'The noise distribution is known and fully specified in the source.'
     card, _ = _fixture(tmp_path, first=first)
     assert refresh_source_citation_cards([card], render_locale='en')[0]['evidence_quote'] == first
+
+
+def test_plaintext_assignment_retains_its_own_verified_prose_context(tmp_path):
+    first = 'a noisier version, Z ≜ Y + M = X + N + M.'
+    raw = 'Our training procedure is as follows. Given Y, we create ' + first + ' We then train the network to predict Y given Z as input.'
+    card, _ = _fixture(tmp_path, raw=raw, first=first)
+    card['answer_claim'] = 'The noisier input is Z ≜ Y + M = X + N + M.'
+    result = refresh_source_citation_cards([card], render_locale='en')[0]
+    assert result['evidence_quote'] == raw and result['card_evidence'] == raw
+    assert all(result[k] == card[k] for k in ('source_path', 'block_id', 'anchor_id', 'heading_path', 'page_start', 'page_end'))
+    card['answer_claim'] = card['answer_claim'].replace('Y + M', 'Y - M')
+    assert refresh_source_citation_cards([card], render_locale='en')[0]['evidence_quote'] != raw

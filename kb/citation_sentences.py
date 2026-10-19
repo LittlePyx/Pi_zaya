@@ -6,12 +6,27 @@ from kb.citation_marker_context import numeric_marker_is_content
 from kb.citation_table_context import cited_table_cell_span
 
 _CITATION_TARGET = r'\(\#[^\s)]+(?:\s+"[^"]*")?\)'
+_DEFINITION_BRIDGE = r",(?=\s*(?:\[\d{1,4}\](?:" + _CITATION_TARGET + r")?\s*)*(?:giving|yielding|producing)\b[^.;\n]{0,160}(?:\\triangleq|:=|≜|\b[A-Z]\s*=))"
+
+
+def split_definition_bridges(text: str) -> list[str]:
+    boundaries = [0]
+    for match in re.finditer(_DEFINITION_BRIDGE, text, re.I):
+        position = match.start()
+        if (not numeric_marker_is_content(text, position)
+                and text[:position].count('(') == text[:position].count(')')
+                and text[:position].count('"') % 2 == 0):
+            suffix = re.match(r'(?:\s*\[\d{1,4}\](?:' + _CITATION_TARGET + r')?)*', text[match.end():])
+            boundaries.append(match.end() + suffix.end())
+    boundaries.append(len(text))
+    return [text[a:b].strip() for a, b in zip(boundaries, boundaries[1:]) if text[a:b].strip()]
+
 
 def citation_sentence_spans(text: str) -> list[tuple[int, int]]:
     """Keep closing quotes/citations with their sentence and protect abbreviations."""
     boundaries = [0]
     links = [m.span() for m in re.finditer(r'\[\d{1,4}\]' + _CITATION_TARGET + r'|\[[^\]\n]*\]\([^\n)]*\)', text)]
-    for match in re.finditer(r'[。！？!?；;\n]|[，,](?=\s*(?:其中|where\b)[^。；;\n]{0,180}(?:表示|定义为|denotes?\b|defined\b))|,(?=\s*(?:\[\d{1,4}\](?:\(\#[^\n)]*\))?\s*)?\s+with\b)|\.(?=\s|["\u201d\u2019\']|\[|$)', text):
+    for match in re.finditer(r'[。！？!?；;\n]|[，,](?=\s*(?:其中|where\b)[^。；;\n]{0,180}(?:表示|定义为|denotes?\b|defined\b))|,(?=\s*(?:\[\d{1,4}\](?:\(\#[^\n)]*\))?\s*)?\s+with\b)|\.(?=\s|["\u201d\u2019\']|\[|$)' + '|' + _DEFINITION_BRIDGE, text, re.I):
         position = match.start()
         if numeric_marker_is_content(text, position) or any(a <= position < b for a, b in links):
             continue

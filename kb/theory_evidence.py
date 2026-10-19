@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from kb.source_equation_literals import source_equation_literals
+from kb.waived_data_requirements import waived_data_requirements_covered
 
 
 _ESTIMATE_VARIANCE = r"(?:估计(?:量|值)?(?:的)?方差|variance\s+of\s+the\s+estimate)"
@@ -157,16 +158,8 @@ def restoration_task_enumeration_covered(claim: str, evidence: str) -> bool:
 
 
 def training_pair_requirement_covered(claim: str, evidence: str) -> bool:
-    """Require both explicitly waived training-pair types in the same evidence."""
-    noisy_pairs = bool(re.search(r"带噪(?:图像)?对|noisy\s+image\s+pairs", claim, re.I))
-    clean_targets = bool(re.search(r"干净(?:目标|标签|参照)|clean\s+target", claim, re.I))
-    waived = bool(re.search(r"不需要|无需|免除|does\s+not\s+require|neither", claim, re.I))
-    if not (noisy_pairs and clean_targets and waived):
-        return True
-    return bool(
-        re.search(r"(?:does\s+not\s+require|neither).{0,80}noisy\s+image\s+pairs", evidence, re.I)
-        and re.search(r"(?:nor|neither).{0,40}clean\s+target\s+images", evidence, re.I)
-    )
+    """Require each explicitly waived data type within its own negation scope."""
+    return waived_data_requirements_covered(claim, evidence)
 
 
 def _noise_given_signal_variables(evidence: str) -> list[str]:

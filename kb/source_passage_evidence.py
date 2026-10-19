@@ -3,7 +3,8 @@ from __future__ import annotations
 import re
 
 from kb.explicit_noise_relations import iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, raw_output_noise_covered, sampling_ability_covered
-from kb.claim_source_eligibility import retrieval_limit_claim
+from kb.claim_source_eligibility import retrieval_limit_claim, omitted_derivation_covered
+from kb.noise_model_prerequisites import noise_model_prerequisites_covered, objective_term_covered
 from kb.explicit_claim_metrics import named_metrics_covered, qualitative_outperformance_covered
 from kb.explicit_training_assignments import explicit_training_assignments_covered, named_equation_covered, noise_augmentation_training_covered, prediction_average_covered
 
@@ -20,7 +21,9 @@ def citation_plan_locator_quote(locator_slot: dict, slots: list[dict]) -> str:
 
 def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
     """A general statistical summary does not establish conditional/zero means."""
-    if retrieval_limit_claim(claim):
+    if retrieval_limit_claim(claim) or not omitted_derivation_covered(claim, evidence):
+        return False
+    if not noise_model_prerequisites_covered(claim, evidence) or not objective_term_covered(claim, evidence):
         return False
     if not named_metrics_covered(claim, evidence) or not qualitative_outperformance_covered(claim, evidence):
         return False

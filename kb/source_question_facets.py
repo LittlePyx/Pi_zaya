@@ -22,6 +22,20 @@ def _additive_training_pair_question(prompt: str) -> bool:
                 and re.search(r"\btarget\b|目标", prompt, re.I))
 
 
+def requests_comparison_boundary(prompt: str) -> bool:
+    return bool(re.search(r'rank\w*|compar\w*|head[- ]to[- ]head|排名|比较|对比', prompt, re.I)
+                and re.search(r'universal|always|every|普遍|总是|始终|任意|所有', prompt, re.I))
+
+
+def comparison_caution_quote(text: str) -> str:
+    for start, end in citation_sentence_spans(text):
+        sentence = text[start:end].strip()
+        if (not re.search(r'\b(?:not|never|false|incorrect)\b', sentence, re.I)
+                and re.search(r'methods make different assumptions about the task.{0,60}direct comparison may be misleading', sentence, re.I)):
+            return sentence
+    return ""
+
+
 def requests_noise_model_requirement(prompt: str) -> bool:
     return bool(_NOISE_MODEL.search(prompt) and re.search(r'requir\w*|need\w*|需要|先验', prompt, re.I))
 
@@ -51,7 +65,7 @@ def noise_model_premise_priority(prompt: str, text: str) -> int:
 
 
 def requests_source_facets(prompt: str) -> bool:
-    return bool(_NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
+    return bool(requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
                 or (_CORRECTION.search(prompt) and _OUTPUT.search(prompt))
                 or _DROPOUT_PHASE.search(prompt) or _additive_training_pair_question(prompt))
 
@@ -83,6 +97,8 @@ def sample_relation_priority(prompt: str, text: str) -> int:
 
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
+    if requests_comparison_boundary(prompt) and comparison_caution_quote(text):
+        return 24
     if requested_method_premise_priority(prompt, text):
         return 20
     if sample_relation_priority(prompt, text) == 2:
@@ -135,7 +151,7 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
-    if requested_method_premise_priority(prompt, text):
+    if requested_method_premise_priority(prompt, text) or (_additive_training_pair_question(prompt) and _known_noise_training_premise(text)):
         return text
     if not source_facet_score(prompt, text):
         return text

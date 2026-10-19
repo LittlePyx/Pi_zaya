@@ -9,6 +9,14 @@ except ImportError:
     fitz = None
 
 
+def recover_pdf_prose_structure(text: str, md_path: Path, pdf_path: Path | str) -> tuple[str, bool]:
+    from kb.converter.pdf_inline_prose import recover_inline_prose_fragments
+
+    fixed, structure_changed = recover_inline_prose_fragments(text, pdf_path)
+    fixed, image_changed = recover_equation_image_prose(fixed, md_path, pdf_path)
+    return fixed, structure_changed or image_changed
+
+
 def recover_equation_image_prose(text: str, md_path: Path, pdf_path: Path | str) -> tuple[str, bool]:
     """Recover only a literal prose continuation hidden by an equation image.
 

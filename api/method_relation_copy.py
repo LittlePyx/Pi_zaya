@@ -5,6 +5,11 @@ import re
 
 _RULES = (
     (
+        (r"Our method is applicable to both pixel-wise i\.\s*i\.\s*d\. white noise and spatially correlated noise",),
+        "方法的适用范围同时包含逐像素独立同分布的白噪声和空间相关噪声。",
+        "该句界定允许的噪声类型；它没有给出两份噪声样本之间的独立性条件，比较方法前提时仍须核对相应方法段落。",
+    ),
+    (
         (r'methods make different assumptions about the task.{0,50}direct comparison may be misleading',),
         '不同方法的任务假设不同，直接比较可能产生误导。',
         '该句提醒先核对不同方法的任务假设，再解释直接比较；它不是普遍优劣排序或新的数量结果的证据。',

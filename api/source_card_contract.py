@@ -15,6 +15,7 @@ from kb.claim_evidence_runtime import _claim_units
 from kb.citation_marker_context import numeric_marker_is_content
 from kb.claim_source_eligibility import complete_source_prefix, incomplete_source_prose
 from kb.refusal_context_excerpt import bind_refusal_context_excerpt
+from kb.source_locator_receipts import relocate_repaired_source_plan
 
 # The reader already carries this bounded source context. A verified continuous
 # excerpt may need more room than the 520-character synthesized card preview.
@@ -181,7 +182,8 @@ def prepare_source_card_message(message: dict) -> dict:
 
     Keep the answer's failure and all semantic/support gates unchanged. A
     page-only plan can qualify only after its entire quote is re-read in one
-    unique block of its own canonical source; stale IDs are never replaced.
+    unique block of its own canonical source. Located plans may follow only
+    an exact PDF-proven repair receipt before all ordinary support checks.
     """
     rec = dict(message or {})
     meta = dict(rec["meta"]) if isinstance(rec.get("meta"), dict) else {}
@@ -204,7 +206,8 @@ def prepare_source_card_message(message: dict) -> dict:
     plan = quality.get("citation_plan")
     if not isinstance(plan, dict):
         return rec
-    context_plan = bind_refusal_context_excerpt(str(rec.get('content') or ''), plan, list(meta.get('canonical_hit_paths') or []))
+    repaired_plan = relocate_repaired_source_plan(plan, list(meta.get("canonical_hit_paths") or []))
+    context_plan = bind_refusal_context_excerpt(str(rec.get('content') or ''), repaired_plan, list(meta.get('canonical_hit_paths') or []))
     context_changed = context_plan != plan
     plan = context_plan
     partial = (
@@ -304,7 +307,7 @@ def _source_excerpt(detail: dict) -> tuple[dict, str] | None:
             # A short variable declaration needs its existing prose context.
             # Never stitch blocks or restore a lost logical continuation.
             if (block.get('kind') == 'paragraph' and len(excerpt) < 120
-                    and re.search(r'(?<!\\)\$[^$\n]+\$', excerpt)
+                    and re.search(r'(?<!\\)\$[^$\n]+\$|:=|≜|\\triangleq\b', excerpt)
                     and excerpt in raw and len(excerpt) < len(raw) <= _SOURCE_EXCERPT_MAX_LEN
                     and not incomplete_source_prose(raw)
                     and not re.search(r'\b(?:because|and|or|but|therefore|thus|hence|where|with|of|from|to|given|denotes|requires|assume|is|are|such that)\s*[,.;:]?\s*$', raw, re.I)):

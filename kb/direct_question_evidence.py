@@ -5,7 +5,8 @@ from pathlib import Path
 
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
-from kb.source_question_facets import requested_method_premise_priority, requests_bernoulli_training_requirement, requests_comparison_facets, requests_noise_model_requirement, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
+from kb.claim_source_eligibility import incomplete_source_prose
+from kb.source_question_facets import _known_noise_training_premise, requests_comparison_boundary, requested_method_premise_priority, requests_bernoulli_training_requirement, requests_comparison_facets, requests_noise_model_requirement, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
 from kb.n2n_target_condition import (
     _verified_block, attach_target_condition_slot, corruption_condition_question, target_condition_quote,
 )
@@ -94,6 +95,12 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                 for row in rows if primary_ok else []:
                     block = _verified_block(path, row, allow_short_equation=True)
                     text = str(row.get("text") or "").strip()
+                    raw = str((block or {}).get("raw_text") or "").strip()
+                    # The retrieved sentence can have lost its stated model
+                    # premise. Restore only its own verified paragraph, without
+                    # changing source identity, stitching blocks or adding text.
+                    if block and text in raw and len(raw) <= 1800 and not incomplete_source_prose(raw) and _known_noise_training_premise(raw):
+                        text = raw
                     if (
                         block
                         and (block.get("page_start") == page or row.get("direct_question_method_facet_score", 0) > 0)
@@ -145,7 +152,7 @@ def prioritize_direct_question_hits(
         for hit in candidates
         if (hit.get("meta") or {}).get("direct_question_evidence")
     ]
-    if requests_comparison_facets(prompt) or requests_noise_model_requirement(prompt) or requests_sample_relation_evidence(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
+    if requests_comparison_boundary(prompt) or requests_comparison_facets(prompt) or requests_noise_model_requirement(prompt) or requests_sample_relation_evidence(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
         # Supplemental/facet scans can deduplicate an earlier direct hit into
         # a generic row. Re-read only the already scoped candidate sources.
         fresh = []

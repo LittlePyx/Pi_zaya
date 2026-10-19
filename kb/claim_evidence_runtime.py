@@ -3,7 +3,7 @@ from __future__ import annotations
 from kb.explicit_noise_relations import iid_relation_covered
 from kb.claim_pruning_format import remove_new_unpaired_bold, repair_pruned_line_emphasis
 from kb.claim_source_eligibility import retrieval_limit_claim
-from kb.citation_sentences import citation_sentence_spans
+from kb.citation_sentences import citation_sentence_spans, split_definition_bridges
 from kb.claim_source_scope import explicit_owned_comparison_clause
 
 import re
@@ -368,7 +368,7 @@ def _split_claim_segments(value: str) -> list[str]:
         for punctuation, token in math_tokens.items():
             value_out = value_out.replace(token, punctuation)
         restored.append(value_out.strip())
-    return restored
+    return [part for segment in restored for part in split_definition_bridges(segment)]
 
 
 def _claim_units(answer: str) -> list[str]:

@@ -49,7 +49,9 @@ from .tables import (
 from .text_utils import _normalize_text, contains_only_detached_accent_mojibake, normalize_detached_accents
 from .reference_citation_diagnostics import plausible_reference_citation_indices as _plausible_reference_citation_indices
 from .pdf_heading_fragments import demote_fraction_heading_fragments
-from .pdf_image_prose import recover_equation_image_prose
+from .pdf_image_prose import recover_pdf_prose_structure
+from kb.source_locator_receipts import write_pdf_prose_repair
+from .pdf_inline_prose import recover_inline_prose_fragments
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -260,7 +262,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 17
+CONVERSION_QUALITY_RULES_VERSION = 18
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 
 
@@ -1745,6 +1747,8 @@ def _issue_codes_from_context(
 ) -> list[str]:
     quality = source_quality if isinstance(source_quality, dict) else _source_quality_view(md_path, text, metrics)
     codes = _issue_codes_from_metrics(metrics)
+    if quality.get("source_inline_prose_math_repair_available") and "prose_dominant_display_math" not in codes:
+        codes.append("prose_dominant_display_math")
     if "mojibake" in codes and contains_only_detached_accent_mojibake(text):
         codes = ["detached_accents" if code == "mojibake" else code for code in codes]
     if bool(quality.get("abstract_not_applicable")):
@@ -1854,7 +1858,7 @@ def _balance_display_math(md: str) -> tuple[str, bool]:
     return fixed, changed and fixed != str(md or "")
 
 
-def _unwrap_prose_dominant_display_math(md: str) -> tuple[str, bool]:
+def _unwrap_prose_dominant_display_math(md: str, pdf_path: Path | str | None = None) -> tuple[str, bool]:
     """Remove display delimiters only from blocks classified as prose-heavy.
 
     The block body is preserved exactly so mixed prose/equation evidence is
@@ -1862,7 +1866,8 @@ def _unwrap_prose_dominant_display_math(md: str) -> tuple[str, bool]:
     """
 
     original = str(md or "")
-    lines = original.splitlines()
+    structured, _ = recover_inline_prose_fragments(original, pdf_path) if pdf_path else (original, False)
+    lines = structured.splitlines()
     out: list[str] = []
     index = 0
     while index < len(lines):
@@ -3408,6 +3413,7 @@ def _source_quality_view(
         **profile,
         "source_pdf_path": str((pdf_stats or {}).get("path") or (pdf_path or "")),
         "source_pdf_available": bool(pdf_stats.get("available")),
+        "source_inline_prose_math_repair_available": recover_inline_prose_fragments(text, pdf_path)[1] if pdf_path and pdf_stats.get("available") else False,
         "pdf_page_count": int(pdf_stats.get("page_count") or 0),
         "pdf_text_chars": int(pdf_stats.get("text_chars") or 0),
         **page_quality,
@@ -4909,7 +4915,7 @@ def _recover_source_prose_omissions_from_pdf_text(
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if fitz is None or not pdf_path:
         return text, False
-    text, image_prose_changed = recover_equation_image_prose(text, md_path, pdf_path)
+    text, image_prose_changed = recover_pdf_prose_structure(text, md_path, pdf_path)
     coverage = _source_page_coverage_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
@@ -5026,7 +5032,7 @@ def _recover_corrupted_source_pages_from_pdf_text(
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if not pdf_path:
         return text, False
-    text, image_prose_changed = recover_equation_image_prose(text, md_path, pdf_path)
+    text, image_prose_changed = recover_pdf_prose_structure(text, md_path, pdf_path)
     coverage = _source_page_coverage_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
@@ -5814,6 +5820,9 @@ def repair_markdown_text(
             active_strategy_names.add(str(name))
     if not active_strategy_names and default_to_postprocess:
         active_strategy_names.update({"postprocess_markdown"})
+    # A source-proven paragraph join needs no unrelated document rewriting.
+    if set(active_codes) == {"prose_dominant_display_math"} and before_source_quality.get("source_inline_prose_math_repair_available") and not before_metrics.get("prose_dominant_display_math_block_count"):
+        active_strategy_names.discard("postprocess_markdown")
 
     text = before_text
     applied: list[str] = []
@@ -5876,7 +5885,7 @@ def repair_markdown_text(
                 applied.append("balance_display_math")
 
         if "unwrap_prose_display_math" in active_strategy_names:
-            text, changed = _unwrap_prose_dominant_display_math(text)
+            text, changed = _unwrap_prose_dominant_display_math(text, (source_pdf_path or _guess_source_pdf_for_md(path)) if source_repairs_enabled else None)
             if changed:
                 applied.append("unwrap_prose_display_math")
 
@@ -6074,7 +6083,7 @@ def repair_markdown_text(
             elif label == "normalize_page_markers":
                 candidate, changed = _normalize_page_marker_sequence(fallback_text)
             elif label == "unwrap_prose_display_math":
-                candidate, changed = _unwrap_prose_dominant_display_math(fallback_text)
+                candidate, changed = _unwrap_prose_dominant_display_math(fallback_text, (source_pdf_path or _guess_source_pdf_for_md(path)) if source_repairs_enabled else None)
             elif label == "figure_metadata_captions":
                 candidate, changed = _inject_figure_metadata_captions(path, fallback_text)
             elif source_repairs_enabled and label == "pdf_text_captions":
@@ -6321,7 +6330,7 @@ def repair_markdown_quality(
                 backup_path = str(backup)
             except Exception:
                 backup_path = ""
-        path.write_text(text, encoding="utf-8")
+        write_pdf_prose_repair(path, before_text, text, pdf_path)
 
     out = dict(result)
     out["backup_path"] = backup_path
