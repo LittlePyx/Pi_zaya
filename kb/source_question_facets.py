@@ -16,6 +16,14 @@ _DROPOUT_PHASE = re.compile(
 )
 
 
+def _training_speed_question(prompt: str) -> bool:
+    return bool(re.search(r'train\w*|训练', prompt, re.I) and re.search(r'accelerat\w*|stabili\w*|speed|加速|稳定', prompt, re.I))
+
+
+def _loss_statistic_question(prompt: str) -> bool:
+    return bool(re.search(r'loss|损失', prompt, re.I) and re.search(r'statistics?|scalar\s+estimation|统计量|标量估计', prompt, re.I))
+
+
 def _additive_training_pair_question(prompt: str) -> bool:
     return bool(re.search(r"additive|加性", prompt, re.I) and not re.search(r"non[- ]?additive|非加性", prompt, re.I)
                 and re.search(r"\binput\b|输入", prompt, re.I)
@@ -65,7 +73,7 @@ def noise_model_premise_priority(prompt: str, text: str) -> int:
 
 
 def requests_source_facets(prompt: str) -> bool:
-    return bool(requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
+    return bool(_training_speed_question(prompt) or _loss_statistic_question(prompt) or re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) or requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
                 or (_CORRECTION.search(prompt) and _OUTPUT.search(prompt))
                 or _DROPOUT_PHASE.search(prompt) or _additive_training_pair_question(prompt))
 
@@ -90,6 +98,8 @@ def sample_relation_priority(prompt: str, text: str) -> int:
         sentence = text[start:end]
         if re.search(r"\b(?:not|never|false|incorrect|different)\b", sentence, re.I):
             continue
+        if re.search(rf"Recall\s+that\s+M\s+and\s+N\s+are\s+{_IID}", sentence, re.I):
+            return 3
         if re.search(rf"two\s+{_IID}\s+noise\s+samples", sentence, re.I):
             return 2
     return int(bool(_CORRELATED.search(text)))
@@ -107,12 +117,22 @@ def _training_pair_procedure(text: str) -> bool:
 
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
+    if _training_speed_question(prompt) and re.search(r'residual\s+learning', text, re.I) and re.search(r'batch\s+normalization', text, re.I) and re.search(r'speed\w*\s+up\s+(?:the\s+)?training|fast\s+and\s+stable\s+training', text, re.I):
+        return 24
+    if _loss_statistic_question(prompt):
+        if re.search(r'L\s*1\s+loss\s+recovers\s+the\s+median|L\s*2\s+loss[^.;]{0,80}output\s+the\s+average', text):
+            return 24
+    if re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) and re.search(r'\bJ\s*[- ]\s*invariant', text, re.I):
+        if re.search(r'f\s*\(\s*x\s*\)\s*[_{ ]*J\b[^.;]{0,35}does\s+not\s+depend\s+on', text):
+            return 24
+        if re.search(r'information\s+from\s+outside\s+each\s+subset\s+J', text, re.I):
+            return 18
     if requests_comparison_boundary(prompt) and comparison_caution_quote(text):
         return 24
     if requested_method_premise_priority(prompt, text):
         return 20
-    if sample_relation_priority(prompt, text) == 2:
-        return 18
+    if sample_relation_priority(prompt, text) >= 2:
+        return 20 if sample_relation_priority(prompt, text) == 3 else 18
     if _additive_training_pair_question(prompt):
         if _training_pair_procedure(text):
             return 22

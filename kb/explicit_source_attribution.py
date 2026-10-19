@@ -4,6 +4,8 @@ import re
 
 from kb.evidence_term_mapping import _METHOD_IDENTITY_EQUIVALENTS, specific_method_identities
 from kb.citation_sentences import citation_sentence_spans
+from kb.explicit_training_assignments import explicit_training_assignments_covered
+from kb.explicit_noise_relations import named_synthetic_sample_covered
 
 
 _MODEL_ESTIMATION = re.compile(r'estimat\w*\s+(?:(?:the|a|an|unknown)\s+){0,3}noise\s+(?:model|distribution)|noise\s+(?:model|distribution)\s+(?:is|are|can\s+be|may\s+be)\s+(?:estimated|learned)|噪声(?:模型|分布)[^。；;\n]{0,20}(?:估计|估测)|估计(?:的)?未知量', re.I)
@@ -27,17 +29,50 @@ def _affirmative_external_data(text: str) -> bool:
 
 def _owns_fact(text: str, source_name: str) -> bool:
     return bool(specific_method_identities(text) & specific_method_identities(source_name)
-                or re.search(r'\b(?:our|this)\s+(?:paper|method|model|approach|network|framework)|\bwe\s+(?:(?:can|then|also)\s+)?(?:use|train|require|estimate|learn|draw|sample|propose|assume|consider)|本文|本方法|本研究|我们的(?:方法|模型)',text,re.I))
+                or any(re.search(rf'(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])', source_name, re.I) for name in specific_method_identities(text))
+                or re.search(r'\b(?:our|this)\s+(?:paper|method|model|approach|network|framework)|\bwe\s+(?:(?:can|then|also|do\s+not)\s+)?(?:use|train|require|estimate|learn|draw|sample|propose|assume|consider)|本文|本方法|本研究|我们的(?:方法|模型)',text,re.I))
 
 
 def _owned_predicate(evidence: str, source_name: str, predicate) -> bool:
     return any(_owns_fact(part,source_name) and predicate(part)
                for start,end in citation_sentence_spans(evidence)
-               for part in re.split(r'\b(?:but|while|whereas|however)\b|但|而',evidence[start:end],flags=re.I))
+               for part in re.split(r'\b(?:but|while|whereas|however)\b|[。；;]|\.(?=\s+[A-Z])|但|而',evidence[start:end],flags=re.I))
 
 
 def source_attribution_covered(claim: str, evidence: str, source_name: str) -> bool:
     """Keep named displays, baseline lists and training provenance in the quote."""
+    if not explicit_training_assignments_covered(claim, evidence) or not named_synthetic_sample_covered(claim, evidence):
+        return False
+    named_results = ((r'proposition|命题', 'proposition'), (r'theorem|定理', 'theorem'), (r'lemma|引理', 'lemma'), (r'corollary|推论', 'corollary'))
+    for aliases, _kind in named_results:
+        for number in re.findall(rf'(?:\b(?:{aliases})|(?:{aliases}))\s*([0-9]+)(?![0-9])', claim, re.I):
+            if not re.search(rf'(?:{aliases})\s*{number}(?![0-9])', evidence, re.I):
+                return False
+    no_model = r'(?:needs?\s+no|(?:does?|do)\s+not\s+(?:need|require)|requir\w*\s+no|without\s+(?:requiring|needing))[^.;。；\n]{0,55}noise[- ]+(?:model|distribution)|(?:不需要|无需|无须)[^。；\n]{0,20}噪声(?:模型|分布)'
+    if re.search(no_model, claim, re.I):
+        predicate = lambda part: bool(re.search(no_model, part, re.I))
+        if not predicate(evidence) or (_owned_predicate(claim, source_name, predicate) and not _owned_predicate(evidence, source_name, predicate)):
+            return False
+    correction = r'correction\s+step|校正步骤|修正步骤'
+    if re.search(correction, claim, re.I) and not re.search(correction + r'|doubl\w*[^.;\n]{0,70}subtract\w*', evidence, re.I):
+        return False
+    for concept in (r'partial\s+convolutions?|部分卷积', r'blind[- ]?spot|盲点', r'model\s+uncertainty|模型不确定性', r'statistical\s+independence|统计独立性', r'\bvariance\b|方差'):
+        if re.search(concept, claim, re.I) and not re.search(concept, evidence, re.I):
+            return False
+    speed = r'(?:speed\w*\s+(?:up\s+)?(?:the\s+)?train\w*|(?:fast\w*|accelerat\w*)\s+(?:and\s+\w+\s+)?train\w*|训练(?:速度|加速)|加速训练)'
+    if re.search(speed, claim, re.I) and not re.search(speed, evidence, re.I):
+        return False
+    # A passage about the same method does not substantiate an attributed
+    # verbatim quotation. Preserve case and all logical words inside it.
+    if re.search(r'paper|authors?|abstract|explicitly|原文|作者|摘要', claim, re.I) and not re.search(r'\b(?:not|never)\s+(?:state|say|claim)|并未|没有(?:说|声称|指出)', claim, re.I):
+        # Token boundaries preserve words, variable case and logical operators,
+        # while mathematical punctuation can have typesetting spaces.
+        tokens = lambda value: re.findall(r'\w+|[^\w\s]', value.replace('’', "'").replace('‘', "'"))
+        source_tokens = tokens(evidence)
+        for match in re.finditer(r'"([^"\n]{40,})"|“([^”\n]{40,})”', claim):
+            wanted = tokens((match[1] or match[2]).rstrip(',.;:'))
+            if not any(source_tokens[i:i + len(wanted)] == wanted for i in range(len(source_tokens) - len(wanted) + 1)):
+                return False
     if re.search(r'\binpaint\w*\b|图像修补|图像补全', claim, re.I) and not re.search(r'\binpaint\w*\b|图像修补|图像补全', evidence, re.I):
         return False
     pixels = r'\b(?:un[- ]?corrupted|non[- ]?corrupted)\s+pixels?\b|未(?:被|受)?(?:损坏|污染)的?像素'
@@ -56,7 +91,7 @@ def source_attribution_covered(claim: str, evidence: str, source_name: str) -> b
     for metric in (r'Pearson|皮尔逊', r'linear(?:ly)?\s+correlat|线性相关', r'covariance|协方差'):
         if re.search(metric, claim, re.I) and not re.search(metric, evidence, re.I):
             return False
-    displays = re.findall(r'\b(?:Figure|Fig\.?)\s*(\d+)\s*(?:states?|shows?|illustrates?|depicts?|makes?\s+[^.;]{0,25}explicit)\b|图\s*(\d+)\s*(?:明确)?(?:说明|显示|表明|展示)', claim, re.I)
+    displays = re.findall(r'\b(?:Figure|Fig\.?)\s*(\d+)\s*(?:(?:likewise|also)\s+)?(?:states?|shows?|illustrates?|depicts?|labels?|confirms?|makes?\s+[^.;]{0,25}explicit)\b|图\s*(\d+)\s*(?:明确)?(?:说明|显示|表明|展示|标注|证实)', claim, re.I)
     for english, chinese in displays:
         number = english or chinese
         if not re.search(rf'\b(?:Figure|Fig\.?)\s*{re.escape(number)}(?!\d)|图\s*{re.escape(number)}(?!\d)', evidence, re.I):

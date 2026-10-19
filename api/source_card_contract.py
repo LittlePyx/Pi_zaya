@@ -22,6 +22,23 @@ from kb.source_locator_receipts import relocate_repaired_source_plan
 _SOURCE_EXCERPT_MAX_LEN = 1800
 
 
+def _restore_leading_qualifier(block: dict, quote: str) -> str:
+    """Keep a located sentence's logical prefix when its preview starts late."""
+    raw = str(block.get('raw_text') or '')
+    if not quote or raw.count(quote) != 1:
+        return quote
+    offset = raw.index(quote)
+    for start, end in citation_sentence_spans(raw):
+        if start < offset < end:
+            prefix = raw[start:offset]
+            if re.search(r'\b(?:without|not|never|unless|only\s+if|provided\s+that|assuming|if)\b|除非|只有|若|如果|不(?:需要|使用|满足)', prefix, re.I):
+                restored = raw[start:offset + len(quote)].strip()
+                if len(restored) <= _SOURCE_EXCERPT_MAX_LEN:
+                    return restored
+            break
+    return quote
+
+
 def _verified_bound_reader_excerpt(detail: dict) -> tuple[dict, str] | None:
     """Retain a verified claim-specific passage after display shortening."""
     if detail.get('evidence_source') not in {'citation_plan_claim_window', 'verified_source_excerpt'} or detail.get('reader_evidence_source') not in {'citation_plan_located_block', 'verified_source_block'}:
@@ -338,6 +355,10 @@ def _source_excerpt(detail: dict) -> tuple[dict, str] | None:
     # quoted source sentence that independently passes the existing support
     # contract. Keep the original compound text for auditing.
     claim = str(detail.get("answer_claim") or "")
+    if len(blocks) == 1 and all(detail.get(k) and detail[k] == blocks[0].get(k) for k in ('block_id', 'anchor_id', 'heading_path', 'page_start', 'page_end')):
+        raw = str(blocks[0].get('raw_text') or '').strip()
+        if len(raw) <= _SOURCE_EXCERPT_MAX_LEN and _supports(claim, raw, '', str(detail.get('source_name') or '')):
+            return blocks[0], raw
     for start, end in citation_sentence_spans(quote):
         sentence = quote[start:end].strip()
         candidates = [(b, literal_excerpt(b, sentence)) for b in blocks]
@@ -367,9 +388,17 @@ def refresh_source_citation_cards(
             continue
         resolved = _source_excerpt(detail)
         if resolved is None:
+            # A located plan preview is not a legacy metadata-only card. If
+            # no continuous excerpt or supported reader context survives,
+            # it cannot remain as an actionable extra card in the packet.
+            if detail.get('evidence_source') in {'citation_plan_claim_window', 'verified_source_excerpt'}:
+                blocks = scoped_source_blocks(detail)
+                if len(blocks) == 1 and all(detail.get(k) and detail[k] == blocks[0].get(k) for k in ('block_id', 'anchor_id', 'heading_path', 'page_start', 'page_end')):
+                    continue
             result.append(detail)
             continue
         block, quote = resolved
+        quote = _restore_leading_qualifier(block, quote)
         if str(original.get("evidence_quote") or "") != quote:
             detail["source_excerpt_previous_quote"] = (
                 original.get("evidence_quote") or original.get("raw") or ""
@@ -413,6 +442,7 @@ def refresh_source_citation_cards(
         # Refresh labels/quality without passing source text through the prose
         # finisher again: it can remove a reference or append synthetic dots.
         view = dict(detail.get("card_view") or {})
+        view['summary'] = detail['summary_line']
         view["header"] = {
             **view.get("header", {}),
             "subtitle": detail.get("card_subtitle") or "",

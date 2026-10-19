@@ -177,4 +177,10 @@ def named_synthetic_sample_covered(claim: str, evidence: str) -> bool:
         direct = rf'\b{name}\s+(?i:is\s+(?:a\s+)?synthetic\s+(?:noise\s+)?sample)\b|(?i:synthetic\s+(?:noise\s+)?sample)\s*\$?{name}(?![A-Za-z])'
         if not re.search(direct, evidence):
             return False
+    declared = re.findall(r'(?<![A-Za-z])([A-Z])\s*(?i:is\s+(?:the|a|an)\s+synthetic\s+(?:noise\s+)?sample)|把\s*([A-Z])\s*视为[^。；\n]{0,40}合成(?:噪声)?样本', claim)
+    for pair in declared:
+        variable = next(value for value in pair if value)
+        direct = rf'(?i:synthetic\s+(?:noise\s+)?sample)\s*\$?{variable}(?![A-Za-z])|(?<![A-Za-z]){variable}\s+(?i:is\s+(?:the|a|an)\s+synthetic\s+(?:noise\s+)?sample)'
+        if not re.search(direct, evidence):
+            return False
     return True

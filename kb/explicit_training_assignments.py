@@ -9,6 +9,14 @@ def _named_training_roles_covered(claim: str, evidence: str) -> bool:
     def roles(text: str, role: str) -> set[str]:
         prefix = rf'(?i:(?:(?:training|network|regression)\s+)?{role}\s+(?:is|are|=)\s+)'
         return set(re.findall(prefix + description + variable, text))
+    def predictions(text: str) -> set[tuple[str, str]]:
+        return {(m[1], m[2]) for m in re.finditer(r'(?i:predict)\s+'+variable+r'\s+(?i:given|from)\s+'+variable, text)}
+    wanted_maps = predictions(claim)
+    if re.search(r'\b(?:train\w*|network|learn\w*|mapping)\b|训练|网络|映射', claim, re.I):
+        wanted_maps |= {(m[2], m[1]) for m in re.finditer(variable+r'\s*\\+mapsto\s*'+variable, claim)}
+    source_maps = predictions(evidence)
+    if wanted_maps and not wanted_maps <= source_maps:
+        return False
     wanted_targets = roles(claim,'target')
     source_targets = roles(evidence,'target') | set(re.findall(r'(?i:predict)\s+'+variable+r'\s+(?i:given|from)\b',evidence))
     if wanted_targets and not wanted_targets <= source_targets:
