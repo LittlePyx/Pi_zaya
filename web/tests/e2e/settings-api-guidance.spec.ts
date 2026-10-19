@@ -770,7 +770,9 @@ test('model discovery fallback keeps the model field editable', async ({ page })
 
   await page.getByTestId('settings-text-api-key').fill('sk-ambiguous-provider-key')
   await page.getByTestId('settings-text-provider').click()
+  await expect(page.locator('.ant-select-dropdown:visible')).not.toHaveClass(/(?:appear|enter)-active/)
   await page.locator('.ant-select-dropdown:visible .ant-select-item-option-content', { hasText: 'Qwen / 通义千问' }).click()
+  await expect(page.getByTestId('settings-text-provider')).toContainText('Qwen / 通义千问')
 
   await expect(page.getByTestId('settings-text-model-discovery')).toContainText(
     'built-in mainstream models',

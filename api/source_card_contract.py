@@ -13,7 +13,7 @@ from kb.source_excerpt import literal_excerpt, scoped_source_blocks
 from kb.source_blocks import normalize_match_text
 from kb.claim_evidence_runtime import _claim_units
 from kb.citation_marker_context import numeric_marker_is_content
-from kb.claim_source_eligibility import complete_source_prefix
+from kb.claim_source_eligibility import complete_source_prefix, incomplete_source_prose
 from kb.refusal_context_excerpt import bind_refusal_context_excerpt
 
 # The reader already carries this bounded source context. A verified continuous
@@ -300,6 +300,18 @@ def _source_excerpt(detail: dict) -> tuple[dict, str] | None:
     if len(matches) == 1:
         block, excerpt = matches[0]
         if len(excerpt) <= _SOURCE_EXCERPT_MAX_LEN:
+            raw = str(block.get('raw_text') or '').strip()
+            # A short variable declaration needs its existing prose context.
+            # Never stitch blocks or restore a lost logical continuation.
+            if (block.get('kind') == 'paragraph' and len(excerpt) < 120
+                    and re.search(r'(?<!\\)\$[^$\n]+\$', excerpt)
+                    and excerpt in raw and len(excerpt) < len(raw) <= _SOURCE_EXCERPT_MAX_LEN
+                    and not incomplete_source_prose(raw)
+                    and not re.search(r'\b(?:because|and|or|but|therefore|thus|hence|where|with|of|from|to|given|denotes|requires|assume|is|are|such that)\s*[,.;:]?\s*$', raw, re.I)):
+                from api.citation_occurrence_support import verified_occurrence_candidates
+                candidate = {**detail, 'evidence_source': 'verified_source_excerpt', 'evidence_quote': raw}
+                if verified_occurrence_candidates(candidate, [candidate], str(detail.get('answer_claim') or '')):
+                    return block, raw
             return block, excerpt
     # A compound context is not a single locator. Select a complete, already
     # quoted source sentence that independently passes the existing support
