@@ -26,7 +26,7 @@ from kb.claim_evidence_runtime import (
     _meaningful_numbers as _claim_meaningful_numbers,
     _split_claim_segments as _split_claim_evidence_segments,
     _support_score as _claim_evidence_support_score,
-    audit_and_repair_claim_evidence,
+    audit_and_repair_claim_evidence, _answer_starts_with_retrieval_limit,
 )
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.paper_guide_contracts import (
@@ -7600,7 +7600,7 @@ def _complete_grounded_requested_source_facts(
 
     text = str(answer or "").strip()
     prompt_text = str(prompt or "")
-    if not text or not isinstance(citation_plan, dict):
+    if not text or not isinstance(citation_plan, dict) or _answer_starts_with_retrieval_limit(text):
         return text
     slots = [
         dict(slot)
@@ -7951,7 +7951,7 @@ def _complete_grounded_requested_source_facets(
 
     text = str(answer or "").strip()
     prompt_text = str(prompt or "").strip()
-    if not text or not prompt_text or not isinstance(citation_plan, dict):
+    if not text or not prompt_text or not isinstance(citation_plan, dict) or _answer_starts_with_retrieval_limit(text):
         return text
     if re.search(r"(?i)\b(?:equation|formula|derive|derivation)\b|公式|方程|推导", prompt_text):
         # Equation questions already have a deterministic source-bound builder

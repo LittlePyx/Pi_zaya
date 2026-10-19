@@ -192,10 +192,11 @@ def conditional_noise_domain_surface(claim: str, evidence: str) -> str:
     """Keep a verified negative noise qualifier out of positive-domain tags."""
     if (
         _signal_subject_surface(claim, evidence) != claim
-        and re.search(r"噪声.{0,40}给定.{0,24}的条件下是逐像素独立", claim)
+        and re.search(r"噪声.{0,40}给定.{0,24}的条件下是逐像素(?:条件)?独立", claim)
+        and not re.search(r"无条件|无论|unconditional|regardless", claim, re.I)
         and signal_noise_assumptions_covered(claim, evidence)
     ):
-        return re.sub(r"噪声\s*(?:\$?[A-Za-z]\$?\s*)?在像素(?:间|之间)没有条件相关性", " ", claim)
+        return re.sub(r"噪声\s*(?:\$?[A-Za-z]\$?\s*)?在像素(?:间|之间)没有(?:条件)?相关性", " ", claim)
     return claim
 
 

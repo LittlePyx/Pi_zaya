@@ -5,6 +5,20 @@ import pytest
 from kb.claim_evidence_runtime import audit_and_repair_claim_evidence
 
 
+def test_absence_in_tables_does_not_prove_absence_in_entire_papers():
+    advice = 'If neither table lists the other method, the correct conclusion is "no direct head-to-head evidence in these papers," not a universal ranking [1] [2].'
+    repaired, _ = _strict(advice)
+    assert 'evidence in these papers' not in repaired
+
+
+def test_nominal_requirement_heading_survives_supported_content():
+    source='The noise n is conditionally pixel-wise independent given the signal s.'
+    answer='**Noise2Void 的独立性要求**\n\n'+source+' [1].'
+    repaired, _ = audit_and_repair_claim_evidence(answer,[{'text':source,'meta':{'source_name':'noise2void.pdf'}}],allowed_citation_numbers={1},drop_unsupported_high_risk_claims=True,enforce_user_visible_binding=True)
+    assert '**Noise2Void 的独立性要求**' in repaired
+    assert source in repaired and '[1]' in repaired
+
+
 def _strict(answer: str) -> tuple[str, dict]:
     return audit_and_repair_claim_evidence(
         answer, [], allow_citation_repairs=False,
@@ -26,6 +40,18 @@ def test_parentheses_do_not_license_unsupported_numeric_claims():
     repaired, meta = _strict('建议核对实验设置（第一组120名患者；第二组150名患者），该方法敏感度提高80%。')
     assert not repaired
     assert meta['dropped_unsupported_unplanned_claims'] == 1
+
+
+def test_late_pruning_leaves_no_empty_reading_heading():
+    boundary = '当前检索证据无法确认所问临床试验。'
+    repaired, _ = _strict(boundary + '\n\n**阅读建议**\n该试验报告120名患者。')
+    assert repaired == boundary
+
+
+def test_empty_heading_cleanup_preserves_code_and_math_units():
+    from kb.claim_evidence_runtime import _drop_empty_answer_headings
+    answer = '```markdown\n## A\n## B\n```\n\n$$\n**M**\n**N**\n$$'
+    assert _drop_empty_answer_headings(answer) == (answer, 0)
 
 
 @pytest.mark.parametrize("answer", [

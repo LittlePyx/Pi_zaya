@@ -9,6 +9,7 @@ from kb.claim_polarity_guard import claim_polarity_conflicts, has_checkable_acti
 from kb.imaging_equation_binding import has_masked_frame_sum
 from kb.citation_marker_context import strip_citation_decoration
 from kb.invariant_input_role import clarify_supported_input_role
+from kb.source_blocks import normalize_inline_markdown
 from kb.theory_evidence import (
     drop_conflicting_source_equations, normalize_supported_variance_relation, protect_source_equations,
 )
@@ -50,7 +51,7 @@ _NUMBER_RE = re.compile(
 _ACRONYM_RE = re.compile(r"\b[A-Z][A-Z0-9-]{1,12}\b")
 _EN_TERM_RE = re.compile(r"\b[a-z][a-z0-9-]{3,}\b", flags=re.IGNORECASE)
 _RISK_RE = re.compile(
-    r"(?:表明|证明|达到|提升|提高|降低|优于|劣于|导致|使(?:得)?|通过|采用|使用|利用|构建|引入|"
+    r"(?:表明|证明|达到|提升|提高|降低|优于|劣于|导致|使(?:得)?|通过|采用|使用|利用|构建|引入|需要|具备|拥有|"
     r"包含|纳入|建模|训练|验证|报告|实现|解决|决定|影响|正交(?:的|组合)|权衡|局限|限制|没有|不存在|未(?:提供|说明|显示|报告|验证|讨论)|"
     r"\b(?:show(?:s|ed)?|demonstrat(?:e|es|ed)|achiev(?:e|es|ed)|improv(?:e|es|ed)|reduc(?:e|es|ed)|"
     r"outperform(?:s|ed)?|caus(?:e|es|ed)|use(?:s|d)?|employ(?:s|ed)?|introduc(?:e|es|ed)|"
@@ -58,7 +59,7 @@ _RISK_RE = re.compile(
             r"enable(?:s|d)?|allow(?:s|ed)?|solve(?:s|d)?|propagat(?:e|es|ed|ing)|"
             r"predict(?:s|ed|ing)?|store(?:s|d|ing)?|accept(?:s|ed|ing)?|"
             r"follow(?:s|ed|ing)?|update(?:s|d|ing)?|recover(?:s|ed|ing)?|restart(?:s|ed|ing)?|"
-            r"trade[- ]?off|limitation|does\s+not|not\s+validated|lack(?:s|ed)?)\b)",
+            r"require(?:s|d)?|need(?:s|ed)?|possess(?:es|ed)?|trade[- ]?off|limitation|does\s+not|not\s+validated|lack(?:s|ed)?)\b)",
     flags=re.IGNORECASE,
 )
 _OPTIMIZATION_DETAIL_RE = re.compile(
@@ -687,6 +688,11 @@ def _is_epistemic_retrieval_limit(plain: str) -> bool:
     )
 
 
+def _answer_starts_with_retrieval_limit(answer: str) -> bool:
+    units = _claim_units(answer)
+    return bool(units and _is_epistemic_retrieval_limit(_plain_claim(units[0])))
+
+
 def _is_high_risk_claim(unit: str) -> bool:
     plain = _plain_claim(unit)
     # A short absence assertion must not bypass grounding on the length guard.
@@ -855,13 +861,15 @@ def _section_source_hit_index(
 def _mentioned_source_hit_indexes(
     claim: str,
     answer_hits: list[dict[str, Any]],
+    *, identity_only: bool = False,
+    exclude_comparators: bool = True,
 ) -> list[int]:
     """Return unambiguous sources explicitly named in one claim segment."""
 
     claim_surface = re.sub(
-        r"(?:\bnot(?:\s+(?:a\s+comparison\s+against|against))?|\brather\s+than|而非|不是)\s+[A-Z][A-Za-z0-9]{3,}\b",
+        r"(?:\bnot(?:\s+(?:(?:a\s+)?(?:comparison|ranking)\s+(?:against|with)|against|about))?|\brather\s+than|而非|不是)\s+[A-Z][A-Za-z0-9]{3,}\b",
         "", _plain_claim(claim),
-    )
+    ) if exclude_comparators else _plain_claim(claim)
     claim_tokens = _source_identity_tokens(claim_surface)
     if not claim_tokens:
         return []
@@ -882,7 +890,7 @@ def _mentioned_source_hit_indexes(
         index for index, hit in enumerate(answer_hits, 1)
         if hit and claim_model_tokens & _source_identity_tokens(_hit_source_identity_surface(hit))
     ]
-    if direct_indexes:
+    if direct_indexes or identity_only:
         return direct_indexes
     for index, hit in enumerate(answer_hits, start=1):
         if not hit:
@@ -938,7 +946,8 @@ def _explicit_per_source_evidence_request(prompt: str, *, source_count: int) -> 
             flags=re.IGNORECASE,
         )
     )
-    return bool(explicit_each or explicit_comparison)
+    selected_pair = count >= 2 and re.search(r"这两篇|两篇(?:论文|文献)|\b(?:these\s+two|both|selected)\s+(?:papers|sources)\b", surface, re.I)
+    return bool(explicit_each or explicit_comparison or selected_pair)
 
 
 def _strict_section_factual_candidate(segment: str) -> bool:
@@ -958,6 +967,23 @@ def _strict_section_factual_candidate(segment: str) -> bool:
     # a source-specific factual claim even when it lacks a high-risk verb such
     # as "reports" or a bold facet label.
     return True
+
+
+def _literal_source_detail_index(line: str, hits: list[dict[str, Any]]) -> int:
+    match = re.match(r"^(?:Source-grounded detail:|已核对的原文要点：)\s*(.+)", _plain_claim(line), re.I)
+    if not match:
+        return 0
+    body = re.sub(r"\s+([.,;:。])", r"\1", match[1]).strip().rstrip('.。')
+    if len(body) < 40:
+        return 0
+    needle = normalize_inline_markdown(body)
+    matched = []
+    for index, hit in enumerate(hits, 1):
+        meta = hit.get('meta') or {}
+        quotes = [meta.get('citation_plan_full_evidence_quote'), *(meta.get('citation_plan_evidence_quotes') or [])]
+        if any(needle in normalize_inline_markdown(str(q or '')) for q in quotes) and _support_score(body, _hit_payload(hit)) >= 5:
+            matched.append(index)
+    return matched[0] if len(matched) == 1 else 0
 
 
 def _enforce_named_source_section_citations(
@@ -985,6 +1011,7 @@ def _enforce_named_source_section_citations(
     in_fence = False
     section_hit_index = 0
     bold_section = False
+    preceding_source_indexes: list[int] = []
     for raw_line in str(answer or "").splitlines():
         stripped = raw_line.strip()
         if stripped.startswith(("```", "~~~")):
@@ -996,13 +1023,13 @@ def _enforce_named_source_section_citations(
             section_hit_index = _section_source_hit_index(stripped, answer_hits)
             if bold_section and len(_mentioned_source_hit_indexes(stripped, answer_hits)) != 1:
                 section_hit_index = 0
+            preceding_source_indexes = []
             output_lines.append(raw_line)
             continue
         if (
             in_fence
             or not stripped
             or _TABLE_OR_CODE_RE.match(stripped)
-            or (inline_only and section_hit_index > 0)
         ):
             output_lines.append(raw_line)
             continue
@@ -1010,6 +1037,14 @@ def _enforce_named_source_section_citations(
         prefix_match = _LIST_PREFIX_RE.match(stripped)
         prefix = prefix_match.group(0) if prefix_match else ""
         body = stripped[len(prefix) :] if prefix else stripped
+        literal_index = _literal_source_detail_index(body, answer_hits)
+        if literal_index:
+            cleaned = re.sub(r"\s+([.,;:。])", r"\1", _NUMERIC_CITATION_RE.sub('', body)).strip()
+            output_lines.append(prefix + _append_citation(cleaned, literal_index))
+            previous = [int(m[1]) for m in _NUMERIC_CITATION_RE.finditer(body)]
+            if previous != [literal_index]:
+                repairs.append({'claim': _plain_claim(body)[:220], 'from': previous, 'citation': literal_index, 'score': 5, 'reason': 'literal_source_detail'})
+            continue
         segments = _split_claim_segments(body)
         if not segments:
             output_lines.append(raw_line)
@@ -1018,6 +1053,7 @@ def _enforce_named_source_section_citations(
         rebuilt: list[str] = []
         changed = False
         tail_dropped = False
+        previous_source_indexes = preceding_source_indexes
         for segment_index, segment in enumerate(segments):
             citations = [
                 int(match.group(1))
@@ -1026,9 +1062,32 @@ def _enforce_named_source_section_citations(
             ]
             segment_hit_indexes = (
                 [section_hit_index]
-                if section_hit_index > 0 and not inline_only
+                if section_hit_index > 0
                 else _mentioned_source_hit_indexes(segment, answer_hits)
             )
+            if inline_only and not _strict_section_factual_candidate(segment):
+                rebuilt.append(segment)
+                continue
+            continuation = _ANAPHORIC_CONTINUATION_RE.search(_plain_claim(segment)) or re.match(r"^(?:its|so)\b", _plain_claim(segment), re.I)
+            if section_hit_index == 0 and len(previous_source_indexes) == 1 and continuation and not _mentioned_source_hit_indexes(segment, answer_hits, identity_only=True):
+                segment_hit_indexes = previous_source_indexes
+            named = _mentioned_source_hit_indexes(segment, answer_hits, identity_only=True)
+            if section_hit_index == 0 and not named and len(set(citations)) == 1 and (segment_index == 0 or not (continuation and len(previous_source_indexes) == 1)) and _support_score(segment, _hit_payload(answer_hits[citations[0] - 1])) >= max(1, int(min_support_score)):
+                segment_hit_indexes = list(dict.fromkeys(citations))
+            if section_hit_index == 0 and continuation and not named and len(previous_source_indexes) != 1 and len(set(citations)) > 1 and _strict_section_factual_candidate(segment):
+                dropped.append({'claim': _plain_claim(segment)[:220], 'from': citations, 'reason': 'unresolved_source_continuation'})
+                changed = True
+                tail_dropped = segment_index == len(segments) - 1
+                previous_source_indexes = []
+                continue
+            excluded = set(_mentioned_source_hit_indexes(segment, answer_hits, identity_only=True, exclude_comparators=False)) - set(named)
+            ambiguous_list = named and re.search(r"\bis\s+not\s+(?:named|among)\b.{0,90}\b(?:that|there|it|its)\b", _plain_claim(segment), re.I)
+            if ambiguous_list or (not segment_hit_indexes and excluded):
+                dropped.append({'claim': _plain_claim(segment)[:220], 'from': citations, 'reason': 'unresolved_comparison_owner'})
+                changed = True
+                tail_dropped = segment_index == len(segments) - 1
+                previous_source_indexes = []
+                continue
             factual = bool(citations) or _strict_section_factual_candidate(segment)
             if not factual:
                 rebuilt.append(segment)
@@ -1064,8 +1123,10 @@ def _enforce_named_source_section_citations(
                 )
                 changed = True
                 tail_dropped = segment_index == len(segments) - 1
+                previous_source_indexes = []
                 continue
 
+            previous_source_indexes = segment_hit_indexes
             unique_citations = list(dict.fromkeys(citations))
             if unique_citations == segment_hit_indexes:
                 rebuilt.append(segment)
@@ -1089,6 +1150,8 @@ def _enforce_named_source_section_citations(
             )
             changed = True
 
+        line_sources = _mentioned_source_hit_indexes(body, answer_hits, identity_only=True)
+        preceding_source_indexes = previous_source_indexes if rebuilt and len(line_sources) <= 1 else []
         if not rebuilt:
             continue
         if not changed:
@@ -1542,6 +1605,10 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
     text = str(answer or "")
     count = 0
     patterns = (
+        (
+            re.compile(r"\bno\s+((?:[a-z][a-z-]*\s+){0,8}evidence)\s+in\s+(?:these|both|the(?:\s+two)?)\s+papers\b", re.I),
+            lambda match: f"no {match[1]} in the currently retrieved excerpts",
+        ),
         (
             re.compile(
                 r"(?:两篇|这些|上述)(?:文献|论文)(?:均|都)?"
@@ -2675,6 +2742,32 @@ def _drop_placeholder_sections(answer: str) -> tuple[str, int]:
     return "\n".join(kept).strip(), dropped + dropped_inline
 
 
+def _drop_empty_answer_headings(answer: str) -> tuple[str, int]:
+    lines = answer.splitlines()
+    def is_heading(line: str) -> bool:
+        return bool(_HEADING_RE.match(line.strip()) or re.fullmatch(r"\*\*[^*。.!?！？]{1,100}\*\*[:：]?", line.strip()))
+    headings: set[int] = set()
+    in_code = in_math = False
+    for index, line in enumerate(lines):
+        if line.strip().startswith(('```', '~~~')):
+            in_code = not in_code
+            continue
+        if not in_code and line.strip() in ('$$', r'\[', r'\]'):
+            in_math = not in_math
+            continue
+        if not in_code and not in_math and is_heading(line):
+            headings.add(index)
+    kept = []
+    dropped = 0
+    for index, line in enumerate(lines):
+        following = next((j for j in range(index + 1, len(lines)) if lines[j].strip()), None)
+        if index in headings and (following is None or following in headings):
+            dropped += 1
+        else:
+            kept.append(line)
+    return '\n'.join(kept).strip(), dropped
+
+
 def _ensure_grounded_frame_rate_fact(
     answer: str,
     *,
@@ -3589,18 +3682,20 @@ def audit_and_repair_claim_evidence(
         prompt=prompt,
         answer_hits=eligible_hits,
     )
-    repaired, requested_facet_boundary_count = _ensure_named_source_requested_facets(
-        repaired,
-        eligible_hits,
-        prompt=prompt,
-    )
-    repaired, clarified_input_roles = clarify_supported_input_role(repaired, eligible_hits)
     if allow_citation_repairs:
         repaired, final_source_repairs, final_source_drops = _enforce_named_source_section_citations(
             repaired, eligible_hits, prompt=prompt, min_support_score=5 if strict_plan else 3, inline_only=True,
         )
         section_repairs.extend(final_source_repairs)
         dropped_section_claims.extend(final_source_drops)
+    repaired, requested_facet_boundary_count = _ensure_named_source_requested_facets(
+        repaired,
+        eligible_hits,
+        prompt=prompt,
+    )
+    repaired, clarified_input_roles = clarify_supported_input_role(repaired, eligible_hits)
+    repaired, empty_heading_count = _drop_empty_answer_headings(repaired)
+    dropped_placeholder_sections += empty_heading_count
     repaired = _renumber_ordered_lists(repaired)
     units = _claim_units(repaired)
     high_risk_units = [unit for unit in units if _is_high_risk_claim(unit)]

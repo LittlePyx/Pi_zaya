@@ -69,3 +69,25 @@ def test_clean_output_or_negated_noisiness_cannot_support_a_still_noisy_claim():
     for source in ('The raw output is not noisy.','The raw output is a clean image.','The raw output is not a clean image.'):
         assert not claim_passage_concepts_covered(claim,source)
     assert not claim_passage_concepts_covered('The raw output is not still noisy.',claim)
+
+
+def test_not_required_is_not_evidence_of_missing_sampling_ability():
+    claim = '该方法允许空间相关噪声，代价是需要能从噪声分布中采样，而 Noise2Void、Noise2Self 等方法不具备这一能力。'
+    source = 'We also allow spatially correlated noise models, which are problematic for Noise2Void and Noise2Self. On the other hand, we require the ability to sample from the noise distribution, which the three aforementioned methods do not.'
+    assert not _supports(claim, source, '', 'method')
+
+
+def test_pronominal_inability_cannot_be_inferred_from_not_requiring_prior():
+    from kb.explicit_noise_relations import sampling_ability_covered
+    claim = '论文还把自己与相关工作区分开：它要求具备从噪声分布采样的能力，而所比较的三种方法不具备这一点。'
+    evidence = 'Our method requires the ability to sample from the noise distribution, which the three aforementioned methods do not.'
+    assert not sampling_ability_covered(claim, evidence)
+
+
+def test_rejected_sampling_inability_is_removed_even_without_a_remaining_marker():
+    from kb.claim_evidence_runtime import audit_and_repair_claim_evidence
+    claim = '论文在相关工作对比中也强调，本方法“需要能够从噪声分布中采样”，而它对比的三种方法不具备这一点。'
+    source = 'Our method requires the ability to sample from the noise distribution, which the three aforementioned methods do not.'
+    answer, meta = audit_and_repair_claim_evidence(claim+' [1]', [{'text':source,'meta':{'source_name':'method'}}], allowed_citation_numbers={1}, drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True)
+    assert '不具备这一点' not in answer
+    assert meta['dropped_unsupported_unplanned_claims']

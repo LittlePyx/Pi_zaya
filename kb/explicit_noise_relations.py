@@ -62,3 +62,17 @@ def raw_output_noise_covered(claim: str, evidence: str) -> bool:
     if not supplied or any(m['state'].lower().startswith(('not noisy','not still noisy')) for m in (wanted,supplied)):
         return False
     return 'clean' in wanted['state'].lower() or 'clean' not in supplied['state'].lower()
+
+
+def sampling_ability_covered(claim: str, evidence: str) -> bool:
+    """Not needing a sampling prior does not establish inability to sample."""
+    sampling = r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样"
+    inability = r"不具备.{0,16}(?:能力|这一点)|无法.{0,25}采样|\b(?:cannot|unable\s+to)\b.{0,45}sampl|\b(?:lack\w*|not\s+(?:have|possess))\b.{0,25}ability"
+    if not (re.search(sampling, claim, re.I) and re.search(inability, claim, re.I)):
+        return True
+    return bool(re.search(
+        r"\b(?:cannot|unable\s+to)\b[^.;\n]{0,45}sampl|"
+        r"\b(?:lack\w*|not\s+(?:have|possess))\s+(?:the\s+)?ability\s+to\s+sampl|"
+        r"(?:不具备|没有|缺乏)[^。；\n]{0,30}采样能力|无法从噪声分布中?采样",
+        evidence, re.I,
+    ))

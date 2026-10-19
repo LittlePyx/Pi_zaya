@@ -13,7 +13,7 @@ from kb.evidence_term_mapping import (
 from kb.source_blocks import normalize_inline_markdown
 from kb.claim_polarity_guard import claim_polarity_conflicts
 from kb.training_information_relation import training_information_relation_covered
-from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered
+from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered, sampling_ability_covered
 from kb.theory_evidence import conditional_noise_domain_surface
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
@@ -211,6 +211,7 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
 
     return (
         iid_relation_covered(claim_text, evidence_text)
+        and sampling_ability_covered(claim_text, evidence_text)
         and variance_relation_covered(claim_text, evidence_text)
         and measurement_conditions_covered(claim_text, evidence_text)
         and architecture_relation_covered(claim_text, evidence_text)
