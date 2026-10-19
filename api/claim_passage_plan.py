@@ -100,6 +100,59 @@ def _slot_supports(claim: str, slot: dict) -> bool:
     return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""), binding_meta=proof)
 
 
+def _literal_verified_passage(passage: dict, source: str) -> dict:
+    verified = _verified_passage(passage, source)
+    if not verified:
+        return {}
+    try:
+        block = next(b for b in load_source_blocks_cached(Path(source)) if b['block_id']==verified['block_id'])
+    except (OSError, ValueError, StopIteration):
+        return {}
+    raw = str(block.get('raw_text') or '')
+    flat = lambda value: re.sub(r'\s+','',value)
+    return {**verified, 'literal_block_text':raw} if flat(verified['text']) in flat(raw) else {}
+
+
+def with_verified_slot_origin(detail: dict, slot: dict) -> dict:
+    """Preserve existing selection provenance across a verified quote overlay."""
+    reason = slot.get('evidence_selection_reason')
+    if reason not in {'prompt_contract_block', 'prompt_aligned_source_sentence'}:
+        return detail
+    source = str(slot.get('source_path') or '')
+    if _canonical_source_path_identity(source) != _canonical_source_path_identity(str(detail.get('source_path') or '')):
+        return detail
+    planned = _literal_verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
+    displayed = _literal_verified_passage({**detail, 'text': detail.get('evidence_quote')}, source)
+    if not planned or not displayed or any(planned.get(k) != displayed.get(k) for k in ('block_id','anchor_id','heading_path','page_start','page_end')):
+        return detail
+    a, b = (normalize_match_text(p['text']) for p in (planned, displayed))
+    if a not in b and b not in a:
+        return detail
+    return {**detail, 'citation_plan_evidence_selection_reason': reason}
+
+
+def keep_verified_occurrence_excerpt(detail: dict, slots: list[dict]) -> bool:
+    """Do not replace a supported occurrence with another claim's window."""
+    if detail.get('is_inpaper') or detail.get('citation_route')!='system_a' or detail.get('evidence_source')!='verified_source_excerpt':
+        return False
+    source=str(detail.get('source_path') or '')
+    current=_literal_verified_passage({**detail,'text':detail.get('evidence_quote')},source)
+    claim=str(detail.get('answer_claim') or '')
+    if not current or not claim:
+        return False
+    matched=False
+    for slot in slots:
+        if _canonical_source_path_identity(str(slot.get('source_path') or ''))!=_canonical_source_path_identity(source):
+            continue
+        planned=_literal_verified_passage({**slot,'text':slot.get('evidence_quote')},source)
+        if planned and all(planned.get(k)==current.get(k) for k in ('block_id','anchor_id','heading_path','page_start','page_end')):
+            matched=True;break
+    if not matched:
+        return False
+    from api.citation_occurrence_support import verified_occurrence_candidates
+    return bool(verified_occurrence_candidates(detail,[detail],claim))
+
+
 def _declared_source_passages(slot: dict) -> list[dict]:
     """Complete omitted fields on explicitly retrieved, identified passages.
 

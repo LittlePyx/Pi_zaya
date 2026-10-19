@@ -650,8 +650,9 @@ def remap_system_a_citations_for_display(
             count=1,
         )
 
+    from api.citation_occurrence_support import expand_verified_occurrence_quotes, refresh_verified_occurrence_claims
+    remapped = expand_verified_occurrence_quotes(text, remapped, _ANSWER_CITATION_LINK_RE, _citation_claim_context)
     text = _rebind_system_a_occurrence_anchors(text, remapped)
-    from api.citation_occurrence_support import refresh_verified_occurrence_claims
     remapped = refresh_verified_occurrence_claims(text, remapped)
 
     # Keep per-occurrence evidence, but give every card for the same paper the

@@ -4,6 +4,8 @@ import re
 from pathlib import Path
 
 from kb.training_observation_scope import scope_training_observation_answer
+from kb.source_domain_terms import normalize_verified_noise_sampling_terms
+from kb.source_fact_scope import scope_explicit_source_facts
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
 from kb.claim_source_eligibility import incomplete_source_prose
@@ -368,20 +370,18 @@ def _requested_facet_score(prompt: str, text: str) -> int:
         return 16 if quality_boundary_quote(text) else 0
     if _CALIBRATION_QUESTION.search(prompt):
         return 3 if re.search(r"(?i)calibrat.{0,80}(?:traditional|median|non.local)|校准.{0,30}(?:传统|中值)", text) else 0
+    if _INDEPENDENCE_QUESTION.search(prompt) or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
+        signal = re.search(r"(?i)signal.{0,30}(?:is\s+)?not\s+pixel[- ]wise\s+independent", text)
+        noise = re.search(r"(?i)noise.{0,45}conditionally\s+pixel[- ]wise\s+independent.{0,30}(?:given\s+the\s+signal|signal)",text)
+        if signal and noise:
+            return 16 if re.search(r"(?i)we\s+make\s+two\s+simple\s+statistical\s+assumptions",text) else 8
     if _INDEPENDENCE_QUESTION.search(prompt):
         relation = re.search(r"(?i)(?:noise.{0,65}independent.{0,50}(?:signal|conditional)|independence.{0,60}noise)", text)
         if not relation:
             return 0
         return 8 if re.search(r"(?i)we (?:assume|use).{0,110}noise.{0,65}independent", text) else 1
     if _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
-        signal = re.search(r"(?i)signal.{0,30}(?:is\s+)?not\s+pixel[- ]wise\s+independent", text)
-        noise = re.search(
-            r"(?i)noise.{0,45}conditionally\s+pixel[- ]wise\s+independent.{0,30}(?:given\s+the\s+signal|signal)",
-            text,
-        )
-        if not (signal and noise):
-            return 0
-        return 16 if re.search(r"(?i)we\s+make\s+two\s+simple\s+statistical\s+assumptions", text) else 8
+        return 0
     if _TRAINING_OBSERVATION_QUESTION.search(prompt):
         # Author-owned data requirements take precedence over related work.
         owned = bool(re.search(r"(?i)\bwe\b|\bour\b|本文|我们", text))

@@ -101,6 +101,10 @@ def _caption_training_pair(text: str) -> bool:
                 and re.search(r'doubly[- ]noisy\s+realization.{0,70}input\s+to\s+(?:the|our)\s+network', text, re.I))
 
 
+def _training_pair_procedure(text: str) -> bool:
+    return bool(re.search(r'\bWe\s+(?:then\s+)?train\s+the\s+network\s+to\s+predict\s+[A-Z]\s+given\s+[A-Z]\s+as\s+input', text))
+
+
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
     if requests_comparison_boundary(prompt) and comparison_caution_quote(text):
@@ -110,6 +114,8 @@ def source_facet_score(prompt: str, text: str) -> int:
     if sample_relation_priority(prompt, text) == 2:
         return 18
     if _additive_training_pair_question(prompt):
+        if _training_pair_procedure(text):
+            return 22
         if _caption_training_pair(text):
             return 18
         if re.search(r"^(?:We\s+)?train\s+the\s+network\s+to\s+predict\s+[A-Z]\s+given\s+[A-Z]\s+as\s+input", text):
@@ -159,7 +165,7 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
-    if requested_method_premise_priority(prompt, text) or (_additive_training_pair_question(prompt) and (_known_noise_training_premise(text) or _caption_training_pair(text))):
+    if requested_method_premise_priority(prompt, text) or (_additive_training_pair_question(prompt) and (_known_noise_training_premise(text) or _caption_training_pair(text) or _training_pair_procedure(text))):
         return text
     if not source_facet_score(prompt, text):
         return text

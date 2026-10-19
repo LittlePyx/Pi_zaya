@@ -2,7 +2,7 @@ from __future__ import annotations
 from kb.reference_origin_binding import origin_sentence_score, origin_topic_identifier
 from kb.citation_marker_context import numeric_marker_is_content, strip_citation_offset, strip_citation_decoration
 from kb.source_passage_evidence import bind_source_passage_primary, citation_plan_locator_quote
-from kb.direct_question_evidence import attach_direct_source_evidence, scope_training_observation_answer
+from kb.direct_question_evidence import attach_direct_source_evidence, scope_training_observation_answer, normalize_verified_noise_sampling_terms, scope_explicit_source_facts
 from kb.refusal_context_excerpt import append_refusal_context_excerpt
 from kb.denoising_quality_boundary import (
     complete_denoising_quality_boundary,
@@ -8092,7 +8092,7 @@ def _normalize_citation_plan_supported_terms(
 ) -> str:
     """Restore precise source terminology that generation paraphrases away."""
 
-    text = scope_training_observation_answer(str(answer or "").strip(), prompt=prompt, citation_plan=citation_plan, answer_hits=answer_hits)
+    text = scope_explicit_source_facts(normalize_verified_noise_sampling_terms(scope_training_observation_answer(str(answer or "").strip(), prompt=prompt, citation_plan=citation_plan, answer_hits=answer_hits), prompt=prompt, citation_plan=citation_plan), citation_plan=citation_plan, answer_hits=answer_hits, slot_hit_numbers=_citation_plan_slot_hit_numbers)
     plan_evidence_parts = [
         str(slot.get("evidence_quote") or "")
         for slot in list((citation_plan or {}).get("slots") or [])
