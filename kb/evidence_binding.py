@@ -15,6 +15,7 @@ from kb.claim_polarity_guard import claim_polarity_conflicts
 from kb.training_information_relation import training_information_relation_covered
 from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered, sampling_ability_covered
 from kb.theory_evidence import conditional_noise_domain_surface
+from kb.claim_source_eligibility import retrieval_limit_claim
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
     (
@@ -1291,6 +1292,10 @@ def assess_system_a_hit_binding(
     source_name: str,
 ) -> dict:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
+    if retrieval_limit_claim(claim):
+        return {'status':'candidate','confidence':0.0,'suppress_link':True,
+                'reason':('当前引用证据的限制不是论文原文断言，不能据此授予事实引用。' if _system_a_prefers_zh(claim) else 'A limitation of the retrieved evidence is not a claim asserted by this paper.'),
+                'overlap_terms':[],'missing_terms':['complete paper assertion']}
     # The reader locator may intentionally keep a short, claim-adjacent
     # snippet.  Binding must still see the complete evidence passage selected
     # by the authoritative citation plan; otherwise a later sentence in that

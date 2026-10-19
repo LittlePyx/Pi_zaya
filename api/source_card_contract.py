@@ -13,6 +13,7 @@ from kb.source_excerpt import literal_excerpt, scoped_source_blocks
 from kb.source_blocks import normalize_match_text
 from kb.claim_evidence_runtime import _claim_units
 from kb.citation_marker_context import numeric_marker_is_content
+from kb.claim_source_eligibility import complete_source_prefix
 
 # The reader already carries this bounded source context. A verified continuous
 # excerpt may need more room than the 520-character synthesized card preview.
@@ -258,6 +259,13 @@ def _source_excerpt(detail: dict) -> tuple[dict, str] | None:
     if not blocks:
         return None
     quote = str(detail.get("evidence_quote") or detail.get("raw") or "")
+    if len(blocks)==1 and all(detail.get(k) and detail.get(k)==blocks[0].get(k) for k in ('block_id','anchor_id','heading_path','page_start','page_end')):
+        raw=str(blocks[0].get('raw_text') or '').strip()
+        prefix=complete_source_prefix(raw)
+        # The full parent was already located exactly. This is a literal,
+        # complete assertion, not a shorter fuzzy match or a new locator.
+        if quote in {raw,prefix} and prefix!=raw and len(prefix)>=24:
+            return blocks[0],prefix
     matches = [(b, literal_excerpt(b, quote)) for b in blocks]
     matches = [(b, q) for b, q in matches if q]
     if len(matches) == 1:

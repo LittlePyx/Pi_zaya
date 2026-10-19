@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from kb.explicit_noise_relations import iid_relation_covered
+from kb.claim_source_eligibility import retrieval_limit_claim
+from kb.citation_sentences import citation_sentence_spans
 
 import re
 from decimal import Decimal, InvalidOperation
@@ -676,6 +678,10 @@ def _is_epistemic_retrieval_limit(plain: str) -> bool:
             r"(?:确认|确定|断言|证明|支持|提供|给出)[^，,。；;!?]{1,64})?[。.]?",
             plain,
         ) or re.fullmatch(
+            r"Not\s+(?:directly\s+)?(?:stated|specified|provided|shown|reported)\s+in\s+"
+            r"(?:the\s+)?(?:current\s+)?(?:retrieved|cited)\s+evidence\s*[:：]\s*"
+            r"[^.!?;,]{1,160}\.?", plain, flags=re.I,
+        ) or re.fullmatch(
             r"(?:the\s+)?(?:current|selected)\s+(?:(?:retrieved|cited)\s+)?"
             r"(?:evidence|snippets?|excerpts?|passages?)\s+"
             r"(?:cannot|can't|can\s+not|does\s+not|do\s+not)\s+"
@@ -1314,7 +1320,7 @@ def _support_score(
     claim_plain = _plain_claim(claim)
     evidence_text = str(evidence or "")
     evidence_norm = re.sub(r"\s+", " ", evidence_text).lower()
-    if not claim_plain or not evidence_norm:
+    if not claim_plain or not evidence_norm or retrieval_limit_claim(claim_plain):
         return 0
     if not iid_relation_covered(claim_plain, evidence_text):
         return 0
@@ -1652,6 +1658,23 @@ def _scope_absolute_negative_claims(answer: str) -> tuple[str, int]:
     for pattern, replacement in patterns:
         text, changed = pattern.subn(replacement, text)
         count += changed
+    # A bounded retrieval limitation has no supporting-paper marker of its
+    # own. Keep the statement; do not mint a factual source card for it.
+    lines=[]
+    in_fence=False
+    for line in text.splitlines(keepends=True):
+        if line.strip().startswith(('```','~~~')):
+            in_fence=not in_fence
+        if in_fence or line.lstrip().startswith('>'):
+            lines.append(line);continue
+        parts=[];offset=0
+        for start,end in citation_sentence_spans(line):
+            parts.append(line[offset:start]);unit=line[start:end]
+            if retrieval_limit_claim(_plain_claim(unit)):
+                unit,removed=_NUMERIC_CITATION_RE.subn('',unit);count+=removed
+            parts.append(unit);offset=end
+        parts.append(line[offset:]);lines.append(''.join(parts))
+    text=''.join(lines)
     # A retrieval-boundary statement describes what the current evidence
     # window does not establish; it is not a factual claim from any one paper.
     # Models sometimes append a numeric marker anyway.  Leaving that marker in

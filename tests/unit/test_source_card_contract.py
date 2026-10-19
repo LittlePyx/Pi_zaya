@@ -14,6 +14,21 @@ FIRST = "The network inherits the properties of the loss function during neural 
 SECOND = "The loss recovers the mean of the targets, including their conditional expected values."
 
 
+def test_exact_located_atomic_fact_excludes_a_missing_math_continuation(tmp_path):
+    from api.source_card_contract import refresh_source_citation_cards
+    raw='Recall that M and N are i.i.d. and therefore and thus'
+    path=tmp_path/'noise.md';path.write_text('<!-- kb_page: 3 -->\n## Method\n\n'+raw,encoding='utf8')
+    block=next(b for b in load_source_blocks_cached(path) if b['kind']=='paragraph')
+    detail={**block,'source_path':str(path),'evidence_quote':raw,'citation_route':'system_a','binding_status':'grounded'}
+    card=refresh_source_citation_cards([detail],render_locale='en')[0]
+    assert card['evidence_quote']=='Recall that M and N are i.i.d.'
+    assert card['evidence_quote'] in block['raw_text']
+    assert card['card_evidence']==card['evidence_quote']
+    assert next(s['text'] for s in card['card_view']['sections'] if s['id']=='evidence')==card['evidence_quote']
+    assert all(card[k]==detail[k] for k in ('source_path','block_id','anchor_id','heading_path','page_start','page_end'))
+    assert refresh_source_citation_cards([card],render_locale='en')[0]['evidence_quote']==card['evidence_quote']
+
+
 def test_internal_preview_cannot_stitch_across_an_abbreviated_source_condition(tmp_path):
     from api.source_card_contract import _verified_reader_excerpt, refresh_source_citation_cards
     raw='While we require only single noisy images vs. paired images for training, we require a known noise model vs. blind denoising. Another method requires a noise estimate but no training data. A third method does not require a noise model but requires independent noise.'
