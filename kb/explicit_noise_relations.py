@@ -66,7 +66,9 @@ def raw_output_noise_covered(claim: str, evidence: str) -> bool:
 
 def sampling_ability_covered(claim: str, evidence: str) -> bool:
     """Not needing a sampling prior does not establish inability to sample."""
-    sampling = r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样|从(?:该|此)分布中?采样|从中采样"
+    sampling = r"sampl\w*\s+from\s+(?:(?:the|a|known)\s+){0,2}noise\s+distribution|从噪声分布中?采样"
+    if re.search(r'noise|噪声', claim, re.I):
+        sampling += r'|从(?:该|此)分布中?采样|从中采样|noise\s+distribution\s+to\s+sampl\w*\s+from'
     inability = r"不具备.{0,16}(?:能力|这一点)|(?:所)?不具备(?:的)?(?=[。；,，\s\[\]]|$)|无法.{0,25}采样|\b(?:cannot|unable\s+to)\b.{0,45}sampl|\b(?:lack\w*|not\s+(?:have|possess))\b.{0,25}ability"
     if not re.search(sampling, claim, re.I):
         return True
@@ -83,7 +85,7 @@ def sampling_ability_covered(claim: str, evidence: str) -> bool:
 def known_noise_model_covered(claim: str, evidence: str) -> bool:
     """Sampling ability alone does not explicitly state a known noise model."""
     scope = bool(re.search(r'noise\s+model|噪声模型', claim, re.I))
-    known = re.compile(r'\bknown(?:,?\s+samplable)?\s+noise\s+(?:model|distribution)|已知(?:的)?噪声(?:模型|分布)' + (r'|\bknown\s+model\b' if scope else ''), re.I)
+    known = re.compile(r'\bknown(?:,?\s+samplable)?\s+noise\s+(?:model|distribution)|已知(?:的)?[、，]?(?:(?:且)?(?:可(?:以)?|能(?:够)?)从中采样的)?噪声(?:模型|分布)' + (r'|\bknown\s+model\b' if scope else ''), re.I)
 
     def positive(text: str, match: re.Match) -> bool:
         prefix = re.split(r'\bbut\b|\bhowever\b|但|而', text[:match.start()], flags=re.I)[-1][-32:]

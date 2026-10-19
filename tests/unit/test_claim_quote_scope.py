@@ -20,9 +20,10 @@ def test_a_short_excerpt_cannot_borrow_a_claim_from_its_unshown_parent(tmp_path)
     result = prepare_claim_passage_plan(rec, pack, claim)
     slots = message_citation_plan(result)['slots']
     assert (rec, pack) == before
-    assert len(slots) == 2
+    assert len(slots) == 1
     full = next(s for s in slots if s.get('passage_bound_claims'))
     assert full['evidence_quote'] == raw and full['block_id'] == block['block_id']
+    assert full['passage_quote_previous'] == short
     assert full['passage_bound_claims'] == [claim]
     assert message_citation_plan(result)['budget'] == {'system_a': 1}
     assert prepare_claim_passage_plan(result, pack, claim) == result

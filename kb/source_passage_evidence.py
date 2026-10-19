@@ -24,7 +24,7 @@ def claim_passage_concepts_covered(claim: str, evidence: str) -> bool:
         return False
     if not named_metrics_covered(claim, evidence) or not qualitative_outperformance_covered(claim, evidence):
         return False
-    concepts = (r"zero[- ]mean|零均值", r"\bconditional\s+(?:expect\w*|mean)\b|条件(?:期望|均值)",
+    concepts = (r"\bBernoulli\b|伯努利", r"zero[- ]mean|零均值", r"\bconditional\s+(?:expect\w*|mean)\b|条件(?:期望|均值)",
                 r"\bunconditional\s+(?:expect\w*|mean)\b|无条件(?:期望|均值)",
                 r"spatially\s+correlated\s+noise|空间相关噪声",
                 r"sampl\w*\s+from\s+(?:the\s+)?noise\s+distribution|从噪声分布中?采样")

@@ -5,6 +5,26 @@ import re
 
 _RULES = (
     (
+        (r'methods make different assumptions about the task.{0,50}direct comparison may be misleading',),
+        '不同方法的任务假设不同，直接比较可能产生误导。',
+        '该句提醒先核对不同方法的任务假设，再解释直接比较；它不是普遍优劣排序或新的数量结果的证据。',
+    ),
+    (
+        (r'is a known noise distribution', r'draw an additional synthetic noise sample'),
+        '噪声分布已知，因此作者可以额外生成合成噪声样本。',
+        '这两句把已知噪声分布与额外合成样本相连，可核对方法的模型知识和采样前提；不能读成完全不需要噪声先验。',
+    ),
+    (
+        (r'is a known noise distribution',),
+        '摘录明确将所述噪声分布设为已知。',
+        '该句可核对噪声分布的知识前提；采样过程和额外样本的身份仍须结合方法段落核对，不能据此认定无需噪声模型。',
+    ),
+    (
+        (r'train.{0,150}fixed,? known noise model',),
+        '该方法把固定且已知的噪声模型作为训练设定。',
+        '该句界定训练环境对噪声模型知识的前提，不等同于完全无需噪声先验；具体采样操作仍需由后续方法原文核对。',
+    ),
+    (
         (r"Given the sum of two i\.\s*i\.\s*d\. noise samples, the best estimate of one of them is half of their sum",),
         "两份独立同分布噪声样本相加时，其中一份的最佳估计是两者之和的一半。",
         "该句限定两份噪声样本之间的独立同分布关系，并给出和的一半这一估计；不能推导每份样本内部各分量也独立。",

@@ -14,10 +14,34 @@ from kb.source_blocks import normalize_match_text
 from kb.claim_evidence_runtime import _claim_units
 from kb.citation_marker_context import numeric_marker_is_content
 from kb.claim_source_eligibility import complete_source_prefix
+from kb.refusal_context_excerpt import bind_refusal_context_excerpt
 
 # The reader already carries this bounded source context. A verified continuous
 # excerpt may need more room than the 520-character synthesized card preview.
 _SOURCE_EXCERPT_MAX_LEN = 1800
+
+
+def _verified_bound_reader_excerpt(detail: dict) -> tuple[dict, str] | None:
+    """Retain a verified claim-specific passage after display shortening."""
+    if detail.get('evidence_source') not in {'citation_plan_claim_window', 'verified_source_excerpt'} or detail.get('reader_evidence_source') not in {'citation_plan_located_block', 'verified_source_block'}:
+        return None
+    actual = str(detail.get('answer_claim') or '').strip()
+    def key(value: str) -> str:
+        return re.sub(r'[\W_]+', '', re.sub(r'\[\d{1,5}\](?:\([^\n)]*\))?', '', value).casefold())
+    actual_key = key(actual)
+    bound = {key(str(c)): str(c) for c in detail.get('passage_bound_claims') or []}
+    matches = [c for k, c in bound.items() if k == actual_key or (actual.endswith(('...', '…')) and len(actual_key) >= 40 and k.startswith(actual_key))]
+    if not actual_key or len(matches) != 1 or not all(detail.get(k) for k in ('source_path', 'block_id', 'anchor_id', 'heading_path', 'page_start', 'page_end')):
+        return None
+    blocks = scoped_source_blocks(detail)
+    if len(blocks) != 1 or any(detail.get(k) != blocks[0].get(k) for k in ('block_id', 'anchor_id', 'heading_path', 'page_start', 'page_end')):
+        return None
+    block = blocks[0]; claim = matches[0]
+    current = literal_excerpt(block, str(detail.get('evidence_quote') or ''))
+    if current and _supports(claim, current, '', ''):
+        return None
+    quote = literal_excerpt(block, str(detail.get('reader_evidence_quote') or ''))
+    return (block, quote) if quote and len(quote) <= _SOURCE_EXCERPT_MAX_LEN and _supports(claim, quote, '', '') else None
 
 
 def _verified_reader_excerpt(detail: dict) -> tuple[dict, str] | None:
@@ -180,6 +204,9 @@ def prepare_source_card_message(message: dict) -> dict:
     plan = quality.get("citation_plan")
     if not isinstance(plan, dict):
         return rec
+    context_plan = bind_refusal_context_excerpt(str(rec.get('content') or ''), plan, list(meta.get('canonical_hit_paths') or []))
+    context_changed = context_plan != plan
+    plan = context_plan
     partial = (
         quality.get("minimum_ok") is False
         and quality.get("incomplete_fragment") is True
@@ -193,7 +220,7 @@ def prepare_source_card_message(message: dict) -> dict:
         plan.get("slots") or [], str(rec.get("content") or ""), paths
     )
     slots = []
-    changed = bool(retired)
+    changed = bool(retired) or context_changed
     for original in originals:
         slot = dict(original) if isinstance(original, dict) else original
         if (
@@ -255,6 +282,9 @@ def prepare_source_card_message(message: dict) -> dict:
 
 
 def _source_excerpt(detail: dict) -> tuple[dict, str] | None:
+    bound = _verified_bound_reader_excerpt(detail)
+    if bound:
+        return bound
     blocks = scoped_source_blocks(detail)
     if not blocks:
         return None

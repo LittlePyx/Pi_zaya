@@ -26,9 +26,24 @@ def requests_noise_model_requirement(prompt: str) -> bool:
     return bool(_NOISE_MODEL.search(prompt) and re.search(r'requir\w*|need\w*|需要|先验', prompt, re.I))
 
 
+def requests_bernoulli_training_requirement(prompt: str) -> bool:
+    return bool(re.search(r'Bernoulli|伯努利', prompt, re.I) and re.search(r'train\w*\s+(?:requirements?|data|observations?)|训练(?:数据|要求|观测)', prompt, re.I))
+
+
+def _bernoulli_training_premise(text: str) -> bool:
+    return bool(re.search(r'Bernoulli[- ](?:sampled|masked)', text, re.I)
+                and re.search(r'\btrain\w*\b', text, re.I)
+                and re.search(r'instances|noisy\s+image|input\s+image', text, re.I)
+                and re.search(r'\bwe\b|\bour\b|this\s+paper|the\s+proposed\s+method', text, re.I))
+
+
+def requested_method_premise_priority(prompt: str, text: str) -> int:
+    return max(noise_model_premise_priority(prompt, text), int(requests_bernoulli_training_requirement(prompt) and _bernoulli_training_premise(text)))
+
+
 def _known_noise_training_premise(text: str) -> bool:
     return bool(re.search(r'known\s+noise\s+(?:model|distribution)', text, re.I)
-                and re.search(r'(?:draw|sampl)\w*.{0,60}additional\s+synthetic\s+noise\s+sample', text, re.I))
+                and re.search(r'\bwe\s+(?:can\s+)?(?:draw|sampl)\w*.{0,60}additional\s+synthetic\s+noise\s+sample', text, re.I))
 
 
 def noise_model_premise_priority(prompt: str, text: str) -> int:
@@ -36,7 +51,7 @@ def noise_model_premise_priority(prompt: str, text: str) -> int:
 
 
 def requests_source_facets(prompt: str) -> bool:
-    return bool(_NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt)
+    return bool(_NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
                 or (_CORRECTION.search(prompt) and _OUTPUT.search(prompt))
                 or _DROPOUT_PHASE.search(prompt) or _additive_training_pair_question(prompt))
 
@@ -68,7 +83,7 @@ def sample_relation_priority(prompt: str, text: str) -> int:
 
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
-    if requests_noise_model_requirement(prompt) and _known_noise_training_premise(text):
+    if requested_method_premise_priority(prompt, text):
         return 20
     if sample_relation_priority(prompt, text) == 2:
         return 18
@@ -120,7 +135,7 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
-    if requests_noise_model_requirement(prompt) and _known_noise_training_premise(text):
+    if requested_method_premise_priority(prompt, text):
         return text
     if not source_facet_score(prompt, text):
         return text

@@ -12,6 +12,7 @@ from kb.evidence_binding import assess_system_a_hit_binding
 from kb.evidence_term_mapping import evidence_alignment_tokens, specific_method_identities
 from kb.source_blocks import load_source_blocks_cached, normalize_match_text
 from kb.source_passage_evidence import claim_passage_concepts_covered
+from kb.claim_source_scope import explicit_owned_comparison_clause
 
 
 def message_citation_plan(rec: dict | None) -> dict:
@@ -28,6 +29,7 @@ def message_citation_plan(rec: dict | None) -> dict:
 
 
 def _supports(claim: str, quote: str, heading: str, source: str) -> bool:
+    claim = explicit_owned_comparison_clause(claim, source)
     # Related summary-statistic prose cannot substitute for a target theorem.
     if not claim_passage_concepts_covered(claim, quote):
         return False
@@ -135,11 +137,6 @@ def _retrieved_passages(slots: list[dict], hits: list[dict], source: str) -> dic
     for slot in slots:
         for passage in _declared_source_passages(slot):
             result[str(passage["block_id"])] = passage
-        if _canonical_source_path_identity(str(slot.get('source_path') or '')) != identity:
-            continue
-        parent = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
-        if parent and 40 <= len(parent['source_block_text']) <= 1800:
-            result[str(parent['block_id'])] = {**parent, 'text': parent['source_block_text']}
     return result
 
 
@@ -198,7 +195,11 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
         if primary is not None:
             claims = [c for c in slot.get("passage_bound_claims", []) if _slot_supports(c, primary)]
             if len(claims) != len(slot.get('passage_bound_claims', [])):
-                continue
+                if len(str(slot.get('evidence_quote') or '')) > 1800 or not all(_slot_supports(c, slot) for c in primary.get('passage_bound_claims', [])):
+                    continue
+                primary['passage_quote_previous'] = primary.get('evidence_quote')
+                primary['evidence_quote'] = slot['evidence_quote']
+                claims = list(slot.get('passage_bound_claims', []))
             primary["passage_bound_claims"] = list(dict.fromkeys([*primary.get("passage_bound_claims", []), *claims]))
             slots.remove(slot)
             added = True
@@ -249,11 +250,26 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
             candidates = {key: passage for key, passage in _retrieved_passages(
                 source_slots, hits, str(source_slots[0]["source_path"])
             ).items() if _passage_supports(local_claim, passage, str(source_slots[0].get("source_name") or ""))}
+            if not candidates:
+                for slot in source_slots:
+                    parent = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, str(slot.get('source_path') or ''))
+                    if parent and 40 <= len(parent['source_block_text']) <= 1800:
+                        full = {**parent, 'text': parent['source_block_text']}
+                        if _passage_supports(local_claim, full, str(slot.get('source_name') or '')):
+                            candidates[str(full['block_id'])] = full
             # Multiple physically different matches are ambiguous; never pick
             # a page by retrieval order or turn a namesake paper into evidence.
             if len(candidates) != 1:
                 continue
             passage = next(iter(candidates.values()))
+            primary = next((s for s in source_slots if s.get('block_id') == passage.get('block_id') and s.get('anchor_id') == passage.get('anchor_id')), None)
+            if primary is not None and all(_passage_supports(c, passage, str(primary.get('source_name') or '')) for c in primary.get('passage_bound_claims', [])):
+                primary['passage_quote_previous'] = primary.get('evidence_quote')
+                primary['evidence_quote'] = passage['text']
+                primary['evidence_selection_reason'] = 'claim_source_passage'
+                primary['passage_bound_claims'] = list(dict.fromkeys([*primary.get('passage_bound_claims', []), local_claim]))
+                added = True
+                continue
             slots.append({**_passage_slot(source_slots[0], passage, number), "passage_bound_claims": [local_claim]})
             added = True
     if not added:
@@ -323,6 +339,18 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
             matches = [(slot, p) for slot, p in verified
                        if losses <= set(re.findall(r'\bL\s*(\d+)\b', p['source_block_text'], re.I))
                        and _slot_supports(claim, slot)]
+            if not matches:
+                full_matches = [(slot, {**p, 'text': p['source_block_text']}) for slot, p in verified
+                                if 40 <= len(p['source_block_text']) <= 1800
+                                and losses <= set(re.findall(r'\bL\s*(\d+)\b', p['source_block_text'], re.I))
+                                and _passage_supports(claim, {**p, 'text': p['source_block_text']}, str(slot.get('source_name') or ''))
+                                and all(_slot_supports(c, {**slot, 'evidence_quote': p['source_block_text']}) for c in slot.get('passage_bound_claims', []))]
+                if len({p['block_id'] for _, p in full_matches}) == 1:
+                    slot, p = full_matches[0]
+                    slot['passage_quote_previous'] = slot.get('evidence_quote')
+                    slot['evidence_quote'] = p['text']
+                    slot['evidence_selection_reason'] = 'claim_source_passage'
+                    matches = [(slot, p)]
             if len({p['block_id'] for _, p in matches}) != 1:
                 continue
             slot, _ = matches[0]

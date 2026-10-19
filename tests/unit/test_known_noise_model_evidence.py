@@ -25,3 +25,10 @@ def test_noise_model_question_keeps_the_continuous_known_sampling_premise():
     assert source_facet_score(prompt, DEFINITION) > source_facet_score(prompt, SAMPLING)
     assert source_facet_quote(prompt, DEFINITION) == DEFINITION
     assert not source_facet_score('Which pixels does the loss measure?', DEFINITION)
+
+
+def test_inserted_sampling_clause_still_requires_the_full_known_distribution_premise():
+    claim = 'Noisier2Noise 需要一个已知、且能从中采样的噪声分布。'
+    assert _supports(claim, DEFINITION, '', 'noisier2noise.en.md')
+    assert not _supports(claim, 'N is drawn from a known noise distribution.', '', 'noisier2noise.en.md')
+    assert not _supports(claim, SAMPLING, '', 'noisier2noise.en.md')

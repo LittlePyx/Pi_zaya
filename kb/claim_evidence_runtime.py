@@ -3,6 +3,7 @@ from __future__ import annotations
 from kb.explicit_noise_relations import iid_relation_covered
 from kb.claim_source_eligibility import retrieval_limit_claim
 from kb.citation_sentences import citation_sentence_spans
+from kb.claim_source_scope import explicit_owned_comparison_clause
 
 import re
 from decimal import Decimal, InvalidOperation
@@ -657,7 +658,7 @@ def _meaningful_numbers(text: str) -> list[str]:
 
 def _is_epistemic_retrieval_limit(plain: str) -> bool:
     """Recognize complete, nonnumeric limits on what retrieved evidence proves."""
-    plain = re.sub(r"^结论[：:]\s*", "", plain)
+    plain = re.sub(r"^(?:结论|Conclusion|Verdict)[：:]\s*", "", plain, flags=re.I)
     return bool(
         (re.fullmatch(
             r"(?:(?:这|此)(?:只能|仅能|仅)(?:说明|表明)(?:所引|当前引用|当前检索)"
@@ -1105,7 +1106,7 @@ def _enforce_named_source_section_citations(
 
             scores = {
                 hit_index: _support_score(
-                    segment,
+                    explicit_owned_comparison_clause(segment, str((answer_hits[hit_index - 1].get('meta') or {}).get('source_name') or (answer_hits[hit_index - 1].get('meta') or {}).get('source_path') or '')),
                     _hit_payload(answer_hits[hit_index - 1]),
                     allow_comparison_scope=len(segment_hit_indexes) > 1,
                 )

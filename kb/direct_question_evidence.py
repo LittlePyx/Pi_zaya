@@ -5,7 +5,7 @@ from pathlib import Path
 
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
-from kb.source_question_facets import noise_model_premise_priority, requests_comparison_facets, requests_noise_model_requirement, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
+from kb.source_question_facets import requested_method_premise_priority, requests_bernoulli_training_requirement, requests_comparison_facets, requests_noise_model_requirement, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
 from kb.n2n_target_condition import (
     _verified_block, attach_target_condition_slot, corruption_condition_question, target_condition_quote,
 )
@@ -199,7 +199,36 @@ def prioritize_direct_question_hits(
 
 def prioritize_selected_source_relation_hits(selected: list[dict], candidates: list[dict], *, limit: int, prompt: str) -> list[dict]:
     """Supplement requested sample relations without displacing other facets."""
-    if not (requests_sample_relation_evidence(prompt) or requests_noise_model_requirement(prompt)):
+    if (requests_noise_model_requirement(prompt) or requests_bernoulli_training_requirement(prompt)) and not requests_sample_relation_evidence(prompt):
+        replacements = {}
+        for path in dict.fromkeys(str((h.get('meta') or {}).get('source_path') or '') for h in selected):
+            if not path or not Path(path).is_file():
+                continue
+            try:
+                from kb.converter.quality_gate import _unreliable_pages_from_report
+                from kb.converter.quality_repair import load_conversion_quality_result
+                excluded = set(_unreliable_pages_from_report(load_conversion_quality_result(Path(path))))
+                rows = direct_question_evidence_hits(Path(path), prompt, limit=limit)
+                premise = next((h for h in rows if requested_method_premise_priority(prompt, h.get('text') or '') and int((h.get('meta') or {}).get('page_start') or 0) not in excluded), None)
+                if premise:
+                    replacements[path] = premise
+            except (OSError, ValueError, TypeError):
+                continue
+        result = []
+        used = set()
+        for hit in selected:
+            meta = hit.get('meta') or {}; path = str(meta.get('source_path') or '')
+            if path not in replacements or path in used:
+                result.append(hit); continue
+            used.add(path); fresh = replacements[path]; fresh_meta = fresh['meta']
+            passage = {**fresh_meta, 'text': fresh['text']}
+            old_passages = list(meta.get('source_passages') or [])
+            merged = {**meta, **fresh_meta, 'source_passages': [passage, *old_passages[1:]]}
+            for key in ('citation_plan_evidence_authoritative', 'citation_plan_full_evidence_quote', 'citation_plan_evidence_selection_reason', 'why_line', 'answer_claim'):
+                merged.pop(key, None)
+            result.append({**hit, **fresh, 'meta': merged})
+        return result[:limit]
+    if not requests_sample_relation_evidence(prompt):
         return selected
     return prioritize_direct_question_hits(selected, candidates, limit=limit, prompt=prompt)
 
@@ -560,7 +589,7 @@ def direct_question_evidence_hits(
         return []
     candidates.sort(key=lambda row: (
         -sample_relation_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
-        -noise_model_premise_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
+        -requested_method_premise_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
         -row[0], row[1],
     ))
     chosen = candidates[0][2]

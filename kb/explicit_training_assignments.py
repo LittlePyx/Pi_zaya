@@ -26,6 +26,8 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
 
 def noise_augmentation_training_covered(claim: str, evidence: str) -> bool:
     """An experiment's noise level is not an additional-noise training recipe."""
+    if not re.search(r'\btrain\w*\b|\bnetwork\b|训练|(?:网络|模型).{0,8}预测', claim, re.I):
+        return True
     addition = r'(?:add|augment|inject)\w*[^.;。\n]{0,65}noise|(?:再|额外|进一步)(?:加入|添加|叠加)(?:合成)?噪声'
     if not re.search(addition, claim, re.I):
         return True

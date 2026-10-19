@@ -3,6 +3,7 @@ from kb.reference_origin_binding import origin_sentence_score, origin_topic_iden
 from kb.citation_marker_context import numeric_marker_is_content, strip_citation_offset, strip_citation_decoration
 from kb.source_passage_evidence import bind_source_passage_primary, citation_plan_locator_quote
 from kb.direct_question_evidence import attach_direct_source_evidence
+from kb.refusal_context_excerpt import append_refusal_context_excerpt
 from kb.denoising_quality_boundary import (
     complete_denoising_quality_boundary,
     complete_n2n_corruption_model_boundary,
@@ -7589,19 +7590,18 @@ def _complete_grounded_requested_source_facts(
     citation_plan: dict | None,
     answer_hits: list[dict] | None = None,
 ) -> str:
-    """Close list/value omissions with compact text from an exact plan slot.
+    """Close source omissions with literal text from exact plan slots.
 
-    The model sometimes receives the right block but paraphrases away one item
-    in an explicit source enumeration or answers a quantitative question with a
-    neighboring number.  This pass never invents a translation or looks beyond
-    the citation plan: it adds a small bounded set of compact, source-verbatim
-    sentences and binds each one to an already resolved System-A hit.
+    Keep additions bound to the resolved same-source hit. A bounded refusal
+    may retain a nonnumeric source quotation as explicitly labeled context.
     """
 
     text = str(answer or "").strip()
     prompt_text = str(prompt or "")
-    if not text or not isinstance(citation_plan, dict) or _answer_starts_with_retrieval_limit(text):
+    if not text or not isinstance(citation_plan, dict):
         return text
+    if _answer_starts_with_retrieval_limit(text):
+        return append_refusal_context_excerpt(text, citation_plan, [str((h.get('meta') or {}).get('source_path') or '') for h in answer_hits or []])
     slots = [
         dict(slot)
         for slot in list(citation_plan.get("slots") or [])
