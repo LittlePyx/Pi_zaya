@@ -5,7 +5,7 @@ from pathlib import Path
 
 from kb.training_observation_scope import scope_training_observation_answer
 from kb.source_domain_terms import normalize_verified_noise_sampling_terms
-from kb.source_question_facets import measurement_conditions_question
+from kb.source_question_facets import measurement_conditions_question, requests_training_augmentation, requests_sampling_prerequisite
 from kb.source_fact_scope import scope_explicit_source_facts
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
@@ -210,7 +210,7 @@ def prioritize_direct_question_hits(
 
 def prioritize_selected_source_relation_hits(selected: list[dict], candidates: list[dict], *, limit: int, prompt: str) -> list[dict]:
     """Supplement requested sample relations without displacing other facets."""
-    if (requests_noise_model_requirement(prompt) or requests_bernoulli_training_requirement(prompt)) and not requests_sample_relation_evidence(prompt):
+    if (requests_noise_model_requirement(prompt) or requests_bernoulli_training_requirement(prompt) or requests_training_augmentation(prompt)) and not requests_sample_relation_evidence(prompt):
         replacements = {}
         for path in dict.fromkeys(str((h.get('meta') or {}).get('source_path') or '') for h in selected):
             if not path or not Path(path).is_file():
@@ -220,9 +220,9 @@ def prioritize_selected_source_relation_hits(selected: list[dict], candidates: l
                 from kb.converter.quality_repair import load_conversion_quality_result
                 excluded = set(_unreliable_pages_from_report(load_conversion_quality_result(Path(path))))
                 rows = direct_question_evidence_hits(Path(path), prompt, limit=limit)
-                premise = next((h for h in rows if requested_method_premise_priority(prompt, h.get('text') or '') and int((h.get('meta') or {}).get('page_start') or 0) not in excluded), None)
-                if premise:
-                    replacements[path] = premise
+                premises = [h for h in rows if requested_method_premise_priority(prompt, h.get('text') or '') and int((h.get('meta') or {}).get('page_start') or 0) not in excluded]
+                if premises:
+                    replacements[path] = premises
             except (OSError, ValueError, TypeError):
                 continue
         result = []
@@ -231,13 +231,17 @@ def prioritize_selected_source_relation_hits(selected: list[dict], candidates: l
             meta = hit.get('meta') or {}; path = str(meta.get('source_path') or '')
             if path not in replacements or path in used:
                 result.append(hit); continue
-            used.add(path); fresh = replacements[path]; fresh_meta = fresh['meta']
-            passage = {**fresh_meta, 'text': fresh['text']}
-            old_passages = list(meta.get('source_passages') or [])
-            merged = {**meta, **fresh_meta, 'source_passages': [passage, *old_passages[1:]]}
+            used.add(path); fresh = replacements[path][0]; fresh_meta = fresh['meta']
+            old_passages = list(meta.get('source_passages') or [{**meta, 'text': hit.get('text')}])
+            bundle = {**fresh, 'meta': {**fresh_meta, 'source_passages': [{**fresh_meta, 'text': fresh['text']}, *old_passages[1:]]}}
+            if requests_training_augmentation(prompt) or requests_sampling_prerequisite(prompt):
+                from kb.paper_guide_answer_selection import _merge_same_source_answer_hits
+                rows = [*replacements[path], *({'text': p.get('text'), 'score': p.get('score'), 'meta': {**p, 'source_path': path}} for p in old_passages)]
+                bundle = _merge_same_source_answer_hits(rows)[0]
+            merged = {**meta, **fresh_meta, **bundle['meta']}
             for key in ('citation_plan_evidence_authoritative', 'citation_plan_full_evidence_quote', 'citation_plan_evidence_selection_reason', 'why_line', 'answer_claim'):
                 merged.pop(key, None)
-            result.append({**hit, **fresh, 'meta': merged})
+            result.append({**hit, **bundle, 'meta': merged})
         return result[:limit]
     if not requests_sample_relation_evidence(prompt):
         return selected

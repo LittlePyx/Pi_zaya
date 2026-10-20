@@ -20,7 +20,7 @@ def explicit_clause_boundaries(text: str) -> list[int]:
     # Link titles contain sections, parentheses and quotation marks. They are
     # routing decoration, not sentence scope; keep offsets but mask their text.
     surface = re.sub(r'\[\[(?:SUPPORT|CITE):[^\]\n]+\]\]|\[\d{1,5}\](?:' + _LINK + r')?', lambda m: ' ' * len(m[0]), text, flags=re.I)
-    for match in re.finditer(r'[,，]' + _MARKERS + r'(?=\s*(?:while\b|whereas\b|而\s*|并指出|且\s*))', text, re.I):
+    for match in re.finditer(r'[,，]' + _MARKERS + r'(?=\s*(?:while\b|whereas\b|而\s*|并指出|且\s*|and\s+(?:adds?|injects?|augments?)\b))', text, re.I):
         at = match.start()
         prefix, suffix = text[:at], text[match.end():]
         if numeric_marker_is_content(text, at):
@@ -43,6 +43,7 @@ def explicit_clause_boundaries(text: str) -> list[int]:
         quantities = re.sub(r'\b(?:propositions?|theorems?|lemmas?|sections?|figures?|tables?)\s*\d+|(?:命题|定理|引理)\s*\d+', '', quantities, flags=re.I)
         if not loss and re.search(r'(?<![A-Za-z0-9])\d+(?:\.\d+)?(?![A-Za-z0-9])', quantities):
             continue
-        if cited or methods or loss:
+        augmentation = re.match(r'\s*and\s+(?:adds?|injects?|augments?)\b[^.;\n]{0,65}(?:synthetic|additional)\s+(?:noise|sample)', following, re.I)
+        if cited or methods or loss or augmentation:
             result.append(match.end())
     return result

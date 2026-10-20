@@ -108,7 +108,7 @@ def iid_relation_covered(claim: str, evidence: str) -> bool:
 
 def signal_dependency_covered(claim: str, evidence: str) -> bool:
     """Keep signal dependence separate from the accompanying noise premise."""
-    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal[^.;\n]{0,65}(?:statistical\s+dependenc|statistically\s+predictable|not\s+pixel[- ]wise\s+independent|\bcorrelated)', claim, re.I)
+    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|表现出|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal[^.;\n]{0,65}(?:statistical\s+dependenc|statistically\s+predictable|not\s+pixel[- ]wise\s+independent|\bcorrelat)', claim, re.I)
     if not requested:
         return True
     pattern = (r'\bsignal\s*,?\s*(?:however\s*,?\s*)?(?:is\s+assumed\s+to\s+contain\s+(?:statistical\s+)?dependencies|'

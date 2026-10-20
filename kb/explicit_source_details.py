@@ -5,6 +5,9 @@ import re
 
 def explicit_source_details_covered(claim: str, evidence: str) -> bool:
     """Veto extra operations/statistics that a nearby topic cannot establish."""
+    stable_training = r'\bstabl\w*[^.;\n]{0,35}\btrain\w*|\bstabili[sz]\w*[^.;\n]{0,35}\btrain\w*|训练[^。；\n]{0,20}稳定|稳定[^。；\n]{0,20}训练'
+    if re.search(stable_training, claim, re.I) and not re.search(stable_training, evidence, re.I):
+        return False
     for number, statistic in ((1, r'median|中位数'), (2, r'mean|average|均值|平均')):
         loss = rf'(?<![A-Za-z])L\s*_?\s*\{{?{number}\}}?(?!\d)'
         if re.search(loss, claim, re.I) and re.search(statistic, claim, re.I):

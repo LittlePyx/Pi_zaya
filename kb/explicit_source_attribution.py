@@ -44,6 +44,10 @@ def source_attribution_covered(claim: str, evidence: str, source_name: str) -> b
     """Keep named displays, baseline lists and training provenance in the quote."""
     if not explicit_training_assignments_covered(claim, evidence) or not named_synthetic_sample_covered(claim, evidence) or not explicit_source_details_covered(claim, evidence):
         return False
+    for match in re.finditer(r'([A-Za-z][A-Za-z0-9-]*)\s*(?:(?:论文|paper)\s*)?(?:明确)?(?:指出|说明|声称|states?\b|notes?\b|describes?\b|论文对)', claim, re.I):
+        attributed = specific_method_identities(match[1])
+        if attributed and not _owns_fact(match[1], source_name):
+            return False
     named_results = ((r'proposition|命题', 'proposition'), (r'theorem|定理', 'theorem'), (r'lemma|引理', 'lemma'), (r'corollary|推论', 'corollary'))
     for aliases, _kind in named_results:
         for number in re.findall(rf'(?:\b(?:{aliases})|(?:{aliases}))\s*([0-9]+)(?![0-9])', claim, re.I):

@@ -4,15 +4,19 @@ import re
 
 
 def _positive_clean_supervision(text: str) -> bool:
-    pattern = r'(?:supervis\w*|train\w*|target\s+(?:is\s+)?defined\s+against|监督|训练)[^.;。；\n]{0,95}(?:clean\s+(?:targets?|ground[- ]truth(?:\s+data)?)|干净(?:目标|参照))'
+    pattern = r'(?:supervis\w*|train\w*|target\s+(?:is\s+)?defined\s+against|监督|训练)[^.;。；\n]{0,95}?(?:clean\s+(?:targets?|ground[- ]truth(?:\s+data)?)|干净(?:目标|参照))'
     for match in re.finditer(pattern, text, re.I):
-        clause = re.split(r'[.;。；\n]', text[:match.end()])[-1]
-        if not re.search(r'\b(?:not|never|without|neither)\b|rather\s+than|无需|不用|不(?:需要|使用)', clause, re.I):
+        clause = re.split(r'[.;。；，\n]', text[:match.end()])[-1]
+        if not re.search(r'\b(?:not|never|without|neither)\b|rather\s+than|无需|不用|不(?:再)?(?:需要|要求|使用)', clause, re.I):
             return True
     return False
 
 
 def _training_supervision_covered(claim: str, evidence: str) -> bool:
+    residual_loss = r'(?:desired|estimated)\s+residual\s+images?|(?:期望|估计|真实)残差'
+    if re.search(residual_loss, claim, re.I) and re.search(r'loss|error|损失|误差', claim, re.I):
+        if not (re.search(r'residual|残差', evidence, re.I) and re.search(r'loss|squared\s+error|损失|平方误差', evidence, re.I)):
+            return False
     synthetic_target = re.search(r'(?:synthetic\s+noise|noise\s+sample|合成噪声)[^.;。；\n]{0,90}(?:construct\w*\s+(?:the\s+)?training\s+targets?|构造训练目标)', claim, re.I)
     if synthetic_target:
         direct = r'corrupt\w*[^.;\n]{0,50}training\s+targets?|(?:synthetic\s+noise|noise\s+samples?)[^.;\n]{0,45}(?:is|are)\s+(?:the\s+)?training\s+targets?|合成噪声[^。；\n]{0,25}(?:是|作为)训练目标'
@@ -35,13 +39,13 @@ def _training_supervision_covered(claim: str, evidence: str) -> bool:
 
 
 def _named_training_roles_covered(claim: str, evidence: str) -> bool:
-    description = r'(?:(?i:the|a|an|observed|noisy|singly[- ]noisy|doubly[- ]noisy|unseen|clean|image|observation)\s+){0,7}'
+    description = r'(?:(?i:the|a|an|observed|noisy|singly[- ]noisy|doubly[- ]noisy|unseen|clean|image|observation|input|target)\s+){0,7}'
     variable = r'\$?([A-Z])(?![A-Za-z0-9_])\$?'
     def roles(text: str, role: str) -> set[str]:
         prefix = rf'(?i:(?:(?:training|network|regression)\s+)?{role}\s+(?:is|are|=)\s+)'
         return set(re.findall(prefix + description + variable, text))
     def predictions(text: str) -> set[tuple[str, str]]:
-        return {(m[1], m[2]) for m in re.finditer(r'(?i:predict)\s+'+variable+r'\s+(?i:given|from)\s+'+variable, text)}
+        return {(m[1], m[2]) for m in re.finditer(r'(?i:predicts?)\s+'+description+variable+r'\s+(?i:given|from)\s+'+description+variable, text)}
     wanted_maps = predictions(claim)
     if re.search(r'\b(?:train\w*|network|learn\w*|mapping)\b|训练|网络|映射', claim, re.I):
         wanted_maps |= {(m[2], m[1]) for m in re.finditer(variable+r'\s*\\+mapsto\s*'+variable, claim)}
@@ -143,12 +147,13 @@ def prediction_average_covered(claim: str, evidence: str) -> bool:
 
 def noise_augmentation_training_covered(claim: str, evidence: str) -> bool:
     """An experiment's noise level is not an additional-noise training recipe."""
-    if not re.search(r'\btrain\w*\b|\bnetwork\b|训练|(?:网络|模型).{0,8}预测', claim, re.I):
+    if not re.search(r'\btrain\w*\b|\bnetwork\b|训练|合成噪声|(?:synthetic|additional)\s+(?:synthetic\s+)?noise', claim, re.I):
         return True
-    addition = r'(?:add|augment|inject)\w*[^.;。\n]{0,65}noise|(?:再|额外|进一步)(?:加入|添加|叠加)(?:合成)?噪声|(?:加入|添加|叠加)合成噪声'
+    addition = r'\b(?:adds?|added|adding|augment\w*|inject\w*)\b[^.;。\n]{0,65}noise|(?:再|额外|进一步)(?:加入|添加|叠加)(?:合成)?噪声|(?:加入|添加|叠加)合成噪声'
     if not re.search(addition, claim, re.I):
         return True
-    if not re.search(r'additional\s+(?:synthetic\s+)?noise|synthetic\s+noise|noisier\s+version|augment\w*[^.;\n]{0,60}noise|(?:额外|合成)噪声', evidence, re.I):
+    operation = (addition + r'|(?:create|form)\w*[^.;\n]{0,45}noisier\s+version[^.;\n]{0,55}[A-Z]\s*(?:≜|:=|=)\s*[A-Z]\s*\+\s*[A-Z]')
+    if not re.search(operation, evidence, re.I):
         return False
     predicts_original = r'predict\w*[^.;\n]{0,30}original\s+noisy\s+image|预测原(?:始)?(?:噪声|带噪|含噪)图像'
     return not re.search(predicts_original, claim, re.I) or bool(re.search(r'predict\s+Y\s+given\s+Z|predict\w*[^.;\n]{0,30}original\s+noisy\s+image|预测原(?:始)?(?:噪声|带噪|含噪)图像', evidence, re.I))

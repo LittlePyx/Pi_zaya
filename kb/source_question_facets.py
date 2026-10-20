@@ -80,7 +80,18 @@ def comparison_caution_quote(text: str) -> str:
 
 
 def requests_noise_model_requirement(prompt: str) -> bool:
-    return bool(_NOISE_MODEL.search(prompt) and re.search(r'requir\w*|need\w*|需要|先验', prompt, re.I))
+    return bool((_NOISE_MODEL.search(prompt) and re.search(r'requir\w*|need\w*|需要|先验', prompt, re.I))
+                or requests_sampling_prerequisite(prompt))
+
+
+def requests_sampling_prerequisite(prompt: str) -> bool:
+    return bool(_CORRELATED.search(prompt) and re.search(r'(?:依赖|需要).{0,15}(?:能力|采样)|(?:requir\w*|depend\w*).{0,30}(?:ability|sampl)', prompt, re.I))
+
+
+def requests_training_augmentation(prompt: str) -> bool:
+    return _additive_training_pair_question(prompt) or bool(
+        _NOISE_MODEL.search(prompt) and re.search(r'train\w*|训练', prompt, re.I)
+        and re.search(r'adds?\s+(?:sampled|synthetic|additional)\s+noise|(?:加入|添加)(?:采样|合成|额外)噪声', prompt, re.I))
 
 
 def requests_bernoulli_training_requirement(prompt: str) -> bool:
@@ -95,7 +106,8 @@ def _bernoulli_training_premise(text: str) -> bool:
 
 
 def requested_method_premise_priority(prompt: str, text: str) -> int:
-    return max(noise_model_premise_priority(prompt, text), int(requests_bernoulli_training_requirement(prompt) and _bernoulli_training_premise(text)))
+    return max(noise_model_premise_priority(prompt, text), int(requests_bernoulli_training_requirement(prompt) and _bernoulli_training_premise(text)),
+               2 * int(requests_training_augmentation(prompt) and _training_pair_procedure(text)))
 
 
 def _known_noise_training_premise(text: str) -> bool:
@@ -176,6 +188,8 @@ def source_facet_score(prompt: str, text: str) -> int:
         if re.search(r'L\s*1\s+loss\s+recovers\s+the\s+median|L\s*2\s+loss[^.;]{0,80}output\s+the\s+average', text):
             return 24
     if re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) and re.search(r'\bJ\s*[- ]\s*invariant', text, re.I):
+        if re.search(r'information\s+from\s+outside\s+(?:of\s+)?each\s+subset\s+(?:of\s+dimensions\s+)?J', text, re.I) and re.search(r'cannot\s+(?:merely|simply)\s+be\s+the\s+identity', text, re.I):
+            return 22
         if re.search(r'f\s*\(\s*x\s*\)\s*[_{ ]*J\b[^.;]{0,35}does\s+not\s+depend\s+on', text):
             return 24
         if re.search(r'information\s+from\s+outside\s+each\s+subset\s+J', text, re.I):
@@ -241,6 +255,8 @@ def source_facet_quote(prompt: str, text: str) -> str:
     if _measurement_modality_question(prompt) and len(text) <= 1800:
         return text
     if _noise_statistics_score(prompt, text) and len(text) <= 1800:
+        return text
+    if _training_speed_question(prompt) and source_facet_score(prompt, text) and len(text) <= 1800:
         return text
     if (_prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt)) and re.search(r'Figure\s+\d+', text, re.I) and re.search(r'receptive\s+field[^.;]{0,60}excludes\s+the\s+pixel\s+itself', text, re.I):
         return text

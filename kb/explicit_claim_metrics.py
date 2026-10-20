@@ -16,6 +16,9 @@ def named_metrics_covered(claim: str, evidence: str) -> bool:
 
 def qualitative_outperformance_covered(claim: str, evidence: str) -> bool:
     """A baseline list does not itself assert an experimental improvement."""
+    moderation = r'(?:performance|性能)[^.;。；\n]{0,25}(?:drops?\s+in\s+moderation|适度下降|下降幅度.{0,5}(?:温和|较小))|(?:适度|温和)[^。；\n]{0,10}(?:性能下降|下降)'
+    if re.search(moderation, claim, re.I) and not re.search(moderation, evidence, re.I):
+        return False
     requested = list(re.finditer(r'outperform\w*|优于|胜过', claim, re.I))
     if not requested:
         return True

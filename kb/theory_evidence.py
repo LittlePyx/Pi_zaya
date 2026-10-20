@@ -237,6 +237,9 @@ def measurement_conditions_covered(claim: str, evidence: str) -> bool:
     This is a literal relation guard, not an algebra solver. In particular,
     unconditional expectations cannot stand in for the conditional condition.
     """
+    conditional_noise = r'noise[^.;。；\n]{0,65}(?:conditionally\s+(?:pixel[- ]wise\s+)?independent|independent\s+conditional\s+on)|噪声[^。；\n]{0,45}条件独立'
+    if re.search(conditional_noise, claim, re.I) and not re.search(conditional_noise, evidence, re.I):
+        return False
     if re.search(r"unbiased|无偏", claim, re.I):
         expectation = r"E\s*\[\s*[xy]\s*(?:\|\s*[xy]\s*)?\]"
         relation = re.compile(

@@ -40,7 +40,7 @@ def waived_data_requirements_covered(claim: str, evidence: str) -> bool:
     # operation from collecting clean training targets. Require the complete
     # source loss relation and restricted minimization result, not a title.
     selection_reference = (re.search(r'干净参照.{0,20}(?:选择|选出)(?:最优)?去噪器', claim)
-                           and re.search(r'最小化自监督损失|方差项|噪声方差', claim)
+                           and re.search(r'最小化自监督损失|方差项|噪声方差|差值项', claim)
                            and re.search(r'与.{0,25}无关|不影响最优解|不会改变最优解', claim)
                            and not re.search(r'训练数据|训练目标|训练图像|训练标签', claim))
     surface = re.sub(r'\s+', ' ', evidence)
