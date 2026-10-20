@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Iterable
 
 
@@ -385,23 +386,24 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def evidence_alignment_tokens(
-    value: object,
-    *,
-    extra_stopwords: Iterable[str] | None = None,
-) -> set[str]:
-    """Return English evidence tokens and deterministic Chinese aliases."""
+_COMPILED_CJK_EVIDENCE_HINTS = tuple(
+    (re.compile(pattern, re.IGNORECASE), aliases)
+    for pattern, aliases in _CJK_EVIDENCE_HINTS
+)
 
-    text = str(value or "")
+
+@lru_cache(maxsize=512)
+def _alignment_token_snapshot(text: str, extra_stopwords: frozenset[str]) -> frozenset[str]:
+    """Share only immutable tokenization results; support checks still run."""
     stopwords = set(_ASCII_STOPWORDS)
-    stopwords.update(str(item or "").strip().lower() for item in (extra_stopwords or ()))
+    stopwords.update(extra_stopwords)
     tokens = {
         token
         for token in re.findall(r"[a-z0-9]+", text.lower())
         if (len(token) >= 3 or token in {"2d", "3d"}) and token not in stopwords
     }
-    for pattern, aliases in _CJK_EVIDENCE_HINTS:
-        if re.search(pattern, text, flags=re.IGNORECASE):
+    for pattern, aliases in _COMPILED_CJK_EVIDENCE_HINTS:
+        if pattern.search(text):
             tokens.update(aliases)
     # One converted HSI/FSI benchmark table carries the obvious OCR/header
     # transposition ``PNSR`` even though the surrounding prose defines PSNR.
@@ -409,7 +411,21 @@ def evidence_alignment_tokens(
     # text itself remains untouched.
     if "pnsr" in tokens:
         tokens.add("psnr")
-    return tokens
+    return frozenset(tokens)
+
+
+def evidence_alignment_tokens(
+    value: object,
+    *,
+    extra_stopwords: Iterable[str] | None = None,
+) -> set[str]:
+    """Return English evidence tokens and deterministic Chinese aliases.
+
+    Callers receive their own mutable set. Locale, evidence coordinates and
+    support decisions are not cached, and different stopword sets stay apart.
+    """
+    stopwords = frozenset(str(item or "").strip().lower() for item in (extra_stopwords or ()))
+    return set(_alignment_token_snapshot(str(value or ""), stopwords))
 
 
 __all__ = [
