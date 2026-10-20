@@ -48,6 +48,8 @@ from api.reference_card_copy import (
     looks_generic_ref_why_line,
     looks_templated_ref_why_line,
 )
+from api.reference_source_projection import answer_citation_evidence_quote, verified_reference_detail, reference_question_facet_priority
+from api.source_relation_copy import source_relation_copy
 from api.reference_card_quality import attach_refs_pack_polish_contract
 from api.reference_card_locale import _ref_card_user_locale
 from api.reference_local_source_meta import public_citation_meta
@@ -58,9 +60,7 @@ from kb.generation_state_runtime import _gen_has_running_for_conversation
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.evidence_text import (
     clean_display_text,
-    compound_claim_evidence_excerpt,
     finish_evidence_text,
-    pick_readable_evidence_text,
 )
 from kb.citation_card_polish import (
     citation_card_polish_cache_key,
@@ -123,7 +123,7 @@ _SHELF_METADATA_BACKFILL_STATE: dict[str, object] = {
 }
 # Bump whenever persisted References-panel payloads should be rebuilt instead
 # of reused. This protects older conversations after card-copy contract changes.
-_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 70
+_REFS_RENDER_PAYLOAD_SCHEMA_VERSION = 104
 _REFS_SOURCE_PATH_MAX_CHARS = 1_200
 _REFS_LOCALE_MAX_CHARS = 24
 _REFS_META_MAX_JSON_CHARS = 90_000
@@ -1036,122 +1036,7 @@ def _answer_citation_support_line_is_specific(text: str) -> bool:
 
 
 def _answer_citation_evidence_quote(detail: dict, *, prompt: str = "") -> str:
-    """Prefer the sentence in the cited block that best matches the answer claim."""
-
-    current = str(detail.get("evidence_quote") or detail.get("summary_line") or "").strip()
-    claim_core = " ".join(
-        part
-        for part in (
-            str(detail.get("answer_claim") or "").strip(),
-            " ".join(str(value or "").strip() for value in list(detail.get("answer_claims") or [])),
-            str(detail.get("card_takeaway") or "").strip(),
-        )
-        if part
-    )
-    claim = " ".join(
-        part for part in (claim_core, str(prompt or "").strip()) if part
-    )
-    claim_terms = evidence_alignment_tokens(claim)
-    if not claim_terms:
-        return current
-
-    candidates: list[str] = []
-    seen_candidates: set[str] = set()
-    for raw_value in (
-        detail.get("citation_plan_evidence_quote"),
-        detail.get("citation_plan_reader_evidence_quote"),
-        detail.get("reader_evidence_quote"),
-        detail.get("raw"),
-        current,
-    ):
-        raw = re.sub(r"\s+", " ", str(raw_value or "")).strip()
-        if not raw:
-            continue
-        # Citation-plan slots are whitespace-normalized before persistence, so
-        # a Markdown heading and its first sentence can share one line.  Strip
-        # only a known section label instead of treating the whole line as a
-        # heading and discarding the evidence body.
-        readable_source = re.sub(
-            r"^\s*#{1,6}\s+(?:abstract|introduction|conclusion|discussion|results?)\s+",
-            "",
-            raw,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-        compound = compound_claim_evidence_excerpt(
-            readable_source,
-            # The user prompt improves candidate ranking, but it is not part
-            # of the cited claim. Mixing a CJK question into an English
-            # compound claim can add an uncovered token and make the compact
-            # multi-step extractor reject an otherwise complete excerpt.
-            claim=claim_core or claim,
-            max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
-        )
-        readable = compound or pick_readable_evidence_text(
-            readable_source,
-            source=str(detail.get("source_name") or ""),
-            title=str(detail.get("title") or detail.get("card_title") or ""),
-            claim=claim_core or claim,
-            heading=str(detail.get("heading_path") or detail.get("location_label") or ""),
-            # Selection and display must share one budget.  Otherwise the
-            # overlay can lose the last step of a compound mechanism before
-            # the 520-character card contract ever sees it.
-            max_len=CITATION_CARD_EVIDENCE_MAX_LEN,
-        )
-        for candidate in (
-            readable,
-            *re.split(r"(?<=[.!?])\s+", readable_source),
-        ):
-            value = str(candidate or "").strip()
-            key = value.casefold()
-            if 24 <= len(value) <= 700 and key not in seen_candidates:
-                seen_candidates.add(key)
-                candidates.append(value)
-    if not candidates:
-        return current
-
-    def score(value: str) -> tuple[int, int, int]:
-        overlap = len(claim_terms & evidence_alignment_tokens(value))
-        number_overlap = len(
-            set(re.findall(r"(?<!\w)\d+(?:\.\d+)?%?", claim))
-            & set(re.findall(r"(?<!\w)\d+(?:\.\d+)?%?", value))
-        )
-        return overlap, number_overlap, -abs(len(value) - 180)
-
-    best = max(candidates, key=score)
-    if score(best)[:2] > score(current)[:2]:
-        current_overlap = claim_terms & evidence_alignment_tokens(current)
-        best_overlap = claim_terms & evidence_alignment_tokens(best)
-        current_sentences = [
-            sentence
-            for sentence in re.split(r"(?<=[.!?])\s+", current)
-            if sentence.strip()
-        ]
-        best_sentences = [
-            sentence
-            for sentence in re.split(r"(?<=[.!?])\s+", best)
-            if sentence.strip()
-        ]
-        if (
-            current_overlap
-            and len(current_sentences) >= 2
-            and len(best_sentences) == 1
-            and len(current) <= CITATION_CARD_EVIDENCE_MAX_LEN
-            and not current_overlap.issubset(best_overlap)
-        ):
-            # The compact render quote can already contain a complete mechanism
-            # chain.  A later sentence may match more answer tokens while
-            # covering a different step; replacing the whole chain with that
-            # sentence loses evidence instead of improving alignment.
-            return current
-        return best
-    if (
-        score(best)[:2] == score(current)[:2]
-        and len(current) > CITATION_CARD_EVIDENCE_MAX_LEN
-        and len(best) <= CITATION_CARD_EVIDENCE_MAX_LEN
-    ):
-        return best
-    return current
+    return answer_citation_evidence_quote(detail, prompt=prompt)
 
 
 def _answer_citation_metric_extreme_summary(
@@ -2277,6 +2162,8 @@ def _overlay_refs_payload_with_answer_citations(
         grouped: dict[str, list[dict]] = {}
         source_order: list[str] = []
         for detail in details:
+            if detail.get("evidence_source") == "verified_source_excerpt" and verified_reference_detail(detail) is None:
+                continue
             source_key = system_a_source_key(detail) or _answer_citation_source_key(detail.get("source_path"))
             if not source_key:
                 continue
@@ -2357,10 +2244,11 @@ def _overlay_refs_payload_with_answer_citations(
                     return planned
                 return current or planned
 
-            def _reader_score(item: dict) -> tuple[int, int, int, bool, int, str]:
+            def _reader_score(item: dict) -> tuple[int, int, int, int, bool, int, str]:
                 reader_quote = _reader_quote(item)
                 quote_terms = evidence_alignment_tokens(reader_quote)
                 return (
+                    reference_question_facet_priority(prompt, reader_quote),
                     len(reader_prompt_terms & quote_terms),
                     len(reader_claim_terms & quote_terms),
                     int(bool(str(item.get("block_id") or "").strip()))
@@ -2477,6 +2365,19 @@ def _overlay_refs_payload_with_answer_citations(
                     reader_detail.get("block_id") or reader_detail.get("anchor_id")
                 ),
             }
+            projection = verified_reference_detail(reader_detail)
+            if projection:
+                evidence_quote = reader_evidence_quote = projection["evidence_quote"]
+                source_path = str(projection["source_path"])
+                source_name = str(projection.get("source_name") or source_name)
+                heading_path = reader_heading_path = str(projection["heading_path"])
+                primary.update({k: projection[k] for k in ("source_path", "block_id", "anchor_id", "page_start", "page_end")})
+                primary.update(source_name=source_name, heading_path=heading_path, anchor_kind=projection["anchor_kind"],
+                               snippet=evidence_quote, highlight_snippet=evidence_quote)
+                summary_line, why_line = _answer_citation_card_copy([projection], prefer_zh=prefer_zh, prompt=prompt)
+                relation = source_relation_copy(evidence_quote) if prefer_zh else None
+                if relation:
+                    summary_line, why_line = relation
             meta.update(
                 {
                     "source_path": source_path,

@@ -21,7 +21,7 @@ test('verified mixed-source prose highlights its complete visible phrase across 
     const prose = 'Proposition 9. Assume independent observations with zero mean noise.'
     const source = '**Proposition 9.** Assume independent observations with zero mean noise.\n$$R(f)=Q(f)+V$$'
     const root = document.createElement('article')
-    root.innerHTML = '<p data-kb-source-prose="1" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9"><strong>Proposition 9.</strong> Assume independent observations with zero mean noise.</p><div class="katex-display" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9">R(f)=Q(f)+V</div>'
+    root.innerHTML = '<p data-kb-source-prose="1" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9"><strong>Proposition 9.</strong> Assume independent observations with zero mean noise.</p><div class="katex-display" data-kb-block-id="mixed-9" data-kb-anchor-id="eq-9"><span class="katex-mathml"><math><semantics><annotation encoding="application/x-tex">R(f)=Q(f)+V</annotation></semantics></math></span></div>'
     document.body.append(root)
     const block = { block_id: 'mixed-9', anchor_id: 'eq-9', kind: 'equation', raw_text: source, text: source }
     const target = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: source }).target!
@@ -29,9 +29,11 @@ test('verified mixed-source prose highlights its complete visible phrase across 
     const hit = buildHighlightQueries(seed, { anchorKind: 'paragraph' }).map((query) => highlightExactTextInContainer(target, query)).find(Boolean)
     const changed = highlightExactTextInContainer(target, seed.replace('zero mean', 'nonzero mean'))
     const math = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: '$$R(f)=Q(f)+V$$' }).target!
-    return { proseTarget: target.tagName === 'P', exact: hit?.textContent === prose, changedRejected: !changed, mathPreserved: mixedProseHighlightSeed(math, '$$R(f)=Q(f)+V$$') === '$$R(f)=Q(f)+V$$' }
+    root.querySelector('annotation')!.remove()
+    const unverified = resolveDirectTargetNode(root, [block], { blockId: 'mixed-9', anchorId: 'eq-9', anchorKind: 'equation', evidenceQuote: source }).target
+    return { proseTarget: target.tagName === 'P', exact: hit?.textContent === prose, changedRejected: !changed, mathPreserved: mixedProseHighlightSeed(math, '$$R(f)=Q(f)+V$$') === '$$R(f)=Q(f)+V$$', unverifiedMathRejected: unverified?.tagName !== 'P' }
   })
-  expect(result).toEqual({ proseTarget: true, exact: true, changedRejected: true, mathPreserved: true })
+  expect(result).toEqual({ proseTarget: true, exact: true, changedRejected: true, mathPreserved: true, unverifiedMathRejected: true })
 })
 
 test('literal evidence selection keeps native clipboard newlines and partial selections', async ({ page }) => {
@@ -66,6 +68,7 @@ test('literal evidence selection keeps native clipboard newlines and partial sel
 import {
   citationFormats,
   cleanCitationDisplayText,
+  mergeCiteMeta,
   normalizeCiteDetail,
   shelfItemMetadataFieldRejected,
   shelfItemNeedsExportMetadataPass,
@@ -120,6 +123,33 @@ test('verified source excerpts keep the full literal in popovers and the evidenc
   expect(popover.contentCard.isEvidenceExcerpt).toBe(false)
   const legacy = buildEvidenceCardViewModel({ ...detail, evidenceSource: 'legacy' }, { evidenceLimit: 320 })
   expect(legacy.evidencePreview.length).toBeLessThan(literal.length)
+})
+
+test('metadata enrichment cannot replace an occurrence-owned verified quote or reader target', () => {
+  const literal = 'We can therefore recover an estimate of the clean image by doubling our network’s output and subtracting its input.'
+  const original = normalizeCiteDetail({
+    anchor: 'third-occurrence', num: 1, source_path: 'paper.en.md', source_name: 'paper.pdf',
+    citation_route: 'system_a', evidence_source: 'verified_source_excerpt',
+    evidence_quote: literal, card_evidence: literal, reader_evidence_quote: literal,
+    block_id: 'method-44', anchor_id: 'p-27', heading_path: 'Paper / Method', page_start: 3, page_end: 3,
+    answer_claim: 'The correction forms the clean-image estimate.', card_display_contract_version: 2,
+  })!
+  for (const patch of [
+    { card_evidence: literal + ' An additional paragraph belongs to another occurrence.', evidence_quote: 'A changed excerpt.',
+      source_path: 'other.en.md', block_id: 'wrong', anchor_id: 'wrong', page_start: 8, page_end: 8 },
+    { cardEvidence: literal + ' An additional paragraph belongs to another occurrence.', evidenceQuote: 'A changed excerpt.',
+      sourcePath: 'other.en.md', blockId: 'wrong', anchorId: 'wrong', pageStart: 8, pageEnd: 8 },
+  ]) {
+    const enriched = mergeCiteMeta(original, { ...patch, title: 'Verified paper title', citation_count: 239 })
+    expect(enriched.evidenceQuote).toBe(literal)
+    expect(enriched.cardEvidence).toBe(literal)
+    expect(enriched.readerEvidenceQuote).toBe(literal)
+    expect([enriched.sourcePath, enriched.blockId, enriched.anchorId, enriched.headingPath, enriched.pageStart, enriched.pageEnd])
+      .toEqual(['paper.en.md', 'method-44', 'p-27', 'Paper / Method', 3, 3])
+    expect(buildEvidenceCardViewModel(enriched).evidencePreview).toBe(literal)
+    expect(enriched.title).toBe('Verified paper title')
+    expect(enriched.citationCount).toBe(239)
+  }
 })
 
 test('reader source literals keep conditional bars and math delimiters', () => {

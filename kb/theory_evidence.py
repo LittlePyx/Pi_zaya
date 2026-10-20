@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from kb.source_equation_literals import source_equation_literals
+from kb.waived_data_requirements import waived_data_requirements_covered
 
 
 _ESTIMATE_VARIANCE = r"(?:估计(?:量|值)?(?:的)?方差|variance\s+of\s+the\s+estimate)"
@@ -157,16 +158,8 @@ def restoration_task_enumeration_covered(claim: str, evidence: str) -> bool:
 
 
 def training_pair_requirement_covered(claim: str, evidence: str) -> bool:
-    """Require both explicitly waived training-pair types in the same evidence."""
-    noisy_pairs = bool(re.search(r"带噪(?:图像)?对|noisy\s+image\s+pairs", claim, re.I))
-    clean_targets = bool(re.search(r"干净(?:目标|标签|参照)|clean\s+target", claim, re.I))
-    waived = bool(re.search(r"不需要|无需|免除|does\s+not\s+require|neither", claim, re.I))
-    if not (noisy_pairs and clean_targets and waived):
-        return True
-    return bool(
-        re.search(r"(?:does\s+not\s+require|neither).{0,80}noisy\s+image\s+pairs", evidence, re.I)
-        and re.search(r"(?:nor|neither).{0,40}clean\s+target\s+images", evidence, re.I)
-    )
+    """Require each explicitly waived data type within its own negation scope."""
+    return waived_data_requirements_covered(claim, evidence)
 
 
 def _noise_given_signal_variables(evidence: str) -> list[str]:
@@ -192,10 +185,11 @@ def conditional_noise_domain_surface(claim: str, evidence: str) -> str:
     """Keep a verified negative noise qualifier out of positive-domain tags."""
     if (
         _signal_subject_surface(claim, evidence) != claim
-        and re.search(r"噪声.{0,40}给定.{0,24}的条件下是逐像素独立", claim)
+        and re.search(r"噪声.{0,40}给定.{0,24}的条件下是逐像素(?:条件)?独立", claim)
+        and not re.search(r"无条件|无论|unconditional|regardless", claim, re.I)
         and signal_noise_assumptions_covered(claim, evidence)
     ):
-        return re.sub(r"噪声\s*(?:\$?[A-Za-z]\$?\s*)?在像素(?:间|之间)没有条件相关性", " ", claim)
+        return re.sub(r"噪声\s*(?:\$?[A-Za-z]\$?\s*)?在像素(?:间|之间)没有(?:条件)?相关性", " ", claim)
     return claim
 
 
@@ -243,6 +237,15 @@ def measurement_conditions_covered(claim: str, evidence: str) -> bool:
     This is a literal relation guard, not an algebra solver. In particular,
     unconditional expectations cannot stand in for the conditional condition.
     """
+    conditional_noise = r'noise[^.;。；\n]{0,65}(?:conditionally\s+(?:pixel[- ]wise\s+)?independent|independent\s+conditional\s+on)|噪声[^。；\n]{0,45}条件独立'
+    if re.search(conditional_noise, claim, re.I) and not re.search(conditional_noise, evidence, re.I):
+        return False
+    if re.search(r'noise|噪声', claim, re.I) and re.search(r'independent|独立', claim, re.I):
+        condition = r'conditional\s+on\s+\$?([A-Za-z])(?![A-Za-z])|给定\s*\$?([A-Za-z])(?![A-Za-z])'
+        wanted = {next(v for v in m if v) for m in re.findall(condition, claim, re.I)}
+        supplied = {next(v for v in m if v) for m in re.findall(condition, evidence, re.I)}
+        if not wanted <= supplied:
+            return False
     if re.search(r"unbiased|无偏", claim, re.I):
         expectation = r"E\s*\[\s*[xy]\s*(?:\|\s*[xy]\s*)?\]"
         relation = re.compile(

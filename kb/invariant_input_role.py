@@ -51,10 +51,24 @@ def clarify_supported_input_role(answer: str, hits: list[dict]) -> tuple[str, in
             for text in sources
             for m in _RELATION.finditer(re.sub(r"[$}{]", "", str(text)))
         )
+        if not supported:
+            # A formal definition supplies the argument role directly, even
+            # when the separate outside-to-inside explanation is not cited.
+            for text in sources:
+                compact = re.sub(r"\s+|[$}{_]", "", str(text))
+                left = f"{function}({argument}){subset}"
+                right = f"{argument}{subset}"
+                if any(form in compact for form in (
+                    f"{left}doesnotdependonthevalueof{right}",
+                    f"{left},doesnotdependonthevalueof{argument}restrictedto{subset},{right}",
+                )):
+                    supported = True
+                    break
         if supported:
             pattern = re.compile(
                 r"(?P<prefix>(?i:does\s+not\s+depend\s+on\s+(?:the\s+)?))(?P<value>(?i:value))"
-                rf"(?P<rest>\s+(?i:of)\s+\$?\s*{argument}\s*_\s*(?:\{{\s*{subset}\s*\}}|{subset})\s*\$?)"
+                rf"(?P<rest>\s+(?i:of)\s+(?:\$?\s*{argument}\s*_\s*(?:\{{\s*{subset}\s*\}}|{subset})\s*\$?"
+                rf"|\$?{argument}\$?\s+(?i:restricted\s+to)\s+\$?{subset}\$?\s*,\s*\${argument}_\{{?{subset}\}}?\$))"
             )
 
             def replace(match: re.Match) -> str:

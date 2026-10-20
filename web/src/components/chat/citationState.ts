@@ -1,11 +1,11 @@
 import { cleanCitationDisplayText } from './citationDisplayText'
+import { preserveVerifiedCitationEvidence } from './verifiedCitationEvidence'
 export { cleanCitationDisplayText } from './citationDisplayText'
 import {
   isSystemBArticleSummarySource,
   isSystemBContextSummarySource,
   resolveSystemBArticleSummary,
 } from './systemBArticleSummary'
-
 export interface CitationCardViewSection {
   id: string
   label: string
@@ -1872,7 +1872,7 @@ export function mergeCiteMeta(detail: CiteDetail, meta: Record<string, unknown>)
       merged[key] = incoming
     }
   }
-  return normalizeCiteDetail(merged) || detail
+  return preserveVerifiedCitationEvidence(detail, normalizeCiteDetail(merged) || detail)
 }
 
 function removeSummaryContract(meta: Record<string, unknown>): Record<string, unknown> {

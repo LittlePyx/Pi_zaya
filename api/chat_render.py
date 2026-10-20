@@ -8,7 +8,7 @@ import os
 import re
 from functools import lru_cache
 from pathlib import Path
-from api.claim_passage_plan import message_citation_plan as _message_citation_plan, prepare_claim_passage_render
+from api.claim_passage_plan import message_citation_plan as _message_citation_plan, prepare_claim_passage_render, with_verified_slot_origin, keep_verified_occurrence_excerpt
 from api.source_card_contract import prepare_source_card_message, refresh_source_citation_cards
 
 from api.message_render_contract import (
@@ -160,7 +160,7 @@ def _call_with_optional_render_locale(func, *args, render_locale: str = "", **kw
 _REF_MAP_CACHE: dict[str, dict[int, str]] = {}
 # Bump whenever citation rendering/card contracts change in a way that should
 # repair historical conversations on the next page load.
-_RENDER_CACHE_SCHEMA_VERSION = 97
+_RENDER_CACHE_SCHEMA_VERSION = 131
 
 
 def _reading_claim_is_retrieval_notice(value: str) -> bool:
@@ -1836,7 +1836,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
             continue
         if (
             str(detail.get("selection_reason") or "").strip().lower()
-            == "comparison_source_block_rescue"
+            == "comparison_source_block_rescue" or keep_verified_occurrence_excerpt(detail, slots)
         ):
             # This strict, quantitative block was recovered because the
             # original plan contained only broad theory snippets. Rebinding it
@@ -2555,7 +2555,7 @@ def _refine_system_a_cite_evidence_from_citation_plan(
         detail["evidence_quote"] = readable
         detail["raw"] = readable
         detail["card_evidence"] = readable
-        detail["evidence_source"] = "citation_plan_claim_window"
+        detail = with_verified_slot_origin({**detail, "evidence_source": "citation_plan_claim_window"}, _slot)
         detail["summary_source"] = "citation_plan_claim_window"
         if mechanism_bundle_upgrade or formula_bundle_upgrade or bool(
             _slot.get("compound_same_page_evidence")
@@ -15685,10 +15685,10 @@ def _merge_render_packet_contract_meta(
         render_locale=render_locale,
     )
     rendered_body, selected_cite_details = _enforce_citation_plan_cite_detail_budget(
-        rendered_body,
-        selected_cite_details,
+        rendered_body, selected_cite_details,
         _message_citation_plan(rec),
     )
+    rendered_body, selected_cite_details, _ = remap_system_a_citations_for_display(rendered_body, selected_cite_details)
     rendered_full = (
         f"{notice}\n\n{rendered_body}"
         if notice and rendered_body

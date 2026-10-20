@@ -49,6 +49,11 @@ from .tables import (
 from .text_utils import _normalize_text, contains_only_detached_accent_mojibake, normalize_detached_accents
 from .reference_citation_diagnostics import plausible_reference_citation_indices as _plausible_reference_citation_indices
 from .pdf_heading_fragments import demote_fraction_heading_fragments
+from .pdf_image_prose import recover_pdf_prose_structure
+from kb.source_locator_receipts import write_pdf_prose_repair
+from .pdf_inline_prose import recover_inline_prose_fragments
+from .pdf_paragraph_join import join_verified_pdf_paragraphs
+from .prose_math_repair import _unwrap_prose_dominant_display_math
 from kb.reference_index import extract_references_map_from_md
 
 try:
@@ -259,7 +264,7 @@ def _reference_map_has_inflated_tail(before_map: dict[int, str], recovered_map: 
 
 
 CONVERSION_QUALITY_RESULT_FILENAME = "conversion_quality_result.json"
-CONVERSION_QUALITY_RULES_VERSION = 17
+CONVERSION_QUALITY_RULES_VERSION = 19
 MAX_CONVERSION_REPAIR_ATTEMPTS = 30
 
 
@@ -632,6 +637,12 @@ CONVERSION_REPAIR_STRATEGIES: dict[str, dict[str, Any]] = {
         "scope": "document",
         "reason": "The Markdown contains an unresolved converter retry marker with an unrecognized kind.",
         "strategies": [],
+    },
+    "fragmented_pdf_prose": {
+        "label": "Rejoin PDF-verified paragraph fragments", "safe": True,
+        "action": "autofix", "scope": "markdown",
+        "reason": "Consecutive Markdown fragments match one complete, unique PDF paragraph with verified layout and math fonts.",
+        "strategies": ["repair_pdf_paragraphs"],
     },
     "prose_dominant_display_math": {
         "label": "Unwrap prose captured as display math",
@@ -1744,6 +1755,10 @@ def _issue_codes_from_context(
 ) -> list[str]:
     quality = source_quality if isinstance(source_quality, dict) else _source_quality_view(md_path, text, metrics)
     codes = _issue_codes_from_metrics(metrics)
+    if quality.get("source_pdf_paragraph_repair_available"):
+        codes.append("fragmented_pdf_prose")
+    if quality.get("source_inline_prose_math_repair_available") and "prose_dominant_display_math" not in codes:
+        codes.append("prose_dominant_display_math")
     if "mojibake" in codes and contains_only_detached_accent_mojibake(text):
         codes = ["detached_accents" if code == "mojibake" else code for code in codes]
     if bool(quality.get("abstract_not_applicable")):
@@ -1851,40 +1866,6 @@ def _balance_display_math(md: str) -> tuple[str, bool]:
         changed = True
     fixed = "\n".join(out)
     return fixed, changed and fixed != str(md or "")
-
-
-def _unwrap_prose_dominant_display_math(md: str) -> tuple[str, bool]:
-    """Remove display delimiters only from blocks classified as prose-heavy.
-
-    The block body is preserved exactly so mixed prose/equation evidence is
-    never discarded. Genuine equation-only blocks retain their delimiters.
-    """
-
-    original = str(md or "")
-    lines = original.splitlines()
-    out: list[str] = []
-    index = 0
-    while index < len(lines):
-        if not DISPLAY_MATH_DELIMITER_RE.match(lines[index]):
-            out.append(lines[index])
-            index += 1
-            continue
-        end = index + 1
-        while end < len(lines) and not DISPLAY_MATH_DELIMITER_RE.match(lines[end]):
-            end += 1
-        if end >= len(lines):
-            out.extend(lines[index:])
-            break
-        block_lines = lines[index + 1 : end]
-        if is_prose_dominant_display_math_block("\n".join(block_lines)):
-            out.extend(block_lines)
-        else:
-            out.extend(lines[index : end + 1])
-        index = end + 1
-    repaired = "\n".join(out)
-    if original.endswith("\n"):
-        repaired += "\n"
-    return repaired, repaired != original
 
 
 def _asset_name_from_image_target(target: str) -> str:
@@ -3407,6 +3388,8 @@ def _source_quality_view(
         **profile,
         "source_pdf_path": str((pdf_stats or {}).get("path") or (pdf_path or "")),
         "source_pdf_available": bool(pdf_stats.get("available")),
+        "source_inline_prose_math_repair_available": recover_inline_prose_fragments(text, pdf_path)[1] if pdf_path and pdf_stats.get("available") else False,
+        "source_pdf_paragraph_repair_available": join_verified_pdf_paragraphs(text, pdf_path)[1] if pdf_path and pdf_stats.get("available") else False,
         "pdf_page_count": int(pdf_stats.get("page_count") or 0),
         "pdf_text_chars": int(pdf_stats.get("text_chars") or 0),
         **page_quality,
@@ -4830,13 +4813,7 @@ def _bounded_source_prose_edits(
     block_texts: list[str],
     local_segment: str,
 ) -> list[tuple[int, int, str]]:
-    """Build source-backed edits bounded by stable token sequences.
-
-    Only pages already classified with a high-confidence omission are eligible.
-    Individual differences must also have three unchanged tokens on both sides.
-    Replacing the small gap between those anchors preserves Markdown headings,
-    figures, paragraph breaks, and citations outside the damaged phrase.
-    """
+    """Repair high-confidence omissions between three unchanged tokens on each side."""
 
     damage = _source_page_prose_omission_damage(block_texts, local_segment)
     if not bool(damage.get("text_omission")):
@@ -4914,6 +4891,7 @@ def _recover_source_prose_omissions_from_pdf_text(
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if fitz is None or not pdf_path:
         return text, False
+    text, image_prose_changed = recover_pdf_prose_structure(text, md_path, pdf_path)
     coverage = _source_page_coverage_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
@@ -4921,7 +4899,7 @@ def _recover_source_prose_omissions_from_pdf_text(
         if int(item.get("page") or 0) > 0
     ]
     if not pages:
-        return text, False
+        return text, image_prose_changed
 
     try:
         doc = fitz.open(str(pdf_path))
@@ -4961,7 +4939,7 @@ def _recover_source_prose_omissions_from_pdf_text(
             fixed = fixed[:segment_start] + repaired_segment + fixed[segment_end:]
     finally:
         doc.close()
-    return fixed, fixed != text
+    return fixed, image_prose_changed or fixed != text
 
 
 def _novel_source_recovery_prose(fallback_body: str, current_body: str) -> str:
@@ -5025,17 +5003,12 @@ def _recover_corrupted_source_pages_from_pdf_text(
     md_path: Path,
     source_pdf_path: Path | str | None = None,
 ) -> tuple[str, bool]:
-    """Replace only source-proven corrupted page segments with PDF block text.
-
-    Existing page-local image links are retained so visual evidence remains
-    available, while prose comes from source text blocks sorted by column and
-    vertical position. The caller re-runs the source comparison before accepting
-    the repair.
-    """
+    """Restore source-proven prose while retaining page-local image evidence."""
     text = str(md_text or "")
     pdf_path = Path(source_pdf_path).expanduser() if source_pdf_path else _guess_source_pdf_for_md(md_path)
     if not pdf_path:
         return text, False
+    text, image_prose_changed = recover_pdf_prose_structure(text, md_path, pdf_path)
     coverage = _source_page_coverage_quality(text, pdf_path)
     pages = [
         int(item.get("page") or 0)
@@ -5043,7 +5016,7 @@ def _recover_corrupted_source_pages_from_pdf_text(
         if int(item.get("page") or 0) > 0
     ]
     if not pages:
-        return text, False
+        return text, image_prose_changed
 
     fixed = text
     for page_no in sorted(set(pages), reverse=True):
@@ -5116,7 +5089,7 @@ def _recover_corrupted_source_pages_from_pdf_text(
             ]
         replacement = "\n\n".join(part for part in replacement_parts if part).strip() + "\n\n"
         fixed = fixed[:marker_start] + replacement + fixed[segment_end:]
-    return fixed, fixed != text
+    return fixed, image_prose_changed or fixed != text
 
 
 def _conversion_retry_attrs(marker: re.Match[str]) -> dict[str, str]:
@@ -5823,6 +5796,9 @@ def repair_markdown_text(
             active_strategy_names.add(str(name))
     if not active_strategy_names and default_to_postprocess:
         active_strategy_names.update({"postprocess_markdown"})
+    # A source-proven paragraph join needs no unrelated document rewriting.
+    if set(active_codes) <= {"prose_dominant_display_math", "fragmented_pdf_prose"} and (before_source_quality.get("source_inline_prose_math_repair_available") or before_source_quality.get("source_pdf_paragraph_repair_available")) and not before_metrics.get("prose_dominant_display_math_block_count"):
+        active_strategy_names.discard("postprocess_markdown")
 
     text = before_text
     applied: list[str] = []
@@ -5884,8 +5860,13 @@ def repair_markdown_text(
             if changed:
                 applied.append("balance_display_math")
 
+        if source_repairs_enabled and "repair_pdf_paragraphs" in active_strategy_names:
+            text, changed = join_verified_pdf_paragraphs(text, source_pdf_path or _guess_source_pdf_for_md(path))
+            if changed:
+                applied.append("repair_pdf_paragraphs")
+
         if "unwrap_prose_display_math" in active_strategy_names:
-            text, changed = _unwrap_prose_dominant_display_math(text)
+            text, changed = _unwrap_prose_dominant_display_math(text, (source_pdf_path or _guess_source_pdf_for_md(path)) if source_repairs_enabled else None)
             if changed:
                 applied.append("unwrap_prose_display_math")
 
@@ -6082,8 +6063,10 @@ def repair_markdown_text(
                 candidate, changed = _realign_table_page_markers_from_pdf_text(fallback_text, path, source_pdf_path)
             elif label == "normalize_page_markers":
                 candidate, changed = _normalize_page_marker_sequence(fallback_text)
+            elif source_repairs_enabled and label == "repair_pdf_paragraphs":
+                candidate, changed = join_verified_pdf_paragraphs(fallback_text, source_pdf_path or _guess_source_pdf_for_md(path))
             elif label == "unwrap_prose_display_math":
-                candidate, changed = _unwrap_prose_dominant_display_math(fallback_text)
+                candidate, changed = _unwrap_prose_dominant_display_math(fallback_text, (source_pdf_path or _guess_source_pdf_for_md(path)) if source_repairs_enabled else None)
             elif label == "figure_metadata_captions":
                 candidate, changed = _inject_figure_metadata_captions(path, fallback_text)
             elif source_repairs_enabled and label == "pdf_text_captions":
@@ -6330,7 +6313,7 @@ def repair_markdown_quality(
                 backup_path = str(backup)
             except Exception:
                 backup_path = ""
-        path.write_text(text, encoding="utf-8")
+        write_pdf_prose_repair(path, before_text, text, pdf_path)
 
     out = dict(result)
     out["backup_path"] = backup_path

@@ -49,6 +49,23 @@ def test_given_signal_condition_is_not_a_signal_independence_assertion(symbol):
     assert "[1]" in answer
 
 
+def test_real_conditional_pixel_noise_paraphrase_keeps_the_condition():
+    claim = '对噪声 $n$ 的假设：噪声在给定信号 $s$ 的条件下是逐像素条件独立的（conditionally pixel-wise independent given the signal $s$），即噪声在像素之间没有相关性。'
+    assert not binding(claim, PIXEL_ASSUMPTIONS)['suppress_link']
+    answer, _ = audit_and_repair_claim_evidence(claim+' [1]', [hit(PIXEL_ASSUMPTIONS)], allowed_citation_numbers={1}, drop_unsupported_high_risk_claims=True, enforce_user_visible_binding=True)
+    assert '给定信号 $s$ 的条件下是逐像素条件独立' in answer and '[1]' in answer
+
+
+@pytest.mark.parametrize('claim', [
+    '噪声在像素之间没有相关性。',
+    '噪声在给定信号 $t$ 的条件下是逐像素条件独立的，即噪声在像素之间没有相关性。',
+    '噪声在给定信号 $s$ 的条件下是逐像素条件独立的，即噪声在像素之间存在相关性。',
+    '噪声在给定信号 $s$ 的条件下是逐像素条件独立的，即噪声在像素之间无条件没有相关性。',
+])
+def test_noise_paraphrase_does_not_grant_standalone_or_changed_correlation(claim):
+    assert binding(claim, PIXEL_ASSUMPTIONS)['suppress_link']
+
+
 @pytest.mark.parametrize("claim, source", [
     ("噪声 n 在给定信号 t 的条件下是逐像素独立的。", PIXEL_ASSUMPTIONS),
     ("信号 s 是逐像素独立的。", PIXEL_ASSUMPTIONS),

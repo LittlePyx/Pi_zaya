@@ -12,6 +12,8 @@ from kb.evidence_binding import assess_system_a_hit_binding
 from kb.evidence_term_mapping import evidence_alignment_tokens, specific_method_identities
 from kb.source_blocks import load_source_blocks_cached, normalize_match_text
 from kb.source_passage_evidence import claim_passage_concepts_covered
+from kb.claim_source_scope import explicit_owned_comparison_clause, owned_source_body_claim
+from kb.explicit_source_attribution import source_attribution_covered
 
 
 def message_citation_plan(rec: dict | None) -> dict:
@@ -27,8 +29,11 @@ def message_citation_plan(rec: dict | None) -> dict:
     return dict(plan) if isinstance(plan, dict) and plan else {}
 
 
-def _supports(claim: str, quote: str, heading: str, source: str) -> bool:
+def _supports(claim: str, quote: str, heading: str, source: str, *, binding_meta: dict | None = None) -> bool:
+    claim = explicit_owned_comparison_clause(claim, source)
     # Related summary-statistic prose cannot substitute for a target theorem.
+    if not source_attribution_covered(claim, quote, source):
+        return False
     if not claim_passage_concepts_covered(claim, quote):
         return False
     if _support_score(claim, f"{quote}\n{heading}\n{source}") < 5:
@@ -46,7 +51,7 @@ def _supports(claim: str, quote: str, heading: str, source: str) -> bool:
             return False
     binding = assess_system_a_hit_binding(
         answer_claim=claim, hit={"text": quote},
-        meta={"citation_plan_evidence_authoritative": True, "citation_plan_full_evidence_quote": quote},
+        meta={**(binding_meta or {}), "citation_plan_evidence_authoritative": True, "citation_plan_full_evidence_quote": quote},
         heading=heading, evidence_quote=quote, source_name=source,
     )
     return not binding.get("suppress_link", True)
@@ -84,8 +89,68 @@ def _slot_supports(claim: str, slot: dict) -> bool:
         return False
     if slot.get("evidence_selection_reason") == "claim_source_passage":
         return bool(passage) and _passage_supports(claim, passage, str(slot.get("source_name") or ""))
-    quote = passage["source_block_text"] if passage else str(slot.get("evidence_quote") or "")
-    return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""))
+    quote = passage["text"] if passage else str(slot.get("evidence_quote") or "")
+    if passage and _support_score(owned_source_body_claim(claim, str(slot.get('source_name') or slot.get('source_path') or '')), quote) < 5:
+        return False
+    proof = {}
+    if passage and slot.get('evidence_selection_reason') in {'prompt_contract_block', 'prompt_aligned_source_sentence'}:
+        proof = {'citation_plan_evidence_selection_reason': slot['evidence_selection_reason'],
+                 'primary_block_id': passage['block_id'], 'primary_anchor_id': passage['anchor_id'],
+                 'page_start': passage['page_start']}
+    return _supports(claim, quote, str(slot.get("heading_path") or ""), str(slot.get("source_name") or ""), binding_meta=proof)
+
+
+def _literal_verified_passage(passage: dict, source: str) -> dict:
+    verified = _verified_passage(passage, source)
+    if not verified:
+        return {}
+    try:
+        block = next(b for b in load_source_blocks_cached(Path(source)) if b['block_id']==verified['block_id'])
+    except (OSError, ValueError, StopIteration):
+        return {}
+    raw = str(block.get('raw_text') or '')
+    flat = lambda value: re.sub(r'\s+','',value)
+    return {**verified, 'literal_block_text':raw} if flat(verified['text']) in flat(raw) else {}
+
+
+def with_verified_slot_origin(detail: dict, slot: dict) -> dict:
+    """Preserve existing selection provenance across a verified quote overlay."""
+    reason = slot.get('evidence_selection_reason')
+    if reason not in {'prompt_contract_block', 'prompt_aligned_source_sentence'}:
+        return detail
+    source = str(slot.get('source_path') or '')
+    if _canonical_source_path_identity(source) != _canonical_source_path_identity(str(detail.get('source_path') or '')):
+        return detail
+    planned = _literal_verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
+    displayed = _literal_verified_passage({**detail, 'text': detail.get('evidence_quote')}, source)
+    if not planned or not displayed or any(planned.get(k) != displayed.get(k) for k in ('block_id','anchor_id','heading_path','page_start','page_end')):
+        return detail
+    a, b = (normalize_match_text(p['text']) for p in (planned, displayed))
+    if a not in b and b not in a:
+        return detail
+    return {**detail, 'citation_plan_evidence_selection_reason': reason}
+
+
+def keep_verified_occurrence_excerpt(detail: dict, slots: list[dict]) -> bool:
+    """Do not replace a supported occurrence with another claim's window."""
+    if detail.get('is_inpaper') or detail.get('citation_route')!='system_a' or detail.get('evidence_source')!='verified_source_excerpt':
+        return False
+    source=str(detail.get('source_path') or '')
+    current=_literal_verified_passage({**detail,'text':detail.get('evidence_quote')},source)
+    claim=str(detail.get('answer_claim') or '')
+    if not current or not claim:
+        return False
+    matched=False
+    for slot in slots:
+        if _canonical_source_path_identity(str(slot.get('source_path') or ''))!=_canonical_source_path_identity(source):
+            continue
+        planned=_literal_verified_passage({**slot,'text':slot.get('evidence_quote')},source)
+        if planned and all(planned.get(k)==current.get(k) for k in ('block_id','anchor_id','heading_path','page_start','page_end')):
+            matched=True;break
+    if not matched:
+        return False
+    from api.citation_occurrence_support import verified_occurrence_candidates
+    return bool(verified_occurrence_candidates(detail,[detail],claim))
 
 
 def _declared_source_passages(slot: dict) -> list[dict]:
@@ -154,7 +219,35 @@ def _passage_supports(claim: str, passage: dict, source_name: str) -> bool:
     # Keep source ownership checks while requiring the body to meet the
     # existing score independently of titles and section headings.
     text = passage["text"]
-    return _support_score(claim, text) >= 5 and _supports(claim, text, "", source_name)
+    # A paragraph may name compared methods but refer to its own method as
+    # "we". Remove only the exact owning paper's name from the body-only check;
+    # all remaining actions, objects and other method names still pass both
+    # body support and binding gates without help from the heading.
+    body_claim = owned_source_body_claim(claim, source_name)
+    return _support_score(body_claim, text) >= 5 and _supports(body_claim, text, "", source_name)
+
+
+def _deduplicate_verified_slots(slots: list[dict]) -> list[dict]:
+    """Repeated identical physical evidence is one passage, not ambiguity."""
+    result = []
+    seen = {}
+    for slot in slots:
+        source = str(slot.get('source_path') or '')
+        passage = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, source)
+        key = (_canonical_source_path_identity(source), *(str(slot.get(k) or '') for k in
+               ('block_id','anchor_id','heading_path','page_start','page_end','evidence_quote','evidence_selection_reason')),
+               str(slot.get('preferred_system') or 'system_a'), tuple(slot.get('candidate_hits') or []))
+        previous = seen.get(key) if passage else None
+        same_children = previous is not None and all(previous.get(k) == slot.get(k) for k in ('direct_source_evidence','source_passage_bundle'))
+        claims = list(dict.fromkeys([*(previous or {}).get('passage_bound_claims', []), *slot.get('passage_bound_claims', [])]))
+        if same_children and all(_slot_supports(c, previous) for c in claims):
+            if claims:
+                previous['passage_bound_claims'] = claims
+            continue
+        result.append(slot)
+        if passage:
+            seen[key] = slot
+    return result
 
 
 def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) -> dict:
@@ -171,6 +264,7 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
     hits = [hit for hit in ref_pack.get("hits", []) if isinstance(hit, dict)]
     valid_slots = [slot for slot in slots if not slot.get("passage_bound_claims") or _verified_passage(
         {**slot, "text": slot.get("evidence_quote")}, str(slot.get("source_path") or ""))]
+    valid_slots = _deduplicate_verified_slots(valid_slots)
     added = len(valid_slots) != len(slots)
     slots = valid_slots
     # Older render plans may have created a full-block fallback beside the
@@ -186,6 +280,12 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
                         and _verified_passage({**s, "text": s.get("evidence_quote")}, str(s.get("source_path") or ""))), None)
         if primary is not None:
             claims = [c for c in slot.get("passage_bound_claims", []) if _slot_supports(c, primary)]
+            if len(claims) != len(slot.get('passage_bound_claims', [])):
+                if len(str(slot.get('evidence_quote') or '')) > 1800 or not all(_slot_supports(c, slot) for c in primary.get('passage_bound_claims', [])):
+                    continue
+                primary['passage_quote_previous'] = primary.get('evidence_quote')
+                primary['evidence_quote'] = slot['evidence_quote']
+                claims = list(slot.get('passage_bound_claims', []))
             primary["passage_bound_claims"] = list(dict.fromkeys([*primary.get("passage_bound_claims", []), *claims]))
             slots.remove(slot)
             added = True
@@ -218,14 +318,14 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
             if len(excerpt_slots) == 1:
                 supported_slots = excerpt_slots
             if supported_slots:
-                unique_secondary = (
-                    len(supported_slots) == 1 and supported_slots[0] is not source_slots[0]
+                unique_verified = (
+                    len(supported_slots) == 1
                     and bool(_verified_passage(
                         {**supported_slots[0], "text": supported_slots[0].get("evidence_quote")},
                         str(supported_slots[0].get("source_path") or ""),
                     ))
                 )
-                if len(supported_slots) == 1 and (unique_secondary or supported_slots[0].get("passage_bound_claims")):
+                if len(supported_slots) == 1 and (unique_verified or supported_slots[0].get("passage_bound_claims")):
                     slot = supported_slots[0]
                     claims = list(slot.get("passage_bound_claims") or [])
                     if local_claim not in claims:
@@ -236,11 +336,26 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
             candidates = {key: passage for key, passage in _retrieved_passages(
                 source_slots, hits, str(source_slots[0]["source_path"])
             ).items() if _passage_supports(local_claim, passage, str(source_slots[0].get("source_name") or ""))}
+            if not candidates:
+                for slot in source_slots:
+                    parent = _verified_passage({**slot, 'text': slot.get('evidence_quote')}, str(slot.get('source_path') or ''))
+                    if parent and 40 <= len(parent['source_block_text']) <= 1800:
+                        full = {**parent, 'text': parent['source_block_text']}
+                        if _passage_supports(local_claim, full, str(slot.get('source_name') or '')):
+                            candidates[str(full['block_id'])] = full
             # Multiple physically different matches are ambiguous; never pick
             # a page by retrieval order or turn a namesake paper into evidence.
             if len(candidates) != 1:
                 continue
             passage = next(iter(candidates.values()))
+            primary = next((s for s in source_slots if s.get('block_id') == passage.get('block_id') and s.get('anchor_id') == passage.get('anchor_id')), None)
+            if primary is not None and all(_passage_supports(c, passage, str(primary.get('source_name') or '')) for c in primary.get('passage_bound_claims', [])):
+                primary['passage_quote_previous'] = primary.get('evidence_quote')
+                primary['evidence_quote'] = passage['text']
+                primary['evidence_selection_reason'] = 'claim_source_passage'
+                primary['passage_bound_claims'] = list(dict.fromkeys([*primary.get('passage_bound_claims', []), local_claim]))
+                added = True
+                continue
             slots.append({**_passage_slot(source_slots[0], passage, number), "passage_bound_claims": [local_claim]})
             added = True
     if not added:
@@ -257,7 +372,8 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
 def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) -> tuple[dict, str]:
     """Give an uncited sentence its own verified passage within a cited paragraph.
 
-    Only distribute one existing paragraph-end document coordinate. Do not
+    Only distribute one existing paragraph-end document coordinate, including
+    its repeated markers earlier in the paragraph. Do not
     infer a source for mixed-source, uncited, mathematical or code paragraphs.
     Raw generation and retrieved evidence remain unchanged.
     """
@@ -276,7 +392,7 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
             continue
         markers = [m for m in re.finditer(r'(?<!\[)\[(\d{1,4})\](?!\])', text)
                    if not numeric_marker_is_content(text, m.start())]
-        if len(markers) != 1 or not re.fullmatch(r'[\s.!?。！？]*', text[markers[0].end():]):
+        if not markers or len({int(m[1]) for m in markers}) != 1 or not re.fullmatch(r'[\s.!?。！？]*', text[markers[-1].end():]):
             continue
         number = int(markers[0][1])
         if not 0 < number <= len(canonical):
@@ -302,17 +418,42 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
                     verified.append((_passage_slot(source_slots[0], passage, number), passage))
         if len({p['block_id'] for _, p in verified}) < 2:
             continue
+        cited_blocks = set()
+        primary_blocks = {slot.get('block_id') for slot in source_slots
+                          if slot.get('evidence_selection_reason') != 'claim_source_passage'}
+        if len(markers) > 1:
+            for marker in markers:
+                cited_claim = _citation_claim_context(text, marker.start(), marker.end())
+                supported = {p['block_id'] for slot, p in verified if _slot_supports(cited_claim, slot)}
+                if len(supported) == 1:
+                    cited_blocks.update(supported)
         for start, end in citation_sentence_spans(text):
             claim = text[start:end].strip()
-            if start <= markers[0].start() < end or len(claim) < 20:
+            if any(start <= marker.start() < end for marker in markers) or len(claim) < 20:
                 continue
             losses = set(re.findall(r'\bL\s*(\d+)\b', claim, re.I))
             matches = [(slot, p) for slot, p in verified
                        if losses <= set(re.findall(r'\bL\s*(\d+)\b', p['source_block_text'], re.I))
                        and _slot_supports(claim, slot)]
+            if not matches:
+                full_matches = [(slot, {**p, 'text': p['source_block_text']}) for slot, p in verified
+                                if 40 <= len(p['source_block_text']) <= 1800
+                                and losses <= set(re.findall(r'\bL\s*(\d+)\b', p['source_block_text'], re.I))
+                                and _passage_supports(claim, {**p, 'text': p['source_block_text']}, str(slot.get('source_name') or ''))
+                                and all(_slot_supports(c, {**slot, 'evidence_quote': p['source_block_text']}) for c in slot.get('passage_bound_claims', []))]
+                if len({p['block_id'] for _, p in full_matches}) == 1:
+                    slot, p = full_matches[0]
+                    slot['passage_quote_previous'] = slot.get('evidence_quote')
+                    slot['evidence_quote'] = p['text']
+                    slot['evidence_selection_reason'] = 'claim_source_passage'
+                    matches = [(slot, p)]
             if len({p['block_id'] for _, p in matches}) != 1:
                 continue
-            slot, _ = matches[0]
+            slot, passage = matches[0]
+            # Repeated coordinates already cover the primary excerpt. Add a
+            # marker only to expose a separately located supporting passage.
+            if passage['block_id'] in cited_blocks or (len(markers) > 1 and passage['block_id'] in primary_blocks):
+                continue
             if not any(s is slot for s in slots):
                 slots.append(slot)
             # Binding stores the precise sentence, not the whole paragraph.

@@ -329,12 +329,24 @@ def _rebind_system_a_occurrence_anchors(markdown: str, rows: list[dict]) -> str:
                 # with the same original coordinate remain eligible for the
                 # existing claim-aware passage selection.
                 candidates = same_occurrence
-        if len(candidates) <= 1:
+        claim = _citation_claim_context(text, match.start(), match.end())
+        from api.citation_occurrence_support import verified_occurrence_candidates
+        verified = verified_occurrence_candidates(current, candidates, claim)
+        if verified is not None:
+            candidates = verified
+            if not candidates:
+                pieces.append("")
+                cursor = match.end()
+                continue
+            bound = claim_bound_candidates(candidates, claim)
+            if bound:
+                candidates = bound
+        if verified is None and len(candidates) <= 1:
             pieces.append(surface)
             cursor = match.end()
             continue
-        claim = _citation_claim_context(text, match.start(), match.end())
-        candidates = claim_bound_candidates(candidates, claim)
+        if verified is None:
+            candidates = claim_bound_candidates(candidates, claim)
         claim_tokens = evidence_alignment_tokens(claim)
         if not candidates:
             pieces.append(surface)
@@ -638,7 +650,10 @@ def remap_system_a_citations_for_display(
             count=1,
         )
 
+    from api.citation_occurrence_support import expand_verified_occurrence_quotes, refresh_verified_occurrence_claims
+    remapped = expand_verified_occurrence_quotes(text, remapped, _ANSWER_CITATION_LINK_RE, _citation_claim_context)
     text = _rebind_system_a_occurrence_anchors(text, remapped)
+    remapped = refresh_verified_occurrence_claims(text, remapped)
 
     # Keep per-occurrence evidence, but give every card for the same paper the
     # complete set of answer claims attributed to that paper.  This prevents a

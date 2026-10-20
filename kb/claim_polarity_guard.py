@@ -13,8 +13,12 @@ _ACTIONS = {
     "filter": (r"filter(?:s|ed|ing)?", r""),
     "direction": (r"increas(?:e|es|ed|ing)|improv(?:e|es|ed|ing)|rais(?:e|es|ed|ing)|higher", r"decreas(?:e|es|ed|ing)|reduc(?:e|es|ed|ing)|lower"),
     "required_estimation": (r"estimat(?:e|es|ed|ing)", r""),
+    "permission": (r"allow(?:s|ed|ing)?|permit(?:s|ted|ting)?", r"disallow(?:s|ed|ing)?|forbid(?:s|den|ding)?"),
+    "requirement": (r"require(?:s|d)?|need(?:s|ed)?", r""),
 }
 _ZH_ALIASES = (
+    ("空间相关噪声", "spatially correlated noise"), ("噪声分布", "noise distribution"),
+    ("允许", "allows"), ("要求", "requires"), ("能够", "ability"), ("采样", "sample"),
     ("视觉编码器", "vision encoder"), ("语言模型", "language model"),
     ("无关信息", "irrelevant information"), ("相关信息", "relevant information"),
     ("重建精度", "reconstruction accuracy"), ("重建质量", "reconstruction quality"),

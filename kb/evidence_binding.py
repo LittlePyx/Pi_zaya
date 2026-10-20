@@ -1,4 +1,5 @@
 from __future__ import annotations
+from kb.explicit_technique_enumeration import technique_pair_quantities
 
 import difflib
 import re
@@ -13,10 +14,15 @@ from kb.evidence_term_mapping import (
 from kb.source_blocks import normalize_inline_markdown
 from kb.claim_polarity_guard import claim_polarity_conflicts
 from kb.training_information_relation import training_information_relation_covered
-from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered
+from kb.explicit_training_assignments import explicit_training_assignments_covered, named_equation_covered, noise_augmentation_training_covered, prediction_average_covered
+from kb.explicit_noise_relations import IID_PATTERN, iid_relation_covered, known_noise_model_covered, named_synthetic_sample_covered, sampling_ability_covered
 from kb.theory_evidence import conditional_noise_domain_surface
+from kb.claim_source_eligibility import retrieval_limit_claim
+from kb.claim_source_scope import explicit_owned_comparison_clause
+from kb.explicit_claim_metrics import named_metrics_covered, qualitative_outperformance_covered
 
 _EXPLICIT_CLAIM_RELATION_REQUIREMENTS: tuple[tuple[re.Pattern, re.Pattern], ...] = (
+    (re.compile(r'\bBernoulli\b|伯努利', re.I), re.compile(r'\bBernoulli\b|伯努利', re.I)),
     (
         re.compile(r"先.{0,24}求和.{0,24}(?:再|后).{0,24}(?:掩模|掩码)|求和后.{0,24}(?:掩模|掩码)|sum.{0,24}before.{0,24}(?:mask|modulat)", re.I),
         re.compile(r"sum.{0,24}before.{0,24}(?:mask|modulat)|求和后.{0,24}(?:掩模|掩码)", re.I),
@@ -208,9 +214,18 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
         training_pair_requirement_covered,
         variance_relation_covered,
     )
+    from kb.explicit_source_details import explicit_source_details_covered
+    from kb.explicit_noise_relations import signal_dependency_covered
 
     return (
+        explicit_source_details_covered(claim_text, evidence_text) and signal_dependency_covered(claim_text, evidence_text) and
+        named_metrics_covered(claim_text, evidence_text) and qualitative_outperformance_covered(claim_text, evidence_text) and
+        explicit_training_assignments_covered(claim_text, evidence_text) and named_equation_covered(claim_text, evidence_text) and prediction_average_covered(claim_text, evidence_text) and
+        noise_augmentation_training_covered(claim_text, evidence_text) and
+        known_noise_model_covered(claim_text, evidence_text) and
+        named_synthetic_sample_covered(claim_text, evidence_text) and
         iid_relation_covered(claim_text, evidence_text)
+        and sampling_ability_covered(claim_text, evidence_text)
         and variance_relation_covered(claim_text, evidence_text)
         and measurement_conditions_covered(claim_text, evidence_text)
         and architecture_relation_covered(claim_text, evidence_text)
@@ -298,7 +313,7 @@ _SYSTEM_A_DOMAIN_PATTERNS: tuple[tuple[str, re.Pattern], ...] = (
         "pixel patch correlation",
         re.compile(
             r"(?i)\bcorrelation\s+between\s+(?:pixels|image\s+patches)\b|"
-            r"像素.{0,8}相关|图像块.{0,8}相关"
+            r"(?:像素|图像块)(?:(?:之间|间|邻域|级|的|具有|存在|不存在|没有|无条件|条件|一定|空间|统计|局部|有)\s*){0,4}相关"
         ),
     ),
     ("wavelet transform", re.compile(r"(?i)\bwavelet\s+transform\b|小波变换")),
@@ -1290,6 +1305,11 @@ def assess_system_a_hit_binding(
     source_name: str,
 ) -> dict:
     claim = re.sub(r"\s+", " ", normalize_inline_markdown(str(answer_claim or ""))).strip()
+    claim = explicit_owned_comparison_clause(claim, source_name)
+    if retrieval_limit_claim(claim):
+        return {'status':'candidate','confidence':0.0,'suppress_link':True,
+                'reason':('当前引用证据的限制不是论文原文断言，不能据此授予事实引用。' if _system_a_prefers_zh(claim) else 'A limitation of the retrieved evidence is not a claim asserted by this paper.'),
+                'overlap_terms':[],'missing_terms':['complete paper assertion']}
     # The reader locator may intentionally keep a short, claim-adjacent
     # snippet.  Binding must still see the complete evidence passage selected
     # by the authoritative citation plan; otherwise a later sentence in that
@@ -1321,7 +1341,8 @@ def assess_system_a_hit_binding(
     )
     claim_low = claim.lower()
     evidence_body_low = evidence_body_surface.lower()
-    if not explicit_claim_relations_covered(claim, evidence_body_surface) or claim_polarity_conflicts(claim, evidence_body_surface):
+    relation_evidence = plan_binding_evidence or evidence_body_surface
+    if not explicit_claim_relations_covered(claim, relation_evidence) or claim_polarity_conflicts(claim, relation_evidence):
         reason = (
             "回答句加入了原文未支持的因果、操作顺序或动作方向关系，不能绑定到这张证据卡。"
             if _system_a_prefers_zh(claim)
@@ -1534,7 +1555,7 @@ def assess_system_a_hit_binding(
         selected_evidence,
         allow_comparison_scope=verified_multi_source_group,
     )
-    evidence_fact_quantities = _system_a_fact_quantities(selected_evidence)
+    evidence_fact_quantities = _system_a_fact_quantities(selected_evidence) | technique_pair_quantities(claim, selected_evidence)
     missing_fact_quantities = {
         quantity
         for quantity in claim_fact_quantities

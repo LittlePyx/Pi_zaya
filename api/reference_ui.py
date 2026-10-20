@@ -5462,11 +5462,7 @@ def _source_block_to_answer_primary_evidence(
     block_id = str(block.get("block_id") or "").strip()
     if not block_id:
         return {}
-    heading_path = _normalize_refs_reader_heading_path(
-        prompt=prompt,
-        source_path=source_path,
-        heading_path=str(block.get("heading_path") or "").strip(),
-    )
+    heading_path = str(block.get("heading_path") or "").strip()
     block_text = str(block.get("text") or block.get("raw_text") or "").strip()
     aligned_snippet = _answer_aligned_block_snippet(block_text, terms=list(terms or []))
     snippet = aligned_snippet

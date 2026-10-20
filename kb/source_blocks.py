@@ -1172,10 +1172,10 @@ def load_source_blocks_cached(md_path: Path | str) -> list[SourceBlock]:
     figure_index_path = path.parent / "assets" / "figure_index.json"
     try:
         st = path.stat()
-        key = f"{str(path)}|{int(st.st_mtime)}|{int(st.st_size)}"
+        key = f"{str(path)}|{st.st_mtime_ns}|{int(st.st_size)}"
         try:
             fig_st = figure_index_path.stat()
-            key += f"|{int(fig_st.st_mtime)}|{int(fig_st.st_size)}"
+            key += f"|{fig_st.st_mtime_ns}|{int(fig_st.st_size)}"
         except Exception:
             pass
     except Exception:
@@ -1220,10 +1220,10 @@ def load_anchor_index_cached(md_path: Path | str) -> dict[str, list[dict]]:
     figure_index_path = path.parent / "assets" / "figure_index.json"
     try:
         st = path.stat()
-        key = f"{str(path)}|{int(st.st_mtime)}|{int(st.st_size)}"
+        key = f"{str(path)}|{st.st_mtime_ns}|{int(st.st_size)}"
         try:
             fig_st = figure_index_path.stat()
-            key += f"|{int(fig_st.st_mtime)}|{int(fig_st.st_size)}"
+            key += f"|{fig_st.st_mtime_ns}|{int(fig_st.st_size)}"
         except Exception:
             pass
     except Exception:

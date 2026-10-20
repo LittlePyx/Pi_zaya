@@ -14,6 +14,7 @@ export type ReaderRegressionScenario =
   | 'limitations-only'
   | 'future-work-only'
   | 'equation'
+  | 'mixed-complete-equation'
   | 'figure'
   | 'multi-panel'
   | 'render-polish'
@@ -23,6 +24,11 @@ export type ReaderRegressionScenario =
 
 export const READER_REGRESSION_SOURCE_PATH = '__reader_regression__/fixture.md'
 export const READER_REGRESSION_SOURCE_NAME = 'Fixture Paper'
+
+const MIXED_COMPLETE_PROSE = String.raw`where $\odot$ denotes the element-wise multiplication and $\boldsymbol{b}$ denotes one instance of binary Bernoulli vector whose entries are independently sampled from a Bernoulli distribution with probability $p \in (0, 1)$. Then, a set of image pairs $\{(\widehat{\boldsymbol{y}}_m, \overline{\boldsymbol{y}}_m)\}_{m=1}^M$ is defined as: for each $m$,`
+const MIXED_COMPLETE_EQUATION = String.raw`\widehat{\boldsymbol{y}}_m := \boldsymbol{b}_m \odot \boldsymbol{y}; \quad \overline{\boldsymbol{y}}_m := (\mathbf{1} - \boldsymbol{b}_m) \odot \boldsymbol{y}. \tag{6}`
+const MIXED_COMPLETE_QUOTE = `${MIXED_COMPLETE_PROSE}\n$$\n${MIXED_COMPLETE_EQUATION}\n$$`
+const MIXED_COMPLETE_BLOCK: ReaderDocBlock = { doc_id: 'fixture-doc', block_id: 'mixed-complete-6', anchor_id: 'mixed-equation-6', kind: 'equation', heading_path: 'Fixture Paper / 2. Method', raw_text: MIXED_COMPLETE_QUOTE, text: MIXED_COMPLETE_QUOTE, number: 6, line_start: 5, line_end: 8 }
 
 const INTRO_P1 = 'Our method exploits neural radiance fields (NeRF) for snapshot compressed imaging. This paragraph intentionally stays long for reader regression scrolling, revisiting geometry consistency, calibration demands, and multi-view reconstruction stability across repeated reading passes.'
 const INTRO_P2 = 'Conventional high-speed imaging systems often face challenges such as high hardware cost and storage requirements. This paragraph intentionally stays long for reader regression scrolling, expanding on memory limits, hardware bottlenecks, and the practical tradeoffs that motivate compressive capture.'
@@ -452,6 +458,9 @@ const readerRegressionRenderPolishCitationDetails = [
 ]
 
 export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScenario) {
+  if (scenario === 'mixed-complete-equation') {
+    return { ok: true, source_path: READER_REGRESSION_SOURCE_PATH, source_name: READER_REGRESSION_SOURCE_NAME, md_path: 'fixture-mixed-equation.md', markdown: `# Fixture Paper\n\n## 2. Method\n\n${MIXED_COMPLETE_QUOTE}`, anchors: [] as ReaderDocAnchor[], blocks: [MIXED_COMPLETE_BLOCK] }
+  }
   if (scenario === 'citation-links' || scenario === 'citation-links-identity-conflict') {
     const citationDetails = scenario === 'citation-links-identity-conflict'
       ? readerRegressionCitationDetails.map((detail, index) => index === 0
@@ -558,6 +567,10 @@ export function buildReaderRegressionDocResponse(scenario: ReaderRegressionScena
 }
 
 export function buildReaderRegressionPayload(scenario: ReaderRegressionScenario): ReaderOpenPayload {
+  if (scenario === 'mixed-complete-equation') {
+    const focus = { headingPath: MIXED_COMPLETE_BLOCK.heading_path, snippet: MIXED_COMPLETE_QUOTE, highlightSnippet: MIXED_COMPLETE_QUOTE, evidenceQuote: MIXED_COMPLETE_QUOTE, blockId: MIXED_COMPLETE_BLOCK.block_id, anchorId: MIXED_COMPLETE_BLOCK.anchor_id, anchorKind: 'equation' as const, anchorNumber: 6 }
+    return { sourcePath: READER_REGRESSION_SOURCE_PATH, sourceName: READER_REGRESSION_SOURCE_NAME, ...focus, strictLocate: true, locateTarget: { ...focus, segmentId: 'mixed-equation-6', sourceSegmentId: 'mixed-equation-6', hitLevel: 'exact', claimType: 'formula_claim', locatePolicy: 'required', locateSurfacePolicy: 'primary' } }
+  }
   if (scenario === 'citation-links' || scenario === 'citation-links-identity-conflict') {
     return {
       sourcePath: READER_REGRESSION_SOURCE_PATH,

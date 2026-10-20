@@ -3,9 +3,14 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from kb.training_observation_scope import scope_training_observation_answer
+from kb.source_domain_terms import normalize_verified_noise_sampling_terms
+from kb.source_question_facets import measurement_conditions_question, requests_training_augmentation, requests_sampling_prerequisite
+from kb.source_fact_scope import scope_explicit_source_facts
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
-from kb.source_question_facets import requests_comparison_facets, requests_source_facets, source_facet_quote, source_facet_score
+from kb.claim_source_eligibility import incomplete_source_prose
+from kb.source_question_facets import _known_noise_training_premise, requests_comparison_boundary, requested_method_premise_priority, requests_bernoulli_training_requirement, requests_comparison_facets, requests_noise_model_requirement, requests_sample_relation_evidence, requests_source_facets, sample_relation_priority, source_facet_quote, source_facet_score
 from kb.n2n_target_condition import (
     _verified_block, attach_target_condition_slot, corruption_condition_question, target_condition_quote,
 )
@@ -94,6 +99,12 @@ def attach_direct_source_evidence(plan: dict | None, hits: list[dict] | None) ->
                 for row in rows if primary_ok else []:
                     block = _verified_block(path, row, allow_short_equation=True)
                     text = str(row.get("text") or "").strip()
+                    raw = str((block or {}).get("raw_text") or "").strip()
+                    # The retrieved sentence can have lost its stated model
+                    # premise. Restore only its own verified paragraph, without
+                    # changing source identity, stitching blocks or adding text.
+                    if block and text in raw and len(raw) <= 1800 and not incomplete_source_prose(raw) and _known_noise_training_premise(raw):
+                        text = raw
                     if (
                         block
                         and (block.get("page_start") == page or row.get("direct_question_method_facet_score", 0) > 0)
@@ -145,7 +156,7 @@ def prioritize_direct_question_hits(
         for hit in candidates
         if (hit.get("meta") or {}).get("direct_question_evidence")
     ]
-    if requests_comparison_facets(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
+    if requests_comparison_boundary(prompt) or requests_comparison_facets(prompt) or requests_noise_model_requirement(prompt) or requests_sample_relation_evidence(prompt) or corruption_condition_question(prompt) or _TASK_LIST_QUESTION.search(prompt) or _QUALITY_BOUNDARY_QUESTION.search(prompt):
         # Supplemental/facet scans can deduplicate an earlier direct hit into
         # a generic row. Re-read only the already scoped candidate sources.
         fresh = []
@@ -195,6 +206,46 @@ def prioritize_direct_question_hits(
                     balanced.append(group.pop(0))
         return balanced
     return out[:limit]
+
+
+def prioritize_selected_source_relation_hits(selected: list[dict], candidates: list[dict], *, limit: int, prompt: str) -> list[dict]:
+    """Supplement requested sample relations without displacing other facets."""
+    if (requests_noise_model_requirement(prompt) or requests_bernoulli_training_requirement(prompt) or requests_training_augmentation(prompt)) and not requests_sample_relation_evidence(prompt):
+        replacements = {}
+        for path in dict.fromkeys(str((h.get('meta') or {}).get('source_path') or '') for h in selected):
+            if not path or not Path(path).is_file():
+                continue
+            try:
+                from kb.converter.quality_gate import _unreliable_pages_from_report
+                from kb.converter.quality_repair import load_conversion_quality_result
+                excluded = set(_unreliable_pages_from_report(load_conversion_quality_result(Path(path))))
+                rows = direct_question_evidence_hits(Path(path), prompt, limit=limit)
+                premises = [h for h in rows if requested_method_premise_priority(prompt, h.get('text') or '') and int((h.get('meta') or {}).get('page_start') or 0) not in excluded]
+                if premises:
+                    replacements[path] = premises
+            except (OSError, ValueError, TypeError):
+                continue
+        result = []
+        used = set()
+        for hit in selected:
+            meta = hit.get('meta') or {}; path = str(meta.get('source_path') or '')
+            if path not in replacements or path in used:
+                result.append(hit); continue
+            used.add(path); fresh = replacements[path][0]; fresh_meta = fresh['meta']
+            old_passages = list(meta.get('source_passages') or [{**meta, 'text': hit.get('text')}])
+            bundle = {**fresh, 'meta': {**fresh_meta, 'source_passages': [{**fresh_meta, 'text': fresh['text']}, *old_passages[1:]]}}
+            if requests_training_augmentation(prompt) or requests_sampling_prerequisite(prompt):
+                from kb.paper_guide_answer_selection import _merge_same_source_answer_hits
+                rows = [*replacements[path], *({'text': p.get('text'), 'score': p.get('score'), 'meta': {**p, 'source_path': path}} for p in old_passages)]
+                bundle = _merge_same_source_answer_hits(rows)[0]
+            merged = {**meta, **fresh_meta, **bundle['meta']}
+            for key in ('citation_plan_evidence_authoritative', 'citation_plan_full_evidence_quote', 'citation_plan_evidence_selection_reason', 'why_line', 'answer_claim'):
+                merged.pop(key, None)
+            result.append({**hit, **bundle, 'meta': merged})
+        return result[:limit]
+    if not requests_sample_relation_evidence(prompt):
+        return selected
+    return prioritize_direct_question_hits(selected, candidates, limit=limit, prompt=prompt)
 
 
 _STATEMENT = re.compile(
@@ -304,6 +355,12 @@ def _architecture_relation_score(text: str) -> int:
 
 
 def _output_relation_score(text: str) -> int:
+    if all(re.search(pattern, text, re.I) for pattern in (
+        r"(?:noisy\s+observation|input).{0,100}y\s*=\s*x\s*\+\s*v",
+        r"(?:train|learn).{0,40}residual\s+mapping",
+        r"x\s*=\s*y\s*(?:−|-|\\minus)\s*R\s*\(\s*y\s*\)",
+    )):
+        return 24
     if not all(
         re.search(pattern, text, re.I)
         for pattern in (
@@ -317,27 +374,25 @@ def _output_relation_score(text: str) -> int:
 
 def _requested_facet_score(prompt: str, text: str) -> int:
     """Locate explicit source statements, never infer facts from paper names."""
+    if _QUALITY_BOUNDARY_QUESTION.search(prompt):
+        return 26 if quality_boundary_quote(text) else 0
     method_facet = source_facet_score(prompt, text)
     if method_facet:
         return method_facet
-    if _QUALITY_BOUNDARY_QUESTION.search(prompt):
-        return 16 if quality_boundary_quote(text) else 0
     if _CALIBRATION_QUESTION.search(prompt):
         return 3 if re.search(r"(?i)calibrat.{0,80}(?:traditional|median|non.local)|校准.{0,30}(?:传统|中值)", text) else 0
+    if _INDEPENDENCE_QUESTION.search(prompt) or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
+        signal = re.search(r"(?i)signal.{0,30}(?:is\s+)?not\s+pixel[- ]wise\s+independent", text)
+        noise = re.search(r"(?i)noise.{0,45}conditionally\s+pixel[- ]wise\s+independent.{0,30}(?:given\s+the\s+signal|signal)",text)
+        if signal and noise:
+            return 16 if re.search(r"(?i)we\s+make\s+two\s+simple\s+statistical\s+assumptions",text) else 8
     if _INDEPENDENCE_QUESTION.search(prompt):
         relation = re.search(r"(?i)(?:noise.{0,65}independent.{0,50}(?:signal|conditional)|independence.{0,60}noise)", text)
         if not relation:
             return 0
         return 8 if re.search(r"(?i)we (?:assume|use).{0,110}noise.{0,65}independent", text) else 1
     if _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
-        signal = re.search(r"(?i)signal.{0,30}(?:is\s+)?not\s+pixel[- ]wise\s+independent", text)
-        noise = re.search(
-            r"(?i)noise.{0,45}conditionally\s+pixel[- ]wise\s+independent.{0,30}(?:given\s+the\s+signal|signal)",
-            text,
-        )
-        if not (signal and noise):
-            return 0
-        return 16 if re.search(r"(?i)we\s+make\s+two\s+simple\s+statistical\s+assumptions", text) else 8
+        return 0
     if _TRAINING_OBSERVATION_QUESTION.search(prompt):
         # Author-owned data requirements take precedence over related work.
         owned = bool(re.search(r"(?i)\bwe\b|\bour\b|本文|我们", text))
@@ -392,6 +447,9 @@ def requests_direct_question_evidence(prompt: str) -> bool:
 
 
 def quality_boundary_quote(text: str) -> str:
+    if (len(text) <= 1800 and re.search(r'(?:cannot|not)\s+be\s+expected\s+to\s+outperform', text, re.I)
+            and re.search(r'(?:noisy\s+image\s+pairs|clean\s+target\s+images)', text, re.I)):
+        return text
     match = re.search(
         r"(?:While\s+)?it cannot be expected that our approach outperforms methods that have "
         r"(?:additional|more) information available during training,\s*we observe that the denoising "
@@ -551,8 +609,20 @@ def direct_question_evidence_hits(
         )
     if not candidates:
         return []
-    candidates.sort(key=lambda row: (-row[0], row[1]))
+    candidates.sort(key=lambda row: (
+        -sample_relation_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
+        -requested_method_premise_priority(prompt, str(blocks[row[1]].get("raw_text") or "")),
+        -row[0], row[1],
+    ))
     chosen = candidates[0][2]
+    if statement and measurement_conditions_question(prompt):
+        # A clipped proposition must remain clipped. Carry a separately located
+        # literal premise when the same paper actually states it elsewhere.
+        premises = [i for i, b in enumerate(blocks) if b.get('kind') == 'paragraph'
+                    and not _STATEMENT.match(normalize_match_text(str(b.get('raw_text') or '')))
+                    and 'reference' not in str(b.get('heading_path') or '').lower()
+                    and source_facet_score(prompt, str(b.get('raw_text') or '')) >= 24]
+        chosen = list(dict.fromkeys([chosen[0], *premises, *chosen[1:]]))
     if requests_source_facets(prompt) and not statement and not equation_numbers:
         chosen = list(dict.fromkeys(i for _, _, bundle in candidates for i in bundle))
     if equation_numbers and not statement:
@@ -614,6 +684,7 @@ def direct_question_evidence_hits(
             continue
         out.append(
             {
+                "id": f"{block['doc_id']}:source-block:{block['block_id']}",
                 "text": text,
                 "score": 1000.0 - len(out),
                 "meta": {

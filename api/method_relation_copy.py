@@ -5,6 +5,36 @@ import re
 
 _RULES = (
     (
+        (r"Our method is applicable to both pixel-wise i\.\s*i\.\s*d\. white noise and spatially correlated noise",),
+        "方法的适用范围同时包含逐像素独立同分布的白噪声和空间相关噪声。",
+        "该句界定允许的噪声类型；它没有给出两份噪声样本之间的独立性条件，比较方法前提时仍须核对相应方法段落。",
+    ),
+    (
+        (r'methods make different assumptions about the task.{0,50}direct comparison may be misleading',),
+        '不同方法的任务假设不同，直接比较可能产生误导。',
+        '该句提醒先核对不同方法的任务假设，再解释直接比较；它不是普遍优劣排序或新的数量结果的证据。',
+    ),
+    (
+        (r'is a known noise distribution', r'draw an additional synthetic noise sample'),
+        '噪声分布已知，因此作者可以额外生成合成噪声样本。',
+        '这两句把已知噪声分布与额外合成样本相连，可核对方法的模型知识和采样前提；不能读成完全不需要噪声先验。',
+    ),
+    (
+        (r'is a known noise distribution',),
+        '摘录明确将所述噪声分布设为已知。',
+        '该句可核对噪声分布的知识前提；采样过程和额外样本的身份仍须结合方法段落核对，不能据此认定无需噪声模型。',
+    ),
+    (
+        (r'train.{0,150}fixed,? known noise model',),
+        '该方法把固定且已知的噪声模型作为训练设定。',
+        '该句界定训练环境对噪声模型知识的前提，不等同于完全无需噪声先验；具体采样操作仍需由后续方法原文核对。',
+    ),
+    (
+        (r"Given the sum of two i\.\s*i\.\s*d\. noise samples, the best estimate of one of them is half of their sum",),
+        "两份独立同分布噪声样本相加时，其中一份的最佳估计是两者之和的一半。",
+        "该句限定两份噪声样本之间的独立同分布关系，并给出和的一半这一估计；不能推导每份样本内部各分量也独立。",
+    ),
+    (
         (r"original noisy image.{0,100}synthetic sample from the same noise distribution",),
         "原始带噪图像中的噪声与另外合成的噪声样本来自同一噪声分布。",
         "该句区分原始观测与合成样本，并明确二者所用噪声分布相同；不能把允许的分布条件仅归于合成样本。",
@@ -58,12 +88,20 @@ _RULES = (
         "摘录提及 Color BSD68 训练集，并将所报 Noise2Void 结果视为该方法潜在表现的下界。",
         "这里的下界限定的是 Noise2Void 的报告结果，不是性能上界；训练集对应哪个方法还应连同前文核对。",
     ),
+    (
+        (r"^(?:On the other hand,\s*)?we require the ability to sample from the noise distribution",),
+        "作者明确要求能够从噪声分布中采样。",
+        "这句把能够从噪声分布采样列为方法要求，可用于核对训练前提；不应据此推断分布未知时同样适用。",
+    ),
 )
 _NEGATION = re.compile(r"\b(?:not|never|cannot|false\w*|incorrect\w*|untrue|fail\w*)\b|不能|并非|不等于", re.I)
 
 
 def method_relation_copy(surface: str) -> tuple[str, str] | None:
     """Translate complete explicit clauses from evidence, retaining premises."""
+    if re.search(r'(?:^|[.!?]\s+)While it cannot be expected that our approach outperforms methods that have additional information available during training(?:,|\.)', surface, re.I):
+        return ('作者不预期该方法胜过训练时拥有额外信息的方法。',
+                '该句明确限定比较条件为训练阶段可用的额外信息，可核对作者对相对性能的预期；不能据此推出所有图像和噪声条件下的普遍排序。')
     for patterns, summary, why in _RULES:
         valid = True
         for pattern in patterns:

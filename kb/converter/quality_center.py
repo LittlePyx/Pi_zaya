@@ -46,6 +46,7 @@ _ISSUE_LABELS = {
     "conversion_retry_equation": "公式转换已回退为图片",
     "conversion_retry_other": "存在未解决的转换重试",
     "prose_dominant_display_math": "正文被误识别为公式",
+    "fragmented_pdf_prose": "正文段落被错误拆分",
     "display_math_markdown_link": "公式块中含 Markdown 链接",
     "adjacent_inline_math_superscript": "相邻公式上标格式异常",
     "legacy_numeric_superscript_citation": "旧式数字上标引用待规范",

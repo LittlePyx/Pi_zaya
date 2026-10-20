@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from typing import Iterable
 
 
@@ -106,13 +107,21 @@ def method_identity_conflicts(claim: object, evidence: object) -> bool:
 # English academic source passages. Values intentionally mirror terms commonly
 # written verbatim in papers; they are never used to generate user-facing prose.
 _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"空间相关噪声", ("spatially", "correlated", "noise")),
+    (r"从噪声分布中?采样", ("sample", "noise", "distribution")),
+    (r"已知(?:的)?噪声分布", ("known", "noise", "distribution")),
+    (r"已知(?:的)?噪声模型", ("known", "noise", "model")),
+    (r"已知(?:的)?[、，]?(?:且)?(?:可(?:以)?|能(?:够)?)从中采样的噪声分布", ("known", "noise", "distribution", "sample")),
+    (r"已知(?:的)?[、，]?(?:且)?可采样的噪声分布", ("known", "noise", "distribution", "sample")),
+    (r"从(?:该|此)分布中?采样", ("sample", "distribution")),
     (r"\bi\.\s*i\.\s*d\.|\biid\b|独立同分布", ("independent", "identically", "distributed")),
     (r"有限(?:数据|样本)", ("finite", "data")),
     (r"方差", ("variance",)),
     (r"估计(?:量|值)?", ("estimate", "estimator")),
     (r"污染|损坏", ("corruptions", "corrupted")),
     (r"目标", ("targets", "target")),
-    (r"噪声|带噪", ("noise", "noisy")),
+    (r"噪声|带噪|含噪", ("noise", "noisy")),
+    (r"(?:一次|单次|单个|一个)(?:含噪|带噪)(?:实现|观测)", ("single", "noisy", "realization")),
     (r"条件期望|条件均值", ("conditional", "expected", "expectation")),
     (r"零均值", ("zero", "mean")),
     (r"干净(?:标签|目标|图像|信号)", ("clean", "target", "image", "signal")),
@@ -123,6 +132,7 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (r"像素邻域", ("pixel", "neighborhood")),
     (r"条件独立", ("conditional", "independent", "independence")),
     (r"独立", ("independent", "independence")),
+    (r"信号(?:(?:中|具有|有|存在|的|统计|一定)\s*){0,4}(?:相关|依赖)", ("signal", "statistical", "dependencies")),
     (r"真实信号", ("true", "signal")),
     (r"特征组", ("groups", "features")),
     (r"预测", ("predict", "predictions")),
@@ -376,23 +386,24 @@ _CJK_EVIDENCE_HINTS: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
-def evidence_alignment_tokens(
-    value: object,
-    *,
-    extra_stopwords: Iterable[str] | None = None,
-) -> set[str]:
-    """Return English evidence tokens and deterministic Chinese aliases."""
+_COMPILED_CJK_EVIDENCE_HINTS = tuple(
+    (re.compile(pattern, re.IGNORECASE), aliases)
+    for pattern, aliases in _CJK_EVIDENCE_HINTS
+)
 
-    text = str(value or "")
+
+@lru_cache(maxsize=512)
+def _alignment_token_snapshot(text: str, extra_stopwords: frozenset[str]) -> frozenset[str]:
+    """Share only immutable tokenization results; support checks still run."""
     stopwords = set(_ASCII_STOPWORDS)
-    stopwords.update(str(item or "").strip().lower() for item in (extra_stopwords or ()))
+    stopwords.update(extra_stopwords)
     tokens = {
         token
         for token in re.findall(r"[a-z0-9]+", text.lower())
         if (len(token) >= 3 or token in {"2d", "3d"}) and token not in stopwords
     }
-    for pattern, aliases in _CJK_EVIDENCE_HINTS:
-        if re.search(pattern, text, flags=re.IGNORECASE):
+    for pattern, aliases in _COMPILED_CJK_EVIDENCE_HINTS:
+        if pattern.search(text):
             tokens.update(aliases)
     # One converted HSI/FSI benchmark table carries the obvious OCR/header
     # transposition ``PNSR`` even though the surrounding prose defines PSNR.
@@ -400,7 +411,21 @@ def evidence_alignment_tokens(
     # text itself remains untouched.
     if "pnsr" in tokens:
         tokens.add("psnr")
-    return tokens
+    return frozenset(tokens)
+
+
+def evidence_alignment_tokens(
+    value: object,
+    *,
+    extra_stopwords: Iterable[str] | None = None,
+) -> set[str]:
+    """Return English evidence tokens and deterministic Chinese aliases.
+
+    Callers receive their own mutable set. Locale, evidence coordinates and
+    support decisions are not cached, and different stopword sets stay apart.
+    """
+    stopwords = frozenset(str(item or "").strip().lower() for item in (extra_stopwords or ()))
+    return set(_alignment_token_snapshot(str(value or ""), stopwords))
 
 
 __all__ = [

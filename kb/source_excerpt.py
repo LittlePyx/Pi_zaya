@@ -90,6 +90,12 @@ def _literal_excerpt(raw: str, quote: str, surface: str) -> str:
         boundary = re.search(r"[.!?。！？](?=\s|$)", flat[end:])
         end = end + boundary.end() if boundary else len(flat)
     first, last = offsets[start], offsets[end - 1] + 1
+    # An exact preview can lose only the opening bold delimiter. Restore it
+    # only from a complete prose emphasis pair in this very source span.
+    protected = [m.span() for m in re.finditer(r"\$\$.*?\$\$|\$[^$\n]+\$|`+.*?`+", raw, re.S)]
+    for emphasis in re.finditer(r"(?<![\w\\])\*\*[^*\n]+\*\*(?!\w)", raw):
+        if emphasis.start() + 2 == first and last >= emphasis.end() and not any(emphasis.start() < b and emphasis.end() > a for a, b in protected):
+            first = emphasis.start()
     if raw[first-2:first] == "**" and surface[first-2:first] == "  ":
         first -= 2
     if raw[last:last+2] == "**" and surface[last:last+2] == "  ":

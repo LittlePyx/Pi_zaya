@@ -58,6 +58,14 @@ def test_complete_method_relations_get_specific_source_backed_copy(evidence):
     assert '置于同一段' not in ''.join(copy)
 
 
+def test_sampling_premise_has_its_own_explanation_without_spatial_claim():
+    evidence = 'On the other hand, we require the ability to sample from the noise distribution, which the three aforementioned methods do not.'
+    copy = source_relation_copy(evidence)
+    assert copy and '采样' in copy[0] and len(copy[1]) >= 25
+    assert '空间相关' not in ''.join(copy)
+    assert source_relation_copy(evidence.replace('we require', 'we do not require')) is None
+
+
 @pytest.mark.parametrize('evidence',[
     PHASE.replace('both training and test','training'),
     PHASE.replace('reduce the variance','increase the variance'),

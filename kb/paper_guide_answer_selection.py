@@ -957,6 +957,32 @@ def _merge_same_source_answer_hits(
     }
     if len(source_keys) != 1:
         return rows
+    # A direct-question hit may already contain a source bundle. Its context
+    # headers are not a literal paragraph and must never inherit the first
+    # paragraph's locator when selection merges the same paper again.
+    unwrapped: list[dict] = []
+    for hit in rows:
+        meta = dict(hit.get("meta") or {})
+        children = meta.get("source_passages")
+        if not meta.get("same_source_evidence_bundle") or not isinstance(children, list):
+            unwrapped.append(hit)
+            continue
+        source = _hit_source_path(hit)
+        for child in children:
+            if not isinstance(child, dict) or not str(child.get("text") or "").strip():
+                continue
+            child_source = str(child.get("source_path") or source)
+            if child_source.replace("\\", "/").casefold() != source.replace("\\", "/").casefold():
+                continue
+            # Only source-wide identity can be inherited. Missing child block,
+            # page or proof flags must remain missing rather than borrow them.
+            identity_keys = ("source_path", "source_name", "file_name", "doc_id", "title", "language", "source_kind", "metadata_quality", "ref_pack_state", "research_basket_evidence", "basket_evidence", "basket_item_index", "basket_item_key", "shelf_item_kind", "basket_source_role", "selected_context_source_path", "selected_context_source_name", "citation_context_source")
+            identity = {k: meta[k] for k in identity_keys if k in meta}
+            child_meta = {k: v for k, v in child.items() if k not in {"text", "score", "source_passages", "same_source_evidence_bundle", "source_passage_count"}}
+            unwrapped.append({**hit, "text": child["text"], "score": child.get("score", hit.get("score", 0)), "meta": {**identity, **child_meta}})
+    rows = unwrapped
+    if len(rows) <= 1:
+        return rows
     try:
         limit = max(1, int(max_passages or 5))
     except Exception:

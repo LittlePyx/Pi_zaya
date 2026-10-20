@@ -2,7 +2,8 @@ from __future__ import annotations
 from kb.reference_origin_binding import origin_sentence_score, origin_topic_identifier
 from kb.citation_marker_context import numeric_marker_is_content, strip_citation_offset, strip_citation_decoration
 from kb.source_passage_evidence import bind_source_passage_primary, citation_plan_locator_quote
-from kb.direct_question_evidence import attach_direct_source_evidence
+from kb.direct_question_evidence import attach_direct_source_evidence, scope_training_observation_answer, normalize_verified_noise_sampling_terms, scope_explicit_source_facts
+from kb.refusal_context_excerpt import append_refusal_context_excerpt
 from kb.denoising_quality_boundary import (
     complete_denoising_quality_boundary,
     complete_n2n_corruption_model_boundary,
@@ -26,7 +27,7 @@ from kb.claim_evidence_runtime import (
     _meaningful_numbers as _claim_meaningful_numbers,
     _split_claim_segments as _split_claim_evidence_segments,
     _support_score as _claim_evidence_support_score,
-    audit_and_repair_claim_evidence,
+    audit_and_repair_claim_evidence, _answer_starts_with_retrieval_limit,
 )
 from kb.evidence_term_mapping import evidence_alignment_tokens
 from kb.paper_guide_contracts import (
@@ -7589,19 +7590,18 @@ def _complete_grounded_requested_source_facts(
     citation_plan: dict | None,
     answer_hits: list[dict] | None = None,
 ) -> str:
-    """Close list/value omissions with compact text from an exact plan slot.
+    """Close source omissions with literal text from exact plan slots.
 
-    The model sometimes receives the right block but paraphrases away one item
-    in an explicit source enumeration or answers a quantitative question with a
-    neighboring number.  This pass never invents a translation or looks beyond
-    the citation plan: it adds a small bounded set of compact, source-verbatim
-    sentences and binds each one to an already resolved System-A hit.
+    Keep additions bound to the resolved same-source hit. A bounded refusal
+    may retain a nonnumeric source quotation as explicitly labeled context.
     """
 
     text = str(answer or "").strip()
     prompt_text = str(prompt or "")
     if not text or not isinstance(citation_plan, dict):
         return text
+    if _answer_starts_with_retrieval_limit(text):
+        return append_refusal_context_excerpt(text, citation_plan, [str((h.get('meta') or {}).get('source_path') or '') for h in answer_hits or []])
     slots = [
         dict(slot)
         for slot in list(citation_plan.get("slots") or [])
@@ -7951,7 +7951,7 @@ def _complete_grounded_requested_source_facets(
 
     text = str(answer or "").strip()
     prompt_text = str(prompt or "").strip()
-    if not text or not prompt_text or not isinstance(citation_plan, dict):
+    if not text or not prompt_text or not isinstance(citation_plan, dict) or _answer_starts_with_retrieval_limit(text):
         return text
     if re.search(r"(?i)\b(?:equation|formula|derive|derivation)\b|公式|方程|推导", prompt_text):
         # Equation questions already have a deterministic source-bound builder
@@ -8092,7 +8092,7 @@ def _normalize_citation_plan_supported_terms(
 ) -> str:
     """Restore precise source terminology that generation paraphrases away."""
 
-    text = str(answer or "").strip()
+    text = scope_explicit_source_facts(normalize_verified_noise_sampling_terms(scope_training_observation_answer(str(answer or "").strip(), prompt=prompt, citation_plan=citation_plan, answer_hits=answer_hits), prompt=prompt, citation_plan=citation_plan), citation_plan=citation_plan, answer_hits=answer_hits, slot_hit_numbers=_citation_plan_slot_hit_numbers)
     plan_evidence_parts = [
         str(slot.get("evidence_quote") or "")
         for slot in list((citation_plan or {}).get("slots") or [])

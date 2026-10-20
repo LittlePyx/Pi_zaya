@@ -26,6 +26,7 @@ function parseScenario(input: string | null): ReaderRegressionScenario {
   if (raw === 'limitations-only') return 'limitations-only'
   if (raw === 'future-work-only') return 'future-work-only'
   if (raw === 'equation') return 'equation'
+  if (raw === 'mixed-complete-equation') return 'mixed-complete-equation'
   if (raw === 'figure') return 'figure'
   if (raw === 'multi-panel') return 'multi-panel'
   if (raw === 'render-polish') return 'render-polish'
