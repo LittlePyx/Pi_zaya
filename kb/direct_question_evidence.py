@@ -370,11 +370,11 @@ def _output_relation_score(text: str) -> int:
 
 def _requested_facet_score(prompt: str, text: str) -> int:
     """Locate explicit source statements, never infer facts from paper names."""
+    if _QUALITY_BOUNDARY_QUESTION.search(prompt):
+        return 26 if quality_boundary_quote(text) else 0
     method_facet = source_facet_score(prompt, text)
     if method_facet:
         return method_facet
-    if _QUALITY_BOUNDARY_QUESTION.search(prompt):
-        return 16 if quality_boundary_quote(text) else 0
     if _CALIBRATION_QUESTION.search(prompt):
         return 3 if re.search(r"(?i)calibrat.{0,80}(?:traditional|median|non.local)|校准.{0,30}(?:传统|中值)", text) else 0
     if _INDEPENDENCE_QUESTION.search(prompt) or _STATISTICAL_ASSUMPTIONS_QUESTION.search(prompt):
@@ -443,6 +443,9 @@ def requests_direct_question_evidence(prompt: str) -> bool:
 
 
 def quality_boundary_quote(text: str) -> str:
+    if (len(text) <= 1800 and re.search(r'(?:cannot|not)\s+be\s+expected\s+to\s+outperform', text, re.I)
+            and re.search(r'(?:noisy\s+image\s+pairs|clean\s+target\s+images)', text, re.I)):
+        return text
     match = re.search(
         r"(?:While\s+)?it cannot be expected that our approach outperforms methods that have "
         r"(?:additional|more) information available during training,\s*we observe that the denoising "

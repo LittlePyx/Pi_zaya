@@ -78,12 +78,16 @@ def source_attribution_covered(claim: str, evidence: str, source_name: str) -> b
         return False
     # A passage about the same method does not substantiate an attributed
     # verbatim quotation. Preserve case and all logical words inside it.
-    if re.search(r'paper|authors?|abstract|caption|figure|related[- ]work|explicitly|原文|作者|摘要|图注', claim, re.I) and not re.search(r'\b(?:not|never)\s+(?:state|say|claim)|并未|没有(?:说|声称|指出)', claim, re.I):
+    if re.search(r'"[^"\n]{40,}"|“[^”\n]{40,}”', claim) and not re.search(r'\bparaphras\w*|意译|转述', claim, re.I):
         # Token boundaries preserve words, variable case and logical operators,
         # while mathematical punctuation can have typesetting spaces.
-        tokens = lambda value: re.findall(r'\w+|[^\w\s]', value.replace('’', "'").replace('‘', "'"))
+        tokens = lambda value: re.findall(r'\w+|[^\w\s]', re.sub(r'\$([A-Za-z])\$', r'\1', value.replace('’', "'").replace('‘', "'")))
         source_tokens = tokens(evidence)
         for match in re.finditer(r'"([^"\n]{40,})"|“([^”\n]{40,})”', claim):
+            # Ellipses explicitly signal a partial quotation. A false premise
+            # quoted in order to refute it is not asserted source text.
+            if (match[1] or match[2]).lstrip().startswith(('…', '...')) or re.search(r'\bpremise\b[^.;\n]{0,120}\bfalse\b|错误前提|前提[^。；\n]{0,35}不成立', claim, re.I):
+                continue
             wanted = tokens((match[1] or match[2]).rstrip(',.;:'))
             if not any(source_tokens[i:i + len(wanted)] == wanted for i in range(len(source_tokens) - len(wanted) + 1)):
                 return False

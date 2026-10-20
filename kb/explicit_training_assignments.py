@@ -56,6 +56,15 @@ def _named_training_roles_covered(claim: str, evidence: str) -> bool:
     source_inputs = roles(evidence,'input') | set(re.findall(r'(?i:given)\s+'+variable+r'\s+(?i:as\s+input)\b',evidence))
     if wanted_inputs and not wanted_inputs <= source_inputs:
         return False
+    estimated = set(re.findall(r'(?i:(?:network\s+)?output\s+is\s+(?:an?\s+)?estimate\s+of\s+)' + variable, claim))
+    if estimated and not estimated <= source_targets:
+        return False
+    for match in re.finditer(variable + r'\s+(?i:enters?\s+(?:the\s+)?training\s+target)', claim):
+        if match[1] not in source_targets:
+            return False
+    descriptive_map = re.search(r'(?i:train\w*\s+to\s+map\s+(?:a\s+)?doubly[- ]noisy\s+input\s+to\s+(?:a\s+)?singly[- ]noisy\s+output)', claim)
+    if descriptive_map and not (source_maps or (re.search(r'singly[- ]noisy[^.;\n]{0,70}training\s+target', evidence, re.I) and re.search(r'doubly[- ]noisy[^.;\n]{0,70}input', evidence, re.I))):
+        return False
     descriptive_input = re.search(r'(?i:network\s+input\s+is\s+(?:the\s+)?(?:doubly[- ]noisy|noisier)\s+image)',claim)
     return not descriptive_input or bool(re.search(r'\binput\b',evidence,re.I) and re.search(r'doubly[- ]noisy|noisier\s+version',evidence,re.I))
 
@@ -78,7 +87,7 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
     """
     if not _named_training_roles_covered(claim,evidence) or not _training_supervision_covered(claim,evidence):
         return False
-    feeding = r'feed\w*[^.;。\n]{0,50}Bernoulli[- ]sampled|fed[^.;。\n]{0,50}Bernoulli[- ]sampled|Bernoulli[- ]sampled[^.;。\n]{0,80}(?:fed|feeding)|伯努利采样[^。；\n]{0,30}(?:送入|输入网络)'
+    feeding = r'(?:feed\w*|fed|receiv\w*)[^.;。\n]{0,50}Bernoulli[- ]sampled|Bernoulli[- ]sampled[^.;。\n]{0,80}(?:fed|feeding)|伯努利采样[^。；\n]{0,30}(?:送入|输入网络)'
     if re.search(feeding, claim, re.I) and not re.search(feeding, evidence, re.I):
         return False
     if re.search(r'\bloss\b|损失', claim, re.I):

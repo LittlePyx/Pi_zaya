@@ -214,8 +214,11 @@ def explicit_claim_relations_covered(claim: str, evidence: str) -> bool:
         training_pair_requirement_covered,
         variance_relation_covered,
     )
+    from kb.explicit_source_details import explicit_source_details_covered
+    from kb.explicit_noise_relations import signal_dependency_covered
 
     return (
+        explicit_source_details_covered(claim_text, evidence_text) and signal_dependency_covered(claim_text, evidence_text) and
         named_metrics_covered(claim_text, evidence_text) and qualitative_outperformance_covered(claim_text, evidence_text) and
         explicit_training_assignments_covered(claim_text, evidence_text) and named_equation_covered(claim_text, evidence_text) and prediction_average_covered(claim_text, evidence_text) and
         noise_augmentation_training_covered(claim_text, evidence_text) and

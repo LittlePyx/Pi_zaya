@@ -33,11 +33,17 @@ def _blind_spot_exclusion_question(prompt: str) -> bool:
 
 
 def _noise_statistics_question(prompt: str) -> bool:
-    return bool(re.search(r'noise|噪声|signal|信号', prompt, re.I) and re.search(r'independen\w*|assumptions?|独立|统计假设|相关噪声', prompt, re.I))
+    quality = re.search(r'performance\s+boundary|性能边界|(?:outperform|胜过|优于).{0,80}(?:clean targets?|noisy pairs?|干净目标|噪声对)', prompt, re.I)
+    return bool(not quality and re.search(r'noise|噪声|signal|信号', prompt, re.I) and re.search(r'independen\w*|assumptions?|独立|统计假设|相关噪声', prompt, re.I))
 
 
 def measurement_conditions_question(prompt: str) -> bool:
     return bool(re.search(r'unbiased\w*|无偏', prompt, re.I) and re.search(r'conditional\s+independen\w*|条件独立', prompt, re.I))
+
+
+def _measurement_modality_question(prompt: str) -> bool:
+    return bool(re.search(r'measurement\s+modality|测量模态', prompt, re.I)
+                and re.search(r'independent\s+events|独立事件', prompt, re.I))
 
 
 def _noise_statistics_score(prompt: str, text: str) -> int:
@@ -102,7 +108,7 @@ def noise_model_premise_priority(prompt: str, text: str) -> int:
 
 
 def requests_source_facets(prompt: str) -> bool:
-    return bool(measurement_conditions_question(prompt) or _noise_statistics_question(prompt) or _prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt) or _training_speed_question(prompt) or _loss_statistic_question(prompt) or re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) or requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
+    return bool(_measurement_modality_question(prompt) or measurement_conditions_question(prompt) or _noise_statistics_question(prompt) or _prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt) or _training_speed_question(prompt) or _loss_statistic_question(prompt) or re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) or requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
                 or (_CORRECTION.search(prompt) and _OUTPUT.search(prompt))
                 or _DROPOUT_PHASE.search(prompt) or _additive_training_pair_question(prompt))
 
@@ -146,6 +152,8 @@ def _training_pair_procedure(text: str) -> bool:
 
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
+    if _measurement_modality_question(prompt) and re.search(r'\bwe\s+demonstrate\b', text, re.I) and re.search(r'\bdata\b', text, re.I) and re.search(r'independence\s+between\s+detections', text, re.I):
+        return 26
     if measurement_conditions_question(prompt):
         for start, end in citation_sentence_spans(text):
             sentence = text[start:end]
@@ -230,6 +238,8 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
+    if _measurement_modality_question(prompt) and len(text) <= 1800:
+        return text
     if _noise_statistics_score(prompt, text) and len(text) <= 1800:
         return text
     if (_prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt)) and re.search(r'Figure\s+\d+', text, re.I) and re.search(r'receptive\s+field[^.;]{0,60}excludes\s+the\s+pixel\s+itself', text, re.I):

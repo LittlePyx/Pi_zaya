@@ -4,7 +4,7 @@ import re
 
 
 _CATEGORIES = {
-    'clean': re.compile(r'(?<![非不])干净(?:目标|标签|参照|图像|数据)|\bclean\s+(?:(?:training|target|reference|ground[- ]truth)\s+)?(?:images?|examples?|targets?|labels?|data)', re.I),
+    'clean': re.compile(r'(?<![非不])干净(?:训练)?(?:目标|标签|参照|图像|数据)|\bclean\s+(?:(?:training|target|reference|ground[- ]truth)\s+)?(?:images?|examples?|targets?|labels?|data)', re.I),
     'noisy_pairs': re.compile(r'(?<![非未不])(?:配对|成对)(?:的)?(?:含噪|带噪|噪声)(?:图像|数据)|(?:含噪|带噪|噪声)(?:图像)?对|\bpaired\s+noisy\s+(?:training\s+)?(?:images?|examples?|data)|\bnoisy\s+image\s+pairs|\bpairs\s+of\s+noisy\s+images', re.I),
 }
 _WAIVER = re.compile(r"(?:does?\s+not|don't|doesn't|not)\s+(?:require\w*|need\w*)\b|(?:require\w*|need\w*)\s+(?:neither|no)\b|不(?:再)?(?:需要|要求)|无需|无须|不必|不用|免除|省去|\b(?:dispose\s+of|dispense\s+with)\s+(?:the\s+)?|\bwithout\s+(?:(?:observing|using|needing)\s+)?", re.I)
@@ -39,9 +39,10 @@ def waived_data_requirements_covered(claim: str, evidence: str) -> bool:
     # Choosing a denoiser by the self-supervised objective is a different
     # operation from collecting clean training targets. Require the complete
     # source loss relation and restricted minimization result, not a title.
-    selection_reference = (re.search(r'干净参照.{0,15}选择去噪器', claim)
-                           and re.search(r'方差项|噪声方差', claim)
-                           and re.search(r'与.{0,20}无关|不影响最优解|不会改变最优解', claim))
+    selection_reference = (re.search(r'干净参照.{0,20}(?:选择|选出)(?:最优)?去噪器', claim)
+                           and re.search(r'最小化自监督损失|方差项|噪声方差', claim)
+                           and re.search(r'与.{0,25}无关|不影响最优解|不会改变最优解', claim)
+                           and not re.search(r'训练数据|训练目标|训练图像|训练标签', claim))
     surface = re.sub(r'\s+', ' ', evidence)
     if selection_reference and re.search(r'(?:^|[.!?])\s*(?:That is,\s*)?the self-supervised loss is the sum of the ordinary supervised loss and the variance of the noise', surface, re.I) and re.search(r'(?:^|[.!?])\s*By minimizing the self-supervised loss over a class of J\s*-invariant functions, one may find the optimal denoiser', surface, re.I):
         covered.add('clean')

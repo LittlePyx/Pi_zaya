@@ -48,7 +48,10 @@ def claim_occurrence_matches(claim: str, bound_claims: list[str]) -> bool:
         return re.sub(r"[\W_]+", "", value.casefold())
 
     actual = key(claim)
-    return any(len(bound := key(value)) >= 20 and bound in actual for value in bound_claims)
+    # Exact identity is a lookup, including a short, already bound claim.
+    # The20-character minimum remains for substring matches. Selection here
+    # grants no support; the located quote still passes the normal binding gate.
+    return bool(actual) and any((bound := key(value)) == actual or len(bound) >= 20 and bound in actual for value in bound_claims)
 
 
 def claim_bound_candidates(rows: list[dict], claim: str) -> list[dict]:

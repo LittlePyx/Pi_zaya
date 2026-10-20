@@ -51,6 +51,9 @@ def _sample_independence_statement(evidence: str) -> bool:
 
 
 def iid_relation_covered(claim: str, evidence: str) -> bool:
+    if re.search(r'前者.*后者|former.*latter', claim, re.I) and re.search(r'不要求|不需要|不相关|\bnot\s+(?:require|need)', claim, re.I):
+        if not re.search(r'前者.*后者|former.*latter', evidence, re.I):
+            return False
     comparison = bool(re.search(r'两篇|前者.*后者|two\s+papers|former.*latter', claim, re.I) and re.search(r'独立|independen', claim, re.I))
     component = any(_positive_scoped(claim, m) for m in _COMPONENT_RELATION.finditer(claim)) or bool(comparison and re.search(r'分量|components?', claim, re.I))
     if component and not any(_positive_scoped(evidence, m) for m in _COMPONENT_PREMISE.finditer(evidence)):
@@ -105,8 +108,8 @@ def iid_relation_covered(claim: str, evidence: str) -> bool:
 
 def signal_dependency_covered(claim: str, evidence: str) -> bool:
     """Keep signal dependence separate from the accompanying noise premise."""
-    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal\s+(?:is\s+)?correlated', claim, re.I)
-    if not requested or not re.search(r'噪声[^。；;]{0,30}独立|noise[^.;]{0,40}independent', claim, re.I):
+    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal[^.;\n]{0,65}(?:statistical\s+dependenc|statistically\s+predictable|not\s+pixel[- ]wise\s+independent|\bcorrelated)', claim, re.I)
+    if not requested:
         return True
     pattern = (r'\bsignal\s*,?\s*(?:however\s*,?\s*)?(?:is\s+assumed\s+to\s+contain\s+(?:statistical\s+)?dependencies|'
                r'(?:exhibits?|contains?|has)\s+(?:some\s+|complex\s+|statistical\s+)*(?:dependencies|correlation)|'
@@ -171,7 +174,9 @@ def known_noise_model_covered(claim: str, evidence: str) -> bool:
 
 def named_synthetic_sample_covered(claim: str, evidence: str) -> bool:
     """A distribution statement about N cannot label N as the synthetic sample."""
-    labels = re.findall(r'(?i:synthetic\s+(?:noise\s+)?sample|synthetic\s+noise|合成(?:噪声)?样本|合成噪声)\s*\$?([A-Z])(?![A-Za-z])', claim)
+    labels = re.findall(r'(?i:synthetic\s+(?:noise\s+)?sample|synthetic\s+noise|合成(?:噪声)?样本|合成噪声|合成样本)\s*\$?([A-Z])(?![A-Za-z])', claim)
+    labels += re.findall(r'(?<![A-Za-z])\$?([A-Z])\$?\s*(?:视为|是|为)[^。；\n]{0,40}(?:合成(?:噪声)?样本)|(?<![A-Za-z])([A-Z])\s+(?i:is\s+(?:the|a|an)\s+synthetic\s+(?:noise\s+)?sample)', claim)
+    labels = [next((v for v in name if v), '') if isinstance(name, tuple) else name for name in labels]
     if any(not re.search(rf'(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])', evidence) for name in labels):
         return False
     named = re.findall(r'(?i:synthetic\s+(?:noise\s+)?sample|合成噪声样本)\s*[（(]?\s*\$?([A-Za-z])\s*(?:\\sim|∼|~)', claim)

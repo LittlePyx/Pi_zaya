@@ -4,6 +4,7 @@ import re
 
 from kb.citation_marker_context import numeric_marker_is_content
 from kb.citation_table_context import cited_table_cell_span
+from kb.citation_clause_boundaries import explicit_clause_boundaries
 
 _CITATION_TARGET = r'\(\#[^\s)]+(?:\s+"[^"]*")?\)'
 _DEFINITION_BRIDGE = (
@@ -15,7 +16,7 @@ _DEFINITION_BRIDGE = (
 
 
 def split_definition_bridges(text: str) -> list[str]:
-    boundaries = [0]
+    boundaries = [0, *explicit_clause_boundaries(text)]
     for match in re.finditer(_DEFINITION_BRIDGE, text, re.I):
         position = match.start()
         if (not numeric_marker_is_content(text, position)
@@ -24,6 +25,7 @@ def split_definition_bridges(text: str) -> list[str]:
             suffix = re.match(r'(?:\s*\[\d{1,4}\](?:' + _CITATION_TARGET + r')?)*', text[match.end():])
             boundaries.append(match.end() + suffix.end())
     boundaries.append(len(text))
+    boundaries = sorted(set(boundaries))
     return [text[a:b].strip() for a, b in zip(boundaries, boundaries[1:]) if text[a:b].strip()]
 
 
@@ -49,6 +51,7 @@ def citation_sentence_spans(text: str) -> list[tuple[int, int]]:
             boundaries.append(end)
     if boundaries[-1] != len(text):
         boundaries.append(len(text))
+    boundaries = sorted(set([*boundaries, *explicit_clause_boundaries(text)]))
     return list(zip(boundaries, boundaries[1:]))
 
 
