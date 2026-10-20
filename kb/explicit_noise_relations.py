@@ -108,7 +108,7 @@ def iid_relation_covered(claim: str, evidence: str) -> bool:
 
 def signal_dependency_covered(claim: str, evidence: str) -> bool:
     """Keep signal dependence separate from the accompanying noise premise."""
-    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|表现出|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal[^.;\n]{0,65}(?:statistical\s+dependenc|statistically\s+predictable|not\s+pixel[- ]wise\s+independent|\bcorrelat)', claim, re.I)
+    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|表现出|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal[^.;\n]{0,65}(?:statistical\s+dependenc|statistically\s+(?:predictable|dependent)|not\s+pixel[- ]wise\s+independent|\bcorrelat)', claim, re.I)
     if not requested:
         return True
     pattern = (r'\bsignal\s*,?\s*(?:however\s*,?\s*)?(?:is\s+assumed\s+to\s+contain\s+(?:statistical\s+)?dependencies|'
@@ -124,6 +124,12 @@ def white_noise_restriction_covered(claim: str, evidence: str) -> bool:
                r'[^,.;。；\n]{0,55}\b(?:white\s+noise|independent\s+noise)|'
                r'(?:仅|只能|只)(?:适用|支持|处理)[^，,。.;\n]{0,35}(?:白噪声|独立噪声)')
     requested = any(not _negated_relation_context(claim, m) for m in re.finditer(pattern, claim, re.I))
+    denial_zh = r'(?:并不|并未|没有|不|未)(?:被)?(?:限制|限定)(?:为|于|在)[^，,。；\n]{0,35}(?:白噪声|独立噪声)'
+    denied = bool(re.search(denial_zh, claim)) or any(_negated_relation_context(claim, m) for m in re.finditer(pattern, claim, re.I))
+    if denied:
+        explicit_denial = bool(re.search(denial_zh, evidence)) or any(_negated_relation_context(evidence, m) for m in re.finditer(pattern, evidence, re.I))
+        applicability = r'(?:work\w*\s+with|handl\w*|applicable\s+to|supports?|allows?)[^.;\n]{0,55}(?:spatially\s+(?:correlated|structured)\s+noise|structured\s+noise)|(?:适用|支持|处理)[^。；\n]{0,25}(?:空间相关|结构化)噪声'
+        return explicit_denial or any(not _negated_relation_context(evidence, m) for m in re.finditer(applicability, evidence, re.I))
     return not requested or any(not _negated_relation_context(evidence, m) for m in re.finditer(pattern, evidence, re.I))
 
 
@@ -160,7 +166,7 @@ def sampling_ability_covered(claim: str, evidence: str) -> bool:
 def known_noise_model_covered(claim: str, evidence: str) -> bool:
     """Sampling ability alone does not explicitly state a known noise model."""
     scope = bool(re.search(r'noise\s+model|噪声模型', claim, re.I))
-    known = re.compile(r'\bknown(?:,?\s+samplable)?\s+noise\s+(?:model|distribution)|已知(?:的)?[、，]?(?:(?:且)?(?:(?:可(?:以)?|能(?:够)?)从中采样的|可采样的))?噪声(?:模型|分布)' + (r'|\bknown\s+model\b' if scope else ''), re.I)
+    known = re.compile(r'\bknown(?:,?\s+samplable)?\s+(?:statistical\s+)?noise\s+(?:model|distribution)|已知(?:的)?[、，]?(?:(?:且)?(?:(?:可(?:以)?|能(?:够)?)从中采样的|可采样的))?噪声(?:模型|分布)' + (r'|\bknown\s+model\b' if scope else ''), re.I)
 
     known = re.compile(known.pattern + r'|noise\s+(?:operator|distribution|model)[^.;\n]{0,35}\bis\s+known\b|噪声(?:分布|模型)[^。；\n]{0,15}(?:是|为)已知', re.I)
 

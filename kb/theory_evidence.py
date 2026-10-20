@@ -240,6 +240,12 @@ def measurement_conditions_covered(claim: str, evidence: str) -> bool:
     conditional_noise = r'noise[^.;。；\n]{0,65}(?:conditionally\s+(?:pixel[- ]wise\s+)?independent|independent\s+conditional\s+on)|噪声[^。；\n]{0,45}条件独立'
     if re.search(conditional_noise, claim, re.I) and not re.search(conditional_noise, evidence, re.I):
         return False
+    if re.search(r'noise|噪声', claim, re.I) and re.search(r'independent|独立', claim, re.I):
+        condition = r'conditional\s+on\s+\$?([A-Za-z])(?![A-Za-z])|给定\s*\$?([A-Za-z])(?![A-Za-z])'
+        wanted = {next(v for v in m if v) for m in re.findall(condition, claim, re.I)}
+        supplied = {next(v for v in m if v) for m in re.findall(condition, evidence, re.I)}
+        if not wanted <= supplied:
+            return False
     if re.search(r"unbiased|无偏", claim, re.I):
         expectation = r"E\s*\[\s*[xy]\s*(?:\|\s*[xy]\s*)?\]"
         relation = re.compile(

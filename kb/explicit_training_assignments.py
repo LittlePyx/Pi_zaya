@@ -42,7 +42,7 @@ def _named_training_roles_covered(claim: str, evidence: str) -> bool:
     description = r'(?:(?i:the|a|an|observed|noisy|singly[- ]noisy|doubly[- ]noisy|unseen|clean|image|observation|input|target)\s+){0,7}'
     variable = r'\$?([A-Z])(?![A-Za-z0-9_])\$?'
     def roles(text: str, role: str) -> set[str]:
-        prefix = rf'(?i:(?:(?:training|network|regression)\s+)?{role}\s+(?:is|are|=)\s+)'
+        prefix = rf'(?i:(?:(?:training|network|regression)\s+)?{role}\s+(?:is|are|=)\s+(?:(?:therefore|thus|actually|indeed)\s+)?)'
         return set(re.findall(prefix + description + variable, text))
     def predictions(text: str) -> set[tuple[str, str]]:
         return {(m[1], m[2]) for m in re.finditer(r'(?i:predicts?)\s+'+description+variable+r'\s+(?i:given|from)\s+'+description+variable, text)}
@@ -60,11 +60,17 @@ def _named_training_roles_covered(claim: str, evidence: str) -> bool:
     source_inputs = roles(evidence,'input') | set(re.findall(r'(?i:given)\s+'+variable+r'\s+(?i:as\s+input)\b',evidence))
     if wanted_inputs and not wanted_inputs <= source_inputs:
         return False
-    estimated = set(re.findall(r'(?i:(?:network\s+)?output\s+is\s+(?:an?\s+)?estimate\s+of\s+)' + variable, claim))
+    estimated = set(re.findall(r'(?i:(?:network\s+)?output\s+is\s+(?:an?\s+)?estimate\s+of\s+)' + variable + r'(?!\s*\[)', claim))
     if estimated and not estimated <= source_targets:
         return False
-    for match in re.finditer(variable + r'\s+(?i:enters?\s+(?:the\s+)?training\s+target)', claim):
-        if match[1] not in source_targets:
+    expectations = re.findall(r'(?i:estimate\s+of\s+)\$?\s*(?:\\mathbb\{E\}|E)\s*\[\s*'+variable+r'\s*(?:\||\\mid)\s*'+variable+r'\s*\]', claim)
+    for target, conditioning in expectations:
+        literal = rf'(?:\\mathbb\{{E\}}|E)\s*\[\s*\$?{target}\$?\s*(?:\||\\mid)\s*\$?{conditioning}\$?\s*\]'
+        if not re.search(literal, evidence) and not ((target, conditioning) in source_maps and re.search(r'\bL\s*_?\s*2\b|squared\s+(?:error|loss)', evidence, re.I)):
+            return False
+    target_use = variable + r'\s+(?i:enters?\s+(?:the\s+)?training\s+target)|(?:如何)?用\s*'+variable+r'\s*构造训练目标'
+    for match in re.finditer(target_use, claim):
+        if next(v for v in match.groups() if v) not in source_targets:
             return False
     descriptive_map = re.search(r'(?i:train\w*\s+to\s+map\s+(?:a\s+)?doubly[- ]noisy\s+input\s+to\s+(?:a\s+)?singly[- ]noisy\s+output)', claim)
     if descriptive_map and not (source_maps or (re.search(r'singly[- ]noisy[^.;\n]{0,70}training\s+target', evidence, re.I) and re.search(r'doubly[- ]noisy[^.;\n]{0,70}input', evidence, re.I))):
@@ -147,9 +153,9 @@ def prediction_average_covered(claim: str, evidence: str) -> bool:
 
 def noise_augmentation_training_covered(claim: str, evidence: str) -> bool:
     """An experiment's noise level is not an additional-noise training recipe."""
-    if not re.search(r'\btrain\w*\b|\bnetwork\b|训练|合成噪声|(?:synthetic|additional)\s+(?:synthetic\s+)?noise', claim, re.I):
+    if not re.search(r'\btrain\w*\b|\bnetwork\b|训练|合成噪声|(?:synthetic|additional|sampled|sampling|samples?|new)\s+(?:synthetic\s+)?noise', claim, re.I):
         return True
-    addition = r'\b(?:adds?|added|adding|augment\w*|inject\w*)\b[^.;。\n]{0,65}noise|(?:再|额外|进一步)(?:加入|添加|叠加)(?:合成)?噪声|(?:加入|添加|叠加)合成噪声'
+    addition = r'\b(?:adds?|added|adding|augment\w*|inject\w*)\b[^.;。\n]{0,65}noise|noise[^.;。\n]{0,65}\b(?:adds?|adding)\s+it\s+to\b|(?:再|额外|进一步)(?:加入|添加|叠加)(?:合成)?噪声|(?:加入|添加|叠加)合成噪声'
     if not re.search(addition, claim, re.I):
         return True
     operation = (addition + r'|(?:create|form)\w*[^.;\n]{0,45}noisier\s+version[^.;\n]{0,55}[A-Z]\s*(?:≜|:=|=)\s*[A-Z]\s*\+\s*[A-Z]')

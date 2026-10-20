@@ -372,7 +372,8 @@ def prepare_claim_passage_plan(rec: dict, ref_pack: dict | None, answer: str) ->
 def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) -> tuple[dict, str]:
     """Give an uncited sentence its own verified passage within a cited paragraph.
 
-    Only distribute one existing paragraph-end document coordinate. Do not
+    Only distribute one existing paragraph-end document coordinate, including
+    its repeated markers earlier in the paragraph. Do not
     infer a source for mixed-source, uncited, mathematical or code paragraphs.
     Raw generation and retrieved evidence remain unchanged.
     """
@@ -391,7 +392,7 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
             continue
         markers = [m for m in re.finditer(r'(?<!\[)\[(\d{1,4})\](?!\])', text)
                    if not numeric_marker_is_content(text, m.start())]
-        if len(markers) != 1 or not re.fullmatch(r'[\s.!?。！？]*', text[markers[0].end():]):
+        if not markers or len({int(m[1]) for m in markers}) != 1 or not re.fullmatch(r'[\s.!?。！？]*', text[markers[-1].end():]):
             continue
         number = int(markers[0][1])
         if not 0 < number <= len(canonical):
@@ -417,9 +418,18 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
                     verified.append((_passage_slot(source_slots[0], passage, number), passage))
         if len({p['block_id'] for _, p in verified}) < 2:
             continue
+        cited_blocks = set()
+        primary_blocks = {slot.get('block_id') for slot in source_slots
+                          if slot.get('evidence_selection_reason') != 'claim_source_passage'}
+        if len(markers) > 1:
+            for marker in markers:
+                cited_claim = _citation_claim_context(text, marker.start(), marker.end())
+                supported = {p['block_id'] for slot, p in verified if _slot_supports(cited_claim, slot)}
+                if len(supported) == 1:
+                    cited_blocks.update(supported)
         for start, end in citation_sentence_spans(text):
             claim = text[start:end].strip()
-            if start <= markers[0].start() < end or len(claim) < 20:
+            if any(start <= marker.start() < end for marker in markers) or len(claim) < 20:
                 continue
             losses = set(re.findall(r'\bL\s*(\d+)\b', claim, re.I))
             matches = [(slot, p) for slot, p in verified
@@ -439,7 +449,11 @@ def prepare_claim_passage_render(rec: dict, ref_pack: dict | None, answer: str) 
                     matches = [(slot, p)]
             if len({p['block_id'] for _, p in matches}) != 1:
                 continue
-            slot, _ = matches[0]
+            slot, passage = matches[0]
+            # Repeated coordinates already cover the primary excerpt. Add a
+            # marker only to expose a separately located supporting passage.
+            if passage['block_id'] in cited_blocks or (len(markers) > 1 and passage['block_id'] in primary_blocks):
+                continue
             if not any(s is slot for s in slots):
                 slots.append(slot)
             # Binding stores the precise sentence, not the whole paragraph.

@@ -40,7 +40,7 @@ def explicit_source_details_covered(claim: str, evidence: str) -> bool:
         neighbor = r'neighbor\w*|surrounding|another\s+pixel|other\s+pixel|邻域|邻近|周围|其他像素'
         if not (re.search(neighbor, claim, re.I) and re.search(neighbor, evidence, re.I) and re.search(r'cop\w*|replac\w*|复制|替换', evidence, re.I)):
             return False
-    concepts = (r'gene\s+expression|基因表达', r'individual\s+molecules|RNA\s+molecules|单个分子', r'hyperparameters?|超参数')
+    concepts = (r'gene\s+expression|基因表达', r'individual\s+molecules|RNA\s+molecules|单个分子', r'hyperparameters?|超参数', r'numerical\s+issues|数值问题', r'\(?quasi\)?[- ]?\s*static\s+scenes|[（(]?准[）)]?静态')
     if any(re.search(p, claim, re.I) and not re.search(p, evidence, re.I) for p in concepts):
         return False
     # A dependence claim about the loss gap needs that objective, not a
