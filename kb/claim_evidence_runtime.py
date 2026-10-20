@@ -1,4 +1,5 @@
 from __future__ import annotations
+from kb.explicit_technique_enumeration import technique_pair_quantities
 
 from kb.explicit_noise_relations import iid_relation_covered
 from kb.claim_pruning_format import remove_new_unpaired_bold, repair_pruned_line_emphasis
@@ -740,6 +741,7 @@ def _is_high_risk_claim(unit: str) -> bool:
         return False
     return bool(
         _meaningful_numbers(plain)
+        or re.search(r'独立|同分布|零均值|无偏|\b(?:unbiased|independent)\b|\bi\.\s*i\.\s*d\.(?!\w)', plain, re.I)
         or has_checkable_action_fact(plain)
         or _RISK_RE.search(plain)
         or re.search(
@@ -1486,7 +1488,7 @@ def _support_score(
         allow_comparison_scope=allow_comparison_scope,
     )
     if claim_quantities:
-        evidence_quantities = _system_a_fact_quantities(quantity_evidence)
+        evidence_quantities = _system_a_fact_quantities(quantity_evidence) | technique_pair_quantities(quantity_claim, quantity_evidence)
         if not all(
             _quantity_is_covered(quantity, evidence_quantities)
             for quantity in claim_quantities

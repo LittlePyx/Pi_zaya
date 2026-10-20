@@ -41,7 +41,8 @@ def _literal_quote(source: str, row: dict) -> str:
 def scope_explicit_source_facts(answer: str, *, citation_plan: dict | None, answer_hits: list[dict] | None, slot_hit_numbers) -> str:
     """Omit explicitly unsupported additions before the answer quality gate.
 
-    Only a cited source (or one unambiguous paragraph-end source) is eligible.
+    Only a cited source, one paragraph-end source, or a single verified source
+    shared by every supplied hit is eligible for this negative check.
     Source text must be supplied by the existing plan/retrieval pack and pass
     complete physical/literal verification. No new evidence or fact is added.
     """
@@ -68,19 +69,25 @@ def scope_explicit_source_facts(answer: str, *, citation_plan: dict | None, answ
         for row in meta.get('source_passages') or []:
             if isinstance(row,dict) and (q:=_literal_quote(source,row)):
                 quotes[identity].append(q)
+    single_source = set(quotes) if len(quotes)==1 and {_path(str((h.get('meta') or {}).get('source_path') or '')) for h in hits}==set(quotes) else set()
     removals=[]
     for paragraph in re.finditer(r'[^\n]+(?:\n(?![ \t]*\n)[^\n]+)*',answer):
         body=paragraph[0]
         if re.search(r'(?m)^\s*(?:>|```|~~~|\$\$)',body):continue
         numbers=[int(m[1]) for m in _CITE.finditer(body) if not numeric_marker_is_content(answer,paragraph.start()+m.start())]
         inherited=set().union(*(sources.get(n,set()) for n in numbers)) if numbers else set()
+        if not numbers and not body.lstrip().startswith(('"', "'", '“', '‘')):
+            inherited = single_source
         for start,end in citation_sentence_spans(body):
             unit=body[start:end]
             own=[int(m[1]) for m in _CITE.finditer(unit) if not numeric_marker_is_content(answer,paragraph.start()+start+m.start())]
             paths=set().union(*(sources.get(n,set()) for n in own)) if own else inherited if len(inherited)==1 else set()
             if not paths or retrieval_limit_claim(unit) or numeric_marker_is_content(answer,paragraph.start()+start):continue
             evidence=[(q,names[p]) for p in paths for q in quotes.get(p,[])]
-            if evidence and not any(source_attribution_covered(unit,q,name) for q,name in evidence):
+            # Routing markers precede citation formatting. They are not method
+            # names (e.g. SUPPORT/DOC) in a paper's baseline enumeration.
+            claim = re.sub(r'\[\[SUPPORT:DOC-\d+\]\]', lambda m: m[0] if numeric_marker_is_content(unit,m.start()) else '', unit)
+            if evidence and not any(source_attribution_covered(claim,q,name) for q,name in evidence):
                 removals.append((paragraph.start()+start,paragraph.start()+end))
     for start,end in reversed(removals):answer=answer[:start]+answer[end:]
     return answer.strip()

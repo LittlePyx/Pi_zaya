@@ -1,4 +1,5 @@
 from __future__ import annotations
+from kb.explicit_technique_enumeration import technique_pair_quantities
 
 import difflib
 import re
@@ -1551,7 +1552,7 @@ def assess_system_a_hit_binding(
         selected_evidence,
         allow_comparison_scope=verified_multi_source_group,
     )
-    evidence_fact_quantities = _system_a_fact_quantities(selected_evidence)
+    evidence_fact_quantities = _system_a_fact_quantities(selected_evidence) | technique_pair_quantities(claim, selected_evidence)
     missing_fact_quantities = {
         quantity
         for quantity in claim_fact_quantities

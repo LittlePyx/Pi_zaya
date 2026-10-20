@@ -105,7 +105,7 @@ def iid_relation_covered(claim: str, evidence: str) -> bool:
 
 def signal_dependency_covered(claim: str, evidence: str) -> bool:
     """Keep signal dependence separate from the accompanying noise premise."""
-    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定)\s*){0,4}(?:相关|依赖)|\bsignal\s+(?:is\s+)?correlated', claim, re.I)
+    requested = re.search(r'信号(?:(?:中|具有|有|存在|的|统计|一定|某种|某些|一定程度(?:的)?)\s*){0,4}(?:相关|依赖)|\bsignal\s+(?:is\s+)?correlated', claim, re.I)
     if not requested or not re.search(r'噪声[^。；;]{0,30}独立|noise[^.;]{0,40}independent', claim, re.I):
         return True
     pattern = (r'\bsignal\s*,?\s*(?:however\s*,?\s*)?(?:is\s+assumed\s+to\s+contain\s+(?:statistical\s+)?dependencies|'
@@ -171,6 +171,9 @@ def known_noise_model_covered(claim: str, evidence: str) -> bool:
 
 def named_synthetic_sample_covered(claim: str, evidence: str) -> bool:
     """A distribution statement about N cannot label N as the synthetic sample."""
+    labels = re.findall(r'(?i:synthetic\s+(?:noise\s+)?sample|synthetic\s+noise|合成(?:噪声)?样本|合成噪声)\s*\$?([A-Z])(?![A-Za-z])', claim)
+    if any(not re.search(rf'(?<![A-Za-z0-9_]){name}(?![A-Za-z0-9_])', evidence) for name in labels):
+        return False
     named = re.findall(r'(?i:synthetic\s+(?:noise\s+)?sample|合成噪声样本)\s*[（(]?\s*\$?([A-Za-z])\s*(?:\\sim|∼|~)', claim)
     for variable in named:
         name = re.escape(variable)

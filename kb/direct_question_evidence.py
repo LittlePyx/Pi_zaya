@@ -5,6 +5,7 @@ from pathlib import Path
 
 from kb.training_observation_scope import scope_training_observation_answer
 from kb.source_domain_terms import normalize_verified_noise_sampling_terms
+from kb.source_question_facets import measurement_conditions_question
 from kb.source_fact_scope import scope_explicit_source_facts
 from kb.source_blocks import extract_equation_number, load_source_blocks, normalize_match_text
 from kb.citation_sentences import citation_sentence_spans
@@ -350,6 +351,12 @@ def _architecture_relation_score(text: str) -> int:
 
 
 def _output_relation_score(text: str) -> int:
+    if all(re.search(pattern, text, re.I) for pattern in (
+        r"(?:noisy\s+observation|input).{0,100}y\s*=\s*x\s*\+\s*v",
+        r"(?:train|learn).{0,40}residual\s+mapping",
+        r"x\s*=\s*y\s*(?:−|-|\\minus)\s*R\s*\(\s*y\s*\)",
+    )):
+        return 24
     if not all(
         re.search(pattern, text, re.I)
         for pattern in (
@@ -601,6 +608,14 @@ def direct_question_evidence_hits(
         -row[0], row[1],
     ))
     chosen = candidates[0][2]
+    if statement and measurement_conditions_question(prompt):
+        # A clipped proposition must remain clipped. Carry a separately located
+        # literal premise when the same paper actually states it elsewhere.
+        premises = [i for i, b in enumerate(blocks) if b.get('kind') == 'paragraph'
+                    and not _STATEMENT.match(normalize_match_text(str(b.get('raw_text') or '')))
+                    and 'reference' not in str(b.get('heading_path') or '').lower()
+                    and source_facet_score(prompt, str(b.get('raw_text') or '')) >= 24]
+        chosen = list(dict.fromkeys([chosen[0], *premises, *chosen[1:]]))
     if requests_source_facets(prompt) and not statement and not equation_numbers:
         chosen = list(dict.fromkeys(i for _, _, bundle in candidates for i in bundle))
     if equation_numbers and not statement:
@@ -662,6 +677,7 @@ def direct_question_evidence_hits(
             continue
         out.append(
             {
+                "id": f"{block['doc_id']}:source-block:{block['block_id']}",
                 "text": text,
                 "score": 1000.0 - len(out),
                 "meta": {

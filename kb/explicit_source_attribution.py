@@ -6,6 +6,7 @@ from kb.evidence_term_mapping import _METHOD_IDENTITY_EQUIVALENTS, specific_meth
 from kb.citation_sentences import citation_sentence_spans
 from kb.explicit_training_assignments import explicit_training_assignments_covered
 from kb.explicit_noise_relations import named_synthetic_sample_covered
+from kb.explicit_source_details import explicit_source_details_covered
 
 
 _MODEL_ESTIMATION = re.compile(r'estimat\w*\s+(?:(?:the|a|an|unknown)\s+){0,3}noise\s+(?:model|distribution)|noise\s+(?:model|distribution)\s+(?:is|are|can\s+be|may\s+be)\s+(?:estimated|learned)|噪声(?:模型|分布)[^。；;\n]{0,20}(?:估计|估测)|估计(?:的)?未知量', re.I)
@@ -41,7 +42,7 @@ def _owned_predicate(evidence: str, source_name: str, predicate) -> bool:
 
 def source_attribution_covered(claim: str, evidence: str, source_name: str) -> bool:
     """Keep named displays, baseline lists and training provenance in the quote."""
-    if not explicit_training_assignments_covered(claim, evidence) or not named_synthetic_sample_covered(claim, evidence):
+    if not explicit_training_assignments_covered(claim, evidence) or not named_synthetic_sample_covered(claim, evidence) or not explicit_source_details_covered(claim, evidence):
         return False
     named_results = ((r'proposition|命题', 'proposition'), (r'theorem|定理', 'theorem'), (r'lemma|引理', 'lemma'), (r'corollary|推论', 'corollary'))
     for aliases, _kind in named_results:
@@ -56,6 +57,19 @@ def source_attribution_covered(claim: str, evidence: str, source_name: str) -> b
     correction = r'correction\s+step|校正步骤|修正步骤'
     if re.search(correction, claim, re.I) and not re.search(correction + r'|doubl\w*[^.;\n]{0,70}subtract\w*', evidence, re.I):
         return False
+    exclusion = r'receptive\s+field[^.;。\n]{0,140}(?:exclud\w*|except\s+for)|(?:target|center)\s+(?:pixel|value)[^.;\n]{0,60}(?:invisible|not\s+visible|never\s+visible)|blind[- ]?\s*spot[^.;\n]{0,40}removes?[^.;\n]{0,30}input\s+pixel|感受野[^。；\n]{0,50}(?:排除|不包含)'
+    if re.search(exclusion, claim, re.I):
+        direct = re.search(r'receptive\s+field[^.;\n]{0,80}exclud\w*[^.;\n]{0,35}(?:pixel\s+itself|center\s+pixel)|(?:affected\s+by|depends\s+on)[^.;\n]{0,110}except\s+(?:for\s+)?(?:the\s+)?pixel\s+itself|center\s+(?:pixel|value)[^.;\n]{0,40}(?:blocked|removed|excluded)|感受野[^。；\n]{0,50}(?:排除|不包含)[^。；\n]{0,15}(?:中心|目标)像素', evidence, re.I)
+        negated = re.search(r'\b(?:not|never)\s+(?:exclud\w*|blocked|removed)|without\s+(?:a\s+)?blind[- ]spot|不(?:会)?排除', evidence, re.I)
+        if not direct or negated:
+            return False
+    clean_independence = r'(?:差值|difference|variance\s+term|噪声方差项)[^.;。；\n]{0,45}(?:does\s+not\s+depend\s+on|is\s+independent\s+of|不依赖于?)[^.;。；\n]{0,25}(?:clean\s+(?:reference|target)|ground[- ]truth|干净(?:参照|目标))'
+    if re.search(clean_independence, claim, re.I) and not re.search(clean_independence, evidence, re.I):
+        return False
+    for number, panel in re.findall(r'(?:\b(?:Figure|Fig\.?)|图)\s*(\d+)\s*\(([a-z])\)\s*(?:states?|shows?|illustrates?|depicts?|说明|显示|表明)', claim, re.I):
+        label = rf'(?:\b(?:Figure|Fig\.?)|图)\s*{number}(?!\d)'
+        if not (re.search(label + rf'\s*(?:\({panel}\)|{panel}\b)', evidence, re.I) or (re.search(label, evidence, re.I) and re.search(rf'\({panel}\)', evidence, re.I))):
+            return False
     for concept in (r'partial\s+convolutions?|部分卷积', r'blind[- ]?spot|盲点', r'model\s+uncertainty|模型不确定性', r'statistical\s+independence|统计独立性', r'\bvariance\b|方差'):
         if re.search(concept, claim, re.I) and not re.search(concept, evidence, re.I):
             return False
@@ -64,7 +78,7 @@ def source_attribution_covered(claim: str, evidence: str, source_name: str) -> b
         return False
     # A passage about the same method does not substantiate an attributed
     # verbatim quotation. Preserve case and all logical words inside it.
-    if re.search(r'paper|authors?|abstract|explicitly|原文|作者|摘要', claim, re.I) and not re.search(r'\b(?:not|never)\s+(?:state|say|claim)|并未|没有(?:说|声称|指出)', claim, re.I):
+    if re.search(r'paper|authors?|abstract|caption|figure|related[- ]work|explicitly|原文|作者|摘要|图注', claim, re.I) and not re.search(r'\b(?:not|never)\s+(?:state|say|claim)|并未|没有(?:说|声称|指出)', claim, re.I):
         # Token boundaries preserve words, variable case and logical operators,
         # while mathematical punctuation can have typesetting spaces.
         tokens = lambda value: re.findall(r'\w+|[^\w\s]', value.replace('’', "'").replace('‘', "'"))
@@ -108,7 +122,7 @@ def source_attribution_covered(claim: str, evidence: str, source_name: str) -> b
     if re.search(r'partition|划分', claim, re.I) and re.search(r'(?<![A-Za-z])J(?![A-Za-z])', claim):
         if not (re.search(r'partition|划分', evidence, re.I) and re.search(r'(?<![A-Za-z])J(?![A-Za-z])', evidence)):
             return False
-    if re.search(r'\bbaselines?\b|\be\.g\.|\breported\s+comparisons?\b|比较基线|对比基线', claim, re.I):
+    if re.search(r'\bbaselines?\b|\be\.g\.|\breported\s+comparisons?\b|hyperparameters?|比较基线|对比基线|超参数', claim, re.I):
         wanted = specific_method_identities(claim)
         present = specific_method_identities(evidence)
         present.update(name for name in wanted if re.search(rf'(?<![A-Za-z0-9]){re.escape(name)}(?![A-Za-z0-9])', source_name, re.I))

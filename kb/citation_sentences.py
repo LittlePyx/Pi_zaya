@@ -6,7 +6,12 @@ from kb.citation_marker_context import numeric_marker_is_content
 from kb.citation_table_context import cited_table_cell_span
 
 _CITATION_TARGET = r'\(\#[^\s)]+(?:\s+"[^"]*")?\)'
-_DEFINITION_BRIDGE = r",(?=\s*(?:\[\d{1,4}\](?:" + _CITATION_TARGET + r")?\s*)*(?:giving|yielding|producing)\b[^.;\n]{0,160}(?:\\triangleq|:=|≜|\b[A-Z]\s*=))"
+_DEFINITION_BRIDGE = (
+    r",(?=\s*(?:\[\d{1,4}\](?:" + _CITATION_TARGET + r")?\s*)*"
+    r"(?:(?:giving|yielding|producing|creating|forming|(?:the\s+(?:method|procedure)|we(?:\s+then)?)\s+(?:creates?|forms?))"
+    r"\b[^.;\n]{0,160}(?:\\triangleq|:=|≜|\b[A-Z]\s*=)|"
+    r"where\s+\$?[A-Z]\$?\s+is\s+(?:an?\s+)?(?:additional\s+)?synthetic\s+noise\s+sample\b))"
+)
 
 
 def split_definition_bridges(text: str) -> list[str]:

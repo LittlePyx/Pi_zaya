@@ -3,6 +3,37 @@ from __future__ import annotations
 import re
 
 
+def _positive_clean_supervision(text: str) -> bool:
+    pattern = r'(?:supervis\w*|train\w*|target\s+(?:is\s+)?defined\s+against|监督|训练)[^.;。；\n]{0,95}(?:clean\s+(?:targets?|ground[- ]truth(?:\s+data)?)|干净(?:目标|参照))'
+    for match in re.finditer(pattern, text, re.I):
+        clause = re.split(r'[.;。；\n]', text[:match.end()])[-1]
+        if not re.search(r'\b(?:not|never|without|neither)\b|rather\s+than|无需|不用|不(?:需要|使用)', clause, re.I):
+            return True
+    return False
+
+
+def _training_supervision_covered(claim: str, evidence: str) -> bool:
+    synthetic_target = re.search(r'(?:synthetic\s+noise|noise\s+sample|合成噪声)[^.;。；\n]{0,90}(?:construct\w*\s+(?:the\s+)?training\s+targets?|构造训练目标)', claim, re.I)
+    if synthetic_target:
+        direct = r'corrupt\w*[^.;\n]{0,50}training\s+targets?|(?:synthetic\s+noise|noise\s+samples?)[^.;\n]{0,45}(?:is|are)\s+(?:the\s+)?training\s+targets?|合成噪声[^。；\n]{0,25}(?:是|作为)训练目标'
+        if not any(not re.search(r'\b(?:not|never|without)\b|不(?:会|是|作为)', evidence[max(0,m.start()-35):m.start()], re.I) for m in re.finditer(direct, evidence, re.I)):
+            return False
+    if _positive_clean_supervision(claim):
+        parts = re.split(r'[.;。；\n]', evidence)
+        prior = r'\b(?:traditionally|traditional|previous|other|recent|methods)\b|传统|其他方法'
+        prior_claim = bool(re.search(prior, claim, re.I) and not re.search(r'\b(?:our|we|this\s+method)\b|本方法|我们', claim, re.I))
+        proof = any((prior_claim or not re.search(prior, part, re.I))
+                    and (_positive_clean_supervision(part) or (re.search(r'noisy[- ]clean\s+training\s+image[^.;]{0,30}pairs', part, re.I) and not re.search(r'\b(?:not|without|neither)\b|无需|不需要', part, re.I)))
+                    for part in parts)
+        if not proof:
+            return False
+    repeat = re.search(r'(?:train\w*|network|训练|网络)[^.;。；\n]{0,160}(?:second\s+noisy\s+observation|第二次[^。；\n]{0,12}(?:噪声|带噪)观测)', claim, re.I)
+    if repeat and not re.search(r'\b(?:not|never|without)\b|不|没有', repeat[0], re.I):
+        if not re.search(r'independent\s+pairs?\s+of\s+noisy\s+(?:images?|observations?)|source\s+image\s+twice|second\s+noisy\s+observation|独立[^。；]{0,15}噪声图像对', evidence, re.I):
+            return False
+    return True
+
+
 def _named_training_roles_covered(claim: str, evidence: str) -> bool:
     description = r'(?:(?i:the|a|an|observed|noisy|singly[- ]noisy|doubly[- ]noisy|unseen|clean|image|observation)\s+){0,7}'
     variable = r'\$?([A-Z])(?![A-Za-z0-9_])\$?'
@@ -45,7 +76,7 @@ def explicit_training_assignments_covered(claim: str, evidence: str) -> bool:
     Shared mask symbols in a loss do not define the training pair. This only
     checks already written definitions; it supplies no positive entailment.
     """
-    if not _named_training_roles_covered(claim,evidence):
+    if not _named_training_roles_covered(claim,evidence) or not _training_supervision_covered(claim,evidence):
         return False
     feeding = r'feed\w*[^.;。\n]{0,50}Bernoulli[- ]sampled|fed[^.;。\n]{0,50}Bernoulli[- ]sampled|Bernoulli[- ]sampled[^.;。\n]{0,80}(?:fed|feeding)|伯努利采样[^。；\n]{0,30}(?:送入|输入网络)'
     if re.search(feeding, claim, re.I) and not re.search(feeding, evidence, re.I):

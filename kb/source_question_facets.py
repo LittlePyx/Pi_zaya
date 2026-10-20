@@ -24,6 +24,35 @@ def _loss_statistic_question(prompt: str) -> bool:
     return bool(re.search(r'loss|损失', prompt, re.I) and re.search(r'statistics?|scalar\s+estimation|统计量|标量估计', prompt, re.I))
 
 
+def _prediction_supervision_question(prompt: str) -> bool:
+    return bool(re.search(r'predicted\s+quantity|predicts?\s+a\s+residual|预测(?:量|残差)', prompt, re.I) and re.search(r'train\w*|supervis\w*|训练|监督', prompt, re.I))
+
+
+def _blind_spot_exclusion_question(prompt: str) -> bool:
+    return bool(re.search(r'blind[- ]spot|盲点', prompt, re.I) and re.search(r'identity|exclud\w*|恒等|排除', prompt, re.I))
+
+
+def _noise_statistics_question(prompt: str) -> bool:
+    return bool(re.search(r'noise|噪声|signal|信号', prompt, re.I) and re.search(r'independen\w*|assumptions?|独立|统计假设|相关噪声', prompt, re.I))
+
+
+def measurement_conditions_question(prompt: str) -> bool:
+    return bool(re.search(r'unbiased\w*|无偏', prompt, re.I) and re.search(r'conditional\s+independen\w*|条件独立', prompt, re.I))
+
+
+def _noise_statistics_score(prompt: str, text: str) -> int:
+    if not _noise_statistics_question(prompt):
+        return 0
+    condition = r'noise(?:\s+[a-z])?\s+(?:(?:is|to\s+be)\s+)?(?:conditionally\s+)?pixel[- ]wise\s+independent|noise\s+is\s+independent\s+conditional\s+on\s+(?:the\s+)?(?:true\s+)?signal'
+    for match in re.finditer(condition, text, re.I):
+        prefix = text[max(0, match.start()-220):match.start()]
+        if re.search(r'\bwe\s+(?:assume|make\s+two\s+simple\s+statistical\s+assumptions|use\s+groups\s+of\s+features)', prefix, re.I) and not re.search(r'\b(?:not|never)\s+assume', prefix, re.I):
+            return 26 if re.search(r'make\s+two\s+simple\s+statistical\s+assumptions', prefix, re.I) else 24
+    if re.search(r'\bwe\s+propose', text, re.I) and re.search(r'noise\s+exhibits\s+statistical\s+independence\s+across', text, re.I) and re.search(r'signal\s+exhibits\s+some\s+correlation', text, re.I):
+        return 22
+    return 0
+
+
 def _additive_training_pair_question(prompt: str) -> bool:
     return bool(re.search(r"additive|加性", prompt, re.I) and not re.search(r"non[- ]?additive|非加性", prompt, re.I)
                 and re.search(r"\binput\b|输入", prompt, re.I)
@@ -73,7 +102,7 @@ def noise_model_premise_priority(prompt: str, text: str) -> int:
 
 
 def requests_source_facets(prompt: str) -> bool:
-    return bool(_training_speed_question(prompt) or _loss_statistic_question(prompt) or re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) or requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
+    return bool(measurement_conditions_question(prompt) or _noise_statistics_question(prompt) or _prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt) or _training_speed_question(prompt) or _loss_statistic_question(prompt) or re.search(r'\bJ\s*[- ]\s*invarian', prompt, re.I) or requests_comparison_boundary(prompt) or _NOISE_MODEL.search(prompt) or _CORRELATED.search(prompt) or requests_bernoulli_training_requirement(prompt)
                 or (_CORRECTION.search(prompt) and _OUTPUT.search(prompt))
                 or _DROPOUT_PHASE.search(prompt) or _additive_training_pair_question(prompt))
 
@@ -117,6 +146,22 @@ def _training_pair_procedure(text: str) -> bool:
 
 def source_facet_score(prompt: str, text: str) -> int:
     """Select explicit method premises/operations; never generate an answer."""
+    if measurement_conditions_question(prompt):
+        for start, end in citation_sentence_spans(text):
+            sentence = text[start:end]
+            if re.search(r'noise[^.;\n]{0,70}conditionally\s+independent\s+between\s+sets\s+of\s+dimensions', sentence, re.I) and not re.search(r'\b(?:not|never|false|incorrect)\b', sentence, re.I):
+                return 24
+    statistical = _noise_statistics_score(prompt, text)
+    if statistical:
+        return statistical
+    if _prediction_supervision_question(prompt):
+        if re.search(r'noisy[- ]clean\s+training\s+image[^.;]{0,30}pairs', text, re.I) and re.search(r'train\w*\s+a\s+residual\s+mapping', text, re.I):
+            return 26
+        if re.search(r'predict\s+the\s+residual\s+image', text, re.I):
+            return 22
+    if _prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt):
+        if re.search(r'receptive\s+field[^.;]{0,60}excludes\s+the\s+pixel\s+itself', text, re.I):
+            return 26
     if _training_speed_question(prompt) and re.search(r'residual\s+learning', text, re.I) and re.search(r'batch\s+normalization', text, re.I) and re.search(r'speed\w*\s+up\s+(?:the\s+)?training|fast\s+and\s+stable\s+training', text, re.I):
         return 24
     if _loss_statistic_question(prompt):
@@ -185,6 +230,10 @@ def source_facet_score(prompt: str, text: str) -> int:
 
 def source_facet_quote(prompt: str, text: str) -> str:
     """Keep complete requested clauses as a continuous literal source span."""
+    if _noise_statistics_score(prompt, text) and len(text) <= 1800:
+        return text
+    if (_prediction_supervision_question(prompt) or _blind_spot_exclusion_question(prompt)) and re.search(r'Figure\s+\d+', text, re.I) and re.search(r'receptive\s+field[^.;]{0,60}excludes\s+the\s+pixel\s+itself', text, re.I):
+        return text
     if requested_method_premise_priority(prompt, text) or (_additive_training_pair_question(prompt) and (_known_noise_training_premise(text) or _caption_training_pair(text) or _training_pair_procedure(text))):
         return text
     if not source_facet_score(prompt, text):
